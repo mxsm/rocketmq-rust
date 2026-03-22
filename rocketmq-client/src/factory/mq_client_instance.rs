@@ -850,6 +850,34 @@ impl MQClientInstance {
             .await
     }
 
+    pub async fn consumer_send_message_back(
+        &mut self,
+        broker_addr: &str,
+        broker_name: &str,
+        message: &MessageExt,
+        consumer_group: &str,
+        delay_level: i32,
+        timeout_millis: u64,
+        max_consume_retry_times: i32,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .clone()
+            .consumer_send_message_back(
+                broker_addr,
+                broker_name,
+                message,
+                consumer_group,
+                delay_level,
+                timeout_millis,
+                max_consume_retry_times,
+            )
+            .await
+    }
+
     pub async fn get_max_offset(
         &self,
         broker_addr: &str,

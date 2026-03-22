@@ -265,10 +265,6 @@ impl<P> ProxyGrpcService<P>
 where
     P: MessagingProcessor + 'static,
 {
-    fn not_implemented_status(&self, feature: &'static str) -> v2::Status {
-        ProxyStatusMapper::from_error(&ProxyError::not_implemented(feature))
-    }
-
     fn validate_client_context<'a>(&self, context: &'a ProxyContext) -> ProxyResult<&'a str> {
         context.require_client_id()
     }
@@ -940,11 +936,37 @@ where
 
     async fn forward_message_to_dead_letter_queue(
         &self,
-        _request: Request<v2::ForwardMessageToDeadLetterQueueRequest>,
+        request: Request<v2::ForwardMessageToDeadLetterQueueRequest>,
     ) -> Result<Response<v2::ForwardMessageToDeadLetterQueueResponse>, Status> {
-        Ok(Response::new(v2::ForwardMessageToDeadLetterQueueResponse {
-            status: Some(self.not_implemented_status("ForwardMessageToDeadLetterQueue")),
-        }))
+        self.reap_session_state_if_due();
+        let context = self.context("ForwardMessageToDeadLetterQueue", &request);
+        let request = request.into_inner();
+
+        let response = match self
+            .validate_client_context(&context)
+            .and_then(|_| adapter::build_forward_message_to_dead_letter_queue_request(&request))
+        {
+            Ok(input) => match self.guards.try_consumer() {
+                Ok(_permit) => match self
+                    .processor
+                    .forward_message_to_dead_letter_queue(&context, input)
+                    .await
+                {
+                    Ok(plan) => adapter::build_forward_message_to_dead_letter_queue_response(&plan),
+                    Err(error) => adapter::error_forward_message_to_dead_letter_queue_response(
+                        ProxyStatusMapper::from_error(&error),
+                    ),
+                },
+                Err(error) => {
+                    adapter::error_forward_message_to_dead_letter_queue_response(ProxyStatusMapper::from_error(&error))
+                }
+            },
+            Err(error) => {
+                adapter::error_forward_message_to_dead_letter_queue_response(ProxyStatusMapper::from_error(&error))
+            }
+        };
+
+        Ok(Response::new(response))
     }
 
     async fn pull_message(
@@ -1275,6 +1297,8 @@ mod tests {
     use crate::processor::DefaultMessagingProcessor;
     use crate::processor::EndTransactionPlan;
     use crate::processor::EndTransactionRequest;
+    use crate::processor::ForwardMessageToDeadLetterQueuePlan;
+    use crate::processor::ForwardMessageToDeadLetterQueueRequest;
     use crate::processor::GetOffsetPlan;
     use crate::processor::GetOffsetRequest;
     use crate::processor::PullMessagePlan;
@@ -1312,6 +1336,7 @@ mod tests {
 
     #[derive(Default)]
     struct TestConsumerService {
+        dlq_requests: Mutex<Vec<ForwardMessageToDeadLetterQueueRequest>>,
         updated_offsets: Mutex<Vec<UpdateOffsetRequest>>,
     }
 
@@ -1431,6 +1456,20 @@ mod tests {
                     status: ProxyStatusMapper::ok_payload(),
                 })
                 .collect())
+        }
+
+        async fn forward_message_to_dead_letter_queue(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &ForwardMessageToDeadLetterQueueRequest,
+        ) -> crate::error::ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
+            self.dlq_requests
+                .lock()
+                .expect("dlq requests mutex poisoned")
+                .push(request.clone());
+            Ok(ForwardMessageToDeadLetterQueuePlan {
+                status: ProxyStatusMapper::ok_payload(),
+            })
         }
 
         async fn change_invisible_duration(
@@ -2014,6 +2053,50 @@ mod tests {
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.entries.len(), 1);
         assert_eq!(response.entries[0].message_id, "msg-1");
+    }
+
+    #[tokio::test]
+    async fn forward_message_to_dead_letter_queue_records_request() {
+        let consumer_service = Arc::new(TestConsumerService::default());
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            consumer_service.clone(),
+        );
+        let mut request = Request::new(v2::ForwardMessageToDeadLetterQueueRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            receipt_handle: "receipt-handle".to_owned(),
+            message_id: "msg-1".to_owned(),
+            delivery_attempt: 3,
+            max_delivery_attempts: 3,
+            lite_topic: Some("LiteTopicA".to_owned()),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service
+            .forward_message_to_dead_letter_queue(request)
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+
+        let requests = consumer_service
+            .dlq_requests
+            .lock()
+            .expect("dlq requests mutex poisoned");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].message_id, "msg-1");
+        assert_eq!(requests[0].lite_topic.as_deref(), Some("LiteTopicA"));
     }
 
     #[tokio::test]

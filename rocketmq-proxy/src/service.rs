@@ -39,6 +39,8 @@ use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::ForwardMessageToDeadLetterQueuePlan;
+use crate::processor::ForwardMessageToDeadLetterQueueRequest;
 use crate::processor::GetOffsetPlan;
 use crate::processor::GetOffsetRequest;
 use crate::processor::PullMessagePlan;
@@ -174,6 +176,12 @@ pub trait ConsumerService: Send + Sync {
         context: &ProxyContext,
         request: &AckMessageRequest,
     ) -> ProxyResult<Vec<AckMessageResultEntry>>;
+
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        context: &ProxyContext,
+        request: &ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan>;
 
     async fn change_invisible_duration(
         &self,
@@ -321,6 +329,14 @@ impl ConsumerService for DefaultConsumerService {
         _context: &ProxyContext,
         _request: &AckMessageRequest,
     ) -> ProxyResult<Vec<AckMessageResultEntry>> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        _context: &ProxyContext,
+        _request: &ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
         Err(ProxyError::not_implemented("consumer service"))
     }
 
@@ -630,6 +646,14 @@ impl ConsumerService for ClusterConsumerService {
         request: &AckMessageRequest,
     ) -> ProxyResult<Vec<AckMessageResultEntry>> {
         self.client.ack_message(context, request).await
+    }
+
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        context: &ProxyContext,
+        request: &ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
+        self.client.forward_message_to_dead_letter_queue(context, request).await
     }
 
     async fn change_invisible_duration(

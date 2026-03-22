@@ -186,6 +186,22 @@ pub struct AckMessagePlan {
 }
 
 #[derive(Debug, Clone)]
+pub struct ForwardMessageToDeadLetterQueueRequest {
+    pub group: ResourceIdentity,
+    pub topic: ResourceIdentity,
+    pub receipt_handle: String,
+    pub message_id: String,
+    pub delivery_attempt: i32,
+    pub max_delivery_attempts: i32,
+    pub lite_topic: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForwardMessageToDeadLetterQueuePlan {
+    pub status: ProxyPayloadStatus,
+}
+
+#[derive(Debug, Clone)]
 pub struct ChangeInvisibleDurationRequest {
     pub group: ResourceIdentity,
     pub topic: ResourceIdentity,
@@ -304,6 +320,12 @@ pub trait MessagingProcessor: Send + Sync {
 
     async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan>;
 
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        context: &ProxyContext,
+        request: ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan>;
+
     async fn change_invisible_duration(
         &self,
         context: &ProxyContext,
@@ -419,6 +441,17 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         let consumer_service = self.service_manager.consumer_service();
         let entries = consumer_service.ack_message(context, &request).await?;
         Ok(AckMessagePlan { entries })
+    }
+
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        context: &ProxyContext,
+        request: ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service
+            .forward_message_to_dead_letter_queue(context, &request)
+            .await
     }
 
     async fn change_invisible_duration(

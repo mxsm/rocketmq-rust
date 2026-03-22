@@ -53,6 +53,8 @@ pub use processor::ConsumerFilterExpression;
 pub use processor::DefaultMessagingProcessor;
 pub use processor::EndTransactionPlan;
 pub use processor::EndTransactionRequest;
+pub use processor::ForwardMessageToDeadLetterQueuePlan;
+pub use processor::ForwardMessageToDeadLetterQueueRequest;
 pub use processor::GetOffsetPlan;
 pub use processor::GetOffsetRequest;
 pub use processor::MessageQueueTarget;

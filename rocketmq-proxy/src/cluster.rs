@@ -34,6 +34,7 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_id::MessageId;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
@@ -75,6 +76,8 @@ use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::ForwardMessageToDeadLetterQueuePlan;
+use crate::processor::ForwardMessageToDeadLetterQueueRequest;
 use crate::processor::GetOffsetPlan;
 use crate::processor::GetOffsetRequest;
 use crate::processor::MessageQueueTarget;
@@ -146,6 +149,12 @@ pub trait ClusterClient: Send + Sync {
         context: &ProxyContext,
         request: &AckMessageRequest,
     ) -> ProxyResult<Vec<AckMessageResultEntry>>;
+
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        context: &ProxyContext,
+        request: &ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan>;
 
     async fn change_invisible_duration(
         &self,
@@ -266,6 +275,16 @@ impl ClusterClient for RocketmqClusterClient {
         self.executor.ack_message(request.clone(), context.deadline()).await
     }
 
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        context: &ProxyContext,
+        request: &ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
+        self.executor
+            .forward_message_to_dead_letter_queue(request.clone(), context.deadline())
+            .await
+    }
+
     async fn change_invisible_duration(
         &self,
         context: &ProxyContext,
@@ -359,6 +378,11 @@ enum ClusterCommand {
         request: AckMessageRequest,
         deadline: Option<Duration>,
         reply: oneshot::Sender<ProxyResult<Vec<AckMessageResultEntry>>>,
+    },
+    ForwardMessageToDeadLetterQueue {
+        request: ForwardMessageToDeadLetterQueueRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<ForwardMessageToDeadLetterQueuePlan>>,
     },
     ChangeInvisibleDuration {
         request: ChangeInvisibleDurationRequest,
@@ -503,6 +527,19 @@ impl ClusterTaskExecutor {
         deadline: Option<Duration>,
     ) -> ProxyResult<Vec<AckMessageResultEntry>> {
         self.execute(|reply| ClusterCommand::AckMessage {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn forward_message_to_dead_letter_queue(
+        &self,
+        request: ForwardMessageToDeadLetterQueueRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
+        self.execute(|reply| ClusterCommand::ForwardMessageToDeadLetterQueue {
             request,
             deadline,
             reply,
@@ -663,6 +700,13 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             reply,
         } => {
             let _ = reply.send(ack_message_inner(config, request, deadline).await);
+        }
+        ClusterCommand::ForwardMessageToDeadLetterQueue {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(forward_message_to_dead_letter_queue_inner(config, request, deadline).await);
         }
         ClusterCommand::ChangeInvisibleDuration {
             request,
@@ -959,6 +1003,46 @@ async fn ack_message_inner(
     }
 
     Ok(results)
+}
+
+async fn forward_message_to_dead_letter_queue_inner(
+    config: &ClusterConfig,
+    request: ForwardMessageToDeadLetterQueueRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let topic_name = request.lite_topic.clone().unwrap_or_else(|| request.topic.to_string());
+    let group_name = request.group.to_string();
+    let parsed = parse_receipt_handle(
+        request.receipt_handle.as_str(),
+        topic_name.as_str(),
+        group_name.as_str(),
+    )?;
+    let actual_broker_name =
+        resolve_subscription_broker_name(&client, &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
+    let broker_addr = find_subscribe_broker_addr(&mut client, &actual_broker_name, &parsed.topic)
+        .await
+        .ok_or_else(|| RocketMQError::BrokerNotFound {
+            name: actual_broker_name.to_string(),
+        })?;
+    let message = build_dead_letter_message(&request, &parsed, &actual_broker_name)?;
+
+    client
+        .consumer_send_message_back(
+            broker_addr.as_str(),
+            actual_broker_name.as_str(),
+            &message,
+            group_name.as_str(),
+            -1,
+            timeout_ms,
+            request.max_delivery_attempts,
+        )
+        .await?;
+
+    Ok(ForwardMessageToDeadLetterQueuePlan {
+        status: ProxyStatusMapper::ok_payload(),
+    })
 }
 
 async fn change_invisible_duration_request_inner(
@@ -1644,6 +1728,23 @@ fn ack_status_to_payload(ack_result: &AckResult) -> ProxyPayloadStatus {
     }
 }
 
+fn build_dead_letter_message(
+    request: &ForwardMessageToDeadLetterQueueRequest,
+    parsed: &ParsedReceiptHandle,
+    broker_name: &CheetahString,
+) -> ProxyResult<MessageExt> {
+    let broker_message_id = decode_broker_message_id(request.message_id.as_str())?;
+    let mut message = MessageExt::default();
+    message.set_topic(parsed.topic.clone());
+    message.set_msg_id(CheetahString::from(request.message_id.as_str()));
+    message.set_broker_name(broker_name.clone());
+    message.set_queue_id(parsed.queue_id);
+    message.set_queue_offset(parsed.queue_offset);
+    message.set_commit_log_offset(broker_message_id.offset);
+    message.set_reconsume_times(request.delivery_attempt.saturating_sub(1));
+    Ok(message)
+}
+
 fn parse_receipt_handle(receipt_handle: &str, topic: &str, consumer_group: &str) -> ProxyResult<ParsedReceiptHandle> {
     let trimmed = receipt_handle.trim();
     if trimmed.is_empty() {
@@ -1847,6 +1948,11 @@ fn decode_end_transaction_message_id(message_id: &str) -> ProxyResult<MessageId>
     MessageDecoder::decode_message_id(&CheetahString::from(message_id)).map_err(|error| {
         ProxyError::invalid_transaction_id(format!("failed to decode transactional message id: {error}"))
     })
+}
+
+fn decode_broker_message_id(message_id: &str) -> ProxyResult<MessageId> {
+    MessageDecoder::decode_message_id(&CheetahString::from(message_id))
+        .map_err(|error| ProxyError::illegal_message_id(format!("failed to decode broker message id: {error}")))
 }
 
 fn effective_send_timeout_ms(config: &ClusterConfig, deadline: Option<Duration>) -> u64 {

@@ -45,6 +45,8 @@ use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::ConsumerFilterExpression;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::ForwardMessageToDeadLetterQueuePlan;
+use crate::processor::ForwardMessageToDeadLetterQueueRequest;
 use crate::processor::GetOffsetPlan;
 use crate::processor::GetOffsetRequest;
 use crate::processor::MessageQueueTarget;
@@ -223,6 +225,25 @@ pub fn build_ack_message_request(request: &v2::AckMessageRequest) -> ProxyResult
         group: resource_identity(request.group.as_ref(), "group")?,
         topic: resource_identity(request.topic.as_ref(), "topic")?,
         entries,
+    })
+}
+
+pub fn build_forward_message_to_dead_letter_queue_request(
+    request: &v2::ForwardMessageToDeadLetterQueueRequest,
+) -> ProxyResult<ForwardMessageToDeadLetterQueueRequest> {
+    Ok(ForwardMessageToDeadLetterQueueRequest {
+        group: resource_identity(request.group.as_ref(), "group")?,
+        topic: resource_identity(request.topic.as_ref(), "topic")?,
+        receipt_handle: validate_non_empty_string("receiptHandle", request.receipt_handle.as_str())?,
+        message_id: validate_non_empty_string("messageId", request.message_id.as_str())?,
+        delivery_attempt: request.delivery_attempt,
+        max_delivery_attempts: request.max_delivery_attempts,
+        lite_topic: request
+            .lite_topic
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
     })
 }
 
@@ -490,6 +511,14 @@ pub fn build_ack_message_response(plan: &AckMessagePlan) -> v2::AckMessageRespon
     }
 }
 
+pub fn build_forward_message_to_dead_letter_queue_response(
+    plan: &ForwardMessageToDeadLetterQueuePlan,
+) -> v2::ForwardMessageToDeadLetterQueueResponse {
+    v2::ForwardMessageToDeadLetterQueueResponse {
+        status: Some(plan.status.clone().into()),
+    }
+}
+
 pub fn build_change_invisible_duration_response(
     plan: &ChangeInvisibleDurationPlan,
 ) -> v2::ChangeInvisibleDurationResponse {
@@ -586,6 +615,12 @@ pub fn error_ack_message_response(status: v2::Status) -> v2::AckMessageResponse 
         status: Some(status),
         entries: Vec::new(),
     }
+}
+
+pub fn error_forward_message_to_dead_letter_queue_response(
+    status: v2::Status,
+) -> v2::ForwardMessageToDeadLetterQueueResponse {
+    v2::ForwardMessageToDeadLetterQueueResponse { status: Some(status) }
 }
 
 pub fn error_change_invisible_duration_response(status: v2::Status) -> v2::ChangeInvisibleDurationResponse {
