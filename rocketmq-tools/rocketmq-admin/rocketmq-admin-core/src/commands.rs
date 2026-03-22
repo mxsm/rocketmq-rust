@@ -455,6 +455,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
+                command: "consumeMessage",
+                remark: "Consume message.",
+            },
+            Command {
+                category: "Message",
                 command: "decodeMessageId",
                 remark: "Decode unique message ID.",
             },

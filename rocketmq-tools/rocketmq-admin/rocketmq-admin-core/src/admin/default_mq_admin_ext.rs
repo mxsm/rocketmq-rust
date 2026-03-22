@@ -148,6 +148,20 @@ impl DefaultMQAdminExt {
         Self::build(client_config, admin_ext_group, timeout_millis, Some(rpc_hook))
     }
 
+    pub fn with_admin_ext_group_and_rpc_hook(
+        admin_ext_group: impl Into<CheetahString>,
+        rpc_hook: Arc<dyn RPCHook>,
+    ) -> Self {
+        let admin_ext_group = admin_ext_group.into();
+        let client_config = ArcMut::new(ClientConfig::new());
+        Self::build(
+            client_config,
+            admin_ext_group,
+            Duration::from_millis(5000),
+            Some(rpc_hook),
+        )
+    }
+
     pub fn with_admin_ext_group(admin_ext_group: impl Into<CheetahString>) -> Self {
         let admin_ext_group = admin_ext_group.into();
         let client_config = ArcMut::new(ClientConfig::new());
