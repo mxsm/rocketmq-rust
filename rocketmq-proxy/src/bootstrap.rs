@@ -46,18 +46,25 @@ impl ProxyRuntimeBuilder {
     }
 
     pub fn build(self) -> ProxyRuntime<DefaultMessagingProcessor> {
+        let local_mode_supported = !(matches!(self.config.mode, ProxyMode::Local) && self.service_manager.is_none());
         let service_manager = self
             .service_manager
             .unwrap_or_else(|| default_service_manager(&self.config));
         let session_registry = self.session_registry.unwrap_or_default();
         let processor = Arc::new(DefaultMessagingProcessor::new(service_manager));
-        ProxyRuntime::from_processor(self.config, processor, session_registry)
+        ProxyRuntime::from_processor_with_local_mode_support(
+            self.config,
+            processor,
+            session_registry,
+            local_mode_supported,
+        )
     }
 }
 
 pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     config: Arc<ProxyConfig>,
     grpc_service: ProxyGrpcService<P>,
+    local_mode_supported: bool,
 }
 
 impl ProxyRuntime<DefaultMessagingProcessor> {
@@ -79,9 +86,22 @@ where
     P: MessagingProcessor + 'static,
 {
     pub fn from_processor(config: ProxyConfig, processor: Arc<P>, session_registry: ClientSessionRegistry) -> Self {
+        Self::from_processor_with_local_mode_support(config, processor, session_registry, true)
+    }
+
+    fn from_processor_with_local_mode_support(
+        config: ProxyConfig,
+        processor: Arc<P>,
+        session_registry: ClientSessionRegistry,
+        local_mode_supported: bool,
+    ) -> Self {
         let config = Arc::new(config);
         let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry);
-        Self { config, grpc_service }
+        Self {
+            config,
+            grpc_service,
+            local_mode_supported,
+        }
     }
 
     pub fn config(&self) -> &ProxyConfig {
@@ -96,6 +116,11 @@ where
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        if matches!(self.config.mode, ProxyMode::Local) && !self.local_mode_supported {
+            return Err(crate::error::ProxyError::not_implemented(
+                "Local mode requires a broker-backed service manager and is not available in the default proxy runtime",
+            ));
+        }
         server::serve(self.config, self.grpc_service, shutdown).await
     }
 }
@@ -104,5 +129,35 @@ fn default_service_manager(config: &ProxyConfig) -> Arc<dyn ServiceManager> {
     match config.mode {
         ProxyMode::Cluster => Arc::new(ClusterServiceManager::from_cluster_config(config.cluster.clone())),
         ProxyMode::Local => Arc::new(LocalServiceManager::default()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::GrpcConfig;
+
+    use super::ProxyRuntime;
+    use super::ProxyRuntimeBuilder;
+    use crate::config::ProxyConfig;
+    use crate::config::ProxyMode;
+    use crate::error::ProxyError;
+
+    #[tokio::test]
+    async fn default_local_mode_fails_fast_before_server_start() {
+        let runtime = ProxyRuntimeBuilder::build(ProxyRuntime::builder(ProxyConfig {
+            mode: ProxyMode::Local,
+            grpc: GrpcConfig {
+                listen_addr: "127.0.0.1:0".to_owned(),
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
+        }));
+
+        let error = runtime
+            .serve_with_shutdown(async {})
+            .await
+            .expect_err("default local mode must fail fast");
+
+        assert!(matches!(error, ProxyError::NotImplemented { .. }));
     }
 }

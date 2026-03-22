@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::sync::Mutex;
+use std::thread;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -55,6 +55,7 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_rust::ArcMut;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::config::ClusterConfig;
@@ -133,12 +134,13 @@ pub trait ClusterClient: Send + Sync {
 }
 
 pub struct RocketmqClusterClient {
-    config: ClusterConfig,
+    executor: ClusterTaskExecutor,
 }
 
 impl RocketmqClusterClient {
     pub fn new(config: ClusterConfig) -> Self {
-        Self { config }
+        let executor = ClusterTaskExecutor::new(config.clone());
+        Self { executor }
     }
 }
 
@@ -151,19 +153,7 @@ impl Default for RocketmqClusterClient {
 #[async_trait]
 impl ClusterClient for RocketmqClusterClient {
     async fn query_route(&self, topic: &ResourceIdentity) -> ProxyResult<TopicRouteData> {
-        let config = self.config.clone();
-        let topic_name = topic.to_string();
-
-        run_cluster_task(move || async move {
-            let client = initialize_client_instance(config.clone()).await?;
-            let route = client
-                .get_mq_client_api_impl()
-                .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-                .await?;
-
-            route.ok_or_else(|| RocketMQError::route_not_found(topic_name).into())
-        })
-        .await
+        self.executor.query_route(topic.clone()).await
     }
 
     async fn query_assignment(
@@ -172,64 +162,13 @@ impl ClusterClient for RocketmqClusterClient {
         group: &ResourceIdentity,
         client_id: &str,
     ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
-        let config = self.config.clone();
-        let topic_name = topic.to_string();
-        let group_name = group.to_string();
-        let client_id = client_id.to_owned();
-
-        run_cluster_task(move || async move {
-            let client = initialize_client_instance(config.clone()).await?;
-            let route = client
-                .get_mq_client_api_impl()
-                .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-                .await?
-                .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
-            let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-                name: topic_name.clone(),
-            })?;
-            let mut api = client.get_mq_client_api_impl();
-            let assignments = api
-                .query_assignment(
-                    &broker_addr,
-                    CheetahString::from(topic_name),
-                    CheetahString::from(group_name),
-                    CheetahString::from(client_id),
-                    CheetahString::from(config.query_assignment_strategy_name),
-                    MessageModel::Clustering,
-                    config.mq_client_api_timeout_ms,
-                )
-                .await?;
-
-            Ok(assignments.map(|items| items.into_iter().collect()))
-        })
-        .await
+        self.executor
+            .query_assignment(topic.clone(), group.clone(), client_id.to_owned())
+            .await
     }
 
     async fn query_topic_message_type(&self, topic: &ResourceIdentity) -> ProxyResult<ProxyTopicMessageType> {
-        let config = self.config.clone();
-        let topic_name = topic.to_string();
-
-        run_cluster_task(move || async move {
-            let client = initialize_client_instance(config.clone()).await?;
-            let route = client
-                .get_mq_client_api_impl()
-                .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-                .await?
-                .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
-            let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-                name: topic_name.clone(),
-            })?;
-            let topic_config = client
-                .get_topic_config(
-                    &broker_addr,
-                    CheetahString::from(topic_name),
-                    config.mq_client_api_timeout_ms,
-                )
-                .await?;
-
-            Ok(convert_topic_message_type(topic_config.get_topic_message_type()))
-        })
-        .await
+        self.executor.query_topic_message_type(topic.clone()).await
     }
 
     async fn query_subscription_group(
@@ -237,31 +176,9 @@ impl ClusterClient for RocketmqClusterClient {
         topic: &ResourceIdentity,
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-        let config = self.config.clone();
-        let topic_name = topic.to_string();
-        let group_name = group.to_string();
-
-        run_cluster_task(move || async move {
-            let client = initialize_client_instance(config.clone()).await?;
-            let route = client
-                .get_mq_client_api_impl()
-                .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-                .await?
-                .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
-            let Some(broker_addr) = select_master_broker_addr(&route) else {
-                return Ok(None);
-            };
-            let group_config = client
-                .get_subscription_group_config(
-                    &broker_addr,
-                    CheetahString::from(group_name),
-                    config.mq_client_api_timeout_ms,
-                )
-                .await?;
-
-            Ok(Some(convert_subscription_group(group_config)))
-        })
-        .await
+        self.executor
+            .query_subscription_group(topic.clone(), group.clone())
+            .await
     }
 
     async fn send_message(
@@ -269,37 +186,13 @@ impl ClusterClient for RocketmqClusterClient {
         context: &ProxyContext,
         request: &SendMessageRequest,
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
-        let config = self.config.clone();
-        let request = request.clone();
-        let client_id = context.client_id().map(ToOwned::to_owned);
-        let request_id = context.request_id().to_owned();
-
-        run_cluster_task(move || async move {
-            let timeout = effective_send_timeout_ms(&config, request.timeout);
-            let mut producer =
-                build_send_producer(&config, &request, client_id.as_deref(), request_id.as_str(), timeout);
-            if let Err(error) = producer.start().await {
-                let error = ProxyError::from(error);
-                return Ok(request
-                    .messages
-                    .iter()
-                    .map(|_| failure_send_result_entry(&error))
-                    .collect());
-            }
-
-            let send_result = async {
-                let mut results = Vec::with_capacity(request.messages.len());
-                for entry in request.messages {
-                    results.push(send_message_entry(&mut producer, entry, timeout).await);
-                }
-                Ok(results)
-            }
-            .await;
-
-            producer.shutdown().await;
-            send_result
-        })
-        .await
+        self.executor
+            .send_message(
+                request.clone(),
+                context.client_id().map(ToOwned::to_owned),
+                context.request_id().to_owned(),
+            )
+            .await
     }
 
     async fn receive_message(
@@ -307,27 +200,7 @@ impl ClusterClient for RocketmqClusterClient {
         context: &ProxyContext,
         request: &ReceiveMessageRequest,
     ) -> ProxyResult<ReceiveMessagePlan> {
-        let config = self.config.clone();
-        let context_deadline = context.deadline();
-        let request = request.clone();
-
-        run_cluster_task(move || async move {
-            let mut client = initialize_client_instance(config.clone()).await?;
-            let broker_target = resolve_receive_broker(&mut client, &config, &request).await?;
-            let timeout_ms = effective_pop_timeout_ms(&config, context_deadline, request.long_polling_timeout);
-            let request_header = build_pop_request_header(&broker_target.broker_name, &request);
-            let pop_result = pop_message(
-                &client,
-                &broker_target.broker_name,
-                &broker_target.broker_addr,
-                request_header,
-                timeout_ms,
-            )
-            .await?;
-
-            Ok(build_receive_plan(pop_result))
-        })
-        .await
+        self.executor.receive_message(request.clone(), context.deadline()).await
     }
 
     async fn ack_message(
@@ -335,21 +208,7 @@ impl ClusterClient for RocketmqClusterClient {
         context: &ProxyContext,
         request: &AckMessageRequest,
     ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-        let config = self.config.clone();
-        let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, context.deadline());
-        let request = request.clone();
-
-        run_cluster_task(move || async move {
-            let mut client = initialize_client_instance(config.clone()).await?;
-            let mut results = Vec::with_capacity(request.entries.len());
-
-            for entry in &request.entries {
-                results.push(ack_message_entry(&mut client, &request.group, &request.topic, entry, timeout_ms).await);
-            }
-
-            Ok(results)
-        })
-        .await
+        self.executor.ack_message(request.clone(), context.deadline()).await
     }
 
     async fn change_invisible_duration(
@@ -357,15 +216,9 @@ impl ClusterClient for RocketmqClusterClient {
         context: &ProxyContext,
         request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-        let config = self.config.clone();
-        let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, context.deadline());
-        let request = request.clone();
-
-        run_cluster_task(move || async move {
-            let mut client = initialize_client_instance(config.clone()).await?;
-            change_invisible_duration_inner(&mut client, &config, &request, timeout_ms).await
-        })
-        .await
+        self.executor
+            .change_invisible_duration(request.clone(), context.deadline())
+            .await
     }
 
     async fn end_transaction(
@@ -373,47 +226,465 @@ impl ClusterClient for RocketmqClusterClient {
         context: &ProxyContext,
         request: &EndTransactionRequest,
     ) -> ProxyResult<EndTransactionPlan> {
-        let config = self.config.clone();
-        let request = request.clone();
-        let client_id = context.client_id().map(ToOwned::to_owned);
-        let request_id = context.request_id().to_owned();
-        let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, context.deadline());
-
-        run_cluster_task(move || async move {
-            let mut client = initialize_client_instance(config.clone()).await?;
-            end_transaction_inner(
-                &mut client,
-                &config,
-                &request,
-                client_id.as_deref(),
-                request_id.as_str(),
-                timeout_ms,
+        self.executor
+            .end_transaction(
+                request.clone(),
+                context.client_id().map(ToOwned::to_owned),
+                context.request_id().to_owned(),
+                context.deadline(),
             )
             .await
-        })
-        .await
     }
 }
 
-async fn run_cluster_task<T, F, Fut>(task: F) -> ProxyResult<T>
-where
-    T: Send + 'static,
-    F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = ProxyResult<T>> + 'static,
-{
-    tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to build proxy cluster runtime: {error}"),
-            })?;
-        runtime.block_on(task())
-    })
+#[derive(Clone)]
+struct ClusterTaskExecutor {
+    sender: mpsc::UnboundedSender<ClusterCommand>,
+}
+
+enum ClusterCommand {
+    QueryRoute {
+        topic: ResourceIdentity,
+        reply: oneshot::Sender<ProxyResult<TopicRouteData>>,
+    },
+    QueryAssignment {
+        topic: ResourceIdentity,
+        group: ResourceIdentity,
+        client_id: String,
+        reply: oneshot::Sender<ProxyResult<Option<Vec<MessageQueueAssignment>>>>,
+    },
+    QueryTopicMessageType {
+        topic: ResourceIdentity,
+        reply: oneshot::Sender<ProxyResult<ProxyTopicMessageType>>,
+    },
+    QuerySubscriptionGroup {
+        topic: ResourceIdentity,
+        group: ResourceIdentity,
+        reply: oneshot::Sender<ProxyResult<Option<SubscriptionGroupMetadata>>>,
+    },
+    SendMessage {
+        request: SendMessageRequest,
+        client_id: Option<String>,
+        request_id: String,
+        reply: oneshot::Sender<ProxyResult<Vec<SendMessageResultEntry>>>,
+    },
+    ReceiveMessage {
+        request: ReceiveMessageRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<ReceiveMessagePlan>>,
+    },
+    AckMessage {
+        request: AckMessageRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<Vec<AckMessageResultEntry>>>,
+    },
+    ChangeInvisibleDuration {
+        request: ChangeInvisibleDurationRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<ChangeInvisibleDurationPlan>>,
+    },
+    EndTransaction {
+        request: EndTransactionRequest,
+        client_id: Option<String>,
+        request_id: String,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<EndTransactionPlan>>,
+    },
+}
+
+impl ClusterTaskExecutor {
+    fn new(config: ClusterConfig) -> Self {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let thread_name = format!(
+            "rocketmq-proxy-cluster-{}",
+            sanitize_group_component(config.instance_name.as_str())
+        );
+        thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || run_cluster_worker(config, receiver))
+            .expect("failed to spawn proxy cluster worker thread");
+        Self { sender }
+    }
+
+    async fn query_route(&self, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {
+        self.execute(|reply| ClusterCommand::QueryRoute { topic, reply }).await
+    }
+
+    async fn query_assignment(
+        &self,
+        topic: ResourceIdentity,
+        group: ResourceIdentity,
+        client_id: String,
+    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
+        self.execute(|reply| ClusterCommand::QueryAssignment {
+            topic,
+            group,
+            client_id,
+            reply,
+        })
+        .await
+    }
+
+    async fn query_topic_message_type(&self, topic: ResourceIdentity) -> ProxyResult<ProxyTopicMessageType> {
+        self.execute(|reply| ClusterCommand::QueryTopicMessageType { topic, reply })
+            .await
+    }
+
+    async fn query_subscription_group(
+        &self,
+        topic: ResourceIdentity,
+        group: ResourceIdentity,
+    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
+        self.execute(|reply| ClusterCommand::QuerySubscriptionGroup { topic, group, reply })
+            .await
+    }
+
+    async fn send_message(
+        &self,
+        request: SendMessageRequest,
+        client_id: Option<String>,
+        request_id: String,
+    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
+        self.execute(|reply| ClusterCommand::SendMessage {
+            request,
+            client_id,
+            request_id,
+            reply,
+        })
+        .await
+    }
+
+    async fn receive_message(
+        &self,
+        request: ReceiveMessageRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<ReceiveMessagePlan> {
+        self.execute(|reply| ClusterCommand::ReceiveMessage {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn ack_message(
+        &self,
+        request: AckMessageRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
+        self.execute(|reply| ClusterCommand::AckMessage {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn change_invisible_duration(
+        &self,
+        request: ChangeInvisibleDurationRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
+        self.execute(|reply| ClusterCommand::ChangeInvisibleDuration {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn end_transaction(
+        &self,
+        request: EndTransactionRequest,
+        client_id: Option<String>,
+        request_id: String,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<EndTransactionPlan> {
+        self.execute(|reply| ClusterCommand::EndTransaction {
+            request,
+            client_id,
+            request_id,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn execute<T>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<ProxyResult<T>>) -> ClusterCommand,
+    ) -> ProxyResult<T>
+    where
+        T: Send + 'static,
+    {
+        let (reply, receiver) = oneshot::channel();
+        self.sender.send(command(reply)).map_err(|_| ProxyError::Transport {
+            message: "proxy cluster worker thread is unavailable".to_owned(),
+        })?;
+        receiver.await.map_err(|_| ProxyError::Transport {
+            message: "proxy cluster worker dropped response".to_owned(),
+        })?
+    }
+}
+
+fn run_cluster_worker(config: ClusterConfig, mut receiver: mpsc::UnboundedReceiver<ClusterCommand>) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build proxy cluster worker runtime");
+    runtime.block_on(async move {
+        while let Some(command) = receiver.recv().await {
+            handle_cluster_command(&config, command).await;
+        }
+    });
+}
+
+async fn handle_cluster_command(config: &ClusterConfig, command: ClusterCommand) {
+    match command {
+        ClusterCommand::QueryRoute { topic, reply } => {
+            let _ = reply.send(query_route_inner(config, topic).await);
+        }
+        ClusterCommand::QueryAssignment {
+            topic,
+            group,
+            client_id,
+            reply,
+        } => {
+            let _ = reply.send(query_assignment_inner(config, topic, group, client_id).await);
+        }
+        ClusterCommand::QueryTopicMessageType { topic, reply } => {
+            let _ = reply.send(query_topic_message_type_inner(config, topic).await);
+        }
+        ClusterCommand::QuerySubscriptionGroup { topic, group, reply } => {
+            let _ = reply.send(query_subscription_group_inner(config, topic, group).await);
+        }
+        ClusterCommand::SendMessage {
+            request,
+            client_id,
+            request_id,
+            reply,
+        } => {
+            let _ = reply.send(send_message_inner(config, request, client_id, request_id).await);
+        }
+        ClusterCommand::ReceiveMessage {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(receive_message_inner(config, request, deadline).await);
+        }
+        ClusterCommand::AckMessage {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(ack_message_inner(config, request, deadline).await);
+        }
+        ClusterCommand::ChangeInvisibleDuration {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(change_invisible_duration_request_inner(config, request, deadline).await);
+        }
+        ClusterCommand::EndTransaction {
+            request,
+            client_id,
+            request_id,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(end_transaction_request_inner(config, request, client_id, request_id, deadline).await);
+        }
+    }
+}
+
+async fn query_route_inner(config: &ClusterConfig, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {
+    let topic_name = topic.to_string();
+    let client = initialize_client_instance(config.clone()).await?;
+    let route = client
+        .get_mq_client_api_impl()
+        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
+        .await?;
+
+    route.ok_or_else(|| RocketMQError::route_not_found(topic_name).into())
+}
+
+async fn query_assignment_inner(
+    config: &ClusterConfig,
+    topic: ResourceIdentity,
+    group: ResourceIdentity,
+    client_id: String,
+) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
+    let topic_name = topic.to_string();
+    let group_name = group.to_string();
+    let client = initialize_client_instance(config.clone()).await?;
+    let route = client
+        .get_mq_client_api_impl()
+        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
+        .await?
+        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
+        name: topic_name.clone(),
+    })?;
+    let mut api = client.get_mq_client_api_impl();
+    let assignments = api
+        .query_assignment(
+            &broker_addr,
+            CheetahString::from(topic_name),
+            CheetahString::from(group_name),
+            CheetahString::from(client_id),
+            CheetahString::from(config.query_assignment_strategy_name.as_str()),
+            MessageModel::Clustering,
+            config.mq_client_api_timeout_ms,
+        )
+        .await?;
+
+    Ok(assignments.map(|items| items.into_iter().collect()))
+}
+
+async fn query_topic_message_type_inner(
+    config: &ClusterConfig,
+    topic: ResourceIdentity,
+) -> ProxyResult<ProxyTopicMessageType> {
+    let topic_name = topic.to_string();
+    let client = initialize_client_instance(config.clone()).await?;
+    let route = client
+        .get_mq_client_api_impl()
+        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
+        .await?
+        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
+        name: topic_name.clone(),
+    })?;
+    let topic_config = client
+        .get_topic_config(
+            &broker_addr,
+            CheetahString::from(topic_name),
+            config.mq_client_api_timeout_ms,
+        )
+        .await?;
+
+    Ok(convert_topic_message_type(topic_config.get_topic_message_type()))
+}
+
+async fn query_subscription_group_inner(
+    config: &ClusterConfig,
+    topic: ResourceIdentity,
+    group: ResourceIdentity,
+) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
+    let topic_name = topic.to_string();
+    let group_name = group.to_string();
+    let client = initialize_client_instance(config.clone()).await?;
+    let route = client
+        .get_mq_client_api_impl()
+        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
+        .await?
+        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    let Some(broker_addr) = select_master_broker_addr(&route) else {
+        return Ok(None);
+    };
+    let group_config = client
+        .get_subscription_group_config(
+            &broker_addr,
+            CheetahString::from(group_name),
+            config.mq_client_api_timeout_ms,
+        )
+        .await?;
+
+    Ok(Some(convert_subscription_group(group_config)))
+}
+
+async fn send_message_inner(
+    config: &ClusterConfig,
+    request: SendMessageRequest,
+    client_id: Option<String>,
+    request_id: String,
+) -> ProxyResult<Vec<SendMessageResultEntry>> {
+    let timeout = effective_send_timeout_ms(config, request.timeout);
+    let mut producer = build_send_producer(config, &request, client_id.as_deref(), request_id.as_str(), timeout);
+    if let Err(error) = producer.start().await {
+        let error = ProxyError::from(error);
+        return Ok(request
+            .messages
+            .iter()
+            .map(|_| failure_send_result_entry(&error))
+            .collect());
+    }
+
+    let mut results = Vec::with_capacity(request.messages.len());
+    for entry in request.messages {
+        results.push(send_message_entry(&mut producer, entry, timeout).await);
+    }
+    producer.shutdown().await;
+    Ok(results)
+}
+
+async fn receive_message_inner(
+    config: &ClusterConfig,
+    request: ReceiveMessageRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<ReceiveMessagePlan> {
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let broker_target = resolve_receive_broker(&mut client, config, &request).await?;
+    let timeout_ms = effective_pop_timeout_ms(config, deadline, request.long_polling_timeout);
+    let request_header = build_pop_request_header(&broker_target.broker_name, &request);
+    let pop_result = pop_message(
+        &client,
+        &broker_target.broker_name,
+        &broker_target.broker_addr,
+        request_header,
+        timeout_ms,
+    )
+    .await?;
+
+    Ok(build_receive_plan(pop_result))
+}
+
+async fn ack_message_inner(
+    config: &ClusterConfig,
+    request: AckMessageRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<Vec<AckMessageResultEntry>> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let mut results = Vec::with_capacity(request.entries.len());
+
+    for entry in &request.entries {
+        results.push(ack_message_entry(&mut client, &request.group, &request.topic, entry, timeout_ms).await);
+    }
+
+    Ok(results)
+}
+
+async fn change_invisible_duration_request_inner(
+    config: &ClusterConfig,
+    request: ChangeInvisibleDurationRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<ChangeInvisibleDurationPlan> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    change_invisible_duration_inner(&mut client, config, &request, timeout_ms).await
+}
+
+async fn end_transaction_request_inner(
+    config: &ClusterConfig,
+    request: EndTransactionRequest,
+    client_id: Option<String>,
+    request_id: String,
+    deadline: Option<Duration>,
+) -> ProxyResult<EndTransactionPlan> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    end_transaction_inner(
+        &mut client,
+        config,
+        &request,
+        client_id.as_deref(),
+        request_id.as_str(),
+        timeout_ms,
+    )
     .await
-    .map_err(|error| ProxyError::Transport {
-        message: format!("proxy cluster task failed: {error}"),
-    })?
 }
 
 async fn initialize_client_instance(config: ClusterConfig) -> ProxyResult<ArcMut<MQClientInstance>> {

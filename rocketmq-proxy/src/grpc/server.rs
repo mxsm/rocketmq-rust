@@ -54,6 +54,7 @@ where
         .max_encoding_message_size(config.grpc.max_encoding_message_size);
 
     let result = Server::builder()
+        .concurrency_limit_per_connection(config.grpc.concurrency_limit_per_connection)
         .add_service(service)
         .serve_with_shutdown(addr, async move {
             shutdown.await;
