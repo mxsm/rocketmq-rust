@@ -16,6 +16,7 @@ use std::future;
 use std::future::Future;
 use std::sync::Arc;
 
+use crate::auth::ProxyAuthRuntime;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
 use crate::error::ProxyResult;
@@ -32,6 +33,7 @@ pub struct ProxyRuntimeBuilder {
     config: ProxyConfig,
     service_manager: Option<Arc<dyn ServiceManager>>,
     session_registry: Option<ClientSessionRegistry>,
+    auth_runtime: Option<ProxyAuthRuntime>,
 }
 
 impl ProxyRuntimeBuilder {
@@ -42,6 +44,11 @@ impl ProxyRuntimeBuilder {
 
     pub fn with_session_registry(mut self, session_registry: ClientSessionRegistry) -> Self {
         self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn with_auth_runtime(mut self, auth_runtime: ProxyAuthRuntime) -> Self {
+        self.auth_runtime = Some(auth_runtime);
         self
     }
 
@@ -57,6 +64,7 @@ impl ProxyRuntimeBuilder {
             processor,
             session_registry,
             local_mode_supported,
+            self.auth_runtime,
         )
     }
 }
@@ -65,6 +73,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     config: Arc<ProxyConfig>,
     grpc_service: ProxyGrpcService<P>,
     local_mode_supported: bool,
+    auth_runtime: Option<ProxyAuthRuntime>,
 }
 
 impl ProxyRuntime<DefaultMessagingProcessor> {
@@ -73,6 +82,7 @@ impl ProxyRuntime<DefaultMessagingProcessor> {
             config,
             service_manager: None,
             session_registry: None,
+            auth_runtime: None,
         }
     }
 
@@ -86,7 +96,7 @@ where
     P: MessagingProcessor + 'static,
 {
     pub fn from_processor(config: ProxyConfig, processor: Arc<P>, session_registry: ClientSessionRegistry) -> Self {
-        Self::from_processor_with_local_mode_support(config, processor, session_registry, true)
+        Self::from_processor_with_local_mode_support(config, processor, session_registry, true, None)
     }
 
     fn from_processor_with_local_mode_support(
@@ -94,6 +104,7 @@ where
         processor: Arc<P>,
         session_registry: ClientSessionRegistry,
         local_mode_supported: bool,
+        auth_runtime: Option<ProxyAuthRuntime>,
     ) -> Self {
         let config = Arc::new(config);
         let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry);
@@ -101,6 +112,7 @@ where
             config,
             grpc_service,
             local_mode_supported,
+            auth_runtime,
         }
     }
 
@@ -116,12 +128,22 @@ where
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        if matches!(self.config.mode, ProxyMode::Local) && !self.local_mode_supported {
+        let ProxyRuntime {
+            config,
+            grpc_service,
+            local_mode_supported,
+            auth_runtime,
+        } = self;
+        if matches!(config.mode, ProxyMode::Local) && !local_mode_supported {
             return Err(crate::error::ProxyError::not_implemented(
                 "Local mode requires a broker-backed service manager and is not available in the default proxy runtime",
             ));
         }
-        server::serve(self.config, self.grpc_service, shutdown).await
+        let auth_runtime = match auth_runtime {
+            Some(auth_runtime) => Some(auth_runtime),
+            None => ProxyAuthRuntime::from_proxy_config(&config.auth).await?,
+        };
+        server::serve(config, grpc_service.with_auth_runtime(auth_runtime), shutdown).await
     }
 }
 

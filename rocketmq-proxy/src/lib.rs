@@ -20,6 +20,7 @@
 //! This crate now provides the Phase 1 gRPC foundation and the first
 //! route/assignment/heartbeat slice of the Java proxy architecture.
 
+pub mod auth;
 pub mod bootstrap;
 pub mod cluster;
 pub mod config;
@@ -32,12 +33,14 @@ pub mod service;
 pub mod session;
 pub mod status;
 
+pub use auth::ProxyAuthRuntime;
 pub use bootstrap::ProxyRuntime;
 pub use bootstrap::ProxyRuntimeBuilder;
 pub use cluster::ClusterClient;
 pub use cluster::RocketmqClusterClient;
 pub use config::ClusterConfig;
 pub use config::GrpcConfig;
+pub use config::ProxyAuthConfig;
 pub use config::ProxyConfig;
 pub use config::ProxyMode;
 pub use config::RuntimeConfig;

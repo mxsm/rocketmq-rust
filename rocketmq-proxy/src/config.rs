@@ -16,6 +16,8 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
+use rocketmq_auth::config::AuthConfig as RocketmqAuthConfig;
 use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
@@ -153,6 +155,77 @@ impl SessionConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProxyAuthConfig {
+    pub config_name: String,
+    pub cluster_name: String,
+    pub auth_config_path: String,
+    pub authentication_enabled: bool,
+    pub authentication_provider: String,
+    pub authentication_metadata_provider: String,
+    pub authentication_strategy: String,
+    pub authentication_whitelist: Vec<String>,
+    pub init_authentication_user: String,
+    pub inner_client_authentication_credentials: String,
+    pub authorization_enabled: bool,
+    pub authorization_provider: String,
+    pub authorization_metadata_provider: String,
+    pub authorization_strategy: String,
+    pub authorization_whitelist: Vec<String>,
+}
+
+impl Default for ProxyAuthConfig {
+    fn default() -> Self {
+        Self {
+            config_name: "rocketmq-proxy".to_owned(),
+            cluster_name: "DefaultCluster".to_owned(),
+            auth_config_path: "store/proxy/auth".to_owned(),
+            authentication_enabled: false,
+            authentication_provider: String::new(),
+            authentication_metadata_provider: String::new(),
+            authentication_strategy: String::new(),
+            authentication_whitelist: Vec::new(),
+            init_authentication_user: String::new(),
+            inner_client_authentication_credentials: String::new(),
+            authorization_enabled: false,
+            authorization_provider: String::new(),
+            authorization_metadata_provider: String::new(),
+            authorization_strategy: String::new(),
+            authorization_whitelist: Vec::new(),
+        }
+    }
+}
+
+impl ProxyAuthConfig {
+    pub fn enabled(&self) -> bool {
+        self.authentication_enabled || self.authorization_enabled
+    }
+
+    pub fn to_auth_config(&self) -> RocketmqAuthConfig {
+        RocketmqAuthConfig {
+            config_name: CheetahString::from(self.config_name.as_str()),
+            cluster_name: CheetahString::from(self.cluster_name.as_str()),
+            auth_config_path: CheetahString::from(self.auth_config_path.as_str()),
+            authentication_enabled: self.authentication_enabled,
+            authentication_provider: CheetahString::from(self.authentication_provider.as_str()),
+            authentication_metadata_provider: CheetahString::from(self.authentication_metadata_provider.as_str()),
+            authentication_strategy: CheetahString::from(self.authentication_strategy.as_str()),
+            authentication_whitelist: CheetahString::from(self.authentication_whitelist.join(",")),
+            init_authentication_user: CheetahString::from(self.init_authentication_user.as_str()),
+            inner_client_authentication_credentials: CheetahString::from(
+                self.inner_client_authentication_credentials.as_str(),
+            ),
+            authorization_enabled: self.authorization_enabled,
+            authorization_provider: CheetahString::from(self.authorization_provider.as_str()),
+            authorization_metadata_provider: CheetahString::from(self.authorization_metadata_provider.as_str()),
+            authorization_strategy: CheetahString::from(self.authorization_strategy.as_str()),
+            authorization_whitelist: CheetahString::from(self.authorization_whitelist.join(",")),
+            ..RocketmqAuthConfig::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
@@ -161,6 +234,7 @@ pub struct ProxyConfig {
     pub cluster: ClusterConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
+    pub auth: ProxyAuthConfig,
 }
 
 impl ProxyConfig {

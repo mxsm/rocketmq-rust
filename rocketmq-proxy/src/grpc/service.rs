@@ -34,6 +34,9 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
+use crate::auth;
+use crate::auth::AuthenticatedPrincipal;
+use crate::auth::ProxyAuthRuntime;
 use crate::config::ProxyConfig;
 use crate::context::ProxyContext;
 use crate::error::ProxyError;
@@ -104,6 +107,7 @@ pub struct ProxyGrpcService<P> {
     sessions: ClientSessionRegistry,
     guards: ExecutionGuards,
     next_reap_at_ms: Arc<AtomicU64>,
+    auth_runtime: Option<Arc<ProxyAuthRuntime>>,
 }
 
 impl<P> Clone for ProxyGrpcService<P> {
@@ -114,6 +118,7 @@ impl<P> Clone for ProxyGrpcService<P> {
             sessions: self.sessions.clone(),
             guards: self.guards.clone(),
             next_reap_at_ms: Arc::clone(&self.next_reap_at_ms),
+            auth_runtime: self.auth_runtime.clone(),
         }
     }
 }
@@ -129,7 +134,13 @@ impl<P> ProxyGrpcService<P> {
             processor,
             sessions,
             next_reap_at_ms: Arc::new(AtomicU64::new(current_epoch_millis().saturating_add(interval_ms))),
+            auth_runtime: None,
         }
+    }
+
+    pub fn with_auth_runtime(mut self, auth_runtime: Option<ProxyAuthRuntime>) -> Self {
+        self.auth_runtime = auth_runtime.map(Arc::new);
+        self
     }
 
     fn context<T>(&self, rpc_name: &'static str, request: &Request<T>) -> ProxyContext {
@@ -148,6 +159,35 @@ impl<P> ProxyGrpcService<P> {
         T: Send + 'static,
     {
         Box::pin(stream::iter(items.into_iter().map(Ok)))
+    }
+
+    async fn authenticate_request<T: 'static>(
+        &self,
+        context: &ProxyContext,
+        request: &Request<T>,
+    ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
+        match self.auth_runtime.as_ref() {
+            Some(auth_runtime) if auth_runtime.enabled() => {
+                auth_runtime.authenticate_request(context.rpc_name(), request).await
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn authorize_contexts(
+        &self,
+        context: &ProxyContext,
+        principal: Option<&AuthenticatedPrincipal>,
+        authorization_contexts: &[auth::AuthorizationContextSpec],
+    ) -> ProxyResult<()> {
+        match self.auth_runtime.as_ref() {
+            Some(auth_runtime) if auth_runtime.enabled() => {
+                auth_runtime
+                    .authorize_request(context.rpc_name(), principal, authorization_contexts)
+                    .await
+            }
+            _ => Ok(()),
+        }
     }
 
     pub async fn run_housekeeping_until<F>(&self, shutdown: F)
@@ -691,6 +731,7 @@ where
     async fn handle_telemetry_command(
         &self,
         context: &ProxyContext,
+        principal: Option<&AuthenticatedPrincipal>,
         command: v2::TelemetryCommand,
     ) -> v2::TelemetryCommand {
         self.sessions.upsert_from_context(context);
@@ -698,10 +739,25 @@ where
         match command.command {
             Some(v2::telemetry_command::Command::Settings(settings)) => {
                 let merged = self.merged_telemetry_settings(&settings);
-                let _ = self.sessions.update_settings_from_telemetry(context, &merged);
-                v2::TelemetryCommand {
-                    status: Some(ProxyStatusMapper::ok()),
-                    command: Some(v2::telemetry_command::Command::Settings(merged)),
+                match self
+                    .authorize_contexts(
+                        context,
+                        principal,
+                        &auth::telemetry_command_contexts(&v2::TelemetryCommand {
+                            status: None,
+                            command: Some(v2::telemetry_command::Command::Settings(merged.clone())),
+                        }),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = self.sessions.update_settings_from_telemetry(context, &merged);
+                        v2::TelemetryCommand {
+                            status: Some(ProxyStatusMapper::ok()),
+                            command: Some(v2::telemetry_command::Command::Settings(merged)),
+                        }
+                    }
+                    Err(error) => Self::telemetry_status(ProxyStatusMapper::from_error(&error)),
                 }
             }
             Some(v2::telemetry_command::Command::ThreadStackTrace(_))
@@ -780,15 +836,29 @@ where
     ) -> Result<Response<v2::QueryRouteResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("QueryRoute", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_query_route_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_query_route_request(self.config.as_ref(), &request))
         {
-            Ok(input) => match self.guards.try_route() {
-                Ok(_permit) => match self.processor.query_route(&context, input).await {
-                    Ok(plan) => adapter::build_query_route_response(&request, &plan),
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::query_route_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_route() {
+                    Ok(_permit) => match self.processor.query_route(&context, input).await {
+                        Ok(plan) => adapter::build_query_route_response(&request, &plan),
+                        Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
@@ -805,15 +875,29 @@ where
     ) -> Result<Response<v2::HeartbeatResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("Heartbeat", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(v2::HeartbeatResponse {
+                    status: Some(ProxyStatusMapper::from_error(&error)),
+                }));
+            }
+        };
         let request = request.into_inner();
 
         let status = match self.guards.try_client_manager() {
             Ok(_permit) => match self.validate_heartbeat_request(&context, request.client_type) {
-                Ok(()) => {
-                    self.sessions
-                        .upsert_from_context_with_client_type(&context, Some(request.client_type));
-                    ProxyStatusMapper::ok()
-                }
+                Ok(()) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::heartbeat_contexts(&request))
+                    .await
+                {
+                    Ok(()) => {
+                        self.sessions
+                            .upsert_from_context_with_client_type(&context, Some(request.client_type));
+                        ProxyStatusMapper::ok()
+                    }
+                    Err(error) => ProxyStatusMapper::from_error(&error),
+                },
                 Err(error) => ProxyStatusMapper::from_error(&error),
             },
             Err(error) => ProxyStatusMapper::from_error(&error),
@@ -828,18 +912,32 @@ where
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("SendMessage", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_send_message_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_send_message_request(&context, &request))
         {
-            Ok(input) => match self.guards.try_producer() {
-                Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
-                    Ok(plan) => {
-                        self.track_prepared_transactions(&context, &request, &input, &plan);
-                        adapter::build_send_message_response(&plan, &input)
-                    }
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_producer() {
+                    Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
+                        Ok(plan) => {
+                            self.track_prepared_transactions(&context, &request, &input, &plan);
+                            adapter::build_send_message_response(&plan, &input)
+                        }
+                        Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
@@ -856,15 +954,29 @@ where
     ) -> Result<Response<v2::QueryAssignmentResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("QueryAssignment", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_query_assignment_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_query_assignment_request(self.config.as_ref(), &request))
         {
-            Ok(input) => match self.guards.try_route() {
-                Ok(_permit) => match self.processor.query_assignment(&context, input).await {
-                    Ok(plan) => adapter::build_query_assignment_response(&request, &plan),
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::query_assignment_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_route() {
+                    Ok(_permit) => match self.processor.query_assignment(&context, input).await {
+                        Ok(plan) => adapter::build_query_assignment_response(&request, &plan),
+                        Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
@@ -881,23 +993,39 @@ where
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("ReceiveMessage", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(self.items_stream(
+                    adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                )));
+            }
+        };
         let request = request.into_inner();
         let responses = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_receive_message_request(&request))
             .and_then(|input| self.effective_receive_request(&context, input))
         {
-            Ok(input) => match self.guards.try_consumer() {
-                Ok(_permit) => {
-                    self.sessions.upsert_from_context(&context);
-                    match self.processor.receive_message(&context, input.clone()).await {
-                        Ok(plan) => {
-                            self.track_received_receipt_handles(&context, &input, &plan);
-                            adapter::build_receive_message_responses(&plan)
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::receive_message_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_consumer() {
+                    Ok(_permit) => {
+                        self.sessions.upsert_from_context(&context);
+                        match self.processor.receive_message(&context, input.clone()).await {
+                            Ok(plan) => {
+                                self.track_received_receipt_handles(&context, &input, &plan);
+                                adapter::build_receive_message_responses(&plan)
+                            }
+                            Err(error) => {
+                                adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error))
+                            }
                         }
-                        Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
                     }
-                }
+                    Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                },
                 Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
             },
             Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
@@ -912,18 +1040,32 @@ where
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("AckMessage", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_ack_message_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_ack_message_request(&request))
         {
-            Ok(input) => match self.guards.try_consumer() {
-                Ok(_permit) => match self.processor.ack_message(&context, input.clone()).await {
-                    Ok(plan) => {
-                        self.reconcile_ack_result(&context, &input, &plan);
-                        adapter::build_ack_message_response(&plan)
-                    }
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::ack_message_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_consumer() {
+                    Ok(_permit) => match self.processor.ack_message(&context, input.clone()).await {
+                        Ok(plan) => {
+                            self.reconcile_ack_result(&context, &input, &plan);
+                            adapter::build_ack_message_response(&plan)
+                        }
+                        Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
@@ -940,19 +1082,39 @@ where
     ) -> Result<Response<v2::ForwardMessageToDeadLetterQueueResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("ForwardMessageToDeadLetterQueue", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(
+                    adapter::error_forward_message_to_dead_letter_queue_response(ProxyStatusMapper::from_error(&error)),
+                ));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_forward_message_to_dead_letter_queue_request(&request))
         {
-            Ok(input) => match self.guards.try_consumer() {
-                Ok(_permit) => match self
-                    .processor
-                    .forward_message_to_dead_letter_queue(&context, input)
-                    .await
-                {
-                    Ok(plan) => adapter::build_forward_message_to_dead_letter_queue_response(&plan),
+            Ok(input) => match self
+                .authorize_contexts(
+                    &context,
+                    principal.as_ref(),
+                    &auth::forward_message_to_dead_letter_queue_contexts(&input),
+                )
+                .await
+            {
+                Ok(()) => match self.guards.try_consumer() {
+                    Ok(_permit) => match self
+                        .processor
+                        .forward_message_to_dead_letter_queue(&context, input)
+                        .await
+                    {
+                        Ok(plan) => adapter::build_forward_message_to_dead_letter_queue_response(&plan),
+                        Err(error) => adapter::error_forward_message_to_dead_letter_queue_response(
+                            ProxyStatusMapper::from_error(&error),
+                        ),
+                    },
                     Err(error) => adapter::error_forward_message_to_dead_letter_queue_response(
                         ProxyStatusMapper::from_error(&error),
                     ),
@@ -975,19 +1137,33 @@ where
     ) -> Result<Response<Self::PullMessageStream>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("PullMessage", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(self.items_stream(adapter::error_pull_message_responses(
+                    ProxyStatusMapper::from_error(&error),
+                ))));
+            }
+        };
         let request = request.into_inner();
         let responses = match adapter::build_pull_message_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
                 .and_then(|_| self.guards.try_consumer().map(|_| ()))
             {
-                Ok(_permit) => {
-                    self.sessions.upsert_from_context(&context);
-                    match self.processor.pull_message(&context, input).await {
-                        Ok(plan) => adapter::build_pull_message_responses(&plan),
-                        Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                Ok(_permit) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::pull_message_contexts(&input))
+                    .await
+                {
+                    Ok(()) => {
+                        self.sessions.upsert_from_context(&context);
+                        match self.processor.pull_message(&context, input).await {
+                            Ok(plan) => adapter::build_pull_message_responses(&plan),
+                            Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                        }
                     }
-                }
+                    Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                },
                 Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
             },
             Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
@@ -1001,14 +1177,28 @@ where
     ) -> Result<Response<v2::UpdateOffsetResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("UpdateOffset", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_update_offset_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
         let response = match adapter::build_update_offset_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
                 .and_then(|_| self.guards.try_consumer().map(|_| ()))
             {
-                Ok(_permit) => match self.processor.update_offset(&context, input).await {
-                    Ok(plan) => adapter::build_update_offset_response(&plan),
+                Ok(_permit) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::update_offset_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.processor.update_offset(&context, input).await {
+                        Ok(plan) => adapter::build_update_offset_response(&plan),
+                        Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
@@ -1024,14 +1214,28 @@ where
     ) -> Result<Response<v2::GetOffsetResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("GetOffset", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_get_offset_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
         let response = match adapter::build_get_offset_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
                 .and_then(|_| self.guards.try_consumer().map(|_| ()))
             {
-                Ok(_permit) => match self.processor.get_offset(&context, input).await {
-                    Ok(plan) => adapter::build_get_offset_response(&plan),
+                Ok(_permit) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::get_offset_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.processor.get_offset(&context, input).await {
+                        Ok(plan) => adapter::build_get_offset_response(&plan),
+                        Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
@@ -1047,14 +1251,28 @@ where
     ) -> Result<Response<v2::QueryOffsetResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("QueryOffset", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_query_offset_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
         let response = match adapter::build_query_offset_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
                 .and_then(|_| self.guards.try_consumer().map(|_| ()))
             {
-                Ok(_permit) => match self.processor.query_offset(&context, input).await {
-                    Ok(plan) => adapter::build_query_offset_response(&plan),
+                Ok(_permit) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::query_offset_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.processor.query_offset(&context, input).await {
+                        Ok(plan) => adapter::build_query_offset_response(&plan),
+                        Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
@@ -1070,6 +1288,14 @@ where
     ) -> Result<Response<v2::EndTransactionResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("EndTransaction", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_end_transaction_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
@@ -1079,12 +1305,18 @@ where
                 self.enrich_end_transaction_request(&context, &mut input)?;
                 Ok(input)
             }) {
-            Ok(input) => match self.guards.try_producer() {
-                Ok(_permit) => match self.processor.end_transaction(&context, input.clone()).await {
-                    Ok(plan) => {
-                        self.reconcile_end_transaction_result(&context, &input, &plan);
-                        adapter::build_end_transaction_response(&plan)
-                    }
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::end_transaction_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_producer() {
+                    Ok(_permit) => match self.processor.end_transaction(&context, input.clone()).await {
+                        Ok(plan) => {
+                            self.reconcile_end_transaction_result(&context, &input, &plan);
+                            adapter::build_end_transaction_response(&plan)
+                        }
+                        Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
@@ -1101,6 +1333,14 @@ where
     ) -> Result<Response<Self::TelemetryStream>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("Telemetry", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(
+                    self.status_stream(Self::telemetry_status(ProxyStatusMapper::from_error(&error))),
+                ));
+            }
+        };
         let mut inbound = request.into_inner();
         let permit = match self
             .validate_client_context(&context)
@@ -1142,7 +1382,9 @@ where
                     inbound_item = inbound.next() => {
                         match inbound_item {
                             Some(Ok(command)) => {
-                                let response = service.handle_telemetry_command(&context, command).await;
+                                let response = service
+                                    .handle_telemetry_command(&context, principal.as_ref(), command)
+                                    .await;
                                 if sender.send(Ok(response)).await.is_err() {
                                     break;
                                 }
@@ -1168,15 +1410,34 @@ where
     ) -> Result<Response<v2::NotifyClientTerminationResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("NotifyClientTermination", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(v2::NotifyClientTerminationResponse {
+                    status: Some(ProxyStatusMapper::from_error(&error)),
+                }));
+            }
+        };
+        let request = request.into_inner();
         let status = match self
             .guards
             .try_client_manager()
             .and_then(|_| self.validate_client_context(&context))
         {
-            Ok(client_id) => {
-                self.sessions.remove_client(client_id);
-                ProxyStatusMapper::ok()
-            }
+            Ok(client_id) => match self
+                .authorize_contexts(
+                    &context,
+                    principal.as_ref(),
+                    &auth::notify_client_termination_contexts(&request),
+                )
+                .await
+            {
+                Ok(()) => {
+                    self.sessions.remove_client(client_id);
+                    ProxyStatusMapper::ok()
+                }
+                Err(error) => ProxyStatusMapper::from_error(&error),
+            },
             Err(error) => ProxyStatusMapper::from_error(&error),
         };
 
@@ -1191,18 +1452,38 @@ where
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("ChangeInvisibleDuration", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_change_invisible_duration_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_change_invisible_duration_request(&request))
         {
-            Ok(input) => match self.guards.try_consumer() {
-                Ok(_permit) => match self.processor.change_invisible_duration(&context, input.clone()).await {
-                    Ok(plan) => {
-                        self.reconcile_change_invisible_result(&context, &input, &plan);
-                        adapter::build_change_invisible_duration_response(&plan)
-                    }
+            Ok(input) => match self
+                .authorize_contexts(
+                    &context,
+                    principal.as_ref(),
+                    &auth::change_invisible_duration_contexts(&input),
+                )
+                .await
+            {
+                Ok(()) => match self.guards.try_consumer() {
+                    Ok(_permit) => match self.processor.change_invisible_duration(&context, input.clone()).await {
+                        Ok(plan) => {
+                            self.reconcile_change_invisible_result(&context, &input, &plan);
+                            adapter::build_change_invisible_duration_response(&plan)
+                        }
+                        Err(error) => {
+                            adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error))
+                        }
+                    },
                     Err(error) => {
                         adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error))
                     }
@@ -1221,15 +1502,29 @@ where
     ) -> Result<Response<v2::RecallMessageResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("RecallMessage", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(adapter::error_recall_message_response(
+                    ProxyStatusMapper::from_error(&error),
+                )));
+            }
+        };
         let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_recall_message_request(&request))
         {
-            Ok(input) => match self.guards.try_producer() {
-                Ok(_permit) => match self.processor.recall_message(&context, input).await {
-                    Ok(plan) => adapter::build_recall_message_response(&plan),
+            Ok(input) => match self
+                .authorize_contexts(&context, principal.as_ref(), &auth::recall_message_contexts(&input))
+                .await
+            {
+                Ok(()) => match self.guards.try_producer() {
+                    Ok(_permit) => match self.processor.recall_message(&context, input).await {
+                        Ok(plan) => adapter::build_recall_message_response(&plan),
+                        Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
@@ -1246,6 +1541,14 @@ where
     ) -> Result<Response<v2::SyncLiteSubscriptionResponse>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("SyncLiteSubscription", &request);
+        let principal = match self.authenticate_request(&context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => {
+                return Ok(Response::new(v2::SyncLiteSubscriptionResponse {
+                    status: Some(ProxyStatusMapper::from_error(&error)),
+                }));
+            }
+        };
         let request = request.into_inner();
 
         let status = match self.validate_client_context(&context).and_then(|client_id| {
@@ -1257,7 +1560,17 @@ where
                 .sync_lite_subscription(client_id, input, settings.as_ref())
                 .map(|_| ProxyStatusMapper::ok())
         }) {
-            Ok(status) => status,
+            Ok(status) => match self
+                .authorize_contexts(
+                    &context,
+                    principal.as_ref(),
+                    &auth::sync_lite_subscription_contexts(&request),
+                )
+                .await
+            {
+                Ok(()) => status,
+                Err(error) => ProxyStatusMapper::from_error(&error),
+            },
             Err(error) => ProxyStatusMapper::from_error(&error),
         };
 
@@ -1275,19 +1588,32 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use futures::StreamExt;
+    use hmac::Hmac;
+    use hmac::Mac;
+    use rocketmq_auth::authentication::enums::user_status::UserStatus;
+    use rocketmq_auth::authentication::enums::user_type::UserType;
+    use rocketmq_auth::authentication::model::user::User;
+    use rocketmq_auth::authorization::enums::decision::Decision;
+    use rocketmq_auth::authorization::model::acl::Acl;
+    use rocketmq_auth::authorization::model::policy::Policy;
+    use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_client_rust::producer::send_result::SendResult;
     use rocketmq_client_rust::producer::send_status::SendStatus;
+    use rocketmq_common::common::action::Action;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use sha1::Sha1;
     use tokio::sync::mpsc;
     use tonic::metadata::MetadataValue;
     use tonic::Request;
 
     use super::ProxyGrpcService;
+    use crate::auth::ProxyAuthRuntime;
+    use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
     use crate::grpc::adapter;
     use crate::processor::AckMessageRequest;
@@ -1604,6 +1930,78 @@ mod tests {
         )
     }
 
+    const AUTH_TEST_DATETIME: &str = "20260322T010203Z";
+
+    async fn test_auth_runtime(authentication_enabled: bool, authorization_enabled: bool) -> ProxyAuthRuntime {
+        ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+            authentication_enabled,
+            authorization_enabled,
+            auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
+            ..ProxyAuthConfig::default()
+        })
+        .await
+        .expect("auth runtime should build")
+        .expect("auth runtime should be enabled")
+    }
+
+    async fn seed_normal_user(auth_runtime: &ProxyAuthRuntime, username: &str, secret: &str) {
+        let mut user = User::of_with_type(username, secret, UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        auth_runtime.create_user(user).await.expect("user should be created");
+    }
+
+    async fn allow_topic_actions(auth_runtime: &ProxyAuthRuntime, username: &str, topic: &str, actions: Vec<Action>) {
+        auth_runtime
+            .create_acl(Acl::of(
+                username,
+                rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+                Policy::of(vec![Resource::of_topic(topic)], actions, None, Decision::Allow),
+            ))
+            .await
+            .expect("acl should be created");
+    }
+
+    async fn allow_group_actions(auth_runtime: &ProxyAuthRuntime, username: &str, group: &str, actions: Vec<Action>) {
+        auth_runtime
+            .create_acl(Acl::of(
+                username,
+                rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_group(group.to_owned())],
+                    actions,
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .expect("group acl should be created");
+    }
+
+    fn apply_auth_headers<T>(request: &mut Request<T>, client_id: &str, username: &str, secret: &str) {
+        type HmacSha1 = Hmac<Sha1>;
+
+        let mut mac = HmacSha1::new_from_slice(secret.as_bytes()).expect("test hmac should build");
+        mac.update(AUTH_TEST_DATETIME.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+        let authorization =
+            format!("MQv2-HMAC-SHA1 Credential={username}, SignedHeaders=x-mq-date-time, Signature={signature}",);
+
+        request.metadata_mut().insert(
+            "x-mq-client-id",
+            MetadataValue::try_from(client_id).expect("client id metadata"),
+        );
+        request
+            .metadata_mut()
+            .insert("x-mq-date-time", MetadataValue::from_static(AUTH_TEST_DATETIME));
+        request.metadata_mut().insert(
+            "authorization",
+            MetadataValue::try_from(authorization.as_str()).expect("auth metadata"),
+        );
+        request
+            .metadata_mut()
+            .insert("channel-id", MetadataValue::from_static("auth-channel"));
+    }
+
     fn sample_route() -> TopicRouteData {
         let mut broker_addrs = HashMap::new();
         broker_addrs.insert(0_u64, CheetahString::from("127.0.0.1:10911"));
@@ -1702,6 +2100,153 @@ mod tests {
 
         let response = service.heartbeat(request).await.unwrap().into_inner();
         assert_eq!(response.status.unwrap().code, v2::Code::ClientIdRequired as i32);
+    }
+
+    #[tokio::test]
+    async fn query_route_returns_unauthorized_when_authentication_fails() {
+        let route_service = StaticRouteService::default();
+        route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
+        let auth_runtime = test_auth_runtime(true, false).await;
+        let service =
+            test_service(route_service, StaticMetadataService::default()).with_auth_runtime(Some(auth_runtime));
+
+        let mut request = Request::new(v2::QueryRouteRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            endpoints: Some(v2::Endpoints {
+                scheme: v2::AddressScheme::IPv4 as i32,
+                addresses: vec![v2::Address {
+                    host: "127.0.0.1".to_owned(),
+                    port: 8081,
+                }],
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.query_route(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Unauthorized as i32);
+    }
+
+    #[tokio::test]
+    async fn query_route_accepts_valid_grpc_authentication_headers() {
+        let route_service = StaticRouteService::default();
+        route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
+        let auth_runtime = test_auth_runtime(true, false).await;
+        seed_normal_user(&auth_runtime, "alice", "secret").await;
+        let service =
+            test_service(route_service, StaticMetadataService::default()).with_auth_runtime(Some(auth_runtime));
+
+        let mut request = Request::new(v2::QueryRouteRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            endpoints: Some(v2::Endpoints {
+                scheme: v2::AddressScheme::IPv4 as i32,
+                addresses: vec![v2::Address {
+                    host: "127.0.0.1".to_owned(),
+                    port: 8081,
+                }],
+            }),
+        });
+        apply_auth_headers(&mut request, "client-a", "alice", "secret");
+
+        let response = service.query_route(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+    }
+
+    #[tokio::test]
+    async fn query_route_returns_forbidden_when_acl_denies_topic_access() {
+        let route_service = StaticRouteService::default();
+        route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
+        let auth_runtime = test_auth_runtime(true, true).await;
+        seed_normal_user(&auth_runtime, "alice", "secret").await;
+        allow_topic_actions(
+            &auth_runtime,
+            "alice",
+            "TopicB",
+            vec![Action::Pub, Action::Sub, Action::Get],
+        )
+        .await;
+        let service =
+            test_service(route_service, StaticMetadataService::default()).with_auth_runtime(Some(auth_runtime));
+
+        let mut request = Request::new(v2::QueryRouteRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            endpoints: Some(v2::Endpoints {
+                scheme: v2::AddressScheme::IPv4 as i32,
+                addresses: vec![v2::Address {
+                    host: "127.0.0.1".to_owned(),
+                    port: 8081,
+                }],
+            }),
+        });
+        apply_auth_headers(&mut request, "client-a", "alice", "secret");
+
+        let response = service.query_route(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Forbidden as i32);
+    }
+
+    #[tokio::test]
+    async fn telemetry_settings_returns_forbidden_when_acl_denies_subscription_topic() {
+        let auth_runtime = test_auth_runtime(true, true).await;
+        seed_normal_user(&auth_runtime, "alice", "secret").await;
+        allow_group_actions(&auth_runtime, "alice", "GroupA", vec![Action::Sub]).await;
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default())
+            .with_auth_runtime(Some(auth_runtime));
+
+        let mut auth_request = Request::new(());
+        apply_auth_headers(&mut auth_request, "client-a", "alice", "secret");
+        let context = service.context("Telemetry", &auth_request);
+        let principal = service
+            .authenticate_request(&context, &auth_request)
+            .await
+            .expect("authentication should succeed");
+
+        let response = service
+            .handle_telemetry_command(
+                &context,
+                principal.as_ref(),
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::Settings(v2::Settings {
+                        client_type: Some(v2::ClientType::PushConsumer as i32),
+                        access_point: None,
+                        backoff_policy: None,
+                        request_timeout: None,
+                        pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                            group: Some(v2::Resource {
+                                resource_namespace: String::new(),
+                                name: "GroupA".to_owned(),
+                            }),
+                            subscriptions: vec![v2::SubscriptionEntry {
+                                topic: Some(v2::Resource {
+                                    resource_namespace: String::new(),
+                                    name: "TopicA".to_owned(),
+                                }),
+                                expression: None,
+                            }],
+                            fifo: Some(false),
+                            receive_batch_size: Some(16),
+                            long_polling_timeout: Some(prost_types::Duration { seconds: 5, nanos: 0 }),
+                            lite_subscription_quota: None,
+                            max_lite_topic_size: None,
+                        })),
+                        user_agent: None,
+                        metric: None,
+                    })),
+                },
+            )
+            .await;
+
+        assert_eq!(response.status.unwrap().code, v2::Code::Forbidden as i32);
     }
 
     #[tokio::test]
