@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -26,6 +27,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::prelude::RemotingDeserializable;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
@@ -49,9 +51,16 @@ use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateCo
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_remoting::remoting_server::rocketmq_tokio_server;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RejectRequestResponse;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
+use tokio::net::TcpListener;
 
+use crate::config::ProxyConfig;
 use crate::context::ProxyContext;
 use crate::error::ProxyError;
+use crate::error::ProxyResult;
 use crate::processor::ConsumerFilterExpression;
 use crate::processor::GetOffsetRequest;
 use crate::processor::MessageQueueTarget;
@@ -65,6 +74,69 @@ use crate::processor::SendMessageEntry;
 use crate::processor::SendMessageRequest;
 use crate::service::ResourceIdentity;
 use crate::status::ProxyPayloadStatus;
+
+pub struct ProxyRemotingRequestProcessor<P> {
+    dispatcher: Arc<ProxyRemotingDispatcher<P>>,
+}
+
+impl<P> Clone for ProxyRemotingRequestProcessor<P> {
+    fn clone(&self) -> Self {
+        Self {
+            dispatcher: Arc::clone(&self.dispatcher),
+        }
+    }
+}
+
+impl<P> ProxyRemotingRequestProcessor<P>
+where
+    P: MessagingProcessor + 'static,
+{
+    pub fn new(processor: Arc<P>) -> Self {
+        Self {
+            dispatcher: Arc::new(ProxyRemotingDispatcher::new(processor)),
+        }
+    }
+}
+
+impl<P> RequestProcessor for ProxyRemotingRequestProcessor<P>
+where
+    P: MessagingProcessor + 'static,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let context = ProxyContext::from_remoting_request(remoting_rpc_name(request.code()), &channel, request);
+        Ok(Some(self.dispatcher.dispatch(&context, request).await))
+    }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
+        (false, None)
+    }
+}
+
+pub async fn serve<P, F>(config: Arc<ProxyConfig>, processor: Arc<P>, shutdown: F) -> ProxyResult<()>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    let addr = config.remoting.socket_addr()?;
+    let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
+        message: format!("proxy remoting server failed to bind {addr}: {error}"),
+    })?;
+    rocketmq_tokio_server::run(
+        listener,
+        shutdown,
+        ProxyRemotingRequestProcessor::new(processor),
+        None,
+        Vec::new(),
+        None,
+    )
+    .await;
+    Ok(())
+}
 
 pub struct ProxyRemotingDispatcher<P> {
     processor: Arc<P>,
@@ -421,6 +493,22 @@ where
             (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
             None,
         )
+    }
+}
+
+fn remoting_rpc_name(code: i32) -> &'static str {
+    match RequestCode::from(code) {
+        RequestCode::GetRouteinfoByTopic => "RemotingGetRouteinfoByTopic",
+        RequestCode::QueryAssignment => "RemotingQueryAssignment",
+        RequestCode::SendMessage => "RemotingSendMessage",
+        RequestCode::SendMessageV2 => "RemotingSendMessageV2",
+        RequestCode::PullMessage => "RemotingPullMessage",
+        RequestCode::UpdateConsumerOffset => "RemotingUpdateConsumerOffset",
+        RequestCode::QueryConsumerOffset => "RemotingQueryConsumerOffset",
+        RequestCode::GetMaxOffset => "RemotingGetMaxOffset",
+        RequestCode::GetMinOffset => "RemotingGetMinOffset",
+        RequestCode::SearchOffsetByTimestamp => "RemotingSearchOffsetByTimestamp",
+        _ => "RemotingRequest",
     }
 }
 

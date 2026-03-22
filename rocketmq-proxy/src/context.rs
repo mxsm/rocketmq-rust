@@ -23,6 +23,8 @@ use crate::auth::AuthenticatedPrincipal;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::middleware;
+use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolvedAddressScheme {
@@ -78,6 +80,23 @@ impl ProxyContext {
 
     pub(crate) fn set_authenticated_principal(&mut self, principal: AuthenticatedPrincipal) {
         self.authenticated_principal = Some(principal);
+    }
+
+    pub fn from_remoting_request(rpc_name: &'static str, channel: &Channel, request: &RemotingCommand) -> Self {
+        Self {
+            request_id: request.opaque().to_string(),
+            rpc_name,
+            remote_addr: Some(channel.remote_address().to_string()),
+            local_addr: Some(channel.local_address().to_string()),
+            client_id: remoting_ext_field(request, "clientID"),
+            language: Some(format!("{:?}", request.language())),
+            client_version: Some(request.version().to_string()),
+            namespace: remoting_ext_field(request, "namespace"),
+            connection_id: Some(channel.channel_id().to_owned()),
+            deadline: None,
+            received_at: Instant::now(),
+            authenticated_principal: None,
+        }
     }
 
     pub fn for_internal_client(rpc_name: &'static str, client_id: impl Into<String>) -> Self {
@@ -155,6 +174,15 @@ fn metadata_string(metadata: &MetadataMap, key: &'static str) -> Option<String> 
         .get(key)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
+}
+
+fn remoting_ext_field(request: &RemotingCommand, key: &str) -> Option<String> {
+    request.ext_fields().and_then(|fields| {
+        fields
+            .iter()
+            .find(|(field_key, _)| field_key.as_str() == key)
+            .map(|(_, value)| value.to_string())
+    })
 }
 
 fn parse_grpc_timeout_metadata(metadata: &MetadataMap) -> ProxyResult<Option<Duration>> {

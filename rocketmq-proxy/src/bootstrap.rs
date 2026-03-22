@@ -16,6 +16,8 @@ use std::future;
 use std::future::Future;
 use std::sync::Arc;
 
+use futures::FutureExt;
+
 use crate::auth::ProxyAuthRuntime;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
@@ -26,6 +28,7 @@ use crate::observability::ProxyHookChain;
 use crate::observability::ProxyMetrics;
 use crate::processor::DefaultMessagingProcessor;
 use crate::processor::MessagingProcessor;
+use crate::remoting;
 use crate::service::ClusterServiceManager;
 use crate::service::LocalServiceManager;
 use crate::service::ServiceManager;
@@ -87,6 +90,7 @@ impl ProxyRuntimeBuilder {
 
 pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     config: Arc<ProxyConfig>,
+    processor: Arc<P>,
     grpc_service: ProxyGrpcService<P>,
     local_mode_supported: bool,
     auth_runtime: Option<ProxyAuthRuntime>,
@@ -140,6 +144,7 @@ where
             .with_metrics(metrics);
         Self {
             config,
+            processor: Arc::clone(grpc_service.processor()),
             grpc_service,
             local_mode_supported,
             auth_runtime,
@@ -160,6 +165,7 @@ where
     {
         let ProxyRuntime {
             config,
+            processor,
             grpc_service,
             local_mode_supported,
             auth_runtime,
@@ -173,7 +179,26 @@ where
             Some(auth_runtime) => Some(auth_runtime),
             None => ProxyAuthRuntime::from_proxy_config(&config.auth).await?,
         };
-        server::serve(config, grpc_service.with_auth_runtime(auth_runtime), shutdown).await
+        let grpc_service = grpc_service.with_auth_runtime(auth_runtime);
+        if !config.remoting.enabled {
+            return server::serve(config, grpc_service, shutdown).await;
+        }
+
+        let shared_shutdown = shutdown.boxed().shared();
+        let grpc_shutdown = {
+            let shared_shutdown = shared_shutdown.clone();
+            async move {
+                shared_shutdown.await;
+            }
+        };
+        let remoting_shutdown = async move {
+            shared_shutdown.await;
+        };
+        let grpc_future = server::serve(config.clone(), grpc_service, grpc_shutdown);
+        let remoting_future = remoting::serve(config, processor, remoting_shutdown);
+        let (grpc_result, remoting_result) = tokio::join!(grpc_future, remoting_future);
+        grpc_result?;
+        remoting_result
     }
 }
 

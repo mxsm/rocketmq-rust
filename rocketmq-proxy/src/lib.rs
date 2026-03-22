@@ -47,6 +47,7 @@ pub use config::LocalConfig;
 pub use config::ProxyAuthConfig;
 pub use config::ProxyConfig;
 pub use config::ProxyMode;
+pub use config::RemotingConfig;
 pub use config::RuntimeConfig;
 pub use config::SessionConfig;
 pub use error::ProxyError;
@@ -134,3 +135,6 @@ pub use status::ProxyPayloadStatus;
 
 /// Default gRPC port used by the proxy runtime.
 pub const DEFAULT_PROXY_GRPC_PORT: u16 = 8081;
+
+/// Default remoting port used by the proxy runtime.
+pub const DEFAULT_PROXY_REMOTING_PORT: u16 = 8080;

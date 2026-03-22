@@ -24,6 +24,7 @@ use serde::Serialize;
 
 use crate::error::ProxyResult;
 use crate::DEFAULT_PROXY_GRPC_PORT;
+use crate::DEFAULT_PROXY_REMOTING_PORT;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +61,38 @@ impl GrpcConfig {
         self.listen_addr.parse().map_err(|error| {
             RocketMQError::illegal_argument(format!(
                 "invalid proxy gRPC listen address '{}': {error}",
+                self.listen_addr
+            ))
+            .into()
+        })
+    }
+
+    pub fn listen_port(&self) -> ProxyResult<u16> {
+        Ok(self.socket_addr()?.port())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RemotingConfig {
+    pub enabled: bool,
+    pub listen_addr: String,
+}
+
+impl Default for RemotingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_addr: format!("0.0.0.0:{DEFAULT_PROXY_REMOTING_PORT}"),
+        }
+    }
+}
+
+impl RemotingConfig {
+    pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
+        self.listen_addr.parse().map_err(|error| {
+            RocketMQError::illegal_argument(format!(
+                "invalid proxy remoting listen address '{}': {error}",
                 self.listen_addr
             ))
             .into()
@@ -267,6 +300,7 @@ impl ProxyAuthConfig {
 pub struct ProxyConfig {
     pub mode: ProxyMode,
     pub grpc: GrpcConfig,
+    pub remoting: RemotingConfig,
     pub cluster: ClusterConfig,
     pub local: LocalConfig,
     pub runtime: RuntimeConfig,
