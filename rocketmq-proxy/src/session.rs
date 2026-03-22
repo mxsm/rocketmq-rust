@@ -446,6 +446,48 @@ impl ClientSessionRegistry {
             .map(|entry| entry.clone())
     }
 
+    pub fn lite_subscriptions_for_topic(&self, topic: &ResourceIdentity) -> Vec<LiteSubscriptionSnapshot> {
+        self.lite_subscriptions
+            .iter()
+            .filter(|entry| entry.value().topic == *topic)
+            .map(|entry| entry.clone())
+            .collect()
+    }
+
+    pub fn all_lite_subscriptions(&self) -> Vec<LiteSubscriptionSnapshot> {
+        self.lite_subscriptions.iter().map(|entry| entry.clone()).collect()
+    }
+
+    pub fn lite_subscriptions_for_topic_and_lite(
+        &self,
+        topic: &ResourceIdentity,
+        lite_topic: &str,
+    ) -> Vec<LiteSubscriptionSnapshot> {
+        self.lite_subscriptions
+            .iter()
+            .filter(|entry| {
+                let snapshot = entry.value();
+                snapshot.topic == *topic && snapshot.lite_topic_set.contains(lite_topic)
+            })
+            .map(|entry| entry.clone())
+            .collect()
+    }
+
+    pub fn lite_subscriptions_for_group_and_lite(
+        &self,
+        group: &ResourceIdentity,
+        lite_topic: &str,
+    ) -> Vec<LiteSubscriptionSnapshot> {
+        self.lite_subscriptions
+            .iter()
+            .filter(|entry| {
+                let snapshot = entry.value();
+                snapshot.group == *group && snapshot.lite_topic_set.contains(lite_topic)
+            })
+            .map(|entry| entry.clone())
+            .collect()
+    }
+
     pub fn remove_lite_topic(
         &self,
         client_id: &str,

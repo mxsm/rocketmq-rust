@@ -1240,7 +1240,7 @@ async fn end_transaction_request_inner(
     .await
 }
 
-async fn initialize_client_instance(config: ClusterConfig) -> ProxyResult<ArcMut<MQClientInstance>> {
+pub(crate) async fn initialize_client_instance(config: ClusterConfig) -> ProxyResult<ArcMut<MQClientInstance>> {
     let mut client_config = RocketmqClientConfig::default();
     client_config.set_instance_name(CheetahString::from(config.instance_name));
     client_config.set_mq_client_api_timeout(config.mq_client_api_timeout_ms);

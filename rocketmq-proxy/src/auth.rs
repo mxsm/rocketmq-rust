@@ -38,8 +38,10 @@ use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::DefaultAuthenticationProvider;
 use rocketmq_auth::ProviderRegistry;
 use rocketmq_common::common::action::Action;
+use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use tonic::Request;
 
 use crate::config::ProxyAuthConfig;
@@ -260,6 +262,71 @@ impl ProxyAuthRuntime {
                 .map_err(map_authorization_error)?;
         }
 
+        Ok(())
+    }
+
+    pub async fn authenticate_remoting(
+        &self,
+        command: &RemotingCommand,
+        channel_id: Option<&str>,
+        source_ip: Option<&str>,
+    ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
+        let code = command.code().to_string();
+        let requires_authentication = self.authentication_required(code.as_str());
+        let requires_authorization = self.authorization_required(code.as_str());
+        if !(requires_authentication || requires_authorization) {
+            return Ok(None);
+        }
+
+        let authentication_context = self
+            .authentication_builder
+            .build_from_remoting(command, channel_id)
+            .map_err(|error| ProxyError::from(RocketMQError::authentication_failed(error.to_string())))?;
+
+        if requires_authentication {
+            self.authentication_provider
+                .authenticate(&authentication_context)
+                .await
+                .map_err(ProxyError::from)?;
+        }
+
+        let username = authentication_context
+            .username()
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                ProxyError::from(RocketMQError::authentication_failed(format!(
+                    "remoting request {} is missing credential information",
+                    command.code()
+                )))
+            })?;
+
+        Ok(Some(AuthenticatedPrincipal {
+            username,
+            source_ip: source_ip.unwrap_or("unknown").to_owned(),
+            channel_id: authentication_context.base.channel_id().map(ToString::to_string),
+        }))
+    }
+
+    pub async fn authorize_remoting(
+        &self,
+        channel_context: &(dyn std::any::Any + Send + Sync),
+        command: &RemotingCommand,
+    ) -> ProxyResult<()> {
+        let code = command.code().to_string();
+        if !self.authorization_required(code.as_str()) {
+            return Ok(());
+        }
+
+        let contexts = self
+            .authorization_provider
+            .new_contexts_from_remoting_command(channel_context, command)
+            .map_err(map_authorization_error)?;
+        for context in contexts {
+            self.authorization_provider
+                .authorize(&context)
+                .await
+                .map_err(map_authorization_error)?;
+        }
         Ok(())
     }
 
@@ -485,6 +552,18 @@ fn map_authorization_error(error: AuthorizationError) -> ProxyError {
     ProxyError::from(RocketMQError::BrokerPermissionDenied {
         operation: error.to_string(),
     })
+}
+
+pub fn is_auth_error(error: &RocketMQError) -> bool {
+    matches!(
+        error,
+        RocketMQError::Authentication(
+            AuthError::AuthenticationFailed(_)
+                | AuthError::InvalidCredential(_)
+                | AuthError::UserNotFound(_)
+                | AuthError::InvalidSignature(_)
+        ) | RocketMQError::BrokerPermissionDenied { .. }
+    )
 }
 
 fn parse_whitelist(entries: &[String]) -> HashSet<String> {

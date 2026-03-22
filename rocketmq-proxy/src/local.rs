@@ -111,6 +111,7 @@ use crate::processor::TransactionResolution;
 use crate::processor::TransactionSource;
 use crate::processor::UpdateOffsetPlan;
 use crate::processor::UpdateOffsetRequest;
+use crate::remoting::ProxyRemotingBackend;
 use crate::service::AssignmentService;
 use crate::service::ConsumerService;
 use crate::service::LocalServiceManager;
@@ -291,6 +292,24 @@ impl LocalBrokerFacadeClient {
         reply_rx.await.map_err(|error| ProxyError::Transport {
             message: format!("local broker worker dropped response channel: {error}"),
         })?
+    }
+}
+
+#[derive(Clone)]
+pub struct LocalRemotingBackend {
+    client: LocalBrokerFacadeClient,
+}
+
+impl LocalRemotingBackend {
+    pub fn new(client: LocalBrokerFacadeClient) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl ProxyRemotingBackend for LocalRemotingBackend {
+    async fn process(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
+        self.client.process_remoting(request).await
     }
 }
 
@@ -527,16 +546,25 @@ impl ConsumerService for LocalConsumerService {
     }
 }
 
-pub fn local_service_manager_from_config(config: LocalConfig, strategy_name: impl Into<String>) -> LocalServiceManager {
+pub fn local_components_from_config(
+    config: LocalConfig,
+    strategy_name: impl Into<String>,
+) -> (LocalServiceManager, LocalBrokerFacadeClient) {
     let client = LocalBrokerFacadeClient::new(config);
-    LocalServiceManager::with_services(
+    let backend_client = client.clone();
+    let manager = LocalServiceManager::with_services(
         std::sync::Arc::new(LocalRouteService::new(client.clone())),
         std::sync::Arc::new(LocalMetadataService::new(client.clone())),
         std::sync::Arc::new(LocalAssignmentService::new(client.clone(), strategy_name)),
         std::sync::Arc::new(LocalMessageService::new(client.clone())),
         std::sync::Arc::new(LocalConsumerService::new(client.clone())),
         std::sync::Arc::new(LocalTransactionService::new(client)),
-    )
+    );
+    (manager, backend_client)
+}
+
+pub fn local_service_manager_from_config(config: LocalConfig, strategy_name: impl Into<String>) -> LocalServiceManager {
+    local_components_from_config(config, strategy_name).0
 }
 
 fn run_local_broker_worker(config: LocalConfig, mut receiver: mpsc::UnboundedReceiver<LocalBrokerCommand>) {
