@@ -39,6 +39,8 @@ use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::RecallMessagePlan;
+use crate::processor::RecallMessageRequest;
 use crate::processor::ReceiveMessagePlan;
 use crate::processor::ReceiveMessageRequest;
 use crate::processor::SendMessageRequest;
@@ -141,6 +143,12 @@ pub trait MessageService: Send + Sync {
         context: &ProxyContext,
         request: &SendMessageRequest,
     ) -> ProxyResult<Vec<SendMessageResultEntry>>;
+
+    async fn recall_message(
+        &self,
+        context: &ProxyContext,
+        request: &RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan>;
 }
 
 #[async_trait]
@@ -256,6 +264,14 @@ impl MessageService for DefaultMessageService {
         _request: &SendMessageRequest,
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         Err(ProxyError::not_implemented("message service"))
+    }
+
+    async fn recall_message(
+        &self,
+        _context: &ProxyContext,
+        _request: &RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan> {
+        Err(ProxyError::not_implemented("message recall service"))
     }
 }
 
@@ -417,6 +433,17 @@ impl MessageService for StaticMessageService {
             })
             .collect())
     }
+
+    async fn recall_message(
+        &self,
+        _context: &ProxyContext,
+        request: &RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan> {
+        Ok(RecallMessagePlan {
+            status: ProxyStatusMapper::ok_payload(),
+            message_id: request.recall_handle.clone(),
+        })
+    }
 }
 
 pub struct ClusterRouteService {
@@ -514,6 +541,14 @@ impl MessageService for ClusterMessageService {
         request: &SendMessageRequest,
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         self.client.send_message(context, request).await
+    }
+
+    async fn recall_message(
+        &self,
+        context: &ProxyContext,
+        request: &RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan> {
+        self.client.recall_message(context, request).await
     }
 }
 

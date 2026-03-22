@@ -142,9 +142,11 @@ pub struct PreparedTransactionRegistration {
     pub producer_group: String,
     pub transaction_state_table_offset: u64,
     pub commit_log_message_id: String,
+    pub message: v2::Message,
+    pub orphaned_transaction_recovery_duration: Option<Duration>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PreparedTransactionHandle {
     pub client_id: String,
     pub topic: ResourceIdentity,
@@ -153,6 +155,8 @@ pub struct PreparedTransactionHandle {
     pub producer_group: String,
     pub transaction_state_table_offset: u64,
     pub commit_log_message_id: String,
+    pub message: v2::Message,
+    pub orphaned_transaction_recovery_duration: Option<Duration>,
     pub last_touched: SystemTime,
 }
 
@@ -411,6 +415,8 @@ impl ClientSessionRegistry {
             producer_group: registration.producer_group,
             transaction_state_table_offset: registration.transaction_state_table_offset,
             commit_log_message_id: registration.commit_log_message_id,
+            message: registration.message,
+            orphaned_transaction_recovery_duration: registration.orphaned_transaction_recovery_duration,
             last_touched: SystemTime::now(),
         };
         self.prepared_transactions.insert(
@@ -509,6 +515,17 @@ impl ClientSessionRegistry {
         self.prepared_transactions
             .remove(&matching_key)
             .map(|(_, tracked)| tracked)
+    }
+
+    pub fn prepared_transactions_due_for_recovery(&self, now: SystemTime) -> Vec<PreparedTransactionHandle> {
+        self.prepared_transactions
+            .iter()
+            .filter_map(|entry| {
+                let tracked = entry.value();
+                let recovery_duration = tracked.orphaned_transaction_recovery_duration?;
+                is_expired(tracked.last_touched, now, recovery_duration).then(|| tracked.clone())
+            })
+            .collect()
     }
 
     pub fn track_receipt_handle(&self, registration: ReceiptHandleRegistration) -> TrackedReceiptHandle {
@@ -936,6 +953,19 @@ mod tests {
             producer_group: format!("PROXY_SEND-{client_id}"),
             transaction_state_table_offset: 7,
             commit_log_message_id: format!("offset-{message_id}"),
+            message: v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: Default::default(),
+                system_properties: Some(v2::SystemProperties {
+                    message_id: message_id.to_owned(),
+                    ..Default::default()
+                }),
+                body: b"hello".to_vec(),
+            },
+            orphaned_transaction_recovery_duration: None,
         }
     }
 

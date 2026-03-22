@@ -163,6 +163,7 @@ impl<P> ProxyGrpcService<P> {
                 _ = &mut shutdown => break,
                 _ = interval.tick() => {
                     self.reap_session_state();
+                    self.dispatch_due_prepared_transaction_recoveries();
                     self.schedule_next_reap();
                 }
             }
@@ -211,6 +212,52 @@ impl<P> ProxyGrpcService<P> {
         {
             self.reap_session_state();
         }
+    }
+
+    fn dispatch_due_prepared_transaction_recoveries(&self) {
+        self.dispatch_due_prepared_transaction_recoveries_for_client(None);
+    }
+
+    fn dispatch_due_prepared_transaction_recoveries_for_client(&self, client_id: Option<&str>) {
+        let now = SystemTime::now();
+        let due_transactions = self.sessions.prepared_transactions_due_for_recovery(now);
+        for tracked in due_transactions {
+            if client_id.is_some_and(|expected| tracked.client_id != expected) {
+                continue;
+            }
+
+            if self.queue_recover_orphaned_transaction_command(
+                tracked.client_id.as_str(),
+                tracked.message.clone(),
+                tracked.transaction_id.clone(),
+            ) {
+                let _ = self.sessions.prepared_transaction(
+                    tracked.client_id.as_str(),
+                    tracked.transaction_id.as_str(),
+                    tracked.message_id.as_str(),
+                );
+            }
+        }
+    }
+
+    fn queue_recover_orphaned_transaction_command(
+        &self,
+        client_id: &str,
+        message: v2::Message,
+        transaction_id: impl Into<String>,
+    ) -> bool {
+        self.sessions.send_telemetry_command(
+            client_id,
+            v2::TelemetryCommand {
+                status: Some(ProxyStatusMapper::ok()),
+                command: Some(v2::telemetry_command::Command::RecoverOrphanedTransactionCommand(
+                    v2::RecoverOrphanedTransactionCommand {
+                        message: Some(message),
+                        transaction_id: transaction_id.into(),
+                    },
+                )),
+            },
+        )
     }
 }
 
@@ -487,6 +534,7 @@ where
     fn track_prepared_transactions(
         &self,
         context: &ProxyContext,
+        grpc_request: &v2::SendMessageRequest,
         request: &crate::processor::SendMessageRequest,
         plan: &crate::processor::SendMessagePlan,
     ) {
@@ -496,7 +544,12 @@ where
         let producer_group =
             crate::cluster::build_proxy_producer_group(&self.config.cluster, Some(client_id), context.request_id());
 
-        for (message, result) in request.messages.iter().zip(plan.entries.iter()) {
+        for ((grpc_message, message), result) in grpc_request
+            .messages
+            .iter()
+            .zip(request.messages.iter())
+            .zip(plan.entries.iter())
+        {
             if !is_transaction_message(&message.message) {
                 continue;
             }
@@ -527,6 +580,12 @@ where
                     producer_group: producer_group.clone(),
                     transaction_state_table_offset: send_result.queue_offset,
                     commit_log_message_id,
+                    message: grpc_message.clone(),
+                    orphaned_transaction_recovery_duration: grpc_message
+                        .system_properties
+                        .as_ref()
+                        .and_then(|system| system.orphaned_transaction_recovery_duration.as_ref())
+                        .and_then(proto_duration),
                 });
         }
     }
@@ -788,7 +847,7 @@ where
             Ok(input) => match self.guards.try_producer() {
                 Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
                     Ok(plan) => {
-                        self.track_prepared_transactions(&context, &input, &plan);
+                        self.track_prepared_transactions(&context, &request, &input, &plan);
                         adapter::build_send_message_response(&plan, &input)
                     }
                     Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
@@ -997,6 +1056,7 @@ where
         };
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
         self.sessions.bind_telemetry_link(client_id.clone(), outbound_tx);
+        self.dispatch_due_prepared_transaction_recoveries_for_client(Some(client_id.as_str()));
         let service = self.clone();
         let (sender, receiver) = mpsc::channel(16);
         tokio::spawn(async move {
@@ -1091,12 +1151,27 @@ where
 
     async fn recall_message(
         &self,
-        _request: Request<v2::RecallMessageRequest>,
+        request: Request<v2::RecallMessageRequest>,
     ) -> Result<Response<v2::RecallMessageResponse>, Status> {
-        Ok(Response::new(v2::RecallMessageResponse {
-            status: Some(self.not_implemented_status("RecallMessage")),
-            message_id: String::new(),
-        }))
+        self.reap_session_state_if_due();
+        let context = self.context("RecallMessage", &request);
+        let request = request.into_inner();
+
+        let response = match self
+            .validate_client_context(&context)
+            .and_then(|_| adapter::build_recall_message_request(&request))
+        {
+            Ok(input) => match self.guards.try_producer() {
+                Ok(_permit) => match self.processor.recall_message(&context, input).await {
+                    Ok(plan) => adapter::build_recall_message_response(&plan),
+                    Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
+        };
+
+        Ok(Response::new(response))
     }
 
     async fn sync_lite_subscription(
@@ -1178,6 +1253,7 @@ mod tests {
     use crate::session::ClientSessionRegistry;
     use crate::status::ProxyPayloadStatus;
     use crate::status::ProxyStatusMapper;
+    use crate::PreparedTransactionRegistration;
 
     struct PartialMessageService;
 
@@ -1223,6 +1299,17 @@ mod tests {
                     }
                 })
                 .collect())
+        }
+
+        async fn recall_message(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &crate::processor::RecallMessageRequest,
+        ) -> crate::error::ProxyResult<crate::processor::RecallMessagePlan> {
+            Ok(crate::processor::RecallMessagePlan {
+                status: ProxyStatusMapper::ok_payload(),
+                message_id: request.recall_handle.clone(),
+            })
         }
     }
 
@@ -1495,6 +1582,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recall_message_returns_recalled_message_id() {
+        let service = test_service_with_message_service(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        );
+        let mut request = Request::new(v2::RecallMessageRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            recall_handle: "recall-handle-1".to_owned(),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.recall_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.message_id, "recall-handle-1");
+    }
+
+    #[tokio::test]
     async fn send_message_tracks_prepared_transactions_for_transactional_entries() {
         let service = test_service_with_message_service(
             StaticRouteService::default(),
@@ -1533,6 +1643,64 @@ mod tests {
         assert_eq!(tracked.producer_group, "PROXY_SEND-client-a");
         assert_eq!(tracked.transaction_state_table_offset, 0);
         assert_eq!(tracked.commit_log_message_id, "offset-msg-1");
+        assert_eq!(
+            tracked
+                .message
+                .system_properties
+                .as_ref()
+                .map(|properties| properties.message_id.as_str()),
+            Some("msg-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn due_prepared_transaction_dispatches_recovery_command() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        service.sessions.bind_telemetry_link("client-a", sender);
+        service
+            .sessions
+            .track_prepared_transaction(PreparedTransactionRegistration {
+                client_id: "client-a".to_owned(),
+                topic: ResourceIdentity::new("", "TopicA"),
+                message_id: "msg-1".to_owned(),
+                transaction_id: "tx-1".to_owned(),
+                producer_group: "PROXY_SEND-client-a".to_owned(),
+                transaction_state_table_offset: 7,
+                commit_log_message_id: "offset-msg-1".to_owned(),
+                message: v2::Message {
+                    topic: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "TopicA".to_owned(),
+                    }),
+                    user_properties: HashMap::new(),
+                    system_properties: Some(v2::SystemProperties {
+                        message_id: "msg-1".to_owned(),
+                        orphaned_transaction_recovery_duration: Some(prost_types::Duration { seconds: 0, nanos: 0 }),
+                        ..Default::default()
+                    }),
+                    body: Bytes::from_static(b"hello").to_vec(),
+                },
+                orphaned_transaction_recovery_duration: Some(std::time::Duration::ZERO),
+            });
+
+        service.dispatch_due_prepared_transaction_recoveries();
+
+        let command = receiver.recv().await.expect("recovery command should be queued");
+        match command.command {
+            Some(v2::telemetry_command::Command::RecoverOrphanedTransactionCommand(command)) => {
+                assert_eq!(command.transaction_id, "tx-1");
+                let message = command.message.expect("recovery command should carry message");
+                assert_eq!(
+                    message
+                        .system_properties
+                        .as_ref()
+                        .map(|properties| properties.message_id.as_str()),
+                    Some("msg-1")
+                );
+            }
+            other => panic!("unexpected telemetry command: {other:?}"),
+        }
     }
 
     #[tokio::test]

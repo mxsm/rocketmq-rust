@@ -83,6 +83,18 @@ pub struct SendMessageResultEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecallMessageRequest {
+    pub topic: ResourceIdentity,
+    pub recall_handle: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecallMessagePlan {
+    pub status: ProxyPayloadStatus,
+    pub message_id: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ConsumerFilterExpression {
     pub expression_type: String,
     pub expression: String,
@@ -207,6 +219,12 @@ pub trait MessagingProcessor: Send + Sync {
 
     async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan>;
 
+    async fn recall_message(
+        &self,
+        context: &ProxyContext,
+        request: RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan>;
+
     async fn receive_message(
         &self,
         context: &ProxyContext,
@@ -291,6 +309,15 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         let entries = message_service.send_message(context, &request).await?;
 
         Ok(SendMessagePlan { entries })
+    }
+
+    async fn recall_message(
+        &self,
+        context: &ProxyContext,
+        request: RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan> {
+        let message_service = self.service_manager.message_service();
+        message_service.recall_message(context, &request).await
     }
 
     async fn receive_message(

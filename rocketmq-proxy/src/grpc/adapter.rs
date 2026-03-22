@@ -49,6 +49,8 @@ use crate::processor::QueryAssignmentPlan;
 use crate::processor::QueryAssignmentRequest;
 use crate::processor::QueryRoutePlan;
 use crate::processor::QueryRouteRequest;
+use crate::processor::RecallMessagePlan;
+use crate::processor::RecallMessageRequest;
 use crate::processor::ReceiveMessagePlan;
 use crate::processor::ReceiveMessageRequest;
 use crate::processor::ReceiveTarget;
@@ -103,6 +105,13 @@ pub fn build_send_message_request(
     Ok(SendMessageRequest {
         messages,
         timeout: context.deadline(),
+    })
+}
+
+pub fn build_recall_message_request(request: &v2::RecallMessageRequest) -> ProxyResult<RecallMessageRequest> {
+    Ok(RecallMessageRequest {
+        topic: resource_identity(request.topic.as_ref(), "topic")?,
+        recall_handle: validate_non_empty_string("recallHandle", request.recall_handle.as_str())?,
     })
 }
 
@@ -411,6 +420,13 @@ pub fn build_end_transaction_response(plan: &EndTransactionPlan) -> v2::EndTrans
     }
 }
 
+pub fn build_recall_message_response(plan: &RecallMessagePlan) -> v2::RecallMessageResponse {
+    v2::RecallMessageResponse {
+        status: Some(plan.status.clone().into()),
+        message_id: plan.message_id.clone(),
+    }
+}
+
 fn build_query_assignment_response_from_server(
     request: &v2::QueryAssignmentRequest,
     plan: &QueryAssignmentPlan,
@@ -470,6 +486,13 @@ pub fn error_change_invisible_duration_response(status: v2::Status) -> v2::Chang
 
 pub fn error_end_transaction_response(status: v2::Status) -> v2::EndTransactionResponse {
     v2::EndTransactionResponse { status: Some(status) }
+}
+
+pub fn error_recall_message_response(status: v2::Status) -> v2::RecallMessageResponse {
+    v2::RecallMessageResponse {
+        status: Some(status),
+        message_id: String::new(),
+    }
 }
 
 fn resource_identity(resource: Option<&v2::Resource>, field: &'static str) -> ProxyResult<ResourceIdentity> {

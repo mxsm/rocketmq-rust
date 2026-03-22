@@ -70,6 +70,8 @@ use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::RecallMessagePlan;
+use crate::processor::RecallMessageRequest;
 use crate::processor::ReceiveMessagePlan;
 use crate::processor::ReceiveMessageRequest;
 use crate::processor::ReceivedMessage;
@@ -109,6 +111,12 @@ pub trait ClusterClient: Send + Sync {
         context: &ProxyContext,
         request: &SendMessageRequest,
     ) -> ProxyResult<Vec<SendMessageResultEntry>>;
+
+    async fn recall_message(
+        &self,
+        context: &ProxyContext,
+        request: &RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan>;
 
     async fn receive_message(
         &self,
@@ -197,6 +205,20 @@ impl ClusterClient for RocketmqClusterClient {
             .await
     }
 
+    async fn recall_message(
+        &self,
+        context: &ProxyContext,
+        request: &RecallMessageRequest,
+    ) -> ProxyResult<RecallMessagePlan> {
+        self.executor
+            .recall_message(
+                request.clone(),
+                context.client_id().map(ToOwned::to_owned),
+                context.request_id().to_owned(),
+            )
+            .await
+    }
+
     async fn receive_message(
         &self,
         context: &ProxyContext,
@@ -269,6 +291,12 @@ enum ClusterCommand {
         client_id: Option<String>,
         request_id: String,
         reply: oneshot::Sender<ProxyResult<Vec<SendMessageResultEntry>>>,
+    },
+    RecallMessage {
+        request: RecallMessageRequest,
+        client_id: Option<String>,
+        request_id: String,
+        reply: oneshot::Sender<ProxyResult<RecallMessagePlan>>,
     },
     ReceiveMessage {
         request: ReceiveMessageRequest,
@@ -353,6 +381,21 @@ impl ClusterTaskExecutor {
         request_id: String,
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         self.execute(|reply| ClusterCommand::SendMessage {
+            request,
+            client_id,
+            request_id,
+            reply,
+        })
+        .await
+    }
+
+    async fn recall_message(
+        &self,
+        request: RecallMessageRequest,
+        client_id: Option<String>,
+        request_id: String,
+    ) -> ProxyResult<RecallMessagePlan> {
+        self.execute(|reply| ClusterCommand::RecallMessage {
             request,
             client_id,
             request_id,
@@ -476,6 +519,14 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             reply,
         } => {
             let _ = reply.send(send_message_inner(config, state, request, client_id, request_id).await);
+        }
+        ClusterCommand::RecallMessage {
+            request,
+            client_id,
+            request_id,
+            reply,
+        } => {
+            let _ = reply.send(recall_message_inner(config, state, request, client_id, request_id).await);
         }
         ClusterCommand::ReceiveMessage {
             request,
@@ -631,6 +682,34 @@ async fn send_message_inner(
         results.push(send_message_entry(producer, entry, timeout).await);
     }
     Ok(results)
+}
+
+async fn recall_message_inner(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    request: RecallMessageRequest,
+    client_id: Option<String>,
+    request_id: String,
+) -> ProxyResult<RecallMessagePlan> {
+    let producer_group = build_proxy_producer_group(config, client_id.as_deref(), request_id.as_str());
+    let topic = CheetahString::from(request.topic.to_string());
+    let producer = acquire_send_producer(
+        config,
+        state,
+        producer_group.as_str(),
+        vec![topic.clone()],
+        config.send_message_timeout_ms.max(1),
+    )
+    .await?;
+    let message_id = producer
+        .recall_message(topic, CheetahString::from(request.recall_handle))
+        .await
+        .map_err(ProxyError::from)?;
+
+    Ok(RecallMessagePlan {
+        status: ProxyStatusMapper::ok_payload(),
+        message_id,
+    })
 }
 
 async fn acquire_send_producer<'a>(

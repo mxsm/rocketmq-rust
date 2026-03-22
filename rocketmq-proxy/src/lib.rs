@@ -58,6 +58,8 @@ pub use processor::QueryAssignmentPlan;
 pub use processor::QueryAssignmentRequest;
 pub use processor::QueryRoutePlan;
 pub use processor::QueryRouteRequest;
+pub use processor::RecallMessagePlan;
+pub use processor::RecallMessageRequest;
 pub use processor::ReceiveMessagePlan;
 pub use processor::ReceiveMessageRequest;
 pub use processor::ReceiveTarget;
