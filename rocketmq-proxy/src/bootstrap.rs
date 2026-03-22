@@ -91,6 +91,7 @@ impl ProxyRuntimeBuilder {
 pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
+    sessions: ClientSessionRegistry,
     grpc_service: ProxyGrpcService<P>,
     local_mode_supported: bool,
     auth_runtime: Option<ProxyAuthRuntime>,
@@ -139,12 +140,15 @@ where
         metrics: ProxyMetrics,
     ) -> Self {
         let config = Arc::new(config);
+        let processor_ref = Arc::clone(&processor);
+        let sessions = session_registry.clone();
         let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry)
             .with_hooks(hooks)
             .with_metrics(metrics);
         Self {
             config,
-            processor: Arc::clone(grpc_service.processor()),
+            processor: processor_ref,
+            sessions,
             grpc_service,
             local_mode_supported,
             auth_runtime,
@@ -166,6 +170,7 @@ where
         let ProxyRuntime {
             config,
             processor,
+            sessions,
             grpc_service,
             local_mode_supported,
             auth_runtime,
@@ -195,7 +200,7 @@ where
             shared_shutdown.await;
         };
         let grpc_future = server::serve(config.clone(), grpc_service, grpc_shutdown);
-        let remoting_future = remoting::serve(config, processor, remoting_shutdown);
+        let remoting_future = remoting::serve(config, processor, sessions, remoting_shutdown);
         let (grpc_result, remoting_result) = tokio::join!(grpc_future, remoting_future);
         grpc_result?;
         remoting_result

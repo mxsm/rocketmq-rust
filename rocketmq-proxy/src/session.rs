@@ -86,6 +86,8 @@ pub struct ClientSession {
     pub client_version: Option<String>,
     pub connection_id: Option<String>,
     pub client_type: Option<i32>,
+    pub producer_groups: BTreeSet<String>,
+    pub consumer_groups: BTreeSet<String>,
     pub settings: Option<ClientSettingsSnapshot>,
     pub last_seen: SystemTime,
 }
@@ -260,6 +262,64 @@ impl ClientSessionRegistry {
             return;
         };
 
+        self.upsert_client_identity(client_id, context, client_type);
+    }
+
+    pub fn update_membership_from_remoting_heartbeat(
+        &self,
+        context: &ProxyContext,
+        client_id: &str,
+        producer_groups: BTreeSet<String>,
+        consumer_groups: BTreeSet<String>,
+    ) -> bool {
+        self.upsert_client_identity(client_id, context, None);
+
+        let mut changed = false;
+        if let Some(mut session) = self.sessions.get_mut(client_id) {
+            changed = session.producer_groups != producer_groups || session.consumer_groups != consumer_groups;
+            session.producer_groups = producer_groups;
+            session.consumer_groups = consumer_groups;
+            session.last_seen = SystemTime::now();
+        }
+        changed
+    }
+
+    pub fn unregister_client_groups(
+        &self,
+        client_id: &str,
+        producer_group: Option<&str>,
+        consumer_group: Option<&str>,
+    ) -> Option<ClientSession> {
+        if producer_group.is_none() && consumer_group.is_none() {
+            return self.remove_client(client_id);
+        }
+
+        let mut snapshot = None;
+        if let Some(mut session) = self.sessions.get_mut(client_id) {
+            if let Some(producer_group) = producer_group {
+                session.producer_groups.remove(producer_group);
+            }
+            if let Some(consumer_group) = consumer_group {
+                session.consumer_groups.remove(consumer_group);
+            }
+            session.last_seen = SystemTime::now();
+            snapshot = Some(session.clone());
+        }
+        snapshot
+    }
+
+    pub fn consumer_client_ids(&self, consumer_group: &str) -> Vec<String> {
+        let mut client_ids = self
+            .sessions
+            .iter()
+            .filter(|entry| entry.consumer_groups.contains(consumer_group))
+            .map(|entry| entry.client_id.clone())
+            .collect::<Vec<_>>();
+        client_ids.sort_unstable();
+        client_ids
+    }
+
+    fn upsert_client_identity(&self, client_id: &str, context: &ProxyContext, client_type: Option<i32>) {
         let now = SystemTime::now();
         if let Some(mut session) = self.sessions.get_mut(client_id) {
             session.remote_addr = context.remote_addr().map(str::to_owned);
@@ -284,6 +344,8 @@ impl ClientSessionRegistry {
                 client_version: context.client_version().map(str::to_owned),
                 connection_id: context.connection_id().map(str::to_owned),
                 client_type,
+                producer_groups: BTreeSet::new(),
+                consumer_groups: BTreeSet::new(),
                 settings: None,
                 last_seen: now,
             },
@@ -937,6 +999,7 @@ fn ensure_lite_subscription_quota(size: usize, settings: Option<&ClientSettingsS
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::time::Duration;
     use std::time::SystemTime;
 
@@ -1267,6 +1330,8 @@ mod tests {
                 client_version: None,
                 connection_id: None,
                 client_type: None,
+                producer_groups: BTreeSet::new(),
+                consumer_groups: BTreeSet::new(),
                 settings: None,
                 last_seen: SystemTime::UNIX_EPOCH,
             },

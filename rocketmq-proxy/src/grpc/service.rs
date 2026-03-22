@@ -180,12 +180,6 @@ impl<P> Clone for ProxyGrpcService<P> {
 }
 
 impl<P> ProxyGrpcService<P> {
-    pub(crate) fn processor(&self) -> &Arc<P> {
-        &self.processor
-    }
-}
-
-impl<P> ProxyGrpcService<P> {
     pub fn new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> Self {
         let interval_ms = Self::housekeeping_interval_from_config(config.as_ref())
             .as_millis()
