@@ -1704,7 +1704,8 @@ mod tests {
 
     #[test]
     fn build_send_message_request_maps_fifo_properties() {
-        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()));
+        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()))
+            .expect("context should be constructed");
         let request = v2::SendMessageRequest {
             messages: vec![v2::Message {
                 topic: Some(v2::Resource {
@@ -1744,7 +1745,8 @@ mod tests {
 
     #[test]
     fn build_send_message_request_rejects_missing_message_id() {
-        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()));
+        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()))
+            .expect("context should be constructed");
         let request = v2::SendMessageRequest {
             messages: vec![v2::Message {
                 topic: Some(v2::Resource {

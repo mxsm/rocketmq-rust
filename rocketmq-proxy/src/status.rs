@@ -61,6 +61,10 @@ impl From<ProxyPayloadStatus> for v2::Status {
 pub struct ProxyStatusMapper;
 
 impl ProxyStatusMapper {
+    pub fn should_use_tonic_status(error: &ProxyError) -> bool {
+        matches!(error, ProxyError::InvalidMetadata { .. } | ProxyError::Transport { .. })
+    }
+
     pub fn ok_payload() -> ProxyPayloadStatus {
         Self::from_payload_code(v2::Code::Ok, "OK")
     }
@@ -122,6 +126,16 @@ impl ProxyStatusMapper {
     }
 
     pub fn to_tonic_status(error: &ProxyError) -> TonicStatus {
+        match error {
+            ProxyError::InvalidMetadata { message } => {
+                return TonicStatus::new(TonicCode::InvalidArgument, message.clone());
+            }
+            ProxyError::Transport { message } => {
+                return TonicStatus::new(TonicCode::Unavailable, message.clone());
+            }
+            _ => {}
+        }
+
         let payload = Self::from_error(error);
         let tonic_code = match v2::Code::try_from(payload.code).unwrap_or(v2::Code::InternalError) {
             v2::Code::BadRequest
@@ -216,5 +230,27 @@ mod tests {
     fn route_not_found_maps_to_topic_not_found() {
         let status = ProxyStatusMapper::from_error(&ProxyError::RocketMQ(RocketMQError::route_not_found("TestTopic")));
         assert_eq!(status.code, v2::Code::TopicNotFound as i32);
+    }
+
+    #[test]
+    fn invalid_metadata_prefers_tonic_status() {
+        let error = ProxyError::invalid_metadata("grpc-timeout must be valid");
+        assert!(ProxyStatusMapper::should_use_tonic_status(&error));
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&error).code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn transport_error_maps_to_unavailable_tonic_status() {
+        let error = ProxyError::Transport {
+            message: "cluster worker unavailable".to_owned(),
+        };
+        assert!(ProxyStatusMapper::should_use_tonic_status(&error));
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&error).code(),
+            tonic::Code::Unavailable
+        );
     }
 }

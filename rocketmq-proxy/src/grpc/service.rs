@@ -143,8 +143,8 @@ impl<P> ProxyGrpcService<P> {
         self
     }
 
-    fn context<T>(&self, rpc_name: &'static str, request: &Request<T>) -> ProxyContext {
-        ProxyContext::from_grpc_request(rpc_name, request)
+    fn context<T>(&self, rpc_name: &'static str, request: &Request<T>) -> Result<ProxyContext, Status> {
+        ProxyContext::from_grpc_request(rpc_name, request).map_err(|error| ProxyStatusMapper::to_tonic_status(&error))
     }
 
     fn status_stream<T>(&self, item: T) -> ResponseStream<T>
@@ -159,6 +159,67 @@ impl<P> ProxyGrpcService<P> {
         T: Send + 'static,
     {
         Box::pin(stream::iter(items.into_iter().map(Ok)))
+    }
+
+    fn unary_error_response<T>(
+        &self,
+        error: ProxyError,
+        payload_builder: impl FnOnce(v2::Status) -> T,
+    ) -> Result<Response<T>, Status> {
+        if ProxyStatusMapper::should_use_tonic_status(&error) {
+            Err(ProxyStatusMapper::to_tonic_status(&error))
+        } else {
+            Ok(Response::new(payload_builder(ProxyStatusMapper::from_error(&error))))
+        }
+    }
+
+    fn stream_error_response<T>(
+        &self,
+        error: ProxyError,
+        payload_builder: impl FnOnce(v2::Status) -> ResponseStream<T>,
+    ) -> Result<Response<ResponseStream<T>>, Status> {
+        if ProxyStatusMapper::should_use_tonic_status(&error) {
+            Err(ProxyStatusMapper::to_tonic_status(&error))
+        } else {
+            Ok(Response::new(payload_builder(ProxyStatusMapper::from_error(&error))))
+        }
+    }
+
+    async fn enter_unary<TRequest: 'static, TResponse>(
+        &self,
+        rpc_name: &'static str,
+        request: Request<TRequest>,
+        payload_builder: impl FnOnce(v2::Status) -> TResponse,
+    ) -> Result<(ProxyContext, Option<AuthenticatedPrincipal>, TRequest), Result<Response<TResponse>, Status>> {
+        self.reap_session_state_if_due();
+        let mut context = match self.context(rpc_name, &request) {
+            Ok(context) => context,
+            Err(status) => return Err(Err(status)),
+        };
+        let principal = match self.authenticate_request(&mut context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => return Err(self.unary_error_response(error, payload_builder)),
+        };
+        Ok((context, principal, request.into_inner()))
+    }
+
+    async fn enter_stream<TRequest: 'static, TItem>(
+        &self,
+        rpc_name: &'static str,
+        request: Request<TRequest>,
+        payload_builder: impl FnOnce(v2::Status) -> ResponseStream<TItem>,
+    ) -> Result<(ProxyContext, Option<AuthenticatedPrincipal>, TRequest), Result<Response<ResponseStream<TItem>>, Status>>
+    {
+        self.reap_session_state_if_due();
+        let mut context = match self.context(rpc_name, &request) {
+            Ok(context) => context,
+            Err(status) => return Err(Err(status)),
+        };
+        let principal = match self.authenticate_request(&mut context, &request).await {
+            Ok(principal) => principal,
+            Err(error) => return Err(self.stream_error_response(error, payload_builder)),
+        };
+        Ok((context, principal, request.into_inner()))
     }
 
     async fn authenticate_request<T: 'static>(
@@ -838,17 +899,13 @@ where
         &self,
         request: Request<v2::QueryRouteRequest>,
     ) -> Result<Response<v2::QueryRouteResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("QueryRoute", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_query_route_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("QueryRoute", request, adapter::error_query_route_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -877,17 +934,15 @@ where
         &self,
         request: Request<v2::HeartbeatRequest>,
     ) -> Result<Response<v2::HeartbeatResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("Heartbeat", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(v2::HeartbeatResponse {
-                    status: Some(ProxyStatusMapper::from_error(&error)),
-                }));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("Heartbeat", request, |status| v2::HeartbeatResponse {
+                status: Some(status),
+            })
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let status = match self.guards.try_client_manager() {
             Ok(_permit) => match self.validate_heartbeat_request(&context, request.client_type) {
@@ -914,17 +969,13 @@ where
         &self,
         request: Request<v2::SendMessageRequest>,
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("SendMessage", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_send_message_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("SendMessage", request, adapter::error_send_message_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -956,17 +1007,13 @@ where
         &self,
         request: Request<v2::QueryAssignmentRequest>,
     ) -> Result<Response<v2::QueryAssignmentResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("QueryAssignment", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_query_assignment_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("QueryAssignment", request, adapter::error_query_assignment_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -995,17 +1042,15 @@ where
         &self,
         request: Request<v2::ReceiveMessageRequest>,
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("ReceiveMessage", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(self.items_stream(
-                    adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_stream("ReceiveMessage", request, |status| {
+                self.items_stream(adapter::error_receive_message_responses(status))
+            })
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
         let responses = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_receive_message_request(&request))
@@ -1042,17 +1087,13 @@ where
         &self,
         request: Request<v2::AckMessageRequest>,
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("AckMessage", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_ack_message_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("AckMessage", request, adapter::error_ack_message_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -1084,17 +1125,17 @@ where
         &self,
         request: Request<v2::ForwardMessageToDeadLetterQueueRequest>,
     ) -> Result<Response<v2::ForwardMessageToDeadLetterQueueResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("ForwardMessageToDeadLetterQueue", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(
-                    adapter::error_forward_message_to_dead_letter_queue_response(ProxyStatusMapper::from_error(&error)),
-                ));
-            }
+        let (context, principal, request) = match self
+            .enter_unary(
+                "ForwardMessageToDeadLetterQueue",
+                request,
+                adapter::error_forward_message_to_dead_letter_queue_response,
+            )
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -1139,17 +1180,15 @@ where
         &self,
         request: Request<v2::PullMessageRequest>,
     ) -> Result<Response<Self::PullMessageStream>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("PullMessage", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(self.items_stream(adapter::error_pull_message_responses(
-                    ProxyStatusMapper::from_error(&error),
-                ))));
-            }
+        let (context, principal, request) = match self
+            .enter_stream("PullMessage", request, |status| {
+                self.items_stream(adapter::error_pull_message_responses(status))
+            })
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
         let responses = match adapter::build_pull_message_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
@@ -1179,17 +1218,13 @@ where
         &self,
         request: Request<v2::UpdateOffsetRequest>,
     ) -> Result<Response<v2::UpdateOffsetResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("UpdateOffset", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_update_offset_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("UpdateOffset", request, adapter::error_update_offset_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
         let response = match adapter::build_update_offset_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
@@ -1216,17 +1251,13 @@ where
         &self,
         request: Request<v2::GetOffsetRequest>,
     ) -> Result<Response<v2::GetOffsetResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("GetOffset", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_get_offset_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("GetOffset", request, adapter::error_get_offset_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
         let response = match adapter::build_get_offset_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
@@ -1253,17 +1284,13 @@ where
         &self,
         request: Request<v2::QueryOffsetRequest>,
     ) -> Result<Response<v2::QueryOffsetResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("QueryOffset", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_query_offset_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("QueryOffset", request, adapter::error_query_offset_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
         let response = match adapter::build_query_offset_request(&request) {
             Ok(input) => match self
                 .validate_client_context(&context)
@@ -1290,17 +1317,13 @@ where
         &self,
         request: Request<v2::EndTransactionRequest>,
     ) -> Result<Response<v2::EndTransactionResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("EndTransaction", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_end_transaction_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("EndTransaction", request, adapter::error_end_transaction_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -1335,17 +1358,16 @@ where
         &self,
         request: Request<tonic::Streaming<v2::TelemetryCommand>>,
     ) -> Result<Response<Self::TelemetryStream>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("Telemetry", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(
-                    self.status_stream(Self::telemetry_status(ProxyStatusMapper::from_error(&error))),
-                ));
-            }
+        let (context, principal, inbound) = match self
+            .enter_stream("Telemetry", request, |status| {
+                self.status_stream(Self::telemetry_status(status))
+            })
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let mut inbound = request.into_inner();
+        let mut inbound = inbound;
         let permit = match self
             .validate_client_context(&context)
             .and_then(|_| self.guards.try_client_manager())
@@ -1412,17 +1434,15 @@ where
         &self,
         request: Request<v2::NotifyClientTerminationRequest>,
     ) -> Result<Response<v2::NotifyClientTerminationResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("NotifyClientTermination", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(v2::NotifyClientTerminationResponse {
-                    status: Some(ProxyStatusMapper::from_error(&error)),
-                }));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("NotifyClientTermination", request, |status| {
+                v2::NotifyClientTerminationResponse { status: Some(status) }
+            })
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
         let status = match self
             .guards
             .try_client_manager()
@@ -1454,17 +1474,17 @@ where
         &self,
         request: Request<v2::ChangeInvisibleDurationRequest>,
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("ChangeInvisibleDuration", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_change_invisible_duration_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary(
+                "ChangeInvisibleDuration",
+                request,
+                adapter::error_change_invisible_duration_response,
+            )
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -1504,17 +1524,13 @@ where
         &self,
         request: Request<v2::RecallMessageRequest>,
     ) -> Result<Response<v2::RecallMessageResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("RecallMessage", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(adapter::error_recall_message_response(
-                    ProxyStatusMapper::from_error(&error),
-                )));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("RecallMessage", request, adapter::error_recall_message_response)
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let response = match self
             .validate_client_context(&context)
@@ -1543,17 +1559,15 @@ where
         &self,
         request: Request<v2::SyncLiteSubscriptionRequest>,
     ) -> Result<Response<v2::SyncLiteSubscriptionResponse>, Status> {
-        self.reap_session_state_if_due();
-        let mut context = self.context("SyncLiteSubscription", &request);
-        let principal = match self.authenticate_request(&mut context, &request).await {
-            Ok(principal) => principal,
-            Err(error) => {
-                return Ok(Response::new(v2::SyncLiteSubscriptionResponse {
-                    status: Some(ProxyStatusMapper::from_error(&error)),
-                }));
-            }
+        let (context, principal, request) = match self
+            .enter_unary("SyncLiteSubscription", request, |status| {
+                v2::SyncLiteSubscriptionResponse { status: Some(status) }
+            })
+            .await
+        {
+            Ok(state) => state,
+            Err(response) => return response,
         };
-        let request = request.into_inner();
 
         let status = match self.validate_client_context(&context).and_then(|client_id| {
             let _permit = self.guards.try_client_manager()?;
@@ -2136,6 +2150,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_route_rejects_invalid_grpc_timeout_as_transport_status() {
+        let route_service = StaticRouteService::default();
+        route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
+        let service = test_service(route_service, StaticMetadataService::default());
+
+        let mut request = Request::new(v2::QueryRouteRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            endpoints: Some(v2::Endpoints {
+                scheme: v2::AddressScheme::IPv4 as i32,
+                addresses: vec![v2::Address {
+                    host: "127.0.0.1".to_owned(),
+                    port: 8080,
+                }],
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("grpc-timeout", MetadataValue::from_static("bad-timeout"));
+
+        let status = service
+            .query_route(request)
+            .await
+            .expect_err("invalid timeout metadata should fail ingress");
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("grpc-timeout"));
+    }
+
+    #[tokio::test]
     async fn query_route_accepts_valid_grpc_authentication_headers() {
         let route_service = StaticRouteService::default();
         route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
@@ -2208,7 +2253,9 @@ mod tests {
 
         let mut auth_request = Request::new(());
         apply_auth_headers(&mut auth_request, "client-a", "alice", "secret");
-        let mut context = service.context("Telemetry", &auth_request);
+        let mut context = service
+            .context("Telemetry", &auth_request)
+            .expect("context should be constructed");
         let principal = service
             .authenticate_request(&mut context, &auth_request)
             .await
@@ -2948,7 +2995,9 @@ mod tests {
         request
             .metadata_mut()
             .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
-        let context = service.context("ReceiveMessage", &request);
+        let context = service
+            .context("ReceiveMessage", &request)
+            .expect("context should be constructed");
 
         let merged = service.merged_telemetry_settings(&v2::Settings {
             client_type: Some(v2::ClientType::PushConsumer as i32),
@@ -3298,7 +3347,9 @@ mod tests {
         context_request
             .metadata_mut()
             .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
-        let context = service.context("Telemetry", &context_request);
+        let context = service
+            .context("Telemetry", &context_request)
+            .expect("context should be constructed");
         let _ = service.sessions.update_settings_from_telemetry(
             &context,
             &service.merged_telemetry_settings(&v2::Settings {
@@ -3363,7 +3414,9 @@ mod tests {
         context_request
             .metadata_mut()
             .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
-        let context = service.context("Telemetry", &context_request);
+        let context = service
+            .context("Telemetry", &context_request)
+            .expect("context should be constructed");
         let _ = service.sessions.update_settings_from_telemetry(
             &context,
             &service.merged_telemetry_settings(&v2::Settings {

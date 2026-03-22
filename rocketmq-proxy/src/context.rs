@@ -56,9 +56,11 @@ pub struct ProxyContext {
 }
 
 impl ProxyContext {
-    pub fn from_grpc_request<T>(rpc_name: &'static str, request: &Request<T>) -> Self {
+    pub fn from_grpc_request<T>(rpc_name: &'static str, request: &Request<T>) -> ProxyResult<Self> {
         let metadata = request.metadata();
-        Self {
+        let deadline = parse_grpc_timeout_metadata(metadata)?;
+
+        Ok(Self {
             request_id: Uuid::new_v4().to_string(),
             rpc_name,
             remote_addr: request.remote_addr().map(|addr| addr.to_string()),
@@ -68,13 +70,10 @@ impl ProxyContext {
             client_version: metadata_string(metadata, "x-mq-client-version"),
             namespace: metadata_string(metadata, "x-mq-namespace"),
             connection_id: metadata_string(metadata, "x-mq-channel-id"),
-            deadline: metadata
-                .get("grpc-timeout")
-                .and_then(|value| value.to_str().ok())
-                .and_then(parse_grpc_timeout),
+            deadline,
             received_at: Instant::now(),
             authenticated_principal: None,
-        }
+        })
     }
 
     pub(crate) fn set_authenticated_principal(&mut self, principal: AuthenticatedPrincipal) {
@@ -141,6 +140,22 @@ fn metadata_string(metadata: &MetadataMap, key: &'static str) -> Option<String> 
         .map(str::to_owned)
 }
 
+fn parse_grpc_timeout_metadata(metadata: &MetadataMap) -> ProxyResult<Option<Duration>> {
+    let Some(raw) = metadata.get("grpc-timeout") else {
+        return Ok(None);
+    };
+    let raw = raw
+        .to_str()
+        .map_err(|_| ProxyError::invalid_metadata("grpc-timeout must be valid ASCII"))?;
+    parse_grpc_timeout(raw)
+        .ok_or_else(|| {
+            ProxyError::invalid_metadata(format!(
+                "grpc-timeout '{raw}' must use the gRPC timeout format <digits><H|M|S|m|u|n>",
+            ))
+        })
+        .map(Some)
+}
+
 pub(crate) fn parse_grpc_timeout(raw: &str) -> Option<Duration> {
     if raw.len() < 2 {
         return None;
@@ -168,6 +183,7 @@ mod tests {
 
     use super::parse_grpc_timeout;
     use super::ProxyContext;
+    use crate::error::ProxyError;
     use crate::grpc::middleware::GrpcTransportContext;
 
     #[test]
@@ -194,8 +210,20 @@ mod tests {
             .metadata_mut()
             .insert("x-mq-client-id", "client-a".parse().expect("client id metadata"));
 
-        let context = ProxyContext::from_grpc_request("QueryRoute", &request);
+        let context = ProxyContext::from_grpc_request("QueryRoute", &request).expect("context should be constructed");
         assert_eq!(context.local_addr(), Some("127.0.0.1:8080"));
         assert_eq!(context.client_id(), Some("client-a"));
+    }
+
+    #[test]
+    fn proxy_context_rejects_invalid_grpc_timeout_metadata() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("grpc-timeout", "bad-timeout".parse().expect("timeout metadata"));
+
+        let error = ProxyContext::from_grpc_request("QueryRoute", &request).expect_err("context should reject timeout");
+        assert!(matches!(error, ProxyError::InvalidMetadata { .. }));
+        assert!(error.to_string().contains("grpc-timeout"));
     }
 }

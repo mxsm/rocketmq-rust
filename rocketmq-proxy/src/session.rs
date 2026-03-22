@@ -926,7 +926,7 @@ mod tests {
             "x-mq-channel-id",
             tonic::metadata::MetadataValue::from_static("channel-a"),
         );
-        ProxyContext::from_grpc_request("Test", &request)
+        ProxyContext::from_grpc_request("Test", &request).expect("context should be constructed")
     }
 
     fn tracked_handle(client_id: &str, message_id: &str, receipt_handle: &str) -> ReceiptHandleRegistration {
