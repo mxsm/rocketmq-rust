@@ -39,12 +39,20 @@ use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::GetOffsetPlan;
+use crate::processor::GetOffsetRequest;
+use crate::processor::PullMessagePlan;
+use crate::processor::PullMessageRequest;
+use crate::processor::QueryOffsetPlan;
+use crate::processor::QueryOffsetRequest;
 use crate::processor::RecallMessagePlan;
 use crate::processor::RecallMessageRequest;
 use crate::processor::ReceiveMessagePlan;
 use crate::processor::ReceiveMessageRequest;
 use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
+use crate::processor::UpdateOffsetPlan;
+use crate::processor::UpdateOffsetRequest;
 use crate::status::ProxyStatusMapper;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -159,6 +167,8 @@ pub trait ConsumerService: Send + Sync {
         request: &ReceiveMessageRequest,
     ) -> ProxyResult<ReceiveMessagePlan>;
 
+    async fn pull_message(&self, context: &ProxyContext, request: &PullMessageRequest) -> ProxyResult<PullMessagePlan>;
+
     async fn ack_message(
         &self,
         context: &ProxyContext,
@@ -170,6 +180,16 @@ pub trait ConsumerService: Send + Sync {
         context: &ProxyContext,
         request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+
+    async fn update_offset(
+        &self,
+        context: &ProxyContext,
+        request: &UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan>;
+
+    async fn get_offset(&self, context: &ProxyContext, request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan>;
+
+    async fn query_offset(&self, context: &ProxyContext, request: &QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan>;
 }
 
 #[async_trait]
@@ -288,6 +308,14 @@ impl ConsumerService for DefaultConsumerService {
         Err(ProxyError::not_implemented("consumer service"))
     }
 
+    async fn pull_message(
+        &self,
+        _context: &ProxyContext,
+        _request: &PullMessageRequest,
+    ) -> ProxyResult<PullMessagePlan> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
     async fn ack_message(
         &self,
         _context: &ProxyContext,
@@ -301,6 +329,26 @@ impl ConsumerService for DefaultConsumerService {
         _context: &ProxyContext,
         _request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
+    async fn update_offset(
+        &self,
+        _context: &ProxyContext,
+        _request: &UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
+    async fn get_offset(&self, _context: &ProxyContext, _request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
+    async fn query_offset(
+        &self,
+        _context: &ProxyContext,
+        _request: &QueryOffsetRequest,
+    ) -> ProxyResult<QueryOffsetPlan> {
         Err(ProxyError::not_implemented("consumer service"))
     }
 }
@@ -572,6 +620,10 @@ impl ConsumerService for ClusterConsumerService {
         self.client.receive_message(context, request).await
     }
 
+    async fn pull_message(&self, context: &ProxyContext, request: &PullMessageRequest) -> ProxyResult<PullMessagePlan> {
+        self.client.pull_message(context, request).await
+    }
+
     async fn ack_message(
         &self,
         context: &ProxyContext,
@@ -586,6 +638,22 @@ impl ConsumerService for ClusterConsumerService {
         request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
         self.client.change_invisible_duration(context, request).await
+    }
+
+    async fn update_offset(
+        &self,
+        context: &ProxyContext,
+        request: &UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan> {
+        self.client.update_offset(context, request).await
+    }
+
+    async fn get_offset(&self, context: &ProxyContext, request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
+        self.client.get_offset(context, request).await
+    }
+
+    async fn query_offset(&self, context: &ProxyContext, request: &QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan> {
+        self.client.query_offset(context, request).await
     }
 }
 

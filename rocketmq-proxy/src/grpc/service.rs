@@ -287,12 +287,6 @@ where
         }
     }
 
-    fn pull_status(status: v2::Status) -> v2::PullMessageResponse {
-        v2::PullMessageResponse {
-            content: Some(v2::pull_message_response::Content::Status(status)),
-        }
-    }
-
     fn telemetry_status(status: v2::Status) -> v2::TelemetryCommand {
         v2::TelemetryCommand {
             status: Some(status),
@@ -959,43 +953,93 @@ where
     ) -> Result<Response<Self::PullMessageStream>, Status> {
         self.reap_session_state_if_due();
         let context = self.context("PullMessage", &request);
-        let status = match self
-            .validate_client_context(&context)
-            .and_then(|_| self.guards.try_consumer().map(|_| ()))
-        {
-            Ok(()) => self.not_implemented_status("PullMessage"),
-            Err(error) => ProxyStatusMapper::from_error(&error),
+        let request = request.into_inner();
+        let responses = match adapter::build_pull_message_request(&request) {
+            Ok(input) => match self
+                .validate_client_context(&context)
+                .and_then(|_| self.guards.try_consumer().map(|_| ()))
+            {
+                Ok(_permit) => {
+                    self.sessions.upsert_from_context(&context);
+                    match self.processor.pull_message(&context, input).await {
+                        Ok(plan) => adapter::build_pull_message_responses(&plan),
+                        Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                    }
+                }
+                Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
         };
-        Ok(Response::new(self.status_stream(Self::pull_status(status))))
+        Ok(Response::new(self.items_stream(responses)))
     }
 
     async fn update_offset(
         &self,
-        _request: Request<v2::UpdateOffsetRequest>,
+        request: Request<v2::UpdateOffsetRequest>,
     ) -> Result<Response<v2::UpdateOffsetResponse>, Status> {
-        Ok(Response::new(v2::UpdateOffsetResponse {
-            status: Some(self.not_implemented_status("UpdateOffset")),
-        }))
+        self.reap_session_state_if_due();
+        let context = self.context("UpdateOffset", &request);
+        let request = request.into_inner();
+        let response = match adapter::build_update_offset_request(&request) {
+            Ok(input) => match self
+                .validate_client_context(&context)
+                .and_then(|_| self.guards.try_consumer().map(|_| ()))
+            {
+                Ok(_permit) => match self.processor.update_offset(&context, input).await {
+                    Ok(plan) => adapter::build_update_offset_response(&plan),
+                    Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
+        };
+        Ok(Response::new(response))
     }
 
     async fn get_offset(
         &self,
-        _request: Request<v2::GetOffsetRequest>,
+        request: Request<v2::GetOffsetRequest>,
     ) -> Result<Response<v2::GetOffsetResponse>, Status> {
-        Ok(Response::new(v2::GetOffsetResponse {
-            status: Some(self.not_implemented_status("GetOffset")),
-            offset: 0,
-        }))
+        self.reap_session_state_if_due();
+        let context = self.context("GetOffset", &request);
+        let request = request.into_inner();
+        let response = match adapter::build_get_offset_request(&request) {
+            Ok(input) => match self
+                .validate_client_context(&context)
+                .and_then(|_| self.guards.try_consumer().map(|_| ()))
+            {
+                Ok(_permit) => match self.processor.get_offset(&context, input).await {
+                    Ok(plan) => adapter::build_get_offset_response(&plan),
+                    Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
+        };
+        Ok(Response::new(response))
     }
 
     async fn query_offset(
         &self,
-        _request: Request<v2::QueryOffsetRequest>,
+        request: Request<v2::QueryOffsetRequest>,
     ) -> Result<Response<v2::QueryOffsetResponse>, Status> {
-        Ok(Response::new(v2::QueryOffsetResponse {
-            status: Some(self.not_implemented_status("QueryOffset")),
-            offset: 0,
-        }))
+        self.reap_session_state_if_due();
+        let context = self.context("QueryOffset", &request);
+        let request = request.into_inner();
+        let response = match adapter::build_query_offset_request(&request) {
+            Ok(input) => match self
+                .validate_client_context(&context)
+                .and_then(|_| self.guards.try_consumer().map(|_| ()))
+            {
+                Ok(_permit) => match self.processor.query_offset(&context, input).await {
+                    Ok(plan) => adapter::build_query_offset_response(&plan),
+                    Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
+        };
+        Ok(Response::new(response))
     }
 
     async fn end_transaction(
@@ -1231,11 +1275,20 @@ mod tests {
     use crate::processor::DefaultMessagingProcessor;
     use crate::processor::EndTransactionPlan;
     use crate::processor::EndTransactionRequest;
+    use crate::processor::GetOffsetPlan;
+    use crate::processor::GetOffsetRequest;
+    use crate::processor::PullMessagePlan;
+    use crate::processor::PullMessageRequest;
+    use crate::processor::QueryOffsetPlan;
+    use crate::processor::QueryOffsetPolicy;
+    use crate::processor::QueryOffsetRequest;
     use crate::processor::ReceiveMessagePlan;
     use crate::processor::ReceiveMessageRequest;
     use crate::processor::ReceivedMessage;
     use crate::processor::SendMessageRequest;
     use crate::processor::SendMessageResultEntry;
+    use crate::processor::UpdateOffsetPlan;
+    use crate::processor::UpdateOffsetRequest;
     use crate::proto::v2;
     use crate::proto::v2::messaging_service_server::MessagingService;
     use crate::service::ClusterServiceManager;
@@ -1257,7 +1310,10 @@ mod tests {
 
     struct PartialMessageService;
 
-    struct TestConsumerService;
+    #[derive(Default)]
+    struct TestConsumerService {
+        updated_offsets: Mutex<Vec<UpdateOffsetRequest>>,
+    }
 
     #[derive(Default)]
     struct TestTransactionService {
@@ -1342,6 +1398,25 @@ mod tests {
             })
         }
 
+        async fn pull_message(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &PullMessageRequest,
+        ) -> crate::error::ProxyResult<PullMessagePlan> {
+            let mut message = MessageExt::default();
+            message.set_topic(CheetahString::from(request.target.topic.to_string()));
+            message.set_body(Bytes::from_static(b"pull"));
+            message.set_msg_id(CheetahString::from("pull-msg-id"));
+            message.set_queue_id(request.target.queue_id);
+            message.set_queue_offset(request.offset);
+
+            Ok(PullMessagePlan {
+                status: ProxyStatusMapper::ok_payload(),
+                next_offset: request.offset + 1,
+                messages: vec![message],
+            })
+        }
+
         async fn ack_message(
             &self,
             _context: &crate::context::ProxyContext,
@@ -1366,6 +1441,47 @@ mod tests {
             Ok(ChangeInvisibleDurationPlan {
                 status: ProxyStatusMapper::ok_payload(),
                 receipt_handle: format!("{}-renewed", request.receipt_handle),
+            })
+        }
+
+        async fn update_offset(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &UpdateOffsetRequest,
+        ) -> crate::error::ProxyResult<UpdateOffsetPlan> {
+            self.updated_offsets
+                .lock()
+                .expect("updated offsets mutex poisoned")
+                .push(request.clone());
+            Ok(UpdateOffsetPlan {
+                status: ProxyStatusMapper::ok_payload(),
+            })
+        }
+
+        async fn get_offset(
+            &self,
+            _context: &crate::context::ProxyContext,
+            _request: &GetOffsetRequest,
+        ) -> crate::error::ProxyResult<GetOffsetPlan> {
+            Ok(GetOffsetPlan {
+                status: ProxyStatusMapper::ok_payload(),
+                offset: 42,
+            })
+        }
+
+        async fn query_offset(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &QueryOffsetRequest,
+        ) -> crate::error::ProxyResult<QueryOffsetPlan> {
+            let offset = match request.policy {
+                QueryOffsetPolicy::Beginning => 0,
+                QueryOffsetPolicy::End => 128,
+                QueryOffsetPolicy::Timestamp => request.timestamp_ms.unwrap_or_default(),
+            };
+            Ok(QueryOffsetPlan {
+                status: ProxyStatusMapper::ok_payload(),
+                offset,
             })
         }
     }
@@ -1808,7 +1924,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         let mut request = Request::new(v2::ReceiveMessageRequest {
             group: Some(v2::Resource {
@@ -1873,7 +1989,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         let mut request = Request::new(v2::AckMessageRequest {
             group: Some(v2::Resource {
@@ -1906,7 +2022,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         let mut request = Request::new(v2::ChangeInvisibleDurationRequest {
             group: Some(v2::Resource {
@@ -1930,6 +2046,176 @@ mod tests {
         let response = service.change_invisible_duration(request).await.unwrap().into_inner();
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.receipt_handle, "handle-1-renewed");
+    }
+
+    #[tokio::test]
+    async fn pull_message_streams_message_next_offset_and_status() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService::default()),
+        );
+        let mut request = Request::new(v2::PullMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 1,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: Some(v2::Broker {
+                    name: "broker-a".to_owned(),
+                    id: 0,
+                    endpoints: Some(v2::Endpoints {
+                        scheme: v2::AddressScheme::IPv4 as i32,
+                        addresses: vec![v2::Address {
+                            host: "127.0.0.1".to_owned(),
+                            port: 10911,
+                        }],
+                    }),
+                }),
+                accept_message_types: vec![v2::MessageType::Normal as i32],
+            }),
+            offset: 7,
+            batch_size: 1,
+            filter_expression: None,
+            long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let mut stream = service.pull_message(request).await.unwrap().into_inner();
+        let responses: Vec<_> = stream.by_ref().collect::<Vec<_>>().await;
+
+        assert_eq!(responses.len(), 3);
+        assert!(matches!(
+            responses[0].as_ref().unwrap().content,
+            Some(v2::pull_message_response::Content::Message(_))
+        ));
+        assert!(matches!(
+            responses[1].as_ref().unwrap().content,
+            Some(v2::pull_message_response::Content::NextOffset(8))
+        ));
+        assert_eq!(
+            match responses[2].as_ref().unwrap().content.as_ref().unwrap() {
+                v2::pull_message_response::Content::Status(status) => status.code,
+                _ => 0,
+            },
+            v2::Code::Ok as i32
+        );
+    }
+
+    #[tokio::test]
+    async fn update_offset_records_consumer_progress() {
+        let consumer_service = Arc::new(TestConsumerService::default());
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            consumer_service.clone(),
+        );
+        let mut request = Request::new(v2::UpdateOffsetRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 1,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: None,
+                accept_message_types: vec![],
+            }),
+            offset: 12,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.update_offset(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        let recorded = consumer_service
+            .updated_offsets
+            .lock()
+            .expect("updated offsets mutex poisoned");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].offset, 12);
+    }
+
+    #[tokio::test]
+    async fn get_offset_returns_offset_value() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService::default()),
+        );
+        let mut request = Request::new(v2::GetOffsetRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 1,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: None,
+                accept_message_types: vec![],
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.get_offset(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.offset, 42);
+    }
+
+    #[tokio::test]
+    async fn query_offset_supports_timestamp_policy() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService::default()),
+        );
+        let mut request = Request::new(v2::QueryOffsetRequest {
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 1,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: None,
+                accept_message_types: vec![],
+            }),
+            query_offset_policy: v2::QueryOffsetPolicy::Timestamp as i32,
+            timestamp: Some(prost_types::Timestamp {
+                seconds: 1_710_000_000,
+                nanos: 0,
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.query_offset(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.offset, 1_710_000_000_000);
     }
 
     #[test]
@@ -2087,7 +2373,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         let mut request = Request::new(v2::ReceiveMessageRequest {
             group: Some(v2::Resource {
@@ -2139,7 +2425,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         service
             .sessions
@@ -2182,7 +2468,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         service
             .sessions
@@ -2235,7 +2521,7 @@ mod tests {
             StaticRouteService::default(),
             StaticMetadataService::default(),
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
-            Arc::new(TestConsumerService),
+            Arc::new(TestConsumerService::default()),
         );
         let mut heartbeat = Request::new(v2::HeartbeatRequest {
             group: None,

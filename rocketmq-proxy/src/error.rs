@@ -55,6 +55,9 @@ pub enum ProxyError {
     #[error("illegal polling time: {message}")]
     IllegalPollingTime { message: String },
 
+    #[error("illegal offset: {message}")]
+    IllegalOffset { message: String },
+
     #[error("illegal invisible time: {message}")]
     IllegalInvisibleTime { message: String },
 
@@ -115,6 +118,12 @@ impl ProxyError {
 
     pub fn illegal_polling_time(message: impl Into<String>) -> Self {
         Self::IllegalPollingTime {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_offset(message: impl Into<String>) -> Self {
+        Self::IllegalOffset {
             message: message.into(),
         }
     }

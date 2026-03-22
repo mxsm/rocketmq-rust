@@ -27,6 +27,7 @@ use rocketmq_client_rust::consumer::ack_status::AckStatus;
 use rocketmq_client_rust::consumer::pop_callback::PopCallback;
 use rocketmq_client_rust::consumer::pop_result::PopResult;
 use rocketmq_client_rust::consumer::pop_status::PopStatus;
+use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
 use rocketmq_client_rust::implementation::mq_client_manager::MQClientManager;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
@@ -42,6 +43,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
@@ -51,6 +53,9 @@ use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTran
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as PopTopicRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -70,6 +75,14 @@ use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::GetOffsetPlan;
+use crate::processor::GetOffsetRequest;
+use crate::processor::MessageQueueTarget;
+use crate::processor::PullMessagePlan;
+use crate::processor::PullMessageRequest;
+use crate::processor::QueryOffsetPlan;
+use crate::processor::QueryOffsetPolicy;
+use crate::processor::QueryOffsetRequest;
 use crate::processor::RecallMessagePlan;
 use crate::processor::RecallMessageRequest;
 use crate::processor::ReceiveMessagePlan;
@@ -80,6 +93,8 @@ use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
 use crate::processor::TransactionResolution;
 use crate::processor::TransactionSource;
+use crate::processor::UpdateOffsetPlan;
+use crate::processor::UpdateOffsetRequest;
 use crate::proto::v2;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
@@ -124,6 +139,8 @@ pub trait ClusterClient: Send + Sync {
         request: &ReceiveMessageRequest,
     ) -> ProxyResult<ReceiveMessagePlan>;
 
+    async fn pull_message(&self, context: &ProxyContext, request: &PullMessageRequest) -> ProxyResult<PullMessagePlan>;
+
     async fn ack_message(
         &self,
         context: &ProxyContext,
@@ -135,6 +152,16 @@ pub trait ClusterClient: Send + Sync {
         context: &ProxyContext,
         request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+
+    async fn update_offset(
+        &self,
+        context: &ProxyContext,
+        request: &UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan>;
+
+    async fn get_offset(&self, context: &ProxyContext, request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan>;
+
+    async fn query_offset(&self, context: &ProxyContext, request: &QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan>;
 
     async fn end_transaction(
         &self,
@@ -227,6 +254,10 @@ impl ClusterClient for RocketmqClusterClient {
         self.executor.receive_message(request.clone(), context.deadline()).await
     }
 
+    async fn pull_message(&self, context: &ProxyContext, request: &PullMessageRequest) -> ProxyResult<PullMessagePlan> {
+        self.executor.pull_message(request.clone(), context.deadline()).await
+    }
+
     async fn ack_message(
         &self,
         context: &ProxyContext,
@@ -243,6 +274,22 @@ impl ClusterClient for RocketmqClusterClient {
         self.executor
             .change_invisible_duration(request.clone(), context.deadline())
             .await
+    }
+
+    async fn update_offset(
+        &self,
+        context: &ProxyContext,
+        request: &UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan> {
+        self.executor.update_offset(request.clone(), context.deadline()).await
+    }
+
+    async fn get_offset(&self, context: &ProxyContext, request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
+        self.executor.get_offset(request.clone(), context.deadline()).await
+    }
+
+    async fn query_offset(&self, context: &ProxyContext, request: &QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan> {
+        self.executor.query_offset(request.clone(), context.deadline()).await
     }
 
     async fn end_transaction(
@@ -303,6 +350,11 @@ enum ClusterCommand {
         deadline: Option<Duration>,
         reply: oneshot::Sender<ProxyResult<ReceiveMessagePlan>>,
     },
+    PullMessage {
+        request: PullMessageRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<PullMessagePlan>>,
+    },
     AckMessage {
         request: AckMessageRequest,
         deadline: Option<Duration>,
@@ -312,6 +364,21 @@ enum ClusterCommand {
         request: ChangeInvisibleDurationRequest,
         deadline: Option<Duration>,
         reply: oneshot::Sender<ProxyResult<ChangeInvisibleDurationPlan>>,
+    },
+    UpdateOffset {
+        request: UpdateOffsetRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<UpdateOffsetPlan>>,
+    },
+    GetOffset {
+        request: GetOffsetRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<GetOffsetPlan>>,
+    },
+    QueryOffset {
+        request: QueryOffsetRequest,
+        deadline: Option<Duration>,
+        reply: oneshot::Sender<ProxyResult<QueryOffsetPlan>>,
     },
     EndTransaction {
         request: EndTransactionRequest,
@@ -417,6 +484,19 @@ impl ClusterTaskExecutor {
         .await
     }
 
+    async fn pull_message(
+        &self,
+        request: PullMessageRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<PullMessagePlan> {
+        self.execute(|reply| ClusterCommand::PullMessage {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
     async fn ack_message(
         &self,
         request: AckMessageRequest,
@@ -436,6 +516,41 @@ impl ClusterTaskExecutor {
         deadline: Option<Duration>,
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
         self.execute(|reply| ClusterCommand::ChangeInvisibleDuration {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn update_offset(
+        &self,
+        request: UpdateOffsetRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<UpdateOffsetPlan> {
+        self.execute(|reply| ClusterCommand::UpdateOffset {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn get_offset(&self, request: GetOffsetRequest, deadline: Option<Duration>) -> ProxyResult<GetOffsetPlan> {
+        self.execute(|reply| ClusterCommand::GetOffset {
+            request,
+            deadline,
+            reply,
+        })
+        .await
+    }
+
+    async fn query_offset(
+        &self,
+        request: QueryOffsetRequest,
+        deadline: Option<Duration>,
+    ) -> ProxyResult<QueryOffsetPlan> {
+        self.execute(|reply| ClusterCommand::QueryOffset {
             request,
             deadline,
             reply,
@@ -535,6 +650,13 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
         } => {
             let _ = reply.send(receive_message_inner(config, request, deadline).await);
         }
+        ClusterCommand::PullMessage {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(pull_message_inner(config, request, deadline).await);
+        }
         ClusterCommand::AckMessage {
             request,
             deadline,
@@ -548,6 +670,27 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             reply,
         } => {
             let _ = reply.send(change_invisible_duration_request_inner(config, request, deadline).await);
+        }
+        ClusterCommand::UpdateOffset {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(update_offset_request_inner(config, request, deadline).await);
+        }
+        ClusterCommand::GetOffset {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(get_offset_request_inner(config, request, deadline).await);
+        }
+        ClusterCommand::QueryOffset {
+            request,
+            deadline,
+            reply,
+        } => {
+            let _ = reply.send(query_offset_request_inner(config, request, deadline).await);
         }
         ClusterCommand::EndTransaction {
             request,
@@ -784,6 +927,24 @@ async fn receive_message_inner(
     Ok(build_receive_plan(pop_result))
 }
 
+async fn pull_message_inner(
+    config: &ClusterConfig,
+    request: PullMessageRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<PullMessagePlan> {
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let timeout_ms = effective_request_timeout_ms(
+        config
+            .mq_client_api_timeout_ms
+            .max(request.long_polling_timeout.as_millis().clamp(0, u128::from(u64::MAX)) as u64 + 500),
+        deadline,
+    );
+    let request_header = build_pull_request_header(&broker_target.broker_name, &request);
+    let pull_result = pull_message(&client, broker_target.broker_addr, request_header, timeout_ms).await?;
+    Ok(build_pull_plan(pull_result))
+}
+
 async fn ack_message_inner(
     config: &ClusterConfig,
     request: AckMessageRequest,
@@ -808,6 +969,84 @@ async fn change_invisible_duration_request_inner(
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let mut client = initialize_client_instance(config.clone()).await?;
     change_invisible_duration_inner(&mut client, config, &request, timeout_ms).await
+}
+
+async fn update_offset_request_inner(
+    config: &ClusterConfig,
+    request: UpdateOffsetRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<UpdateOffsetPlan> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let request_header = build_update_offset_request_header(&broker_target.broker_name, &request);
+    client
+        .update_consumer_offset(&broker_target.broker_addr, request_header, timeout_ms)
+        .await?;
+
+    Ok(UpdateOffsetPlan {
+        status: ProxyStatusMapper::ok_payload(),
+    })
+}
+
+async fn get_offset_request_inner(
+    config: &ClusterConfig,
+    request: GetOffsetRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<GetOffsetPlan> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let request_header = build_query_consumer_offset_request_header(&broker_target.broker_name, &request);
+    let offset = client
+        .query_consumer_offset(broker_target.broker_addr.as_str(), request_header, timeout_ms)
+        .await?;
+
+    Ok(GetOffsetPlan {
+        status: ProxyStatusMapper::ok_payload(),
+        offset,
+    })
+}
+
+async fn query_offset_request_inner(
+    config: &ClusterConfig,
+    request: QueryOffsetRequest,
+    deadline: Option<Duration>,
+) -> ProxyResult<QueryOffsetPlan> {
+    let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let message_queue = build_message_queue(&request.target, &broker_target.broker_name);
+    let offset = match request.policy {
+        QueryOffsetPolicy::Beginning => {
+            client
+                .get_min_offset(broker_target.broker_addr.as_str(), &message_queue, timeout_ms)
+                .await?
+        }
+        QueryOffsetPolicy::End => {
+            client
+                .get_max_offset(broker_target.broker_addr.as_str(), &message_queue, timeout_ms)
+                .await?
+        }
+        QueryOffsetPolicy::Timestamp => {
+            client
+                .search_offset_by_timestamp(
+                    broker_target.broker_addr.as_str(),
+                    &message_queue,
+                    request.timestamp_ms.ok_or_else(|| {
+                        ProxyError::illegal_offset("timestamp policy requires timestamp to be present")
+                    })?,
+                    rocketmq_common::common::boundary_type::BoundaryType::Lower,
+                    timeout_ms,
+                )
+                .await?
+        }
+    };
+
+    Ok(QueryOffsetPlan {
+        status: ProxyStatusMapper::ok_payload(),
+        offset,
+    })
 }
 
 async fn end_transaction_request_inner(
@@ -920,23 +1159,55 @@ async fn resolve_receive_broker(
     config: &ClusterConfig,
     request: &ReceiveMessageRequest,
 ) -> ProxyResult<BrokerTarget> {
-    if let (Some(broker_name), Some(broker_addr)) =
-        (request.target.broker_name.as_ref(), request.target.broker_addr.as_ref())
-    {
+    resolve_broker_target(
+        client,
+        config,
+        &request.target.topic,
+        request.target.queue_id,
+        request.target.broker_name.as_deref(),
+        request.target.broker_addr.as_deref(),
+    )
+    .await
+}
+
+async fn resolve_message_queue_broker(
+    client: &mut ArcMut<MQClientInstance>,
+    config: &ClusterConfig,
+    target: &MessageQueueTarget,
+) -> ProxyResult<BrokerTarget> {
+    resolve_broker_target(
+        client,
+        config,
+        &target.topic,
+        target.queue_id,
+        target.broker_name.as_deref(),
+        target.broker_addr.as_deref(),
+    )
+    .await
+}
+
+async fn resolve_broker_target(
+    client: &mut ArcMut<MQClientInstance>,
+    config: &ClusterConfig,
+    topic: &ResourceIdentity,
+    queue_id: i32,
+    broker_name: Option<&str>,
+    broker_addr: Option<&str>,
+) -> ProxyResult<BrokerTarget> {
+    if let (Some(broker_name), Some(broker_addr)) = (broker_name, broker_addr) {
         return Ok(BrokerTarget {
-            broker_name: CheetahString::from(broker_name.as_str()),
-            broker_addr: CheetahString::from(broker_addr.as_str()),
+            broker_name: CheetahString::from(broker_name),
+            broker_addr: CheetahString::from(broker_addr),
         });
     }
 
-    let topic = CheetahString::from(request.target.topic.to_string());
-    if let Some(broker_name) = request.target.broker_name.as_ref() {
-        let broker_name = CheetahString::from(broker_name.as_str());
-        let actual_broker_name =
-            resolve_subscription_broker_name(client, &topic, &broker_name, request.target.queue_id).await;
-        if let Some(broker_addr) = find_subscribe_broker_addr(client, &actual_broker_name, &topic).await {
+    let topic_name = CheetahString::from(topic.to_string());
+    if let Some(broker_name) = broker_name {
+        let broker_name = CheetahString::from(broker_name);
+        let actual_broker_name = resolve_subscription_broker_name(client, &topic_name, &broker_name, queue_id).await;
+        if let Some(broker_addr) = find_subscribe_broker_addr(client, &actual_broker_name, &topic_name).await {
             return Ok(BrokerTarget {
-                broker_name,
+                broker_name: actual_broker_name,
                 broker_addr,
             });
         }
@@ -944,11 +1215,11 @@ async fn resolve_receive_broker(
 
     let route = client
         .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic.as_str(), config.mq_client_api_timeout_ms)
+        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
         .await?
-        .ok_or_else(|| RocketMQError::route_not_found(topic.as_str()))?;
+        .ok_or_else(|| RocketMQError::route_not_found(topic_name.as_str()))?;
     let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-        name: topic.to_string(),
+        name: topic_name.to_string(),
     })?;
     let broker_name = route
         .broker_datas
@@ -990,6 +1261,18 @@ async fn pop_message(
     receiver.await.map_err(|error| ProxyError::Transport {
         message: format!("proxy pop callback dropped: {error}"),
     })?
+}
+
+async fn pull_message(
+    client: &ArcMut<MQClientInstance>,
+    broker_addr: CheetahString,
+    request_header: PullMessageRequestHeader,
+    timeout_ms: u64,
+) -> ProxyResult<rocketmq_client_rust::consumer::pull_result::PullResult> {
+    client
+        .pull_message_from_broker(broker_addr.as_str(), request_header, timeout_ms)
+        .await
+        .map_err(Into::into)
 }
 
 async fn ack_message_entry(
@@ -1212,6 +1495,80 @@ fn build_pop_request_header(broker_name: &CheetahString, request: &ReceiveMessag
     }
 }
 
+fn build_pull_request_header(broker_name: &CheetahString, request: &PullMessageRequest) -> PullMessageRequestHeader {
+    PullMessageRequestHeader {
+        consumer_group: CheetahString::from(request.group.to_string()),
+        topic: CheetahString::from(request.target.topic.to_string()),
+        queue_id: request.target.queue_id,
+        queue_offset: request.offset,
+        max_msg_nums: request.batch_size.min(i32::MAX as u32) as i32,
+        sys_flag: PullSysFlag::build_sys_flag(
+            false,
+            !request.long_polling_timeout.is_zero(),
+            true,
+            request.filter_expression.expression_type
+                != rocketmq_common::common::filter::expression_type::ExpressionType::TAG,
+        ) as i32,
+        commit_offset: 0,
+        suspend_timeout_millis: request.long_polling_timeout.as_millis().clamp(0, u128::from(u64::MAX)) as u64,
+        sub_version: 0,
+        subscription: Some(CheetahString::from(request.filter_expression.expression.as_str())),
+        expression_type: Some(CheetahString::from(request.filter_expression.expression_type.as_str())),
+        max_msg_bytes: None,
+        request_source: None,
+        proxy_forward_client_id: None,
+        topic_request: Some(PopTopicRequestHeader {
+            lo: None,
+            rpc: Some(RpcRequestHeader {
+                broker_name: Some(broker_name.clone()),
+                ..Default::default()
+            }),
+        }),
+    }
+}
+
+fn build_update_offset_request_header(
+    broker_name: &CheetahString,
+    request: &UpdateOffsetRequest,
+) -> UpdateConsumerOffsetRequestHeader {
+    UpdateConsumerOffsetRequestHeader {
+        consumer_group: CheetahString::from(request.group.to_string()),
+        topic: CheetahString::from(request.target.topic.to_string()),
+        queue_id: request.target.queue_id,
+        commit_offset: request.offset,
+        topic_request_header: Some(PopTopicRequestHeader {
+            rpc: Some(RpcRequestHeader {
+                broker_name: Some(broker_name.clone()),
+                ..Default::default()
+            }),
+            lo: None,
+        }),
+    }
+}
+
+fn build_query_consumer_offset_request_header(
+    broker_name: &CheetahString,
+    request: &GetOffsetRequest,
+) -> QueryConsumerOffsetRequestHeader {
+    QueryConsumerOffsetRequestHeader {
+        consumer_group: CheetahString::from(request.group.to_string()),
+        topic: CheetahString::from(request.target.topic.to_string()),
+        queue_id: request.target.queue_id,
+        set_zero_if_not_found: Some(false),
+        topic_request_header: Some(PopTopicRequestHeader {
+            rpc: Some(RpcRequestHeader {
+                broker_name: Some(broker_name.clone()),
+                ..Default::default()
+            }),
+            lo: None,
+        }),
+    }
+}
+
+fn build_message_queue(target: &MessageQueueTarget, broker_name: &CheetahString) -> MessageQueue {
+    MessageQueue::from_parts(target.topic.to_string(), broker_name.clone(), target.queue_id)
+}
+
 fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
     let delivery_timestamp_ms = (pop_result.pop_time > 0).then_some(pop_result.pop_time as i64);
     let invisible_duration = Duration::from_millis(pop_result.invisible_time.max(1));
@@ -1245,6 +1602,33 @@ fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
         PopStatus::PollingFull => ReceiveMessagePlan {
             status: ProxyStatusMapper::from_payload_code(v2::Code::TooManyRequests, "broker polling queue is full"),
             delivery_timestamp_ms,
+            messages: Vec::new(),
+        },
+    }
+}
+
+fn build_pull_plan(pull_result: rocketmq_client_rust::consumer::pull_result::PullResult) -> PullMessagePlan {
+    let next_offset = pull_result.next_begin_offset() as i64;
+    match pull_result.pull_status() {
+        PullStatus::Found => PullMessagePlan {
+            status: ProxyStatusMapper::ok_payload(),
+            next_offset,
+            messages: pull_result
+                .msg_found_list()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|message| message.as_ref().clone())
+                .collect(),
+        },
+        PullStatus::NoNewMsg | PullStatus::NoMatchedMsg => PullMessagePlan {
+            status: ProxyStatusMapper::from_payload_code(v2::Code::MessageNotFound, "no message available"),
+            next_offset,
+            messages: Vec::new(),
+        },
+        PullStatus::OffsetIllegal => PullMessagePlan {
+            status: ProxyStatusMapper::from_payload_code(v2::Code::IllegalOffset, "pull offset is illegal"),
+            next_offset,
             messages: Vec::new(),
         },
     }

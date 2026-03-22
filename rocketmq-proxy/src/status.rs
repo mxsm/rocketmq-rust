@@ -15,6 +15,7 @@
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_error::RocketMQError;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 
@@ -104,6 +105,7 @@ impl ProxyStatusMapper {
             ProxyError::IllegalMessageGroup { .. } => v2::Code::IllegalMessageGroup,
             ProxyError::IllegalDeliveryTime { .. } => v2::Code::IllegalDeliveryTime,
             ProxyError::IllegalPollingTime { .. } => v2::Code::IllegalPollingTime,
+            ProxyError::IllegalOffset { .. } => v2::Code::IllegalOffset,
             ProxyError::IllegalInvisibleTime { .. } => v2::Code::IllegalInvisibleTime,
             ProxyError::IllegalFilterExpression { .. } => v2::Code::IllegalFilterExpression,
             ProxyError::InvalidReceiptHandle { .. } => v2::Code::InvalidReceiptHandle,
@@ -181,6 +183,14 @@ impl ProxyStatusMapper {
             RocketMQError::BrokerNotFound { .. }
             | RocketMQError::QueueNotExist { .. }
             | RocketMQError::ClusterNotFound { .. } => v2::Code::NotFound,
+            RocketMQError::BrokerOperationFailed { code, .. } => match ResponseCode::from(*code) {
+                ResponseCode::NoPermission => v2::Code::Forbidden,
+                ResponseCode::TopicNotExist => v2::Code::TopicNotFound,
+                ResponseCode::SubscriptionGroupNotExist => v2::Code::ConsumerGroupNotFound,
+                ResponseCode::QueryNotFound => v2::Code::OffsetNotFound,
+                ResponseCode::PullOffsetMoved => v2::Code::IllegalOffset,
+                _ => v2::Code::InternalError,
+            },
             RocketMQError::Timeout { .. } => v2::Code::ProxyTimeout,
             RocketMQError::Network(_) => v2::Code::RequestTimeout,
             _ => v2::Code::InternalError,

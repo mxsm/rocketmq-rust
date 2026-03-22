@@ -24,9 +24,11 @@ use dashmap::DashMap;
 use futures::future;
 use rand::seq::IndexedRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
@@ -35,6 +37,9 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -54,11 +59,16 @@ use tracing::warn;
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
+use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
+use crate::consumer::pull_callback::PullCallback;
+use crate::consumer::pull_result::PullResult;
+use crate::consumer::pull_status::PullStatus;
 use crate::factory::client_tables::*;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
+use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
@@ -764,6 +774,130 @@ impl MQClientInstance {
 
     pub fn get_mq_client_api_impl(&self) -> ArcMut<MQClientAPIImpl> {
         self.mq_client_api_impl.as_ref().unwrap().clone()
+    }
+
+    pub async fn pull_message_from_broker(
+        &self,
+        broker_addr: &str,
+        request_header: PullMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<PullResult> {
+        struct NoopPullCallback;
+
+        impl PullCallback for NoopPullCallback {
+            async fn on_success(&mut self, _pull_result: PullResultExt) {}
+
+            fn on_exception(&mut self, _e: Box<dyn std::error::Error + Send>) {}
+        }
+
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+
+        let mut result = MQClientAPIImpl::pull_message(
+            api_impl.clone(),
+            CheetahString::from(broker_addr),
+            request_header,
+            timeout_millis,
+            CommunicationMode::Sync,
+            NoopPullCallback,
+        )
+        .await?
+        .ok_or_else(|| rocketmq_error::RocketMQError::Internal("pull_message returned None in sync mode".into()))?;
+
+        if result.pull_result.pull_status == PullStatus::Found {
+            if let Some(mut message_binary) = result.message_binary.take() {
+                let messages = message_decoder::decodes_batch(&mut message_binary, true, true);
+                result
+                    .pull_result
+                    .set_msg_found_list(Some(messages.into_iter().map(ArcMut::new).collect()));
+            }
+        }
+
+        Ok(result.pull_result)
+    }
+
+    pub async fn query_consumer_offset(
+        &self,
+        broker_addr: &str,
+        request_header: QueryConsumerOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .clone()
+            .query_consumer_offset(broker_addr, request_header, timeout_millis)
+            .await
+    }
+
+    pub async fn update_consumer_offset(
+        &self,
+        broker_addr: &CheetahString,
+        request_header: UpdateConsumerOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .clone()
+            .update_consumer_offset(broker_addr, request_header, timeout_millis)
+            .await
+    }
+
+    pub async fn get_max_offset(
+        &self,
+        broker_addr: &str,
+        message_queue: &MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .clone()
+            .get_max_offset(broker_addr, message_queue, timeout_millis)
+            .await
+    }
+
+    pub async fn get_min_offset(
+        &self,
+        broker_addr: &str,
+        message_queue: &MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .clone()
+            .get_min_offset(broker_addr, message_queue, timeout_millis)
+            .await
+    }
+
+    pub async fn search_offset_by_timestamp(
+        &self,
+        broker_addr: &str,
+        message_queue: &MessageQueue,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .clone()
+            .search_offset_by_timestamp(broker_addr, message_queue, timestamp, boundary_type, timeout_millis)
+            .await
     }
 
     pub async fn get_topic_config(

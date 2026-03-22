@@ -101,6 +101,14 @@ pub struct ConsumerFilterExpression {
 }
 
 #[derive(Debug, Clone)]
+pub struct MessageQueueTarget {
+    pub topic: ResourceIdentity,
+    pub queue_id: i32,
+    pub broker_name: Option<String>,
+    pub broker_addr: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReceiveTarget {
     pub topic: ResourceIdentity,
     pub queue_id: i32,
@@ -132,6 +140,23 @@ pub struct ReceiveMessagePlan {
     pub status: ProxyPayloadStatus,
     pub delivery_timestamp_ms: Option<i64>,
     pub messages: Vec<ReceivedMessage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullMessageRequest {
+    pub group: ResourceIdentity,
+    pub target: MessageQueueTarget,
+    pub offset: i64,
+    pub batch_size: u32,
+    pub filter_expression: ConsumerFilterExpression,
+    pub long_polling_timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullMessagePlan {
+    pub status: ProxyPayloadStatus,
+    pub next_offset: i64,
+    pub messages: Vec<MessageExt>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +200,50 @@ pub struct ChangeInvisibleDurationRequest {
 pub struct ChangeInvisibleDurationPlan {
     pub status: ProxyPayloadStatus,
     pub receipt_handle: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateOffsetRequest {
+    pub group: ResourceIdentity,
+    pub target: MessageQueueTarget,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateOffsetPlan {
+    pub status: ProxyPayloadStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetOffsetRequest {
+    pub group: ResourceIdentity,
+    pub target: MessageQueueTarget,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetOffsetPlan {
+    pub status: ProxyPayloadStatus,
+    pub offset: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryOffsetPolicy {
+    Beginning,
+    End,
+    Timestamp,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryOffsetRequest {
+    pub target: MessageQueueTarget,
+    pub policy: QueryOffsetPolicy,
+    pub timestamp_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryOffsetPlan {
+    pub status: ProxyPayloadStatus,
+    pub offset: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +300,8 @@ pub trait MessagingProcessor: Send + Sync {
         request: ReceiveMessageRequest,
     ) -> ProxyResult<ReceiveMessagePlan>;
 
+    async fn pull_message(&self, context: &ProxyContext, request: PullMessageRequest) -> ProxyResult<PullMessagePlan>;
+
     async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan>;
 
     async fn change_invisible_duration(
@@ -238,6 +309,16 @@ pub trait MessagingProcessor: Send + Sync {
         context: &ProxyContext,
         request: ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+
+    async fn update_offset(
+        &self,
+        context: &ProxyContext,
+        request: UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan>;
+
+    async fn get_offset(&self, context: &ProxyContext, request: GetOffsetRequest) -> ProxyResult<GetOffsetPlan>;
+
+    async fn query_offset(&self, context: &ProxyContext, request: QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan>;
 
     async fn end_transaction(
         &self,
@@ -329,6 +410,11 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         consumer_service.receive_message(context, &request).await
     }
 
+    async fn pull_message(&self, context: &ProxyContext, request: PullMessageRequest) -> ProxyResult<PullMessagePlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service.pull_message(context, &request).await
+    }
+
     async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan> {
         let consumer_service = self.service_manager.consumer_service();
         let entries = consumer_service.ack_message(context, &request).await?;
@@ -342,6 +428,25 @@ impl MessagingProcessor for DefaultMessagingProcessor {
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
         let consumer_service = self.service_manager.consumer_service();
         consumer_service.change_invisible_duration(context, &request).await
+    }
+
+    async fn update_offset(
+        &self,
+        context: &ProxyContext,
+        request: UpdateOffsetRequest,
+    ) -> ProxyResult<UpdateOffsetPlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service.update_offset(context, &request).await
+    }
+
+    async fn get_offset(&self, context: &ProxyContext, request: GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service.get_offset(context, &request).await
+    }
+
+    async fn query_offset(&self, context: &ProxyContext, request: QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service.query_offset(context, &request).await
     }
 
     async fn end_transaction(

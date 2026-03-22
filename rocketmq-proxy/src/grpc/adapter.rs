@@ -45,8 +45,16 @@ use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::ConsumerFilterExpression;
 use crate::processor::EndTransactionPlan;
 use crate::processor::EndTransactionRequest;
+use crate::processor::GetOffsetPlan;
+use crate::processor::GetOffsetRequest;
+use crate::processor::MessageQueueTarget;
+use crate::processor::PullMessagePlan;
+use crate::processor::PullMessageRequest;
 use crate::processor::QueryAssignmentPlan;
 use crate::processor::QueryAssignmentRequest;
+use crate::processor::QueryOffsetPlan;
+use crate::processor::QueryOffsetPolicy;
+use crate::processor::QueryOffsetRequest;
 use crate::processor::QueryRoutePlan;
 use crate::processor::QueryRouteRequest;
 use crate::processor::RecallMessagePlan;
@@ -61,6 +69,8 @@ use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
 use crate::processor::TransactionResolution;
 use crate::processor::TransactionSource;
+use crate::processor::UpdateOffsetPlan;
+use crate::processor::UpdateOffsetRequest;
 use crate::proto::v2;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
@@ -171,6 +181,22 @@ pub fn build_receive_message_request(request: &v2::ReceiveMessageRequest) -> Pro
     })
 }
 
+pub fn build_pull_message_request(request: &v2::PullMessageRequest) -> ProxyResult<PullMessageRequest> {
+    Ok(PullMessageRequest {
+        group: resource_identity(request.group.as_ref(), "group")?,
+        target: message_queue_target(request.message_queue.as_ref(), "messageQueue")?,
+        offset: validate_offset("offset", request.offset)?,
+        batch_size: validate_batch_size(request.batch_size)?,
+        filter_expression: build_filter_expression(request.filter_expression.as_ref())?,
+        long_polling_timeout: request
+            .long_polling_timeout
+            .as_ref()
+            .map(|duration| non_negative_duration(duration, "longPollingTimeout", ProxyError::illegal_polling_time))
+            .transpose()?
+            .unwrap_or_default(),
+    })
+}
+
 pub fn build_ack_message_request(request: &v2::AckMessageRequest) -> ProxyResult<AckMessageRequest> {
     if request.entries.is_empty() {
         return Err(rocketmq_error::RocketMQError::illegal_argument("entries must not be empty").into());
@@ -222,6 +248,46 @@ pub fn build_change_invisible_duration_request(
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
         suspend: request.suspend,
+    })
+}
+
+pub fn build_update_offset_request(request: &v2::UpdateOffsetRequest) -> ProxyResult<UpdateOffsetRequest> {
+    Ok(UpdateOffsetRequest {
+        group: resource_identity(request.group.as_ref(), "group")?,
+        target: message_queue_target(request.message_queue.as_ref(), "messageQueue")?,
+        offset: validate_offset("offset", request.offset)?,
+    })
+}
+
+pub fn build_get_offset_request(request: &v2::GetOffsetRequest) -> ProxyResult<GetOffsetRequest> {
+    Ok(GetOffsetRequest {
+        group: resource_identity(request.group.as_ref(), "group")?,
+        target: message_queue_target(request.message_queue.as_ref(), "messageQueue")?,
+    })
+}
+
+pub fn build_query_offset_request(request: &v2::QueryOffsetRequest) -> ProxyResult<QueryOffsetRequest> {
+    let policy = match v2::QueryOffsetPolicy::try_from(request.query_offset_policy)
+        .unwrap_or(v2::QueryOffsetPolicy::Beginning)
+    {
+        v2::QueryOffsetPolicy::Beginning => QueryOffsetPolicy::Beginning,
+        v2::QueryOffsetPolicy::End => QueryOffsetPolicy::End,
+        v2::QueryOffsetPolicy::Timestamp => QueryOffsetPolicy::Timestamp,
+    };
+
+    let timestamp_ms = request
+        .timestamp
+        .as_ref()
+        .map(timestamp_to_offset_query_epoch_millis)
+        .transpose()?;
+    if matches!(policy, QueryOffsetPolicy::Timestamp) && timestamp_ms.is_none() {
+        return Err(ProxyError::illegal_offset("timestamp policy requires timestamp"));
+    }
+
+    Ok(QueryOffsetRequest {
+        target: message_queue_target(request.message_queue.as_ref(), "messageQueue")?,
+        policy,
+        timestamp_ms,
     })
 }
 
@@ -398,6 +464,25 @@ pub fn build_receive_message_responses(plan: &ReceiveMessagePlan) -> Vec<v2::Rec
     responses
 }
 
+pub fn build_pull_message_responses(plan: &PullMessagePlan) -> Vec<v2::PullMessageResponse> {
+    let mut responses = plan
+        .messages
+        .iter()
+        .map(|message| v2::PullMessageResponse {
+            content: Some(v2::pull_message_response::Content::Message(build_message_from_ext(
+                message, None,
+            ))),
+        })
+        .collect::<Vec<_>>();
+    responses.push(v2::PullMessageResponse {
+        content: Some(v2::pull_message_response::Content::NextOffset(plan.next_offset)),
+    });
+    responses.push(v2::PullMessageResponse {
+        content: Some(v2::pull_message_response::Content::Status(plan.status.clone().into())),
+    });
+    responses
+}
+
 pub fn build_ack_message_response(plan: &AckMessagePlan) -> v2::AckMessageResponse {
     v2::AckMessageResponse {
         status: Some(summarize_ack_response_status(&plan.entries).into()),
@@ -424,6 +509,26 @@ pub fn build_recall_message_response(plan: &RecallMessagePlan) -> v2::RecallMess
     v2::RecallMessageResponse {
         status: Some(plan.status.clone().into()),
         message_id: plan.message_id.clone(),
+    }
+}
+
+pub fn build_update_offset_response(plan: &UpdateOffsetPlan) -> v2::UpdateOffsetResponse {
+    v2::UpdateOffsetResponse {
+        status: Some(plan.status.clone().into()),
+    }
+}
+
+pub fn build_get_offset_response(plan: &GetOffsetPlan) -> v2::GetOffsetResponse {
+    v2::GetOffsetResponse {
+        status: Some(plan.status.clone().into()),
+        offset: plan.offset,
+    }
+}
+
+pub fn build_query_offset_response(plan: &QueryOffsetPlan) -> v2::QueryOffsetResponse {
+    v2::QueryOffsetResponse {
+        status: Some(plan.status.clone().into()),
+        offset: plan.offset,
     }
 }
 
@@ -470,6 +575,12 @@ pub fn error_receive_message_responses(status: v2::Status) -> Vec<v2::ReceiveMes
     }]
 }
 
+pub fn error_pull_message_responses(status: v2::Status) -> Vec<v2::PullMessageResponse> {
+    vec![v2::PullMessageResponse {
+        content: Some(v2::pull_message_response::Content::Status(status)),
+    }]
+}
+
 pub fn error_ack_message_response(status: v2::Status) -> v2::AckMessageResponse {
     v2::AckMessageResponse {
         status: Some(status),
@@ -492,6 +603,24 @@ pub fn error_recall_message_response(status: v2::Status) -> v2::RecallMessageRes
     v2::RecallMessageResponse {
         status: Some(status),
         message_id: String::new(),
+    }
+}
+
+pub fn error_update_offset_response(status: v2::Status) -> v2::UpdateOffsetResponse {
+    v2::UpdateOffsetResponse { status: Some(status) }
+}
+
+pub fn error_get_offset_response(status: v2::Status) -> v2::GetOffsetResponse {
+    v2::GetOffsetResponse {
+        status: Some(status),
+        offset: 0,
+    }
+}
+
+pub fn error_query_offset_response(status: v2::Status) -> v2::QueryOffsetResponse {
+    v2::QueryOffsetResponse {
+        status: Some(status),
+        offset: 0,
     }
 }
 
@@ -571,6 +700,25 @@ fn message_queue_broker(message_queue: &v2::MessageQueue) -> ProxyResult<(Option
     Ok((broker_name, broker_addr))
 }
 
+fn message_queue_target(
+    message_queue: Option<&v2::MessageQueue>,
+    field: &'static str,
+) -> ProxyResult<MessageQueueTarget> {
+    let message_queue = message_queue
+        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument(format!("{field} must not be empty")))?;
+    if message_queue.id < 0 {
+        return Err(ProxyError::illegal_offset(format!("{field}.id must not be negative")));
+    }
+
+    let (broker_name, broker_addr) = message_queue_broker(message_queue)?;
+    Ok(MessageQueueTarget {
+        topic: resource_identity(message_queue.topic.as_ref(), "messageQueue.topic")?,
+        queue_id: message_queue.id,
+        broker_name,
+        broker_addr,
+    })
+}
+
 fn endpoint_address(address: &v2::Address) -> ProxyResult<String> {
     if address.host.trim().is_empty() {
         return Err(rocketmq_error::RocketMQError::illegal_argument("broker endpoint host must not be empty").into());
@@ -634,6 +782,14 @@ fn validate_batch_size(batch_size: i32) -> ProxyResult<u32> {
     }
 
     Ok(batch_size as u32)
+}
+
+fn validate_offset(field: &'static str, offset: i64) -> ProxyResult<i64> {
+    if offset < 0 {
+        return Err(ProxyError::illegal_offset(format!("{field} must not be negative")));
+    }
+
+    Ok(offset)
 }
 
 fn validate_non_empty_string(field: &'static str, value: &str) -> ProxyResult<String> {
@@ -924,6 +1080,30 @@ fn timestamp_to_epoch_millis(timestamp: &prost_types::Timestamp) -> ProxyResult<
         .ok_or_else(|| ProxyError::illegal_delivery_time("delivery timestamp overflowed milliseconds"))
 }
 
+fn timestamp_to_offset_query_epoch_millis(timestamp: &prost_types::Timestamp) -> ProxyResult<i64> {
+    if timestamp.seconds < 0 {
+        return Err(ProxyError::illegal_offset(
+            "query offset timestamp must not be negative",
+        ));
+    }
+
+    if !(0..1_000_000_000).contains(&timestamp.nanos) {
+        return Err(ProxyError::illegal_offset(
+            "query offset timestamp nanos are out of range",
+        ));
+    }
+
+    let millis_from_seconds = timestamp
+        .seconds
+        .checked_mul(1_000)
+        .ok_or_else(|| ProxyError::illegal_offset("query offset timestamp overflowed milliseconds"))?;
+    let millis_from_nanos = i64::from(timestamp.nanos / 1_000_000);
+
+    millis_from_seconds
+        .checked_add(millis_from_nanos)
+        .ok_or_else(|| ProxyError::illegal_offset("query offset timestamp overflowed milliseconds"))
+}
+
 fn explicit_queue_id(queue_id: i32) -> Option<i32> {
     (queue_id > 0).then_some(queue_id)
 }
@@ -937,16 +1117,22 @@ fn build_receive_message_response(message: &ReceivedMessage) -> v2::ReceiveMessa
 }
 
 fn build_received_message(message: &ReceivedMessage) -> v2::Message {
+    build_message_from_ext(&message.message, Some(message.invisible_duration))
+}
+
+fn build_message_from_ext(message: &MessageExt, invisible_duration: Option<Duration>) -> v2::Message {
     v2::Message {
-        topic: Some(resource_from_topic_name(message.message.topic().as_str())),
-        user_properties: build_user_properties(&message.message),
-        system_properties: Some(build_received_system_properties(message)),
-        body: message.message.body().unwrap_or_default().to_vec(),
+        topic: Some(resource_from_topic_name(message.topic().as_str())),
+        user_properties: build_user_properties(message),
+        system_properties: Some(build_message_system_properties(message, invisible_duration)),
+        body: message.body().unwrap_or_default().to_vec(),
     }
 }
 
-fn build_received_system_properties(message: &ReceivedMessage) -> v2::SystemProperties {
-    let message_ext = &message.message;
+fn build_message_system_properties(
+    message_ext: &MessageExt,
+    invisible_duration: Option<Duration>,
+) -> v2::SystemProperties {
     let keys = message_ext
         .property(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
         .map(|value| {
@@ -975,7 +1161,7 @@ fn build_received_system_properties(message: &ReceivedMessage) -> v2::SystemProp
             .map(|value| value.to_string()),
         queue_id: message_ext.queue_id(),
         queue_offset: Some(message_ext.queue_offset()),
-        invisible_duration: duration_to_proto(message.invisible_duration),
+        invisible_duration: invisible_duration.and_then(duration_to_proto),
         delivery_attempt: Some(message_ext.reconsume_times().saturating_add(1)),
         message_group: message_ext
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY))
