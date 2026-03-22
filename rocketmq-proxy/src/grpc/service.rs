@@ -163,15 +163,19 @@ impl<P> ProxyGrpcService<P> {
 
     async fn authenticate_request<T: 'static>(
         &self,
-        context: &ProxyContext,
+        context: &mut ProxyContext,
         request: &Request<T>,
     ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
-        match self.auth_runtime.as_ref() {
+        let principal = match self.auth_runtime.as_ref() {
             Some(auth_runtime) if auth_runtime.enabled() => {
-                auth_runtime.authenticate_request(context.rpc_name(), request).await
+                auth_runtime.authenticate_request(context.rpc_name(), request).await?
             }
-            _ => Ok(None),
+            _ => None,
+        };
+        if let Some(principal) = principal.as_ref() {
+            context.set_authenticated_principal(principal.clone());
         }
+        Ok(principal)
     }
 
     async fn authorize_contexts(
@@ -835,8 +839,8 @@ where
         request: Request<v2::QueryRouteRequest>,
     ) -> Result<Response<v2::QueryRouteResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("QueryRoute", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("QueryRoute", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_query_route_response(
@@ -874,8 +878,8 @@ where
         request: Request<v2::HeartbeatRequest>,
     ) -> Result<Response<v2::HeartbeatResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("Heartbeat", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("Heartbeat", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(v2::HeartbeatResponse {
@@ -911,8 +915,8 @@ where
         request: Request<v2::SendMessageRequest>,
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("SendMessage", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("SendMessage", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_send_message_response(
@@ -953,8 +957,8 @@ where
         request: Request<v2::QueryAssignmentRequest>,
     ) -> Result<Response<v2::QueryAssignmentResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("QueryAssignment", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("QueryAssignment", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_query_assignment_response(
@@ -992,8 +996,8 @@ where
         request: Request<v2::ReceiveMessageRequest>,
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("ReceiveMessage", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("ReceiveMessage", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(self.items_stream(
@@ -1039,8 +1043,8 @@ where
         request: Request<v2::AckMessageRequest>,
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("AckMessage", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("AckMessage", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_ack_message_response(
@@ -1081,8 +1085,8 @@ where
         request: Request<v2::ForwardMessageToDeadLetterQueueRequest>,
     ) -> Result<Response<v2::ForwardMessageToDeadLetterQueueResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("ForwardMessageToDeadLetterQueue", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("ForwardMessageToDeadLetterQueue", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(
@@ -1136,8 +1140,8 @@ where
         request: Request<v2::PullMessageRequest>,
     ) -> Result<Response<Self::PullMessageStream>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("PullMessage", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("PullMessage", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(self.items_stream(adapter::error_pull_message_responses(
@@ -1176,8 +1180,8 @@ where
         request: Request<v2::UpdateOffsetRequest>,
     ) -> Result<Response<v2::UpdateOffsetResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("UpdateOffset", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("UpdateOffset", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_update_offset_response(
@@ -1213,8 +1217,8 @@ where
         request: Request<v2::GetOffsetRequest>,
     ) -> Result<Response<v2::GetOffsetResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("GetOffset", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("GetOffset", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_get_offset_response(
@@ -1250,8 +1254,8 @@ where
         request: Request<v2::QueryOffsetRequest>,
     ) -> Result<Response<v2::QueryOffsetResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("QueryOffset", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("QueryOffset", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_query_offset_response(
@@ -1287,8 +1291,8 @@ where
         request: Request<v2::EndTransactionRequest>,
     ) -> Result<Response<v2::EndTransactionResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("EndTransaction", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("EndTransaction", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_end_transaction_response(
@@ -1332,8 +1336,8 @@ where
         request: Request<tonic::Streaming<v2::TelemetryCommand>>,
     ) -> Result<Response<Self::TelemetryStream>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("Telemetry", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("Telemetry", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(
@@ -1409,8 +1413,8 @@ where
         request: Request<v2::NotifyClientTerminationRequest>,
     ) -> Result<Response<v2::NotifyClientTerminationResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("NotifyClientTermination", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("NotifyClientTermination", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(v2::NotifyClientTerminationResponse {
@@ -1451,8 +1455,8 @@ where
         request: Request<v2::ChangeInvisibleDurationRequest>,
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("ChangeInvisibleDuration", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("ChangeInvisibleDuration", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_change_invisible_duration_response(
@@ -1501,8 +1505,8 @@ where
         request: Request<v2::RecallMessageRequest>,
     ) -> Result<Response<v2::RecallMessageResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("RecallMessage", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("RecallMessage", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(adapter::error_recall_message_response(
@@ -1540,8 +1544,8 @@ where
         request: Request<v2::SyncLiteSubscriptionRequest>,
     ) -> Result<Response<v2::SyncLiteSubscriptionResponse>, Status> {
         self.reap_session_state_if_due();
-        let context = self.context("SyncLiteSubscription", &request);
-        let principal = match self.authenticate_request(&context, &request).await {
+        let mut context = self.context("SyncLiteSubscription", &request);
+        let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
                 return Ok(Response::new(v2::SyncLiteSubscriptionResponse {
@@ -2204,11 +2208,18 @@ mod tests {
 
         let mut auth_request = Request::new(());
         apply_auth_headers(&mut auth_request, "client-a", "alice", "secret");
-        let context = service.context("Telemetry", &auth_request);
+        let mut context = service.context("Telemetry", &auth_request);
         let principal = service
-            .authenticate_request(&context, &auth_request)
+            .authenticate_request(&mut context, &auth_request)
             .await
             .expect("authentication should succeed");
+        assert_eq!(
+            context
+                .authenticated_principal()
+                .expect("principal should be attached to context")
+                .username(),
+            "alice"
+        );
 
         let response = service
             .handle_telemetry_command(

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod adapter;
+pub mod middleware;
 pub mod server;
 pub mod service;
 

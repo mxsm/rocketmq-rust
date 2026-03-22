@@ -19,8 +19,10 @@ use tonic::metadata::MetadataMap;
 use tonic::Request;
 use uuid::Uuid;
 
+use crate::auth::AuthenticatedPrincipal;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::grpc::middleware;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolvedAddressScheme {
@@ -50,6 +52,7 @@ pub struct ProxyContext {
     connection_id: Option<String>,
     deadline: Option<Duration>,
     received_at: Instant,
+    authenticated_principal: Option<AuthenticatedPrincipal>,
 }
 
 impl ProxyContext {
@@ -59,7 +62,7 @@ impl ProxyContext {
             request_id: Uuid::new_v4().to_string(),
             rpc_name,
             remote_addr: request.remote_addr().map(|addr| addr.to_string()),
-            local_addr: None,
+            local_addr: middleware::request_local_addr(request).map(str::to_owned),
             client_id: metadata_string(metadata, "x-mq-client-id"),
             language: metadata_string(metadata, "x-mq-language"),
             client_version: metadata_string(metadata, "x-mq-client-version"),
@@ -70,7 +73,12 @@ impl ProxyContext {
                 .and_then(|value| value.to_str().ok())
                 .and_then(parse_grpc_timeout),
             received_at: Instant::now(),
+            authenticated_principal: None,
         }
+    }
+
+    pub(crate) fn set_authenticated_principal(&mut self, principal: AuthenticatedPrincipal) {
+        self.authenticated_principal = Some(principal);
     }
 
     pub fn require_client_id(&self) -> ProxyResult<&str> {
@@ -120,6 +128,10 @@ impl ProxyContext {
     pub fn received_at(&self) -> Instant {
         self.received_at
     }
+
+    pub fn authenticated_principal(&self) -> Option<&AuthenticatedPrincipal> {
+        self.authenticated_principal.as_ref()
+    }
 }
 
 fn metadata_string(metadata: &MetadataMap, key: &'static str) -> Option<String> {
@@ -152,7 +164,11 @@ pub(crate) fn parse_grpc_timeout(raw: &str) -> Option<Duration> {
 mod tests {
     use std::time::Duration;
 
+    use tonic::Request;
+
     use super::parse_grpc_timeout;
+    use super::ProxyContext;
+    use crate::grpc::middleware::GrpcTransportContext;
 
     #[test]
     fn parse_grpc_timeout_supports_multiple_units() {
@@ -166,5 +182,20 @@ mod tests {
         assert_eq!(parse_grpc_timeout(""), None);
         assert_eq!(parse_grpc_timeout("abc"), None);
         assert_eq!(parse_grpc_timeout("12X"), None);
+    }
+
+    #[test]
+    fn proxy_context_reads_local_addr_from_transport_context() {
+        let mut request = Request::new(());
+        request.extensions_mut().insert(GrpcTransportContext::new(
+            "127.0.0.1:8080".parse().expect("socket addr"),
+        ));
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", "client-a".parse().expect("client id metadata"));
+
+        let context = ProxyContext::from_grpc_request("QueryRoute", &request);
+        assert_eq!(context.local_addr(), Some("127.0.0.1:8080"));
+        assert_eq!(context.client_id(), Some("client-a"));
     }
 }
