@@ -109,6 +109,7 @@ pub struct TrackedReceiptHandle {
     pub receipt_handle: String,
     pub invisible_duration: Duration,
     pub last_touched: SystemTime,
+    pub next_renew_at: SystemTime,
     pub cancellation: CancellationToken,
 }
 
@@ -529,6 +530,7 @@ impl ClientSessionRegistry {
     }
 
     pub fn track_receipt_handle(&self, registration: ReceiptHandleRegistration) -> TrackedReceiptHandle {
+        let now = SystemTime::now();
         let tracked = TrackedReceiptHandle {
             client_id: registration.client_id,
             group: registration.group,
@@ -536,7 +538,8 @@ impl ClientSessionRegistry {
             message_id: registration.message_id,
             receipt_handle: registration.receipt_handle,
             invisible_duration: registration.invisible_duration,
-            last_touched: SystemTime::now(),
+            last_touched: now,
+            next_renew_at: renew_at(now, registration.invisible_duration),
             cancellation: CancellationToken::new(),
         };
         let key = ReceiptHandleKey::from(&tracked);
@@ -569,9 +572,11 @@ impl ClientSessionRegistry {
     ) -> Option<TrackedReceiptHandle> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, None)?;
         let mut tracked = self.receipt_handles.get_mut(&key)?;
+        let now = SystemTime::now();
         tracked.receipt_handle = new_receipt_handle.to_owned();
         tracked.invisible_duration = invisible_duration;
-        tracked.last_touched = SystemTime::now();
+        tracked.last_touched = now;
+        tracked.next_renew_at = renew_at(now, invisible_duration);
         Some(tracked.clone())
     }
 
@@ -587,9 +592,25 @@ impl ClientSessionRegistry {
     ) -> Option<TrackedReceiptHandle> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, Some(current_receipt_handle))?;
         let mut tracked = self.receipt_handles.get_mut(&key)?;
+        let now = SystemTime::now();
         tracked.receipt_handle = new_receipt_handle.to_owned();
         tracked.invisible_duration = invisible_duration;
-        tracked.last_touched = SystemTime::now();
+        tracked.last_touched = now;
+        tracked.next_renew_at = renew_at(now, invisible_duration);
+        Some(tracked.clone())
+    }
+
+    pub fn mark_receipt_handle_renew_attempted(
+        &self,
+        client_id: &str,
+        group: &ResourceIdentity,
+        topic: &ResourceIdentity,
+        message_id: &str,
+        invisible_duration: Duration,
+    ) -> Option<TrackedReceiptHandle> {
+        let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, None)?;
+        let mut tracked = self.receipt_handles.get_mut(&key)?;
+        tracked.next_renew_at = renew_at(SystemTime::now(), invisible_duration);
         Some(tracked.clone())
     }
 
@@ -663,6 +684,14 @@ impl ClientSessionRegistry {
 
     pub fn tracked_handle_count(&self) -> usize {
         self.receipt_handles.len()
+    }
+
+    pub fn receipt_handles_due_for_renewal(&self, now: SystemTime) -> Vec<TrackedReceiptHandle> {
+        self.receipt_handles
+            .iter()
+            .filter(|entry| entry.next_renew_at <= now)
+            .map(|entry| entry.clone())
+            .collect()
     }
 
     pub fn lite_subscription_count(&self) -> usize {
@@ -835,6 +864,15 @@ fn is_expired(instant: SystemTime, now: SystemTime, ttl: Duration) -> bool {
         Ok(elapsed) => elapsed >= ttl,
         Err(_) => false,
     }
+}
+
+fn renew_at(now: SystemTime, invisible_duration: Duration) -> SystemTime {
+    now.checked_add(auto_renew_interval(invisible_duration)).unwrap_or(now)
+}
+
+fn auto_renew_interval(invisible_duration: Duration) -> Duration {
+    let half_millis = invisible_duration.as_millis().saturating_div(2).clamp(1_000, 15_000) as u64;
+    Duration::from_millis(half_millis)
 }
 
 fn validate_lite_subscription_request(
@@ -1054,6 +1092,21 @@ mod tests {
     }
 
     #[test]
+    fn receipt_handles_due_for_renewal_returns_only_due_entries() {
+        let registry = ClientSessionRegistry::default();
+        let tracked = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "handle-1"));
+        let key = super::ReceiptHandleKey::from(&tracked);
+
+        if let Some(mut entry) = registry.receipt_handles.get_mut(&key) {
+            entry.next_renew_at = SystemTime::UNIX_EPOCH;
+        }
+
+        let due = registry.receipt_handles_due_for_renewal(SystemTime::now());
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].message_id, "msg-1");
+    }
+
+    #[test]
     fn sync_lite_subscription_tracks_partial_and_complete_actions() {
         let registry = ClientSessionRegistry::default();
 
@@ -1233,6 +1286,7 @@ mod tests {
                 receipt_handle: "handle-1".to_owned(),
                 invisible_duration: Duration::from_secs(30),
                 last_touched: SystemTime::UNIX_EPOCH,
+                next_renew_at: SystemTime::UNIX_EPOCH,
                 cancellation: CancellationToken::new(),
             },
         );

@@ -22,6 +22,8 @@ use crate::config::ProxyMode;
 use crate::error::ProxyResult;
 use crate::grpc::server;
 use crate::grpc::ProxyGrpcService;
+use crate::observability::ProxyHookChain;
+use crate::observability::ProxyMetrics;
 use crate::processor::DefaultMessagingProcessor;
 use crate::processor::MessagingProcessor;
 use crate::service::ClusterServiceManager;
@@ -34,6 +36,8 @@ pub struct ProxyRuntimeBuilder {
     service_manager: Option<Arc<dyn ServiceManager>>,
     session_registry: Option<ClientSessionRegistry>,
     auth_runtime: Option<ProxyAuthRuntime>,
+    hooks: Option<ProxyHookChain>,
+    metrics: Option<ProxyMetrics>,
 }
 
 impl ProxyRuntimeBuilder {
@@ -52,6 +56,16 @@ impl ProxyRuntimeBuilder {
         self
     }
 
+    pub fn with_hooks(mut self, hooks: ProxyHookChain) -> Self {
+        self.hooks = Some(hooks);
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: ProxyMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
     pub fn build(self) -> ProxyRuntime<DefaultMessagingProcessor> {
         let local_mode_supported = !(matches!(self.config.mode, ProxyMode::Local) && self.service_manager.is_none());
         let service_manager = self
@@ -65,6 +79,8 @@ impl ProxyRuntimeBuilder {
             session_registry,
             local_mode_supported,
             self.auth_runtime,
+            self.hooks.unwrap_or_default(),
+            self.metrics.unwrap_or_default(),
         )
     }
 }
@@ -83,6 +99,8 @@ impl ProxyRuntime<DefaultMessagingProcessor> {
             service_manager: None,
             session_registry: None,
             auth_runtime: None,
+            hooks: None,
+            metrics: None,
         }
     }
 
@@ -96,7 +114,15 @@ where
     P: MessagingProcessor + 'static,
 {
     pub fn from_processor(config: ProxyConfig, processor: Arc<P>, session_registry: ClientSessionRegistry) -> Self {
-        Self::from_processor_with_local_mode_support(config, processor, session_registry, true, None)
+        Self::from_processor_with_local_mode_support(
+            config,
+            processor,
+            session_registry,
+            true,
+            None,
+            ProxyHookChain::default(),
+            ProxyMetrics::default(),
+        )
     }
 
     fn from_processor_with_local_mode_support(
@@ -105,9 +131,13 @@ where
         session_registry: ClientSessionRegistry,
         local_mode_supported: bool,
         auth_runtime: Option<ProxyAuthRuntime>,
+        hooks: ProxyHookChain,
+        metrics: ProxyMetrics,
     ) -> Self {
         let config = Arc::new(config);
-        let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry);
+        let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry)
+            .with_hooks(hooks)
+            .with_metrics(metrics);
         Self {
             config,
             grpc_service,

@@ -80,6 +80,23 @@ impl ProxyContext {
         self.authenticated_principal = Some(principal);
     }
 
+    pub fn for_internal_client(rpc_name: &'static str, client_id: impl Into<String>) -> Self {
+        Self {
+            request_id: Uuid::new_v4().to_string(),
+            rpc_name,
+            remote_addr: None,
+            local_addr: None,
+            client_id: Some(client_id.into()),
+            language: None,
+            client_version: None,
+            namespace: None,
+            connection_id: None,
+            deadline: None,
+            received_at: Instant::now(),
+            authenticated_principal: None,
+        }
+    }
+
     pub fn require_client_id(&self) -> ProxyResult<&str> {
         self.client_id.as_deref().ok_or(ProxyError::ClientIdRequired)
     }

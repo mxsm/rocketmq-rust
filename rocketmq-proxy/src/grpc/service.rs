@@ -33,6 +33,10 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use tracing::field;
+use tracing::info_span;
+use tracing::Instrument;
+use tracing::Span;
 
 use crate::auth;
 use crate::auth::AuthenticatedPrincipal;
@@ -42,6 +46,10 @@ use crate::context::ProxyContext;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::adapter;
+use crate::observability::ProxyHookChain;
+use crate::observability::ProxyMetrics;
+use crate::observability::ProxyMetricsSnapshot;
+use crate::observability::ProxyRequestOutcome;
 use crate::processor::MessagingProcessor;
 use crate::proto::v2;
 use crate::service::ResourceIdentity;
@@ -49,7 +57,6 @@ use crate::session::ClientSessionRegistry;
 use crate::session::ClientSettingsSnapshot;
 use crate::session::PreparedTransactionRegistration;
 use crate::session::ReceiptHandleRegistration;
-use crate::session::TrackedReceiptHandle;
 use crate::status::ProxyStatusMapper;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
@@ -101,6 +108,51 @@ impl ExecutionGuards {
     }
 }
 
+#[derive(Clone)]
+struct RequestObservation {
+    context: ProxyContext,
+    started_at: std::time::Instant,
+    span: Span,
+}
+
+impl RequestObservation {
+    fn new(context: ProxyContext) -> Self {
+        let span = info_span!(
+            "rocketmq_proxy.rpc",
+            rpc = context.rpc_name(),
+            request_id = %context.request_id(),
+            client_id = context.client_id().unwrap_or(""),
+            remote_addr = context.remote_addr().unwrap_or(""),
+            local_addr = context.local_addr().unwrap_or(""),
+            principal = field::Empty,
+        );
+        Self {
+            context,
+            started_at: std::time::Instant::now(),
+            span,
+        }
+    }
+
+    fn record_principal(&mut self, principal: Option<&AuthenticatedPrincipal>) {
+        if let Some(principal) = principal {
+            self.context.set_authenticated_principal(principal.clone());
+            self.span.record("principal", principal.username());
+        }
+    }
+
+    fn context(&self) -> &ProxyContext {
+        &self.context
+    }
+
+    fn span(&self) -> Span {
+        self.span.clone()
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+}
+
 pub struct ProxyGrpcService<P> {
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
@@ -108,6 +160,8 @@ pub struct ProxyGrpcService<P> {
     guards: ExecutionGuards,
     next_reap_at_ms: Arc<AtomicU64>,
     auth_runtime: Option<Arc<ProxyAuthRuntime>>,
+    hooks: ProxyHookChain,
+    metrics: ProxyMetrics,
 }
 
 impl<P> Clone for ProxyGrpcService<P> {
@@ -119,6 +173,8 @@ impl<P> Clone for ProxyGrpcService<P> {
             guards: self.guards.clone(),
             next_reap_at_ms: Arc::clone(&self.next_reap_at_ms),
             auth_runtime: self.auth_runtime.clone(),
+            hooks: self.hooks.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -135,12 +191,28 @@ impl<P> ProxyGrpcService<P> {
             sessions,
             next_reap_at_ms: Arc::new(AtomicU64::new(current_epoch_millis().saturating_add(interval_ms))),
             auth_runtime: None,
+            hooks: ProxyHookChain::default(),
+            metrics: ProxyMetrics::default(),
         }
     }
 
     pub fn with_auth_runtime(mut self, auth_runtime: Option<ProxyAuthRuntime>) -> Self {
         self.auth_runtime = auth_runtime.map(Arc::new);
         self
+    }
+
+    pub fn with_hooks(mut self, hooks: ProxyHookChain) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: ProxyMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
+        self.metrics.snapshot(&self.sessions)
     }
 
     fn context<T>(&self, rpc_name: &'static str, request: &Request<T>) -> Result<ProxyContext, Status> {
@@ -161,28 +233,42 @@ impl<P> ProxyGrpcService<P> {
         Box::pin(stream::iter(items.into_iter().map(Ok)))
     }
 
-    fn unary_error_response<T>(
-        &self,
-        error: ProxyError,
-        payload_builder: impl FnOnce(v2::Status) -> T,
-    ) -> Result<Response<T>, Status> {
-        if ProxyStatusMapper::should_use_tonic_status(&error) {
-            Err(ProxyStatusMapper::to_tonic_status(&error))
-        } else {
-            Ok(Response::new(payload_builder(ProxyStatusMapper::from_error(&error))))
-        }
+    async fn begin_observation(&self, context: ProxyContext) -> RequestObservation {
+        let observation = RequestObservation::new(context);
+        self.metrics.record_request_started(observation.context().rpc_name());
+        self.hooks
+            .before_request(observation.context())
+            .instrument(observation.span())
+            .await;
+        observation
     }
 
-    fn stream_error_response<T>(
-        &self,
-        error: ProxyError,
-        payload_builder: impl FnOnce(v2::Status) -> ResponseStream<T>,
-    ) -> Result<Response<ResponseStream<T>>, Status> {
-        if ProxyStatusMapper::should_use_tonic_status(&error) {
-            Err(ProxyStatusMapper::to_tonic_status(&error))
-        } else {
-            Ok(Response::new(payload_builder(ProxyStatusMapper::from_error(&error))))
-        }
+    async fn finish_observation(&self, observation: &RequestObservation, outcome: &ProxyRequestOutcome) {
+        self.metrics
+            .record_request_completed(observation.context().rpc_name(), outcome, observation.elapsed());
+        self.hooks
+            .after_request(observation.context(), outcome)
+            .instrument(observation.span())
+            .await;
+    }
+
+    async fn finish_unary_payload(&self, observation: &RequestObservation, status: &v2::Status) {
+        self.finish_observation(observation, &ProxyRequestOutcome::from_payload_status(status))
+            .await;
+    }
+
+    async fn finish_stream_payload(&self, observation: &RequestObservation, status: &v2::Status) {
+        self.finish_observation(observation, &ProxyRequestOutcome::from_payload_status(status))
+            .await;
+    }
+
+    fn record_transport_failure(&self, rpc_name: &'static str, status: &Status) {
+        self.metrics.record_request_started(rpc_name);
+        self.metrics.record_request_completed(
+            rpc_name,
+            &ProxyRequestOutcome::from_tonic_status(status),
+            Duration::ZERO,
+        );
     }
 
     async fn enter_unary<TRequest: 'static, TResponse>(
@@ -190,17 +276,41 @@ impl<P> ProxyGrpcService<P> {
         rpc_name: &'static str,
         request: Request<TRequest>,
         payload_builder: impl FnOnce(v2::Status) -> TResponse,
-    ) -> Result<(ProxyContext, Option<AuthenticatedPrincipal>, TRequest), Result<Response<TResponse>, Status>> {
+    ) -> Result<
+        (
+            RequestObservation,
+            ProxyContext,
+            Option<AuthenticatedPrincipal>,
+            TRequest,
+        ),
+        Result<Response<TResponse>, Status>,
+    > {
         self.reap_session_state_if_due();
         let mut context = match self.context(rpc_name, &request) {
             Ok(context) => context,
-            Err(status) => return Err(Err(status)),
+            Err(status) => {
+                self.record_transport_failure(rpc_name, &status);
+                return Err(Err(status));
+            }
         };
+        let mut observation = self.begin_observation(context.clone()).await;
         let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
-            Err(error) => return Err(self.unary_error_response(error, payload_builder)),
+            Err(error) => {
+                return if ProxyStatusMapper::should_use_tonic_status(&error) {
+                    let status = ProxyStatusMapper::to_tonic_status(&error);
+                    self.finish_observation(&observation, &ProxyRequestOutcome::from_tonic_status(&status))
+                        .await;
+                    Err(Err(status))
+                } else {
+                    let payload_status = ProxyStatusMapper::from_error(&error);
+                    self.finish_unary_payload(&observation, &payload_status).await;
+                    Err(Ok(Response::new(payload_builder(payload_status))))
+                };
+            }
         };
-        Ok((context, principal, request.into_inner()))
+        observation.record_principal(principal.as_ref());
+        Ok((observation, context, principal, request.into_inner()))
     }
 
     async fn enter_stream<TRequest: 'static, TItem>(
@@ -208,18 +318,41 @@ impl<P> ProxyGrpcService<P> {
         rpc_name: &'static str,
         request: Request<TRequest>,
         payload_builder: impl FnOnce(v2::Status) -> ResponseStream<TItem>,
-    ) -> Result<(ProxyContext, Option<AuthenticatedPrincipal>, TRequest), Result<Response<ResponseStream<TItem>>, Status>>
-    {
+    ) -> Result<
+        (
+            RequestObservation,
+            ProxyContext,
+            Option<AuthenticatedPrincipal>,
+            TRequest,
+        ),
+        Result<Response<ResponseStream<TItem>>, Status>,
+    > {
         self.reap_session_state_if_due();
         let mut context = match self.context(rpc_name, &request) {
             Ok(context) => context,
-            Err(status) => return Err(Err(status)),
+            Err(status) => {
+                self.record_transport_failure(rpc_name, &status);
+                return Err(Err(status));
+            }
         };
+        let mut observation = self.begin_observation(context.clone()).await;
         let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
-            Err(error) => return Err(self.stream_error_response(error, payload_builder)),
+            Err(error) => {
+                return if ProxyStatusMapper::should_use_tonic_status(&error) {
+                    let status = ProxyStatusMapper::to_tonic_status(&error);
+                    self.finish_observation(&observation, &ProxyRequestOutcome::from_tonic_status(&status))
+                        .await;
+                    Err(Err(status))
+                } else {
+                    let payload_status = ProxyStatusMapper::from_error(&error);
+                    self.finish_stream_payload(&observation, &payload_status).await;
+                    Err(Ok(Response::new(payload_builder(payload_status))))
+                };
+            }
         };
-        Ok((context, principal, request.into_inner()))
+        observation.record_principal(principal.as_ref());
+        Ok((observation, context, principal, request.into_inner()))
     }
 
     async fn authenticate_request<T: 'static>(
@@ -258,6 +391,7 @@ impl<P> ProxyGrpcService<P> {
     pub async fn run_housekeeping_until<F>(&self, shutdown: F)
     where
         F: std::future::Future<Output = ()> + Send,
+        P: MessagingProcessor + 'static,
     {
         let mut interval = tokio::time::interval(self.housekeeping_interval());
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -268,6 +402,7 @@ impl<P> ProxyGrpcService<P> {
                 _ = &mut shutdown => break,
                 _ = interval.tick() => {
                     self.reap_session_state();
+                    self.renew_due_receipt_handles().await;
                     self.dispatch_due_prepared_transaction_recoveries();
                     self.schedule_next_reap();
                 }
@@ -575,7 +710,7 @@ where
                 receipt_handle,
                 invisible_duration: message.invisible_duration,
             });
-            self.spawn_auto_renew_task(context.clone(), tracked);
+            let _ = tracked;
         }
     }
 
@@ -725,72 +860,81 @@ where
         );
     }
 
-    fn spawn_auto_renew_task(&self, context: ProxyContext, tracked: TrackedReceiptHandle) {
+    async fn renew_due_receipt_handles(&self) {
+        let due_handles = self.sessions.receipt_handles_due_for_renewal(SystemTime::now());
+        if due_handles.is_empty() {
+            return;
+        }
+
         let processor = Arc::clone(&self.processor);
         let sessions = self.sessions.clone();
-        tokio::spawn(async move {
-            let client_id = tracked.client_id.clone();
-            let group = tracked.group.clone();
-            let topic = tracked.topic.clone();
-            let message_id = tracked.message_id.clone();
-
-            loop {
-                let Some(current) =
-                    sessions.tracked_receipt_handle(client_id.as_str(), &group, &topic, message_id.as_str())
-                else {
-                    break;
-                };
-                let delay = auto_renew_interval(current.invisible_duration);
-                let cancellation = current.cancellation.clone();
-
-                tokio::select! {
-                    _ = cancellation.cancelled() => break,
-                    _ = tokio::time::sleep(delay) => {}
-                }
-
-                let Some(current) =
-                    sessions.tracked_receipt_handle(client_id.as_str(), &group, &topic, message_id.as_str())
-                else {
-                    break;
-                };
-
-                let renew_request = crate::processor::ChangeInvisibleDurationRequest {
-                    group: group.clone(),
-                    topic: topic.clone(),
-                    receipt_handle: current.receipt_handle.clone(),
-                    invisible_duration: current.invisible_duration,
-                    message_id: message_id.clone(),
-                    lite_topic: None,
-                    suspend: None,
-                };
-
-                match processor
-                    .change_invisible_duration(&context, renew_request.clone())
-                    .await
-                {
-                    Ok(plan) if plan.status.is_ok() => {
-                        let next_receipt_handle = if plan.receipt_handle.is_empty() {
-                            renew_request.receipt_handle
-                        } else {
-                            plan.receipt_handle
-                        };
-                        let _ = sessions.update_receipt_handle(
-                            client_id.as_str(),
-                            &group,
-                            &topic,
-                            message_id.as_str(),
-                            next_receipt_handle.as_str(),
-                            renew_request.invisible_duration,
+        stream::iter(due_handles)
+            .for_each_concurrent(Some(32), move |tracked| {
+                let processor = Arc::clone(&processor);
+                let sessions = sessions.clone();
+                async move {
+                    if tracked.cancellation.is_cancelled() {
+                        let _ = sessions.remove_receipt_handle(
+                            tracked.client_id.as_str(),
+                            &tracked.group,
+                            &tracked.topic,
+                            tracked.message_id.as_str(),
                         );
+                        return;
                     }
-                    Ok(plan) if plan.status.code() == v2::Code::InvalidReceiptHandle as i32 => {
-                        let _ = sessions.remove_receipt_handle(client_id.as_str(), &group, &topic, message_id.as_str());
-                        break;
+
+                    let context =
+                        ProxyContext::for_internal_client("AutoRenewReceiptHandle", tracked.client_id.clone());
+                    let renew_request = crate::processor::ChangeInvisibleDurationRequest {
+                        group: tracked.group.clone(),
+                        topic: tracked.topic.clone(),
+                        receipt_handle: tracked.receipt_handle.clone(),
+                        invisible_duration: tracked.invisible_duration,
+                        message_id: tracked.message_id.clone(),
+                        lite_topic: None,
+                        suspend: None,
+                    };
+
+                    match processor
+                        .change_invisible_duration(&context, renew_request.clone())
+                        .await
+                    {
+                        Ok(plan) if plan.status.is_ok() => {
+                            let next_receipt_handle = if plan.receipt_handle.is_empty() {
+                                renew_request.receipt_handle
+                            } else {
+                                plan.receipt_handle
+                            };
+                            let _ = sessions.update_receipt_handle(
+                                tracked.client_id.as_str(),
+                                &tracked.group,
+                                &tracked.topic,
+                                tracked.message_id.as_str(),
+                                next_receipt_handle.as_str(),
+                                renew_request.invisible_duration,
+                            );
+                        }
+                        Ok(plan) if plan.status.code() == v2::Code::InvalidReceiptHandle as i32 => {
+                            let _ = sessions.remove_receipt_handle(
+                                tracked.client_id.as_str(),
+                                &tracked.group,
+                                &tracked.topic,
+                                tracked.message_id.as_str(),
+                            );
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = sessions.mark_receipt_handle_renew_attempted(
+                                tracked.client_id.as_str(),
+                                &tracked.group,
+                                &tracked.topic,
+                                tracked.message_id.as_str(),
+                                tracked.invisible_duration,
+                            );
+                        }
                     }
-                    Ok(_) | Err(_) => {}
                 }
-            }
-        });
+            })
+            .await;
     }
 
     async fn handle_telemetry_command(
@@ -842,11 +986,6 @@ fn clamp_duration(duration: Duration, minimum: Duration, maximum: Duration) -> D
     duration.max(minimum).min(maximum)
 }
 
-fn auto_renew_interval(invisible_duration: Duration) -> Duration {
-    let half_millis = invisible_duration.as_millis().saturating_div(2).clamp(1_000, 15_000) as u64;
-    Duration::from_millis(half_millis)
-}
-
 fn proto_duration(duration: &prost_types::Duration) -> Option<Duration> {
     if duration.seconds < 0 || duration.nanos < 0 || duration.nanos >= 1_000_000_000 {
         return None;
@@ -886,6 +1025,20 @@ fn is_transaction_message(message: &rocketmq_common::common::message::message_si
         .is_some()
 }
 
+fn receive_message_stream_status(response: &v2::ReceiveMessageResponse) -> Option<&v2::Status> {
+    match response.content.as_ref() {
+        Some(v2::receive_message_response::Content::Status(status)) => Some(status),
+        _ => None,
+    }
+}
+
+fn pull_message_stream_status(response: &v2::PullMessageResponse) -> Option<&v2::Status> {
+    match response.content.as_ref() {
+        Some(v2::pull_message_response::Content::Status(status)) => Some(status),
+        _ => None,
+    }
+}
+
 #[tonic::async_trait]
 impl<P> v2::messaging_service_server::MessagingService for ProxyGrpcService<P>
 where
@@ -899,7 +1052,7 @@ where
         &self,
         request: Request<v2::QueryRouteRequest>,
     ) -> Result<Response<v2::QueryRouteResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("QueryRoute", request, adapter::error_query_route_response)
             .await
         {
@@ -907,26 +1060,32 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_query_route_request(self.config.as_ref(), &request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::query_route_contexts(&input))
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_query_route_request(self.config.as_ref(), &request))
             {
-                Ok(()) => match self.guards.try_route() {
-                    Ok(_permit) => match self.processor.query_route(&context, input).await {
-                        Ok(plan) => adapter::build_query_route_response(&request, &plan),
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::query_route_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_route() {
+                        Ok(_permit) => match self.processor.query_route(&context, input).await {
+                            Ok(plan) => adapter::build_query_route_response(&request, &plan),
+                            Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -934,7 +1093,7 @@ where
         &self,
         request: Request<v2::HeartbeatRequest>,
     ) -> Result<Response<v2::HeartbeatResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("Heartbeat", request, |status| v2::HeartbeatResponse {
                 status: Some(status),
             })
@@ -944,24 +1103,29 @@ where
             Err(response) => return response,
         };
 
-        let status = match self.guards.try_client_manager() {
-            Ok(_permit) => match self.validate_heartbeat_request(&context, request.client_type) {
-                Ok(()) => match self
-                    .authorize_contexts(&context, principal.as_ref(), &auth::heartbeat_contexts(&request))
-                    .await
-                {
-                    Ok(()) => {
-                        self.sessions
-                            .upsert_from_context_with_client_type(&context, Some(request.client_type));
-                        ProxyStatusMapper::ok()
-                    }
+        let status = async {
+            match self.guards.try_client_manager() {
+                Ok(_permit) => match self.validate_heartbeat_request(&context, request.client_type) {
+                    Ok(()) => match self
+                        .authorize_contexts(&context, principal.as_ref(), &auth::heartbeat_contexts(&request))
+                        .await
+                    {
+                        Ok(()) => {
+                            self.sessions
+                                .upsert_from_context_with_client_type(&context, Some(request.client_type));
+                            ProxyStatusMapper::ok()
+                        }
+                        Err(error) => ProxyStatusMapper::from_error(&error),
+                    },
                     Err(error) => ProxyStatusMapper::from_error(&error),
                 },
                 Err(error) => ProxyStatusMapper::from_error(&error),
-            },
-            Err(error) => ProxyStatusMapper::from_error(&error),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(v2::HeartbeatResponse { status: Some(status) }))
     }
 
@@ -969,7 +1133,7 @@ where
         &self,
         request: Request<v2::SendMessageRequest>,
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("SendMessage", request, adapter::error_send_message_response)
             .await
         {
@@ -977,29 +1141,35 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_send_message_request(&context, &request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_send_message_request(&context, &request))
             {
-                Ok(()) => match self.guards.try_producer() {
-                    Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
-                        Ok(plan) => {
-                            self.track_prepared_transactions(&context, &request, &input, &plan);
-                            adapter::build_send_message_response(&plan, &input)
-                        }
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_producer() {
+                        Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
+                            Ok(plan) => {
+                                self.track_prepared_transactions(&context, &request, &input, &plan);
+                                adapter::build_send_message_response(&plan, &input)
+                            }
+                            Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1007,7 +1177,7 @@ where
         &self,
         request: Request<v2::QueryAssignmentRequest>,
     ) -> Result<Response<v2::QueryAssignmentResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("QueryAssignment", request, adapter::error_query_assignment_response)
             .await
         {
@@ -1015,26 +1185,34 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_query_assignment_request(self.config.as_ref(), &request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::query_assignment_contexts(&input))
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_query_assignment_request(self.config.as_ref(), &request))
             {
-                Ok(()) => match self.guards.try_route() {
-                    Ok(_permit) => match self.processor.query_assignment(&context, input).await {
-                        Ok(plan) => adapter::build_query_assignment_response(&request, &plan),
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::query_assignment_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_route() {
+                        Ok(_permit) => match self.processor.query_assignment(&context, input).await {
+                            Ok(plan) => adapter::build_query_assignment_response(&request, &plan),
+                            Err(error) => {
+                                adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error))
+                            }
+                        },
                         Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_query_assignment_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1042,7 +1220,7 @@ where
         &self,
         request: Request<v2::ReceiveMessageRequest>,
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_stream("ReceiveMessage", request, |status| {
                 self.items_stream(adapter::error_receive_message_responses(status))
             })
@@ -1051,35 +1229,45 @@ where
             Ok(state) => state,
             Err(response) => return response,
         };
-        let responses = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_receive_message_request(&request))
-            .and_then(|input| self.effective_receive_request(&context, input))
-        {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::receive_message_contexts(&input))
-                .await
+        let responses = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_receive_message_request(&request))
+                .and_then(|input| self.effective_receive_request(&context, input))
             {
-                Ok(()) => match self.guards.try_consumer() {
-                    Ok(_permit) => {
-                        self.sessions.upsert_from_context(&context);
-                        match self.processor.receive_message(&context, input.clone()).await {
-                            Ok(plan) => {
-                                self.track_received_receipt_handles(&context, &input, &plan);
-                                adapter::build_receive_message_responses(&plan)
-                            }
-                            Err(error) => {
-                                adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error))
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::receive_message_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_consumer() {
+                        Ok(_permit) => {
+                            self.sessions.upsert_from_context(&context);
+                            match self.processor.receive_message(&context, input.clone()).await {
+                                Ok(plan) => {
+                                    self.track_received_receipt_handles(&context, &input, &plan);
+                                    adapter::build_receive_message_responses(&plan)
+                                }
+                                Err(error) => {
+                                    adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error))
+                                }
                             }
                         }
-                    }
+                        Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = responses
+            .last()
+            .and_then(receive_message_stream_status)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_stream_payload(&observation, &status).await;
         Ok(Response::new(self.items_stream(responses)))
     }
 
@@ -1087,7 +1275,7 @@ where
         &self,
         request: Request<v2::AckMessageRequest>,
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("AckMessage", request, adapter::error_ack_message_response)
             .await
         {
@@ -1095,29 +1283,35 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_ack_message_request(&request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::ack_message_contexts(&input))
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_ack_message_request(&request))
             {
-                Ok(()) => match self.guards.try_consumer() {
-                    Ok(_permit) => match self.processor.ack_message(&context, input.clone()).await {
-                        Ok(plan) => {
-                            self.reconcile_ack_result(&context, &input, &plan);
-                            adapter::build_ack_message_response(&plan)
-                        }
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::ack_message_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_consumer() {
+                        Ok(_permit) => match self.processor.ack_message(&context, input.clone()).await {
+                            Ok(plan) => {
+                                self.reconcile_ack_result(&context, &input, &plan);
+                                adapter::build_ack_message_response(&plan)
+                            }
+                            Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1125,7 +1319,7 @@ where
         &self,
         request: Request<v2::ForwardMessageToDeadLetterQueueRequest>,
     ) -> Result<Response<v2::ForwardMessageToDeadLetterQueueResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary(
                 "ForwardMessageToDeadLetterQueue",
                 request,
@@ -1137,25 +1331,30 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_forward_message_to_dead_letter_queue_request(&request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(
-                    &context,
-                    principal.as_ref(),
-                    &auth::forward_message_to_dead_letter_queue_contexts(&input),
-                )
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_forward_message_to_dead_letter_queue_request(&request))
             {
-                Ok(()) => match self.guards.try_consumer() {
-                    Ok(_permit) => match self
-                        .processor
-                        .forward_message_to_dead_letter_queue(&context, input)
-                        .await
-                    {
-                        Ok(plan) => adapter::build_forward_message_to_dead_letter_queue_response(&plan),
+                Ok(input) => match self
+                    .authorize_contexts(
+                        &context,
+                        principal.as_ref(),
+                        &auth::forward_message_to_dead_letter_queue_contexts(&input),
+                    )
+                    .await
+                {
+                    Ok(()) => match self.guards.try_consumer() {
+                        Ok(_permit) => match self
+                            .processor
+                            .forward_message_to_dead_letter_queue(&context, input)
+                            .await
+                        {
+                            Ok(plan) => adapter::build_forward_message_to_dead_letter_queue_response(&plan),
+                            Err(error) => adapter::error_forward_message_to_dead_letter_queue_response(
+                                ProxyStatusMapper::from_error(&error),
+                            ),
+                        },
                         Err(error) => adapter::error_forward_message_to_dead_letter_queue_response(
                             ProxyStatusMapper::from_error(&error),
                         ),
@@ -1167,12 +1366,13 @@ where
                 Err(error) => {
                     adapter::error_forward_message_to_dead_letter_queue_response(ProxyStatusMapper::from_error(&error))
                 }
-            },
-            Err(error) => {
-                adapter::error_forward_message_to_dead_letter_queue_response(ProxyStatusMapper::from_error(&error))
             }
-        };
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1180,7 +1380,7 @@ where
         &self,
         request: Request<v2::PullMessageRequest>,
     ) -> Result<Response<Self::PullMessageStream>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_stream("PullMessage", request, |status| {
                 self.items_stream(adapter::error_pull_message_responses(status))
             })
@@ -1189,28 +1389,41 @@ where
             Ok(state) => state,
             Err(response) => return response,
         };
-        let responses = match adapter::build_pull_message_request(&request) {
-            Ok(input) => match self
-                .validate_client_context(&context)
-                .and_then(|_| self.guards.try_consumer().map(|_| ()))
-            {
-                Ok(_permit) => match self
-                    .authorize_contexts(&context, principal.as_ref(), &auth::pull_message_contexts(&input))
-                    .await
+        let responses = async {
+            match adapter::build_pull_message_request(&request) {
+                Ok(input) => match self
+                    .validate_client_context(&context)
+                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
                 {
-                    Ok(()) => {
-                        self.sessions.upsert_from_context(&context);
-                        match self.processor.pull_message(&context, input).await {
-                            Ok(plan) => adapter::build_pull_message_responses(&plan),
-                            Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                    Ok(_permit) => match self
+                        .authorize_contexts(&context, principal.as_ref(), &auth::pull_message_contexts(&input))
+                        .await
+                    {
+                        Ok(()) => {
+                            self.sessions.upsert_from_context(&context);
+                            match self.processor.pull_message(&context, input).await {
+                                Ok(plan) => adapter::build_pull_message_responses(&plan),
+                                Err(error) => {
+                                    adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error))
+                                }
+                            }
                         }
-                    }
+                        Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                    },
                     Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
+
+        let status = responses
+            .last()
+            .and_then(pull_message_stream_status)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_stream_payload(&observation, &status).await;
         Ok(Response::new(self.items_stream(responses)))
     }
 
@@ -1218,32 +1431,38 @@ where
         &self,
         request: Request<v2::UpdateOffsetRequest>,
     ) -> Result<Response<v2::UpdateOffsetResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("UpdateOffset", request, adapter::error_update_offset_response)
             .await
         {
             Ok(state) => state,
             Err(response) => return response,
         };
-        let response = match adapter::build_update_offset_request(&request) {
-            Ok(input) => match self
-                .validate_client_context(&context)
-                .and_then(|_| self.guards.try_consumer().map(|_| ()))
-            {
-                Ok(_permit) => match self
-                    .authorize_contexts(&context, principal.as_ref(), &auth::update_offset_contexts(&input))
-                    .await
+        let response = async {
+            match adapter::build_update_offset_request(&request) {
+                Ok(input) => match self
+                    .validate_client_context(&context)
+                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
                 {
-                    Ok(()) => match self.processor.update_offset(&context, input).await {
-                        Ok(plan) => adapter::build_update_offset_response(&plan),
+                    Ok(_permit) => match self
+                        .authorize_contexts(&context, principal.as_ref(), &auth::update_offset_contexts(&input))
+                        .await
+                    {
+                        Ok(()) => match self.processor.update_offset(&context, input).await {
+                            Ok(plan) => adapter::build_update_offset_response(&plan),
+                            Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_update_offset_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1251,32 +1470,38 @@ where
         &self,
         request: Request<v2::GetOffsetRequest>,
     ) -> Result<Response<v2::GetOffsetResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("GetOffset", request, adapter::error_get_offset_response)
             .await
         {
             Ok(state) => state,
             Err(response) => return response,
         };
-        let response = match adapter::build_get_offset_request(&request) {
-            Ok(input) => match self
-                .validate_client_context(&context)
-                .and_then(|_| self.guards.try_consumer().map(|_| ()))
-            {
-                Ok(_permit) => match self
-                    .authorize_contexts(&context, principal.as_ref(), &auth::get_offset_contexts(&input))
-                    .await
+        let response = async {
+            match adapter::build_get_offset_request(&request) {
+                Ok(input) => match self
+                    .validate_client_context(&context)
+                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
                 {
-                    Ok(()) => match self.processor.get_offset(&context, input).await {
-                        Ok(plan) => adapter::build_get_offset_response(&plan),
+                    Ok(_permit) => match self
+                        .authorize_contexts(&context, principal.as_ref(), &auth::get_offset_contexts(&input))
+                        .await
+                    {
+                        Ok(()) => match self.processor.get_offset(&context, input).await {
+                            Ok(plan) => adapter::build_get_offset_response(&plan),
+                            Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_get_offset_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1284,32 +1509,38 @@ where
         &self,
         request: Request<v2::QueryOffsetRequest>,
     ) -> Result<Response<v2::QueryOffsetResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("QueryOffset", request, adapter::error_query_offset_response)
             .await
         {
             Ok(state) => state,
             Err(response) => return response,
         };
-        let response = match adapter::build_query_offset_request(&request) {
-            Ok(input) => match self
-                .validate_client_context(&context)
-                .and_then(|_| self.guards.try_consumer().map(|_| ()))
-            {
-                Ok(_permit) => match self
-                    .authorize_contexts(&context, principal.as_ref(), &auth::query_offset_contexts(&input))
-                    .await
+        let response = async {
+            match adapter::build_query_offset_request(&request) {
+                Ok(input) => match self
+                    .validate_client_context(&context)
+                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
                 {
-                    Ok(()) => match self.processor.query_offset(&context, input).await {
-                        Ok(plan) => adapter::build_query_offset_response(&plan),
+                    Ok(_permit) => match self
+                        .authorize_contexts(&context, principal.as_ref(), &auth::query_offset_contexts(&input))
+                        .await
+                    {
+                        Ok(()) => match self.processor.query_offset(&context, input).await {
+                            Ok(plan) => adapter::build_query_offset_response(&plan),
+                            Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_query_offset_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1317,7 +1548,7 @@ where
         &self,
         request: Request<v2::EndTransactionRequest>,
     ) -> Result<Response<v2::EndTransactionResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("EndTransaction", request, adapter::error_end_transaction_response)
             .await
         {
@@ -1325,32 +1556,40 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_end_transaction_request(&request))
-            .and_then(|mut input| {
-                self.enrich_end_transaction_request(&context, &mut input)?;
-                Ok(input)
-            }) {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::end_transaction_contexts(&input))
-                .await
-            {
-                Ok(()) => match self.guards.try_producer() {
-                    Ok(_permit) => match self.processor.end_transaction(&context, input.clone()).await {
-                        Ok(plan) => {
-                            self.reconcile_end_transaction_result(&context, &input, &plan);
-                            adapter::build_end_transaction_response(&plan)
-                        }
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_end_transaction_request(&request))
+                .and_then(|mut input| {
+                    self.enrich_end_transaction_request(&context, &mut input)?;
+                    Ok(input)
+                }) {
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::end_transaction_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_producer() {
+                        Ok(_permit) => match self.processor.end_transaction(&context, input.clone()).await {
+                            Ok(plan) => {
+                                self.reconcile_end_transaction_result(&context, &input, &plan);
+                                adapter::build_end_transaction_response(&plan)
+                            }
+                            Err(error) => {
+                                adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error))
+                            }
+                        },
                         Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1358,7 +1597,7 @@ where
         &self,
         request: Request<tonic::Streaming<v2::TelemetryCommand>>,
     ) -> Result<Response<Self::TelemetryStream>, Status> {
-        let (context, principal, inbound) = match self
+        let (observation, context, principal, inbound) = match self
             .enter_stream("Telemetry", request, |status| {
                 self.status_stream(Self::telemetry_status(status))
             })
@@ -1374,17 +1613,17 @@ where
         {
             Ok(permit) => permit,
             Err(error) => {
-                return Ok(Response::new(
-                    self.status_stream(Self::telemetry_status(ProxyStatusMapper::from_error(&error))),
-                ));
+                let status = ProxyStatusMapper::from_error(&error);
+                self.finish_stream_payload(&observation, &status).await;
+                return Ok(Response::new(self.status_stream(Self::telemetry_status(status))));
             }
         };
 
         self.sessions.upsert_from_context(&context);
         let Some(client_id) = context.client_id().map(ToOwned::to_owned) else {
-            return Ok(Response::new(self.status_stream(Self::telemetry_status(
-                ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired),
-            ))));
+            let status = ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired);
+            self.finish_stream_payload(&observation, &status).await;
+            return Ok(Response::new(self.status_stream(Self::telemetry_status(status))));
         };
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
         self.sessions.bind_telemetry_link(client_id.clone(), outbound_tx);
@@ -1427,6 +1666,7 @@ where
             service.sessions.unbind_telemetry_link(client_id.as_str());
         });
 
+        self.finish_stream_payload(&observation, &ProxyStatusMapper::ok()).await;
         Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
 
@@ -1434,7 +1674,7 @@ where
         &self,
         request: Request<v2::NotifyClientTerminationRequest>,
     ) -> Result<Response<v2::NotifyClientTerminationResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("NotifyClientTermination", request, |status| {
                 v2::NotifyClientTerminationResponse { status: Some(status) }
             })
@@ -1443,28 +1683,33 @@ where
             Ok(state) => state,
             Err(response) => return response,
         };
-        let status = match self
-            .guards
-            .try_client_manager()
-            .and_then(|_| self.validate_client_context(&context))
-        {
-            Ok(client_id) => match self
-                .authorize_contexts(
-                    &context,
-                    principal.as_ref(),
-                    &auth::notify_client_termination_contexts(&request),
-                )
-                .await
+        let status = async {
+            match self
+                .guards
+                .try_client_manager()
+                .and_then(|_| self.validate_client_context(&context))
             {
-                Ok(()) => {
-                    self.sessions.remove_client(client_id);
-                    ProxyStatusMapper::ok()
-                }
+                Ok(client_id) => match self
+                    .authorize_contexts(
+                        &context,
+                        principal.as_ref(),
+                        &auth::notify_client_termination_contexts(&request),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        self.sessions.remove_client(client_id);
+                        ProxyStatusMapper::ok()
+                    }
+                    Err(error) => ProxyStatusMapper::from_error(&error),
+                },
                 Err(error) => ProxyStatusMapper::from_error(&error),
-            },
-            Err(error) => ProxyStatusMapper::from_error(&error),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(v2::NotifyClientTerminationResponse {
             status: Some(status),
         }))
@@ -1474,7 +1719,7 @@ where
         &self,
         request: Request<v2::ChangeInvisibleDurationRequest>,
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary(
                 "ChangeInvisibleDuration",
                 request,
@@ -1486,24 +1731,29 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_change_invisible_duration_request(&request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(
-                    &context,
-                    principal.as_ref(),
-                    &auth::change_invisible_duration_contexts(&input),
-                )
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_change_invisible_duration_request(&request))
             {
-                Ok(()) => match self.guards.try_consumer() {
-                    Ok(_permit) => match self.processor.change_invisible_duration(&context, input.clone()).await {
-                        Ok(plan) => {
-                            self.reconcile_change_invisible_result(&context, &input, &plan);
-                            adapter::build_change_invisible_duration_response(&plan)
-                        }
+                Ok(input) => match self
+                    .authorize_contexts(
+                        &context,
+                        principal.as_ref(),
+                        &auth::change_invisible_duration_contexts(&input),
+                    )
+                    .await
+                {
+                    Ok(()) => match self.guards.try_consumer() {
+                        Ok(_permit) => match self.processor.change_invisible_duration(&context, input.clone()).await {
+                            Ok(plan) => {
+                                self.reconcile_change_invisible_result(&context, &input, &plan);
+                                adapter::build_change_invisible_duration_response(&plan)
+                            }
+                            Err(error) => {
+                                adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error))
+                            }
+                        },
                         Err(error) => {
                             adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error))
                         }
@@ -1513,10 +1763,13 @@ where
                     }
                 },
                 Err(error) => adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1524,7 +1777,7 @@ where
         &self,
         request: Request<v2::RecallMessageRequest>,
     ) -> Result<Response<v2::RecallMessageResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("RecallMessage", request, adapter::error_recall_message_response)
             .await
         {
@@ -1532,26 +1785,32 @@ where
             Err(response) => return response,
         };
 
-        let response = match self
-            .validate_client_context(&context)
-            .and_then(|_| adapter::build_recall_message_request(&request))
-        {
-            Ok(input) => match self
-                .authorize_contexts(&context, principal.as_ref(), &auth::recall_message_contexts(&input))
-                .await
+        let response = async {
+            match self
+                .validate_client_context(&context)
+                .and_then(|_| adapter::build_recall_message_request(&request))
             {
-                Ok(()) => match self.guards.try_producer() {
-                    Ok(_permit) => match self.processor.recall_message(&context, input).await {
-                        Ok(plan) => adapter::build_recall_message_response(&plan),
+                Ok(input) => match self
+                    .authorize_contexts(&context, principal.as_ref(), &auth::recall_message_contexts(&input))
+                    .await
+                {
+                    Ok(()) => match self.guards.try_producer() {
+                        Ok(_permit) => match self.processor.recall_message(&context, input).await {
+                            Ok(plan) => adapter::build_recall_message_response(&plan),
+                            Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
+                        },
                         Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
                     },
                     Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
-            },
-            Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        let status = response.status.clone().unwrap_or_else(ProxyStatusMapper::ok);
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(response))
     }
 
@@ -1559,7 +1818,7 @@ where
         &self,
         request: Request<v2::SyncLiteSubscriptionRequest>,
     ) -> Result<Response<v2::SyncLiteSubscriptionResponse>, Status> {
-        let (context, principal, request) = match self
+        let (observation, context, principal, request) = match self
             .enter_unary("SyncLiteSubscription", request, |status| {
                 v2::SyncLiteSubscriptionResponse { status: Some(status) }
             })
@@ -1569,29 +1828,34 @@ where
             Err(response) => return response,
         };
 
-        let status = match self.validate_client_context(&context).and_then(|client_id| {
-            let _permit = self.guards.try_client_manager()?;
-            let input = crate::session::build_lite_subscription_sync_request(&request)?;
-            self.sessions.upsert_from_context(&context);
-            let settings = self.sessions.settings_for_client(client_id);
-            self.sessions
-                .sync_lite_subscription(client_id, input, settings.as_ref())
-                .map(|_| ProxyStatusMapper::ok())
-        }) {
-            Ok(status) => match self
-                .authorize_contexts(
-                    &context,
-                    principal.as_ref(),
-                    &auth::sync_lite_subscription_contexts(&request),
-                )
-                .await
-            {
-                Ok(()) => status,
+        let status = async {
+            match self.validate_client_context(&context).and_then(|client_id| {
+                let _permit = self.guards.try_client_manager()?;
+                let input = crate::session::build_lite_subscription_sync_request(&request)?;
+                self.sessions.upsert_from_context(&context);
+                let settings = self.sessions.settings_for_client(client_id);
+                self.sessions
+                    .sync_lite_subscription(client_id, input, settings.as_ref())
+                    .map(|_| ProxyStatusMapper::ok())
+            }) {
+                Ok(status) => match self
+                    .authorize_contexts(
+                        &context,
+                        principal.as_ref(),
+                        &auth::sync_lite_subscription_contexts(&request),
+                    )
+                    .await
+                {
+                    Ok(()) => status,
+                    Err(error) => ProxyStatusMapper::from_error(&error),
+                },
                 Err(error) => ProxyStatusMapper::from_error(&error),
-            },
-            Err(error) => ProxyStatusMapper::from_error(&error),
-        };
+            }
+        }
+        .instrument(observation.span())
+        .await;
 
+        self.finish_unary_payload(&observation, &status).await;
         Ok(Response::new(v2::SyncLiteSubscriptionResponse { status: Some(status) }))
     }
 }
@@ -1634,6 +1898,9 @@ mod tests {
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
     use crate::grpc::adapter;
+    use crate::observability::ProxyHook;
+    use crate::observability::ProxyHookChain;
+    use crate::observability::ProxyRequestOutcome;
     use crate::processor::AckMessageRequest;
     use crate::processor::AckMessageResultEntry;
     use crate::processor::ChangeInvisibleDurationPlan;
@@ -1687,6 +1954,62 @@ mod tests {
     #[derive(Default)]
     struct TestTransactionService {
         requests: Mutex<Vec<EndTransactionRequest>>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct HookEvent {
+        phase: &'static str,
+        rpc_name: &'static str,
+        client_id: Option<String>,
+        principal: Option<String>,
+        outcome_code: Option<i32>,
+    }
+
+    #[derive(Default)]
+    struct RecordingHook {
+        events: Mutex<Vec<HookEvent>>,
+    }
+
+    impl RecordingHook {
+        fn events(&self) -> Vec<HookEvent> {
+            self.events.lock().expect("hook events mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl ProxyHook for RecordingHook {
+        async fn before_request(&self, context: &crate::context::ProxyContext) -> crate::error::ProxyResult<()> {
+            self.events.lock().expect("hook events mutex poisoned").push(HookEvent {
+                phase: "before",
+                rpc_name: context.rpc_name(),
+                client_id: context.client_id().map(str::to_owned),
+                principal: context
+                    .authenticated_principal()
+                    .map(|principal| principal.username().to_owned()),
+                outcome_code: None,
+            });
+            Ok(())
+        }
+
+        async fn after_request(
+            &self,
+            context: &crate::context::ProxyContext,
+            outcome: &ProxyRequestOutcome,
+        ) -> crate::error::ProxyResult<()> {
+            self.events.lock().expect("hook events mutex poisoned").push(HookEvent {
+                phase: "after",
+                rpc_name: context.rpc_name(),
+                client_id: context.client_id().map(str::to_owned),
+                principal: context
+                    .authenticated_principal()
+                    .map(|principal| principal.username().to_owned()),
+                outcome_code: match outcome {
+                    ProxyRequestOutcome::Payload(status) => Some(status.code()),
+                    ProxyRequestOutcome::Transport { .. } => None,
+                },
+            });
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -2206,6 +2529,104 @@ mod tests {
 
         let response = service.query_route(request).await.unwrap().into_inner();
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+    }
+
+    #[tokio::test]
+    async fn query_route_observability_records_hook_and_metrics() {
+        let route_service = StaticRouteService::default();
+        route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
+        let hook = Arc::new(RecordingHook::default());
+        let service = test_service(route_service, StaticMetadataService::default())
+            .with_hooks(ProxyHookChain::new(vec![hook.clone()]));
+
+        let mut request = Request::new(v2::QueryRouteRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            endpoints: Some(v2::Endpoints {
+                scheme: v2::AddressScheme::IPv4 as i32,
+                addresses: vec![v2::Address {
+                    host: "127.0.0.1".to_owned(),
+                    port: 8081,
+                }],
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.query_route(request).await.unwrap().into_inner();
+        assert_eq!(
+            response.status.as_ref().map(|status| status.code),
+            Some(v2::Code::Ok as i32)
+        );
+
+        let snapshot = service.metrics_snapshot();
+        let rpc = snapshot
+            .rpcs
+            .iter()
+            .find(|rpc| rpc.rpc_name == "QueryRoute")
+            .expect("query route metrics should exist");
+        assert_eq!(rpc.started, 1);
+        assert_eq!(rpc.completed, 1);
+        assert_eq!(rpc.succeeded, 1);
+        assert_eq!(rpc.payload_failures, 0);
+        assert_eq!(rpc.transport_failures, 0);
+
+        let events = hook.events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].phase, "before");
+        assert_eq!(events[0].rpc_name, "QueryRoute");
+        assert_eq!(events[0].client_id.as_deref(), Some("client-a"));
+        assert_eq!(events[0].principal, None);
+        assert_eq!(events[1].phase, "after");
+        assert_eq!(events[1].rpc_name, "QueryRoute");
+        assert_eq!(events[1].outcome_code, Some(v2::Code::Ok as i32));
+    }
+
+    #[tokio::test]
+    async fn query_route_observability_records_payload_failure_for_auth_rejection() {
+        let route_service = StaticRouteService::default();
+        route_service.insert(ResourceIdentity::new("", "TopicA"), sample_route());
+        let auth_runtime = test_auth_runtime(true, false).await;
+        let service =
+            test_service(route_service, StaticMetadataService::default()).with_auth_runtime(Some(auth_runtime));
+
+        let mut request = Request::new(v2::QueryRouteRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            endpoints: Some(v2::Endpoints {
+                scheme: v2::AddressScheme::IPv4 as i32,
+                addresses: vec![v2::Address {
+                    host: "127.0.0.1".to_owned(),
+                    port: 8081,
+                }],
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.query_route(request).await.unwrap().into_inner();
+        assert_eq!(
+            response.status.as_ref().map(|status| status.code),
+            Some(v2::Code::Unauthorized as i32)
+        );
+
+        let snapshot = service.metrics_snapshot();
+        let rpc = snapshot
+            .rpcs
+            .iter()
+            .find(|rpc| rpc.rpc_name == "QueryRoute")
+            .expect("query route metrics should exist");
+        assert_eq!(rpc.started, 1);
+        assert_eq!(rpc.completed, 1);
+        assert_eq!(rpc.succeeded, 0);
+        assert_eq!(rpc.payload_failures, 1);
+        assert_eq!(rpc.transport_failures, 0);
     }
 
     #[tokio::test]

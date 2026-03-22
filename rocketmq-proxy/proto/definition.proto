@@ -253,7 +253,7 @@ message SystemProperties {
   optional string receipt_handle = 12;
 
   // Message queue identifier in which a message is physically stored.
-  int32 queue_id = 13;
+  optional int32 queue_id = 13;
 
   // Message-queue offset at which a message is stored, which is absent for
   // message publishing.

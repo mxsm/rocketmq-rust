@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use cheetah_string::CheetahString;
@@ -413,9 +414,84 @@ enum ClusterCommand {
     },
 }
 
-#[derive(Default)]
+#[derive(Clone)]
+struct CachedValue<T> {
+    value: T,
+    expires_at: Instant,
+}
+
+impl<T> CachedValue<T> {
+    fn new(value: T, ttl: Duration) -> Self {
+        Self {
+            value,
+            expires_at: Instant::now() + ttl,
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
+}
+
 struct ClusterWorkerState {
     send_producers: HashMap<String, DefaultMQProducer>,
+    route_cache: HashMap<String, CachedValue<TopicRouteData>>,
+    topic_message_type_cache: HashMap<String, CachedValue<ProxyTopicMessageType>>,
+    subscription_group_cache: HashMap<(String, String), CachedValue<Option<SubscriptionGroupMetadata>>>,
+}
+
+impl ClusterWorkerState {
+    fn new() -> Self {
+        Self {
+            send_producers: HashMap::new(),
+            route_cache: HashMap::new(),
+            topic_message_type_cache: HashMap::new(),
+            subscription_group_cache: HashMap::new(),
+        }
+    }
+
+    fn cached_route(&mut self, topic: &str) -> Option<TopicRouteData> {
+        cached_value(&mut self.route_cache, &topic.to_owned())
+    }
+
+    fn cache_route(&mut self, topic: impl Into<String>, route: TopicRouteData, ttl: Duration) {
+        cache_value(&mut self.route_cache, topic.into(), route, ttl);
+    }
+
+    fn cached_topic_message_type(&mut self, topic: &str) -> Option<ProxyTopicMessageType> {
+        cached_value(&mut self.topic_message_type_cache, &topic.to_owned())
+    }
+
+    fn cache_topic_message_type(
+        &mut self,
+        topic: impl Into<String>,
+        message_type: ProxyTopicMessageType,
+        ttl: Duration,
+    ) {
+        cache_value(&mut self.topic_message_type_cache, topic.into(), message_type, ttl);
+    }
+
+    fn cached_subscription_group(&mut self, topic: &str, group: &str) -> Option<Option<SubscriptionGroupMetadata>> {
+        cached_value(
+            &mut self.subscription_group_cache,
+            &(topic.to_owned(), group.to_owned()),
+        )
+    }
+
+    fn cache_subscription_group(
+        &mut self,
+        topic: impl Into<String>,
+        group: impl Into<String>,
+        metadata: Option<SubscriptionGroupMetadata>,
+        ttl: Duration,
+    ) {
+        cache_value(
+            &mut self.subscription_group_cache,
+            (topic.into(), group.into()),
+            metadata,
+            ttl,
+        );
+    }
 }
 
 impl ClusterTaskExecutor {
@@ -635,7 +711,7 @@ fn run_cluster_worker(config: ClusterConfig, mut receiver: mpsc::UnboundedReceiv
         .build()
         .expect("failed to build proxy cluster worker runtime");
     runtime.block_on(async move {
-        let mut state = ClusterWorkerState::default();
+        let mut state = ClusterWorkerState::new();
         while let Some(command) = receiver.recv().await {
             handle_cluster_command(&config, &mut state, command).await;
         }
@@ -648,7 +724,7 @@ fn run_cluster_worker(config: ClusterConfig, mut receiver: mpsc::UnboundedReceiv
 async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorkerState, command: ClusterCommand) {
     match command {
         ClusterCommand::QueryRoute { topic, reply } => {
-            let _ = reply.send(query_route_inner(config, topic).await);
+            let _ = reply.send(query_route_inner(config, state, topic).await);
         }
         ClusterCommand::QueryAssignment {
             topic,
@@ -656,13 +732,13 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             client_id,
             reply,
         } => {
-            let _ = reply.send(query_assignment_inner(config, topic, group, client_id).await);
+            let _ = reply.send(query_assignment_inner(config, state, topic, group, client_id).await);
         }
         ClusterCommand::QueryTopicMessageType { topic, reply } => {
-            let _ = reply.send(query_topic_message_type_inner(config, topic).await);
+            let _ = reply.send(query_topic_message_type_inner(config, state, topic).await);
         }
         ClusterCommand::QuerySubscriptionGroup { topic, group, reply } => {
-            let _ = reply.send(query_subscription_group_inner(config, topic, group).await);
+            let _ = reply.send(query_subscription_group_inner(config, state, topic, group).await);
         }
         ClusterCommand::SendMessage {
             request,
@@ -685,14 +761,14 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             deadline,
             reply,
         } => {
-            let _ = reply.send(receive_message_inner(config, request, deadline).await);
+            let _ = reply.send(receive_message_inner(config, state, request, deadline).await);
         }
         ClusterCommand::PullMessage {
             request,
             deadline,
             reply,
         } => {
-            let _ = reply.send(pull_message_inner(config, request, deadline).await);
+            let _ = reply.send(pull_message_inner(config, state, request, deadline).await);
         }
         ClusterCommand::AckMessage {
             request,
@@ -720,21 +796,21 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             deadline,
             reply,
         } => {
-            let _ = reply.send(update_offset_request_inner(config, request, deadline).await);
+            let _ = reply.send(update_offset_request_inner(config, state, request, deadline).await);
         }
         ClusterCommand::GetOffset {
             request,
             deadline,
             reply,
         } => {
-            let _ = reply.send(get_offset_request_inner(config, request, deadline).await);
+            let _ = reply.send(get_offset_request_inner(config, state, request, deadline).await);
         }
         ClusterCommand::QueryOffset {
             request,
             deadline,
             reply,
         } => {
-            let _ = reply.send(query_offset_request_inner(config, request, deadline).await);
+            let _ = reply.send(query_offset_request_inner(config, state, request, deadline).await);
         }
         ClusterCommand::EndTransaction {
             request,
@@ -743,36 +819,33 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
             deadline,
             reply,
         } => {
-            let _ = reply.send(end_transaction_request_inner(config, request, client_id, request_id, deadline).await);
+            let _ = reply
+                .send(end_transaction_request_inner(config, state, request, client_id, request_id, deadline).await);
         }
     }
 }
 
-async fn query_route_inner(config: &ClusterConfig, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {
+async fn query_route_inner(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    topic: ResourceIdentity,
+) -> ProxyResult<TopicRouteData> {
     let topic_name = topic.to_string();
-    let client = initialize_client_instance(config.clone()).await?;
-    let route = client
-        .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-        .await?;
-
-    route.ok_or_else(|| RocketMQError::route_not_found(topic_name).into())
+    let mut client = initialize_client_instance(config.clone()).await?;
+    fetch_topic_route(&mut client, config, state, topic_name.as_str()).await
 }
 
 async fn query_assignment_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     topic: ResourceIdentity,
     group: ResourceIdentity,
     client_id: String,
 ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
     let topic_name = topic.to_string();
     let group_name = group.to_string();
-    let client = initialize_client_instance(config.clone()).await?;
-    let route = client
-        .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-        .await?
-        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let route = fetch_topic_route(&mut client, config, state, topic_name.as_str()).await?;
     let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
         name: topic_name.clone(),
     })?;
@@ -794,54 +867,61 @@ async fn query_assignment_inner(
 
 async fn query_topic_message_type_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     topic: ResourceIdentity,
 ) -> ProxyResult<ProxyTopicMessageType> {
     let topic_name = topic.to_string();
-    let client = initialize_client_instance(config.clone()).await?;
-    let route = client
-        .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-        .await?
-        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    if let Some(message_type) = state.cached_topic_message_type(topic_name.as_str()) {
+        return Ok(message_type);
+    }
+
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let route = fetch_topic_route(&mut client, config, state, topic_name.as_str()).await?;
     let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
         name: topic_name.clone(),
     })?;
     let topic_config = client
         .get_topic_config(
             &broker_addr,
-            CheetahString::from(topic_name),
+            CheetahString::from(topic_name.as_str()),
             config.mq_client_api_timeout_ms,
         )
         .await?;
 
-    Ok(convert_topic_message_type(topic_config.get_topic_message_type()))
+    let message_type = convert_topic_message_type(topic_config.get_topic_message_type());
+    state.cache_topic_message_type(topic_name, message_type, config.metadata_cache_ttl());
+    Ok(message_type)
 }
 
 async fn query_subscription_group_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     topic: ResourceIdentity,
     group: ResourceIdentity,
 ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
     let topic_name = topic.to_string();
     let group_name = group.to_string();
-    let client = initialize_client_instance(config.clone()).await?;
-    let route = client
-        .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-        .await?
-        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    if let Some(metadata) = state.cached_subscription_group(topic_name.as_str(), group_name.as_str()) {
+        return Ok(metadata);
+    }
+
+    let mut client = initialize_client_instance(config.clone()).await?;
+    let route = fetch_topic_route(&mut client, config, state, topic_name.as_str()).await?;
     let Some(broker_addr) = select_master_broker_addr(&route) else {
+        state.cache_subscription_group(topic_name, group_name, None, config.metadata_cache_ttl());
         return Ok(None);
     };
     let group_config = client
         .get_subscription_group_config(
             &broker_addr,
-            CheetahString::from(group_name),
+            CheetahString::from(group_name.as_str()),
             config.mq_client_api_timeout_ms,
         )
         .await?;
 
-    Ok(Some(convert_subscription_group(group_config)))
+    let metadata = Some(convert_subscription_group(group_config));
+    state.cache_subscription_group(topic_name, group_name, metadata.clone(), config.metadata_cache_ttl());
+    Ok(metadata)
 }
 
 async fn send_message_inner(
@@ -952,11 +1032,12 @@ fn collect_send_topics(request: &SendMessageRequest) -> Vec<CheetahString> {
 
 async fn receive_message_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: ReceiveMessageRequest,
     deadline: Option<Duration>,
 ) -> ProxyResult<ReceiveMessagePlan> {
     let mut client = initialize_client_instance(config.clone()).await?;
-    let broker_target = resolve_receive_broker(&mut client, config, &request).await?;
+    let broker_target = resolve_receive_broker(&mut client, config, state, &request).await?;
     let timeout_ms = effective_pop_timeout_ms(config, deadline, request.long_polling_timeout);
     let request_header = build_pop_request_header(&broker_target.broker_name, &request);
     let pop_result = pop_message(
@@ -973,11 +1054,12 @@ async fn receive_message_inner(
 
 async fn pull_message_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: PullMessageRequest,
     deadline: Option<Duration>,
 ) -> ProxyResult<PullMessagePlan> {
     let mut client = initialize_client_instance(config.clone()).await?;
-    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, state, &request.target).await?;
     let timeout_ms = effective_request_timeout_ms(
         config
             .mq_client_api_timeout_ms
@@ -1057,12 +1139,13 @@ async fn change_invisible_duration_request_inner(
 
 async fn update_offset_request_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: UpdateOffsetRequest,
     deadline: Option<Duration>,
 ) -> ProxyResult<UpdateOffsetPlan> {
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let mut client = initialize_client_instance(config.clone()).await?;
-    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, state, &request.target).await?;
     let request_header = build_update_offset_request_header(&broker_target.broker_name, &request);
     client
         .update_consumer_offset(&broker_target.broker_addr, request_header, timeout_ms)
@@ -1075,12 +1158,13 @@ async fn update_offset_request_inner(
 
 async fn get_offset_request_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: GetOffsetRequest,
     deadline: Option<Duration>,
 ) -> ProxyResult<GetOffsetPlan> {
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let mut client = initialize_client_instance(config.clone()).await?;
-    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, state, &request.target).await?;
     let request_header = build_query_consumer_offset_request_header(&broker_target.broker_name, &request);
     let offset = client
         .query_consumer_offset(broker_target.broker_addr.as_str(), request_header, timeout_ms)
@@ -1094,12 +1178,13 @@ async fn get_offset_request_inner(
 
 async fn query_offset_request_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: QueryOffsetRequest,
     deadline: Option<Duration>,
 ) -> ProxyResult<QueryOffsetPlan> {
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let mut client = initialize_client_instance(config.clone()).await?;
-    let broker_target = resolve_message_queue_broker(&mut client, config, &request.target).await?;
+    let broker_target = resolve_message_queue_broker(&mut client, config, state, &request.target).await?;
     let message_queue = build_message_queue(&request.target, &broker_target.broker_name);
     let offset = match request.policy {
         QueryOffsetPolicy::Beginning => {
@@ -1135,6 +1220,7 @@ async fn query_offset_request_inner(
 
 async fn end_transaction_request_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: EndTransactionRequest,
     client_id: Option<String>,
     request_id: String,
@@ -1145,6 +1231,7 @@ async fn end_transaction_request_inner(
     end_transaction_inner(
         &mut client,
         config,
+        state,
         &request,
         client_id.as_deref(),
         request_id.as_str(),
@@ -1165,6 +1252,50 @@ async fn initialize_client_instance(config: ClusterConfig) -> ProxyResult<ArcMut
     let this = instance.clone();
     instance.start(this).await?;
     Ok(instance)
+}
+
+async fn fetch_topic_route(
+    client: &mut ArcMut<MQClientInstance>,
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    topic_name: &str,
+) -> ProxyResult<TopicRouteData> {
+    if let Some(route) = state.cached_route(topic_name) {
+        return Ok(route);
+    }
+
+    let route = client
+        .get_mq_client_api_impl()
+        .get_topic_route_info_from_name_server(topic_name, config.mq_client_api_timeout_ms)
+        .await?
+        .ok_or_else(|| RocketMQError::route_not_found(topic_name.to_owned()))?;
+    state.cache_route(topic_name.to_owned(), route.clone(), config.route_cache_ttl());
+    Ok(route)
+}
+
+fn cached_value<K, T>(cache: &mut HashMap<K, CachedValue<T>>, key: &K) -> Option<T>
+where
+    K: Clone + Eq + std::hash::Hash,
+    T: Clone,
+{
+    match cache.get(key) {
+        Some(entry) if !entry.is_expired() => Some(entry.value.clone()),
+        Some(_) => {
+            cache.remove(key);
+            None
+        }
+        None => None,
+    }
+}
+
+fn cache_value<K, T>(cache: &mut HashMap<K, CachedValue<T>>, key: K, value: T, ttl: Duration)
+where
+    K: Eq + std::hash::Hash,
+{
+    if ttl.is_zero() {
+        return;
+    }
+    cache.insert(key, CachedValue::new(value, ttl));
 }
 
 #[derive(Debug, Clone)]
@@ -1241,11 +1372,13 @@ impl AckCallback for AckResultCallback {
 async fn resolve_receive_broker(
     client: &mut ArcMut<MQClientInstance>,
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: &ReceiveMessageRequest,
 ) -> ProxyResult<BrokerTarget> {
     resolve_broker_target(
         client,
         config,
+        state,
         &request.target.topic,
         request.target.queue_id,
         request.target.broker_name.as_deref(),
@@ -1257,11 +1390,13 @@ async fn resolve_receive_broker(
 async fn resolve_message_queue_broker(
     client: &mut ArcMut<MQClientInstance>,
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     target: &MessageQueueTarget,
 ) -> ProxyResult<BrokerTarget> {
     resolve_broker_target(
         client,
         config,
+        state,
         &target.topic,
         target.queue_id,
         target.broker_name.as_deref(),
@@ -1273,6 +1408,7 @@ async fn resolve_message_queue_broker(
 async fn resolve_broker_target(
     client: &mut ArcMut<MQClientInstance>,
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     topic: &ResourceIdentity,
     queue_id: i32,
     broker_name: Option<&str>,
@@ -1297,11 +1433,7 @@ async fn resolve_broker_target(
         }
     }
 
-    let route = client
-        .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-        .await?
-        .ok_or_else(|| RocketMQError::route_not_found(topic_name.as_str()))?;
+    let route = fetch_topic_route(client, config, state, topic_name.as_str()).await?;
     let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
         name: topic_name.to_string(),
     })?;
@@ -1501,17 +1633,14 @@ async fn change_invisible_time(
 async fn end_transaction_inner(
     client: &mut ArcMut<MQClientInstance>,
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: &EndTransactionRequest,
     client_id: Option<&str>,
     request_id: &str,
     timeout_ms: u64,
 ) -> ProxyResult<EndTransactionPlan> {
     let topic_name = request.topic.to_string();
-    let route = client
-        .get_mq_client_api_impl()
-        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
-        .await?
-        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    let route = fetch_topic_route(client, config, state, topic_name.as_str()).await?;
     let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
         name: topic_name.clone(),
     })?;
@@ -2008,6 +2137,8 @@ fn convert_subscription_group(group_config: SubscriptionGroupConfig) -> Subscrip
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::Duration;
+    use std::time::Instant;
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -2019,6 +2150,8 @@ mod tests {
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
     use super::select_master_broker_addr;
+    use super::CachedValue;
+    use super::ClusterWorkerState;
     use crate::service::ProxyTopicMessageType;
 
     #[test]
@@ -2055,5 +2188,37 @@ mod tests {
 
         let converted = convert_subscription_group(config);
         assert!(converted.consume_message_orderly);
+    }
+
+    #[test]
+    fn cluster_worker_state_discards_expired_route_cache_entries() {
+        let mut state = ClusterWorkerState::new();
+        state.route_cache.insert(
+            "TopicA".to_owned(),
+            CachedValue {
+                value: TopicRouteData::default(),
+                expires_at: Instant::now() - Duration::from_millis(1),
+            },
+        );
+
+        assert!(state.cached_route("TopicA").is_none());
+        assert!(!state.route_cache.contains_key("TopicA"));
+    }
+
+    #[test]
+    fn cluster_worker_state_returns_live_metadata_cache_entries() {
+        let mut state = ClusterWorkerState::new();
+        state.topic_message_type_cache.insert(
+            "TopicA".to_owned(),
+            CachedValue {
+                value: ProxyTopicMessageType::Fifo,
+                expires_at: Instant::now() + Duration::from_secs(1),
+            },
+        );
+
+        assert_eq!(
+            state.cached_topic_message_type("TopicA"),
+            Some(ProxyTopicMessageType::Fifo)
+        );
     }
 }

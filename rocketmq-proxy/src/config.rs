@@ -80,6 +80,8 @@ pub struct ClusterConfig {
     pub query_assignment_strategy_name: String,
     pub producer_group_prefix: String,
     pub send_message_timeout_ms: u64,
+    pub route_cache_ttl_ms: u64,
+    pub metadata_cache_ttl_ms: u64,
 }
 
 impl Default for ClusterConfig {
@@ -91,7 +93,19 @@ impl Default for ClusterConfig {
             query_assignment_strategy_name: "AVG".to_owned(),
             producer_group_prefix: "PROXY_SEND".to_owned(),
             send_message_timeout_ms: 3_000,
+            route_cache_ttl_ms: 5_000,
+            metadata_cache_ttl_ms: 5_000,
         }
+    }
+}
+
+impl ClusterConfig {
+    pub fn route_cache_ttl(&self) -> Duration {
+        Duration::from_millis(self.route_cache_ttl_ms)
+    }
+
+    pub fn metadata_cache_ttl(&self) -> Duration {
+        Duration::from_millis(self.metadata_cache_ttl_ms)
     }
 }
 

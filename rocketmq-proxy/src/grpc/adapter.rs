@@ -1139,8 +1139,8 @@ fn timestamp_to_offset_query_epoch_millis(timestamp: &prost_types::Timestamp) ->
         .ok_or_else(|| ProxyError::illegal_offset("query offset timestamp overflowed milliseconds"))
 }
 
-fn explicit_queue_id(queue_id: i32) -> Option<i32> {
-    (queue_id > 0).then_some(queue_id)
+fn explicit_queue_id(queue_id: Option<i32>) -> Option<i32> {
+    queue_id
 }
 
 fn build_receive_message_response(message: &ReceivedMessage) -> v2::ReceiveMessageResponse {
@@ -1194,7 +1194,7 @@ fn build_message_system_properties(
         receipt_handle: message_ext
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
             .map(|value| value.to_string()),
-        queue_id: message_ext.queue_id(),
+        queue_id: Some(message_ext.queue_id()),
         queue_offset: Some(message_ext.queue_offset()),
         invisible_duration: invisible_duration.and_then(duration_to_proto),
         delivery_attempt: Some(message_ext.reconsume_times().saturating_add(1)),
@@ -1741,6 +1741,31 @@ mod tests {
             message.get_user_property(CheetahString::from("k")).unwrap().as_str(),
             "v"
         );
+    }
+
+    #[test]
+    fn build_send_message_request_preserves_explicit_queue_zero() {
+        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()))
+            .expect("context should be constructed");
+        let request = v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: HashMap::new(),
+                system_properties: Some(v2::SystemProperties {
+                    message_id: "msg-1".to_owned(),
+                    body_encoding: v2::Encoding::Identity as i32,
+                    queue_id: Some(0),
+                    ..Default::default()
+                }),
+                body: Bytes::from_static(b"hello").to_vec(),
+            }],
+        };
+
+        let mapped = build_send_message_request(&context, &request).expect("request should build");
+        assert_eq!(mapped.messages[0].queue_id, Some(0));
     }
 
     #[test]
