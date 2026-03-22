@@ -28,11 +28,13 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::cluster::ClusterClient;
 use crate::config::ClusterConfig;
+use crate::config::LocalConfig;
 use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::local::local_service_manager_from_config;
 use crate::processor::AckMessageRequest;
 use crate::processor::AckMessageResultEntry;
 use crate::processor::ChangeInvisibleDurationPlan;
@@ -865,6 +867,10 @@ impl LocalServiceManager {
             consumer_service,
             transaction_service,
         }
+    }
+
+    pub fn from_local_config(config: LocalConfig, assignment_strategy_name: impl Into<String>) -> Self {
+        local_service_manager_from_config(config, assignment_strategy_name)
     }
 }
 

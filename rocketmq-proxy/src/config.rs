@@ -111,6 +111,28 @@ impl ClusterConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+pub struct LocalConfig {
+    pub broker_cluster_name: String,
+    pub broker_name: String,
+    pub broker_ip: String,
+    pub broker_listen_port: u16,
+    pub store_root_dir: String,
+}
+
+impl Default for LocalConfig {
+    fn default() -> Self {
+        Self {
+            broker_cluster_name: "DefaultCluster".to_owned(),
+            broker_name: "rocketmq-proxy-local".to_owned(),
+            broker_ip: "127.0.0.1".to_owned(),
+            broker_listen_port: 10911,
+            store_root_dir: "store/proxy/local-broker".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RuntimeConfig {
     pub route_permits: usize,
     pub producer_permits: usize,
@@ -246,6 +268,7 @@ pub struct ProxyConfig {
     pub mode: ProxyMode,
     pub grpc: GrpcConfig,
     pub cluster: ClusterConfig,
+    pub local: LocalConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
     pub auth: ProxyAuthConfig,

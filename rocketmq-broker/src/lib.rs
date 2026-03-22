@@ -20,8 +20,10 @@
 
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
+pub use proxy_facade::ProxyBrokerFacade;
 
 pub mod command;
+pub mod proxy_facade;
 pub mod send_message_constants;
 
 // Re-export types needed for benchmarking

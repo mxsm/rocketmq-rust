@@ -29,6 +29,8 @@ rust-version.workspace = true
 
 [dependencies]
 rocketmq-common   = { workspace = true }
+rocketmq-broker   = { workspace = true }
+rocketmq-store    = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-client-rust = { workspace = true }

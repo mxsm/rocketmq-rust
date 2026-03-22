@@ -44,6 +44,7 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
@@ -149,6 +150,7 @@ pub(crate) struct BrokerRuntime {
     inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
     broker_runtime: Option<RocketMQRuntime>,
     shutdown_hook: Option<BrokerShutdownHook>,
+    proxy_request_processor: Option<DefaultServerProcessor>,
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
     scheduled_task_manager: ScheduledTaskManager,
@@ -278,6 +280,7 @@ impl BrokerRuntime {
             inner,
             broker_runtime: Some(runtime),
             shutdown_hook: None,
+            proxy_request_processor: None,
             consumer_ids_change_listener,
             topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
             scheduled_task_manager: Default::default(),
@@ -290,6 +293,16 @@ impl BrokerRuntime {
 
     pub(crate) fn message_store_config(&self) -> &MessageStoreConfig {
         self.inner.message_store_config()
+    }
+
+    pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+        self.inner.topic_config_manager().select_topic_config(topic)
+    }
+
+    pub(crate) fn subscription_group(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
+        self.inner
+            .subscription_group_manager()
+            .find_subscription_group_config(group)
     }
 
     pub async fn shutdown(&mut self) {
@@ -1008,6 +1021,7 @@ impl BrokerRuntime {
         }
 
         let (request_processor, fast_request_processor) = self.init_processor();
+        self.proxy_request_processor = Some(request_processor.clone());
 
         let mut server = RocketMQServer::new(Arc::new(self.inner.broker_config.broker_server_config.clone()));
         //start nomarl broker remoting_server
@@ -1233,6 +1247,10 @@ impl BrokerRuntime {
                 self.inner.clone(),
             )
             .await;
+    }
+
+    pub(crate) fn proxy_request_processor(&self) -> Option<DefaultServerProcessor> {
+        self.proxy_request_processor.clone()
     }
 }
 

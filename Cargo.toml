@@ -66,6 +66,7 @@ rocketmq-filter      = { path = "./rocketmq-filter" }
 rocketmq-store       = { path = "./rocketmq-store", default-features = true }
 rocketmq-remoting    = { path = "./rocketmq-remoting" }
 rocketmq-client-rust = { path = "./rocketmq-client" }
+rocketmq-broker      = { path = "./rocketmq-broker" }
 rocketmq-error       = { path = "./rocketmq-error" }
 rocketmq-auth        = { path = "./rocketmq-auth" }
 
