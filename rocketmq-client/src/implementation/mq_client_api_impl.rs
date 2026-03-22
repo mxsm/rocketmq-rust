@@ -194,7 +194,6 @@ static SEND_SMART_MSG: LazyLock<bool> = LazyLock::new(|| {
 pub struct MQClientAPIImpl {
     remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
-    // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
     client_config: Arc<ClientConfig>,
 }
