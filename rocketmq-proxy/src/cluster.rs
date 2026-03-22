@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -292,6 +294,11 @@ enum ClusterCommand {
     },
 }
 
+#[derive(Default)]
+struct ClusterWorkerState {
+    send_producers: HashMap<String, DefaultMQProducer>,
+}
+
 impl ClusterTaskExecutor {
     fn new(config: ClusterConfig) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -433,13 +440,17 @@ fn run_cluster_worker(config: ClusterConfig, mut receiver: mpsc::UnboundedReceiv
         .build()
         .expect("failed to build proxy cluster worker runtime");
     runtime.block_on(async move {
+        let mut state = ClusterWorkerState::default();
         while let Some(command) = receiver.recv().await {
-            handle_cluster_command(&config, command).await;
+            handle_cluster_command(&config, &mut state, command).await;
+        }
+        for producer in state.send_producers.values_mut() {
+            producer.shutdown().await;
         }
     });
 }
 
-async fn handle_cluster_command(config: &ClusterConfig, command: ClusterCommand) {
+async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorkerState, command: ClusterCommand) {
     match command {
         ClusterCommand::QueryRoute { topic, reply } => {
             let _ = reply.send(query_route_inner(config, topic).await);
@@ -464,7 +475,7 @@ async fn handle_cluster_command(config: &ClusterConfig, command: ClusterCommand)
             request_id,
             reply,
         } => {
-            let _ = reply.send(send_message_inner(config, request, client_id, request_id).await);
+            let _ = reply.send(send_message_inner(config, state, request, client_id, request_id).await);
         }
         ClusterCommand::ReceiveMessage {
             request,
@@ -597,27 +608,80 @@ async fn query_subscription_group_inner(
 
 async fn send_message_inner(
     config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
     request: SendMessageRequest,
     client_id: Option<String>,
     request_id: String,
 ) -> ProxyResult<Vec<SendMessageResultEntry>> {
     let timeout = effective_send_timeout_ms(config, request.timeout);
-    let mut producer = build_send_producer(config, &request, client_id.as_deref(), request_id.as_str(), timeout);
-    if let Err(error) = producer.start().await {
-        let error = ProxyError::from(error);
-        return Ok(request
-            .messages
-            .iter()
-            .map(|_| failure_send_result_entry(&error))
-            .collect());
-    }
-
+    let producer_group = build_proxy_producer_group(config, client_id.as_deref(), request_id.as_str());
+    let topics = collect_send_topics(&request);
+    let producer = match acquire_send_producer(config, state, producer_group.as_str(), topics, timeout).await {
+        Ok(producer) => producer,
+        Err(error) => {
+            return Ok(request
+                .messages
+                .iter()
+                .map(|_| failure_send_result_entry(&error))
+                .collect());
+        }
+    };
     let mut results = Vec::with_capacity(request.messages.len());
     for entry in request.messages {
-        results.push(send_message_entry(&mut producer, entry, timeout).await);
+        results.push(send_message_entry(producer, entry, timeout).await);
     }
-    producer.shutdown().await;
     Ok(results)
+}
+
+async fn acquire_send_producer<'a>(
+    config: &ClusterConfig,
+    state: &'a mut ClusterWorkerState,
+    producer_group: &str,
+    topics: Vec<CheetahString>,
+    timeout_ms: u64,
+) -> Result<&'a mut DefaultMQProducer, ProxyError> {
+    if !state.send_producers.contains_key(producer_group) {
+        let mut producer = build_send_producer(config, producer_group, timeout_ms);
+        producer.set_topics(topics.clone());
+        if let Err(error) = producer.start().await {
+            return Err(ProxyError::from(error));
+        }
+        state.send_producers.insert(producer_group.to_owned(), producer);
+    }
+
+    let producer = state
+        .send_producers
+        .get_mut(producer_group)
+        .expect("send producer should exist after initialization");
+    refresh_send_producer(producer, topics, timeout_ms);
+    Ok(producer)
+}
+
+fn refresh_send_producer(producer: &mut DefaultMQProducer, topics: Vec<CheetahString>, timeout_ms: u64) {
+    producer.set_topics(merge_topics(producer.topics().clone(), topics));
+    producer.set_send_msg_timeout(timeout_ms.clamp(1, u64::from(u32::MAX)) as u32);
+}
+
+fn merge_topics(existing: Vec<CheetahString>, incoming: Vec<CheetahString>) -> Vec<CheetahString> {
+    existing
+        .into_iter()
+        .chain(incoming)
+        .map(|topic| topic.to_string())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(CheetahString::from)
+        .collect()
+}
+
+fn collect_send_topics(request: &SendMessageRequest) -> Vec<CheetahString> {
+    request
+        .messages
+        .iter()
+        .map(|message| message.topic.to_string())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(CheetahString::from)
+        .collect()
 }
 
 async fn receive_message_inner(
@@ -1175,34 +1239,21 @@ async fn resolve_subscription_broker_name(
     }
 }
 
-fn build_send_producer(
-    config: &ClusterConfig,
-    request: &SendMessageRequest,
-    client_id: Option<&str>,
-    request_id: &str,
-    timeout_ms: u64,
-) -> DefaultMQProducer {
+fn build_send_producer(config: &ClusterConfig, producer_group: &str, timeout_ms: u64) -> DefaultMQProducer {
     let mut client_config = RocketmqClientConfig::default();
     client_config.set_instance_name(CheetahString::from(format!(
         "{}-{}",
         config.instance_name,
-        sanitize_group_component(request_id)
+        sanitize_group_component(producer_group)
     )));
     client_config.set_mq_client_api_timeout(config.mq_client_api_timeout_ms);
     if let Some(namesrv_addr) = config.namesrv_addr.as_ref() {
         client_config.set_namesrv_addr(CheetahString::from(namesrv_addr.as_str()));
     }
 
-    let topics = request
-        .messages
-        .iter()
-        .map(|message| CheetahString::from(message.topic.to_string()))
-        .collect();
-
     DefaultMQProducer::builder()
         .client_config(client_config)
-        .producer_group(build_proxy_producer_group(config, client_id, request_id))
-        .topics(topics)
+        .producer_group(producer_group)
         .send_msg_timeout(timeout_ms as u32)
         .build()
 }

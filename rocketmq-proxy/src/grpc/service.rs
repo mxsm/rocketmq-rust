@@ -13,8 +13,12 @@
 // limitations under the License.
 
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use futures::stream;
 use futures::Stream;
@@ -99,6 +103,7 @@ pub struct ProxyGrpcService<P> {
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     guards: ExecutionGuards,
+    next_reap_at_ms: Arc<AtomicU64>,
 }
 
 impl<P> Clone for ProxyGrpcService<P> {
@@ -108,17 +113,22 @@ impl<P> Clone for ProxyGrpcService<P> {
             processor: Arc::clone(&self.processor),
             sessions: self.sessions.clone(),
             guards: self.guards.clone(),
+            next_reap_at_ms: Arc::clone(&self.next_reap_at_ms),
         }
     }
 }
 
 impl<P> ProxyGrpcService<P> {
     pub fn new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> Self {
+        let interval_ms = Self::housekeeping_interval_from_config(config.as_ref())
+            .as_millis()
+            .clamp(1, u128::from(u64::MAX)) as u64;
         Self {
             guards: ExecutionGuards::from_config(config.as_ref()),
             config,
             processor,
             sessions,
+            next_reap_at_ms: Arc::new(AtomicU64::new(current_epoch_millis().saturating_add(interval_ms))),
         }
     }
 
@@ -153,19 +163,19 @@ impl<P> ProxyGrpcService<P> {
                 _ = &mut shutdown => break,
                 _ = interval.tick() => {
                     self.reap_session_state();
+                    self.schedule_next_reap();
                 }
             }
         }
     }
 
     fn housekeeping_interval(&self) -> Duration {
-        let min_ttl = self
-            .config
-            .session
-            .client_ttl()
-            .min(self.config.session.receipt_handle_ttl());
-        let half_ttl_ms = min_ttl.as_millis().saturating_div(2).clamp(1_000, 30_000) as u64;
-        Duration::from_millis(half_ttl_ms)
+        Self::housekeeping_interval_from_config(self.config.as_ref())
+    }
+
+    fn housekeeping_interval_from_config(config: &ProxyConfig) -> Duration {
+        let min_ttl = config.session.client_ttl().min(config.session.receipt_handle_ttl());
+        Duration::from_millis(min_ttl.as_millis().saturating_div(2).clamp(1_000, 30_000) as u64)
     }
 
     fn reap_session_state(&self) {
@@ -173,6 +183,34 @@ impl<P> ProxyGrpcService<P> {
             self.config.session.client_ttl(),
             self.config.session.receipt_handle_ttl(),
         );
+    }
+
+    fn schedule_next_reap(&self) {
+        let next = current_epoch_millis()
+            .saturating_add(self.housekeeping_interval().as_millis().clamp(1, u128::from(u64::MAX)) as u64);
+        self.next_reap_at_ms.store(next, Ordering::Relaxed);
+    }
+
+    fn reap_session_state_if_due(&self) {
+        let now = current_epoch_millis();
+        let next = self.next_reap_at_ms.load(Ordering::Relaxed);
+        if now < next {
+            return;
+        }
+
+        let interval_ms = self.housekeeping_interval().as_millis().clamp(1, u128::from(u64::MAX)) as u64;
+        if self
+            .next_reap_at_ms
+            .compare_exchange(
+                next,
+                now.saturating_add(interval_ms),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            self.reap_session_state();
+        }
     }
 }
 
@@ -213,6 +251,83 @@ where
             status: Some(status),
             command: None,
         }
+    }
+
+    pub fn send_reconnect_endpoints_command(&self, client_id: &str, nonce: impl Into<String>) -> bool {
+        self.send_server_telemetry_command(
+            client_id,
+            v2::TelemetryCommand {
+                status: Some(ProxyStatusMapper::ok()),
+                command: Some(v2::telemetry_command::Command::ReconnectEndpointsCommand(
+                    v2::ReconnectEndpointsCommand { nonce: nonce.into() },
+                )),
+            },
+        )
+    }
+
+    pub fn send_print_thread_stack_trace_command(&self, client_id: &str, nonce: impl Into<String>) -> bool {
+        self.send_server_telemetry_command(
+            client_id,
+            v2::TelemetryCommand {
+                status: Some(ProxyStatusMapper::ok()),
+                command: Some(v2::telemetry_command::Command::PrintThreadStackTraceCommand(
+                    v2::PrintThreadStackTraceCommand { nonce: nonce.into() },
+                )),
+            },
+        )
+    }
+
+    pub fn send_verify_message_command(&self, client_id: &str, nonce: impl Into<String>, message: v2::Message) -> bool {
+        self.send_server_telemetry_command(
+            client_id,
+            v2::TelemetryCommand {
+                status: Some(ProxyStatusMapper::ok()),
+                command: Some(v2::telemetry_command::Command::VerifyMessageCommand(
+                    v2::VerifyMessageCommand {
+                        nonce: nonce.into(),
+                        message: Some(message),
+                    },
+                )),
+            },
+        )
+    }
+
+    pub fn send_recover_orphaned_transaction_command(
+        &self,
+        client_id: &str,
+        message: v2::Message,
+        transaction_id: impl Into<String>,
+    ) -> bool {
+        self.send_server_telemetry_command(
+            client_id,
+            v2::TelemetryCommand {
+                status: Some(ProxyStatusMapper::ok()),
+                command: Some(v2::telemetry_command::Command::RecoverOrphanedTransactionCommand(
+                    v2::RecoverOrphanedTransactionCommand {
+                        message: Some(message),
+                        transaction_id: transaction_id.into(),
+                    },
+                )),
+            },
+        )
+    }
+
+    pub fn send_notify_unsubscribe_lite_command(&self, client_id: &str, lite_topic: impl Into<String>) -> bool {
+        self.send_server_telemetry_command(
+            client_id,
+            v2::TelemetryCommand {
+                status: Some(ProxyStatusMapper::ok()),
+                command: Some(v2::telemetry_command::Command::NotifyUnsubscribeLiteCommand(
+                    v2::NotifyUnsubscribeLiteCommand {
+                        lite_topic: lite_topic.into(),
+                    },
+                )),
+            },
+        )
+    }
+
+    fn send_server_telemetry_command(&self, client_id: &str, command: v2::TelemetryCommand) -> bool {
+        self.sessions.send_telemetry_command(client_id, command)
     }
 
     fn merged_telemetry_settings(&self, settings: &v2::Settings) -> v2::Settings {
@@ -586,6 +701,13 @@ fn is_lite_client(client_type: Option<i32>) -> bool {
     )
 }
 
+fn current_epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
 fn is_transaction_message(message: &rocketmq_common::common::message::message_single::Message) -> bool {
     message
         .property(&cheetah_string::CheetahString::from_static_str(
@@ -607,7 +729,7 @@ where
         &self,
         request: Request<v2::QueryRouteRequest>,
     ) -> Result<Response<v2::QueryRouteResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("QueryRoute", &request);
         let request = request.into_inner();
 
@@ -632,7 +754,7 @@ where
         &self,
         request: Request<v2::HeartbeatRequest>,
     ) -> Result<Response<v2::HeartbeatResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("Heartbeat", &request);
         let request = request.into_inner();
 
@@ -655,7 +777,7 @@ where
         &self,
         request: Request<v2::SendMessageRequest>,
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("SendMessage", &request);
         let request = request.into_inner();
 
@@ -683,7 +805,7 @@ where
         &self,
         request: Request<v2::QueryAssignmentRequest>,
     ) -> Result<Response<v2::QueryAssignmentResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("QueryAssignment", &request);
         let request = request.into_inner();
 
@@ -708,7 +830,7 @@ where
         &self,
         request: Request<v2::ReceiveMessageRequest>,
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("ReceiveMessage", &request);
         let request = request.into_inner();
         let responses = match self
@@ -739,7 +861,7 @@ where
         &self,
         request: Request<v2::AckMessageRequest>,
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("AckMessage", &request);
         let request = request.into_inner();
 
@@ -776,7 +898,7 @@ where
         &self,
         request: Request<v2::PullMessageRequest>,
     ) -> Result<Response<Self::PullMessageStream>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("PullMessage", &request);
         let status = match self
             .validate_client_context(&context)
@@ -821,7 +943,7 @@ where
         &self,
         request: Request<v2::EndTransactionRequest>,
     ) -> Result<Response<v2::EndTransactionResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("EndTransaction", &request);
         let request = request.into_inner();
 
@@ -852,7 +974,7 @@ where
         &self,
         request: Request<tonic::Streaming<v2::TelemetryCommand>>,
     ) -> Result<Response<Self::TelemetryStream>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("Telemetry", &request);
         let mut inbound = request.into_inner();
         let permit = match self
@@ -868,25 +990,47 @@ where
         };
 
         self.sessions.upsert_from_context(&context);
+        let Some(client_id) = context.client_id().map(ToOwned::to_owned) else {
+            return Ok(Response::new(self.status_stream(Self::telemetry_status(
+                ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired),
+            ))));
+        };
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
+        self.sessions.bind_telemetry_link(client_id.clone(), outbound_tx);
         let service = self.clone();
         let (sender, receiver) = mpsc::channel(16);
         tokio::spawn(async move {
             let _permit = permit;
             loop {
-                match inbound.next().await {
-                    Some(Ok(command)) => {
-                        let response = service.handle_telemetry_command(&context, command).await;
-                        if sender.send(Ok(response)).await.is_err() {
-                            break;
+                tokio::select! {
+                    outbound = outbound_rx.recv() => {
+                        match outbound {
+                            Some(command) => {
+                                if sender.send(Ok(command)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
                         }
                     }
-                    Some(Err(error)) => {
-                        let _ = sender.send(Err(error)).await;
-                        break;
+                    inbound_item = inbound.next() => {
+                        match inbound_item {
+                            Some(Ok(command)) => {
+                                let response = service.handle_telemetry_command(&context, command).await;
+                                if sender.send(Ok(response)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Some(Err(error)) => {
+                                let _ = sender.send(Err(error)).await;
+                                break;
+                            }
+                            None => break,
+                        }
                     }
-                    None => break,
                 }
             }
+            service.sessions.unbind_telemetry_link(client_id.as_str());
         });
 
         Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
@@ -896,7 +1040,7 @@ where
         &self,
         request: Request<v2::NotifyClientTerminationRequest>,
     ) -> Result<Response<v2::NotifyClientTerminationResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("NotifyClientTermination", &request);
         let status = match self
             .guards
@@ -919,7 +1063,7 @@ where
         &self,
         request: Request<v2::ChangeInvisibleDurationRequest>,
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("ChangeInvisibleDuration", &request);
         let request = request.into_inner();
 
@@ -959,7 +1103,7 @@ where
         &self,
         request: Request<v2::SyncLiteSubscriptionRequest>,
     ) -> Result<Response<v2::SyncLiteSubscriptionResponse>, Status> {
-        self.reap_session_state();
+        self.reap_session_state_if_due();
         let context = self.context("SyncLiteSubscription", &request);
         let request = request.into_inner();
 
@@ -998,6 +1142,7 @@ mod tests {
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use tokio::sync::mpsc;
     use tonic::metadata::MetadataValue;
     use tonic::Request;
 
@@ -1684,6 +1829,23 @@ mod tests {
         };
         assert_eq!(subscription.lite_subscription_quota, Some(1200));
         assert_eq!(subscription.max_lite_topic_size, Some(64));
+    }
+
+    #[tokio::test]
+    async fn server_side_telemetry_command_is_queued_for_bound_client() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        service.sessions.bind_telemetry_link("client-a", sender);
+
+        assert!(service.send_reconnect_endpoints_command("client-a", "nonce-a"));
+
+        let command = receiver.recv().await.expect("telemetry command should be queued");
+        match command.command {
+            Some(v2::telemetry_command::Command::ReconnectEndpointsCommand(command)) => {
+                assert_eq!(command.nonce, "nonce-a");
+            }
+            other => panic!("unexpected telemetry command: {other:?}"),
+        }
     }
 
     #[test]

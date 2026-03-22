@@ -20,6 +20,7 @@ use std::time::SystemTime;
 use dashmap::DashMap;
 use rocketmq_common::get_parent_and_lite_topic;
 use rocketmq_common::to_lmq_name;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::ProxyContext;
@@ -155,6 +156,11 @@ pub struct PreparedTransactionHandle {
     pub last_touched: SystemTime,
 }
 
+#[derive(Clone)]
+pub struct TelemetryLink {
+    pub sender: mpsc::UnboundedSender<v2::TelemetryCommand>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReapSummary {
     pub removed_sessions: usize,
@@ -236,6 +242,7 @@ pub struct ClientSessionRegistry {
     receipt_handles: Arc<DashMap<ReceiptHandleKey, TrackedReceiptHandle>>,
     lite_subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscriptionSnapshot>>,
     prepared_transactions: Arc<DashMap<PreparedTransactionKey, PreparedTransactionHandle>>,
+    telemetry_links: Arc<DashMap<String, TelemetryLink>>,
 }
 
 impl ClientSessionRegistry {
@@ -411,6 +418,36 @@ impl ClientSessionRegistry {
             tracked.clone(),
         );
         tracked
+    }
+
+    pub fn bind_telemetry_link(
+        &self,
+        client_id: impl Into<String>,
+        sender: mpsc::UnboundedSender<v2::TelemetryCommand>,
+    ) {
+        self.telemetry_links.insert(client_id.into(), TelemetryLink { sender });
+    }
+
+    pub fn send_telemetry_command(&self, client_id: &str, command: v2::TelemetryCommand) -> bool {
+        let Some(link) = self.telemetry_links.get(client_id) else {
+            return false;
+        };
+
+        if link.sender.send(command).is_ok() {
+            true
+        } else {
+            drop(link);
+            self.telemetry_links.remove(client_id);
+            false
+        }
+    }
+
+    pub fn unbind_telemetry_link(&self, client_id: &str) -> bool {
+        self.telemetry_links.remove(client_id).is_some()
+    }
+
+    pub fn has_telemetry_link(&self, client_id: &str) -> bool {
+        self.telemetry_links.contains_key(client_id)
     }
 
     pub fn prepared_transaction(
@@ -595,6 +632,7 @@ impl ClientSessionRegistry {
         for key in prepared_transaction_keys {
             let _ = self.prepared_transactions.remove(&key);
         }
+        self.telemetry_links.remove(client_id);
         session
     }
 
@@ -618,11 +656,16 @@ impl ClientSessionRegistry {
         self.prepared_transactions.len()
     }
 
+    pub fn telemetry_link_count(&self) -> usize {
+        self.telemetry_links.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
             && self.receipt_handles.is_empty()
             && self.lite_subscriptions.is_empty()
             && self.prepared_transactions.is_empty()
+            && self.telemetry_links.is_empty()
     }
 
     pub fn reap_expired(&self, client_ttl: Duration, receipt_handle_ttl: Duration) -> ReapSummary {
@@ -842,6 +885,7 @@ mod tests {
     use std::time::Duration;
     use std::time::SystemTime;
 
+    use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
     use super::ClientSession;
@@ -1071,6 +1115,37 @@ mod tests {
         assert_eq!(registry.prepared_transaction_count(), 0);
     }
 
+    #[tokio::test]
+    async fn telemetry_link_can_send_and_unbind_commands() {
+        let registry = ClientSessionRegistry::default();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        registry.bind_telemetry_link("client-a", sender);
+
+        assert!(registry.send_telemetry_command(
+            "client-a",
+            v2::TelemetryCommand {
+                status: None,
+                command: Some(v2::telemetry_command::Command::ReconnectEndpointsCommand(
+                    v2::ReconnectEndpointsCommand {
+                        nonce: "nonce-a".to_owned(),
+                    },
+                )),
+            },
+        ));
+        assert!(registry.has_telemetry_link("client-a"));
+
+        let command = receiver.recv().await.expect("telemetry command should be delivered");
+        match command.command.expect("command should be present") {
+            v2::telemetry_command::Command::ReconnectEndpointsCommand(command) => {
+                assert_eq!(command.nonce, "nonce-a");
+            }
+            other => panic!("unexpected telemetry command: {other:?}"),
+        }
+
+        assert!(registry.unbind_telemetry_link("client-a"));
+        assert!(!registry.has_telemetry_link("client-a"));
+    }
+
     #[test]
     fn remove_client_clears_receipt_handles() {
         let registry = ClientSessionRegistry::default();
@@ -1078,6 +1153,8 @@ mod tests {
         registry.upsert_from_context(&context);
         let tracked = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "handle-1"));
         registry.track_prepared_transaction(prepared_transaction("client-a", "msg-2", "tx-2"));
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        registry.bind_telemetry_link("client-a", sender);
         let _ = registry.sync_lite_subscription(
             "client-a",
             lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-a"]),
@@ -1091,6 +1168,7 @@ mod tests {
         assert_eq!(registry.tracked_handle_count(), 0);
         assert_eq!(registry.lite_subscription_count(), 0);
         assert_eq!(registry.prepared_transaction_count(), 0);
+        assert_eq!(registry.telemetry_link_count(), 0);
     }
 
     #[test]
