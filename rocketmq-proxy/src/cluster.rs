@@ -1822,10 +1822,14 @@ fn build_receive_plan(pop_result: PopResult) -> ReceiveMessagePlan {
 
 fn build_pull_plan(pull_result: rocketmq_client_rust::consumer::pull_result::PullResult) -> PullMessagePlan {
     let next_offset = pull_result.next_begin_offset() as i64;
+    let min_offset = pull_result.min_offset() as i64;
+    let max_offset = pull_result.max_offset() as i64;
     match pull_result.pull_status() {
         PullStatus::Found => PullMessagePlan {
             status: ProxyStatusMapper::ok_payload(),
             next_offset,
+            min_offset,
+            max_offset,
             messages: pull_result
                 .msg_found_list()
                 .cloned()
@@ -1837,11 +1841,15 @@ fn build_pull_plan(pull_result: rocketmq_client_rust::consumer::pull_result::Pul
         PullStatus::NoNewMsg | PullStatus::NoMatchedMsg => PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(v2::Code::MessageNotFound, "no message available"),
             next_offset,
+            min_offset,
+            max_offset,
             messages: Vec::new(),
         },
         PullStatus::OffsetIllegal => PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(v2::Code::IllegalOffset, "pull offset is illegal"),
             next_offset,
+            min_offset,
+            max_offset,
             messages: Vec::new(),
         },
     }

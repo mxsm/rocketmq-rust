@@ -156,6 +156,8 @@ pub struct PullMessageRequest {
 pub struct PullMessagePlan {
     pub status: ProxyPayloadStatus,
     pub next_offset: i64,
+    pub min_offset: i64,
+    pub max_offset: i64,
     pub messages: Vec<MessageExt>,
 }
 

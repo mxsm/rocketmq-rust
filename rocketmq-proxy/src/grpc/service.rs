@@ -2105,6 +2105,8 @@ mod tests {
             Ok(PullMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
                 next_offset: request.offset + 1,
+                min_offset: 0,
+                max_offset: request.offset + 1024,
                 messages: vec![message],
             })
         }
