@@ -1,16 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { motion } from 'motion/react';
 import {
   AlertCircle,
   Calendar,
   ChevronDown,
-  Clock,
   Copy,
   FileText,
   Info,
-  Key,
   Search,
-  Tag,
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { MessageDetailModal } from './MessageDetailModal';
@@ -31,13 +27,20 @@ const defaultPagination = {
   totalElements: 0,
 };
 
+const pad = (value: number) => value.toString().padStart(2, '0');
+
+const formatDateTimeInput = (date: Date) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
+    date.getMinutes(),
+  )}:${pad(date.getSeconds())}`;
+
 export const MessageView = () => {
   const [activeTab, setActiveTab] = useState<MessageTab>('Topic');
   const [topic, setTopic] = useState('');
   const [msgKey, setMsgKey] = useState('');
   const [msgId, setMsgId] = useState('');
-  const [startDate, setStartDate] = useState('2026-01-27 00:00:00');
-  const [endDate, setEndDate] = useState('2026-01-28 00:00:00');
+  const [startDate, setStartDate] = useState(() => formatDateTimeInput(new Date(Date.now() - 60 * 60 * 1000)));
+  const [endDate, setEndDate] = useState(() => formatDateTimeInput(new Date()));
   const [messages, setMessages] = useState<MessageSummary[]>([]);
   const [selectedMessage, setSelectedMessage] = useState<MessageSummary | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -159,6 +162,20 @@ export const MessageView = () => {
 
     if (activeTab === 'Message ID' && !msgId.trim()) {
       setSearchError('Message ID is required.');
+      return;
+    }
+
+    if (activeTab === 'Message ID') {
+      setSearchError('');
+      setHasSearched(false);
+      setMessages([]);
+      setSelectedMessage({
+        topic: topic.trim(),
+        msgId: msgId.trim(),
+        tags: null,
+        keys: null,
+        storeTimestamp: 0,
+      });
       return;
     }
 
@@ -301,8 +318,84 @@ export const MessageView = () => {
     if (activeTab === 'Message Key') {
       return 'Enter a topic and message key to start searching.';
     }
-    return 'Enter a topic and message id to start searching.';
+    return 'Enter a topic and message id to open the real detail dialog directly.';
   };
+
+  const renderMessageTable = () => (
+    <div className="overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-gray-50/80 text-xs uppercase tracking-wider text-gray-500 dark:bg-gray-800/50 dark:text-gray-400">
+            <tr>
+              <th className="px-5 py-3 font-semibold">Message ID</th>
+              <th className="px-5 py-3 font-semibold">Tag</th>
+              <th className="px-5 py-3 font-semibold">Key</th>
+              <th className="px-5 py-3 font-semibold">Store Time</th>
+              <th className="px-5 py-3 text-right font-semibold">Operation</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {messages.map((msg) => (
+              <tr
+                key={`${msg.topic}-${msg.msgId}`}
+                className="hover:bg-gray-50/70 dark:hover:bg-gray-800/40"
+              >
+                <td className="px-5 py-4 align-middle">
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(msg.msgId);
+                        toast.success('Copied ID');
+                      }}
+                      className="rounded-md border border-gray-200 p-1.5 text-gray-400 transition-colors hover:border-blue-200 hover:text-blue-600 dark:border-gray-700 dark:text-gray-500 dark:hover:border-blue-800 dark:hover:text-blue-400"
+                      title="Copy message id"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="min-w-0">
+                      <div
+                        className="truncate font-mono text-xs font-semibold text-gray-900 dark:text-white"
+                        title={msg.msgId}
+                      >
+                        {msg.msgId}
+                      </div>
+                      <div className="mt-1 truncate text-[11px] text-gray-500 dark:text-gray-400" title={msg.topic}>
+                        {msg.topic}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-5 py-4 align-middle">
+                  <span className="inline-flex items-center rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                    {msg.tags || '-'}
+                  </span>
+                </td>
+                <td className="px-5 py-4 align-middle">
+                  <div className="max-w-[320px] truncate font-mono text-xs text-gray-700 dark:text-gray-300" title={msg.keys || '-'}>
+                    {msg.keys || '-'}
+                  </div>
+                </td>
+                <td className="px-5 py-4 align-middle">
+                  <div className="font-mono text-xs text-gray-700 dark:text-gray-300">
+                    {formatTimestamp(msg.storeTimestamp)}
+                  </div>
+                </td>
+                <td className="px-5 py-4 align-middle text-right">
+                  <button
+                    onClick={() => setSelectedMessage(msg)}
+                    className="inline-flex items-center rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-gray-800 dark:bg-blue-600 dark:hover:bg-blue-500"
+                  >
+                    <FileText className="mr-1.5 h-3.5 w-3.5" />
+                    Detail
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6 pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -366,8 +459,10 @@ export const MessageView = () => {
           <Info className="h-4 w-4 text-blue-500" />
           <span>
             {activeTab === 'Topic'
-              ? 'Topic tab now uses real topic/time pagination with backend taskId continuity.'
-              : 'Message Key and Message ID remain on the real query path introduced in earlier phases.'}
+              ? 'Topic tab now follows the Java dashboard flow: dynamic time defaults plus real topic/time pagination with backend taskId continuity.'
+              : activeTab === 'Message Key'
+                ? 'Message Key uses the real query path and returns up to 64 messages, matching the Java dashboard behavior.'
+                : 'Message ID now opens the real detail dialog directly, matching the Java dashboard interaction.'}
           </span>
         </div>
         <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
@@ -375,9 +470,13 @@ export const MessageView = () => {
             ? hasSearched
               ? `${messages.length} item(s) on page ${topicPagination.currentPage} / ${Math.max(topicPagination.totalPages, 1)}`
               : 'ready'
-            : hasSearched
-              ? `${messages.length} result(s)`
-              : 'ready'}
+            : activeTab === 'Message ID'
+              ? selectedMessage
+                ? 'detail open'
+                : 'ready'
+              : hasSearched
+                ? `${messages.length} result(s)`
+                : 'ready'}
         </span>
       </div>
 
@@ -388,101 +487,7 @@ export const MessageView = () => {
         </div>
       ) : messages.length > 0 ? (
         <>
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
-            {messages.map((msg, index) => (
-              <motion.div
-                key={msg.msgId}
-                initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                whileHover={{
-                  y: -4,
-                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)',
-                }}
-                transition={{
-                  duration: 0.3,
-                  delay: index * 0.05,
-                  ease: [0.22, 1, 0.36, 1],
-                }}
-                className="group flex flex-col overflow-hidden rounded-[20px] border border-gray-100 bg-white shadow-sm transition-all duration-300 hover:border-blue-200 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-800"
-              >
-                <div className="border-b border-gray-100 bg-gradient-to-br from-gray-50/80 to-white p-5 dark:border-gray-800 dark:from-gray-800/80 dark:to-gray-900">
-                  <div className="mb-3 flex items-center gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-100 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                      <FileText className="h-5 w-5 text-blue-600 dark:text-blue-500" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between">
-                        <span className="mb-0.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Message ID</span>
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            navigator.clipboard.writeText(msg.msgId);
-                            toast.success('Copied ID');
-                          }}
-                          className="p-1 text-gray-300 transition-colors hover:text-blue-600 dark:text-gray-600 dark:hover:text-blue-400"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                      <h3 className="truncate font-mono text-xs font-bold text-gray-900 dark:text-white" title={msg.msgId}>
-                        {msg.msgId}
-                      </h3>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 space-y-4 p-5">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900/30">
-                      <Tag className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <div>
-                      <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Tag</div>
-                      <span className="inline-flex items-center rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-bold text-gray-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                        {msg.tags || '-'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 dark:bg-amber-900/30">
-                        <Key className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Key</div>
-                        <div className="truncate font-mono text-xs font-medium text-gray-900 dark:text-gray-300" title={msg.keys || '-'}>
-                          {msg.keys || '-'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-3">
-                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-900/30">
-                        <Clock className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Store Time</div>
-                        <div className="truncate font-mono text-xs font-medium text-gray-900 dark:text-gray-300" title={formatTimestamp(msg.storeTimestamp)}>
-                          {formatTimestamp(msg.storeTimestamp)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-gray-800/50">
-                  <button
-                    onClick={() => setSelectedMessage(msg)}
-                    className="flex w-full items-center justify-center space-x-2 rounded-xl bg-gray-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-gray-800 active:scale-[0.98] dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500"
-                  >
-                    <FileText className="h-3.5 w-3.5" />
-                    <span>View Details</span>
-                  </button>
-                </div>
-              </motion.div>
-            ))}
-          </div>
+          {renderMessageTable()}
 
           {activeTab === 'Topic' && topicPagination.totalPages > 1 ? (
             <div className="flex items-center justify-center pt-2">

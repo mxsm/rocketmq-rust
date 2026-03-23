@@ -1278,12 +1278,12 @@ impl MQAdminExt for DefaultMQAdminExt {
         unimplemented!("query_consume_time_span_concurrent not implemented yet")
     }
     #[allow(deprecated)]
-    async fn message_track_detail(&self, _msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
-        unimplemented!("message_track_detail not implemented yet")
+    async fn message_track_detail(&self, msg: MessageExt) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
+        self.default_mqadmin_ext_impl.message_track_detail(msg).await
     }
     #[allow(deprecated)]
-    async fn message_track_detail_concurrent(&self, _msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>> {
-        unimplemented!("message_track_detail_concurrent not implemented yet")
+    async fn message_track_detail_concurrent(&self, msg: MessageExt) -> AdminToolResult<Vec<MessageTrack>> {
+        self.default_mqadmin_ext_impl.message_track_detail_concurrent(msg).await
     }
 
     async fn view_broker_stats_data(

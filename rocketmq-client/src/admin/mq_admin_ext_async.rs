@@ -385,9 +385,9 @@ pub trait MQAdminExt: Send {
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult>;
     #[allow(deprecated)]
-    async fn message_track_detail(&self, msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>>;
+    async fn message_track_detail(&self, msg: MessageExt) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>>;
     #[allow(deprecated)]
-    async fn message_track_detail_concurrent(&self, msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>>;
+    async fn message_track_detail_concurrent(&self, msg: MessageExt) -> AdminToolResult<Vec<MessageTrack>>;
 
     async fn clone_group_offset(
         &self,

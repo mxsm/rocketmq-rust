@@ -25,6 +25,7 @@ use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::common::admin_tool_result::AdminToolResult;
+use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_status::PullStatus;
@@ -51,8 +52,12 @@ use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
 #[allow(deprecated)]
 use rocketmq_common::common::tools::message_track::MessageTrack;
+#[allow(deprecated)]
+use rocketmq_common::common::tools::track_type::TrackType;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::FAQUrl;
+use rocketmq_error::RocketMQError;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
 use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
@@ -99,6 +104,8 @@ use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffse
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader;
 use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
+use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
@@ -2130,12 +2137,62 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         unimplemented!("query_consume_time_span_concurrent not implemented yet")
     }
     #[allow(deprecated)]
-    async fn message_track_detail(&self, _msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
-        unimplemented!("message_track_detail not implemented yet")
+    async fn message_track_detail(&self, msg: MessageExt) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
+        let group_list = self.query_topic_consume_by_who(msg.topic().clone()).await?;
+        let mut result = Vec::with_capacity(group_list.get_group_list().len());
+
+        for group in group_list.get_group_list() {
+            let mut track = build_message_track(group.as_str());
+            let consumer_connection = match self.examine_consumer_connection_info(group.clone(), None).await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    apply_track_error(&mut track, &error);
+                    result.push(track);
+                    continue;
+                }
+            };
+
+            match consumer_connection.get_consume_type() {
+                Some(ConsumeType::ConsumeActively) => {
+                    track.set_track_type(TrackType::Pull);
+                }
+                Some(ConsumeType::ConsumePassively) => {
+                    if consumer_connection.get_message_model() == Some(MessageModel::Broadcasting) {
+                        track.set_track_type(TrackType::ConsumeBroadcasting);
+                        result.push(track);
+                        continue;
+                    }
+
+                    let consumed = match self.message_consumed_by_group(&msg, group).await {
+                        Ok(consumed) => consumed,
+                        Err(error) => {
+                            apply_track_error(&mut track, &error);
+                            result.push(track);
+                            continue;
+                        }
+                    };
+
+                    if consumed {
+                        track.set_track_type(resolve_consumed_track_type(&msg, &consumer_connection));
+                    } else {
+                        track.set_track_type(TrackType::NotConsumedYet);
+                    }
+                }
+                _ => {}
+            }
+
+            result.push(track);
+        }
+
+        result.sort_by(|left, right| left.consumer_group.cmp(&right.consumer_group));
+        Ok(result)
     }
     #[allow(deprecated)]
-    async fn message_track_detail_concurrent(&self, _msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>> {
-        unimplemented!("message_track_detail_concurrent not implemented yet")
+    async fn message_track_detail_concurrent(&self, msg: MessageExt) -> AdminToolResult<Vec<MessageTrack>> {
+        match self.message_track_detail(msg).await {
+            Ok(data) => AdminToolResult::success(data),
+            Err(error) => AdminToolResult::failure(admin_result_code_for_error(&error), error.to_string()),
+        }
     }
 
     async fn view_broker_stats_data(
@@ -2694,6 +2751,19 @@ impl DefaultMQAdminExtImpl {
 
         Ok(rollback_stats)
     }
+
+    async fn message_consumed_by_group(
+        &self,
+        msg: &MessageExt,
+        group: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<bool> {
+        let consume_stats = self
+            .examine_consume_stats(group.clone(), None, None, None, None)
+            .await?;
+        let cluster_info = self.examine_broker_cluster_info().await?;
+
+        Ok(is_message_consumed(msg, &consume_stats, &cluster_info))
+    }
 }
 
 fn merge_order_conf_entries(existing: &str, value: &str) -> String {
@@ -2747,17 +2817,146 @@ fn select_consumer_direct_connection(
     Ok((connection.get_client_id(), connection.get_client_addr()))
 }
 
+#[allow(deprecated)]
+fn build_message_track(consumer_group: &str) -> MessageTrack {
+    MessageTrack {
+        consumer_group: consumer_group.to_string(),
+        track_type: Some(TrackType::Unknown),
+        exception_desc: String::new(),
+    }
+}
+
+#[allow(deprecated)]
+fn resolve_consumed_track_type(msg: &MessageExt, consumer_connection: &ConsumerConnection) -> TrackType {
+    let Some(subscription_data) = consumer_connection.get_subscription_table().get(msg.topic()) else {
+        return TrackType::Consumed;
+    };
+
+    let Some(message_tag) = msg.get_tags() else {
+        return TrackType::Consumed;
+    };
+
+    if subscription_data.tags_set.is_empty()
+        || subscription_data
+            .tags_set
+            .contains(&CheetahString::from_static_str(SubscriptionData::SUB_ALL))
+        || subscription_data.tags_set.contains(&message_tag)
+    {
+        TrackType::Consumed
+    } else {
+        TrackType::ConsumedButFiltered
+    }
+}
+
+fn is_message_consumed(msg: &MessageExt, consume_stats: &ConsumeStats, cluster_info: &ClusterInfo) -> bool {
+    consume_stats.get_offset_table().iter().any(|(queue, offset_wrapper)| {
+        queue.topic() == msg.topic()
+            && queue.queue_id() == msg.queue_id()
+            && resolve_master_broker_addr(cluster_info, queue)
+                .map(|broker_addr| {
+                    broker_addr_matches_store_host(broker_addr, msg.store_host())
+                        && offset_wrapper.get_consumer_offset() > msg.queue_offset()
+                })
+                .unwrap_or(false)
+    })
+}
+
+fn resolve_master_broker_addr<'a>(cluster_info: &'a ClusterInfo, queue: &MessageQueue) -> Option<&'a CheetahString> {
+    cluster_info
+        .broker_addr_table
+        .as_ref()?
+        .get(queue.broker_name())?
+        .broker_addrs()
+        .get(&mix_all::MASTER_ID)
+}
+
+fn broker_addr_matches_store_host(broker_addr: &CheetahString, store_host: std::net::SocketAddr) -> bool {
+    broker_addr
+        .parse::<std::net::SocketAddr>()
+        .map(|parsed| parsed == store_host)
+        .unwrap_or_else(|_| broker_addr.as_str() == store_host.to_string())
+}
+
+#[allow(deprecated)]
+fn apply_track_error(track: &mut MessageTrack, error: &RocketMQError) {
+    if let Some(code) = response_code_from_error(error) {
+        match code {
+            ResponseCode::ConsumerNotOnline => track.set_track_type(TrackType::NotOnline),
+            ResponseCode::BroadcastConsumption => track.set_track_type(TrackType::ConsumeBroadcasting),
+            _ => {}
+        }
+    }
+
+    track.set_exception_desc(track_exception_desc(error));
+}
+
+fn response_code_from_error(error: &RocketMQError) -> Option<ResponseCode> {
+    match error {
+        RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
+        RocketMQError::IllegalArgument(message) => parse_response_code_from_message(message),
+        _ => None,
+    }
+}
+
+fn parse_response_code_from_message(message: &str) -> Option<ResponseCode> {
+    let code_start = message.find("CODE:")?;
+    let digits = message[code_start + "CODE:".len()..]
+        .trim_start()
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '-')
+        .collect::<String>();
+
+    if digits.is_empty() {
+        return None;
+    }
+
+    digits.parse::<i32>().ok().map(ResponseCode::from)
+}
+
+fn track_exception_desc(error: &RocketMQError) -> String {
+    match error {
+        RocketMQError::BrokerOperationFailed { code, message, .. } => format!("CODE:{code} DESC:{message}"),
+        _ => error.to_string(),
+    }
+}
+
+fn admin_result_code_for_error(error: &RocketMQError) -> AdminToolsResultCodeEnum {
+    match response_code_from_error(error) {
+        Some(ResponseCode::ConsumerNotOnline) => AdminToolsResultCodeEnum::ConsumerNotOnline,
+        Some(ResponseCode::BroadcastConsumption) => AdminToolsResultCodeEnum::BroadcastConsumption,
+        Some(_) => AdminToolsResultCodeEnum::MQBrokerError,
+        None => AdminToolsResultCodeEnum::MQClientError,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::collections::HashMap;
 
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_builder::MessageBuilder;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_common::common::mix_all;
+    #[allow(deprecated)]
+    use rocketmq_common::common::tools::track_type::TrackType;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
+    use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
+    use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_remoting::protocol::body::connection::Connection;
     use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
     use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
     use super::encode_topic_attributes;
+    use super::is_message_consumed;
     use super::merge_order_conf_entries;
+    use super::parse_response_code_from_message;
+    use super::resolve_consumed_track_type;
     use super::select_consumer_direct_connection;
 
     #[test]
@@ -2846,5 +3045,75 @@ mod tests {
             .expect_err("offline group should not resolve a client");
 
         assert!(error.to_string().contains("NO CONSUMER"));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn resolve_consumed_track_type_marks_filtered_subscription() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"payload")
+            .tags("TagA")
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+
+        let mut subscription = SubscriptionData {
+            topic: CheetahString::from("TopicTest"),
+            ..Default::default()
+        };
+        subscription.tags_set = BTreeSet::from([CheetahString::from("TagB")]);
+
+        let mut connection = ConsumerConnection::new();
+        connection.set_consume_type(ConsumeType::ConsumePassively);
+        connection
+            .get_subscription_table_mut()
+            .insert(CheetahString::from("TopicTest"), subscription);
+
+        let track_type = resolve_consumed_track_type(&message_ext, &connection);
+
+        assert_eq!(track_type, TrackType::ConsumedButFiltered);
+    }
+
+    #[test]
+    fn is_message_consumed_returns_true_when_offset_has_advanced_on_master() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"payload")
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_queue_id(1);
+        message_ext.set_queue_offset(10);
+        message_ext.set_store_host("127.0.0.1:10911".parse().expect("store host"));
+
+        let mut consume_stats = ConsumeStats::new();
+        let mut offset_wrapper = OffsetWrapper::default();
+        offset_wrapper.set_consumer_offset(11);
+        consume_stats
+            .get_offset_table_mut()
+            .insert(MessageQueue::from_parts("TopicTest", "broker-a", 1), offset_wrapper);
+
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(mix_all::MASTER_ID, CheetahString::from("127.0.0.1:10911"));
+        let broker_data = BrokerData::new(
+            CheetahString::from("cluster-a"),
+            CheetahString::from("broker-a"),
+            broker_addrs,
+            None,
+        );
+        let cluster_info = ClusterInfo::new(
+            Some(HashMap::from([(CheetahString::from("broker-a"), broker_data)])),
+            None,
+        );
+
+        assert!(is_message_consumed(&message_ext, &consume_stats, &cluster_info));
+    }
+
+    #[test]
+    fn parse_response_code_from_message_reads_consumer_not_online_code() {
+        let code = parse_response_code_from_message("CODE: 206 DESC: Not found the consumer group connection");
+
+        assert_eq!(code, Some(ResponseCode::ConsumerNotOnline));
     }
 }

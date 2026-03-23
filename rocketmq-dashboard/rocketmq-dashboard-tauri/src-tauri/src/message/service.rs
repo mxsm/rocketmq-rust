@@ -42,6 +42,8 @@ use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::mix_all;
+#[allow(deprecated)]
+use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
@@ -864,8 +866,12 @@ impl MessageManager {
         let message = self
             .find_message_by_id_with_admin(admin, request.topic, request.message_id)
             .await?;
+        let message_tracks = admin
+            .message_track_detail(message.clone())
+            .await
+            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
 
-        Ok(map_message_detail(message))
+        Ok(map_message_detail(message, message_tracks))
     }
 
     async fn resend_dlq_message_with_admin(
@@ -1386,7 +1392,23 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
-fn map_message_detail(message: MessageExt) -> MessageDetailView {
+#[allow(deprecated)]
+fn map_message_track_list(tracks: Vec<MessageTrack>) -> Vec<crate::message::types::MessageTrackView> {
+    tracks
+        .into_iter()
+        .map(|track| crate::message::types::MessageTrackView {
+            consumer_group: track.consumer_group,
+            track_type: track
+                .track_type
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "UNKNOWN".to_string()),
+            exception_desc: non_empty(&track.exception_desc),
+        })
+        .collect()
+}
+
+#[allow(deprecated)]
+fn map_message_detail(message: MessageExt, message_tracks: Vec<MessageTrack>) -> MessageDetailView {
     let properties = message
         .properties()
         .iter()
@@ -1413,7 +1435,7 @@ fn map_message_detail(message: MessageExt) -> MessageDetailView {
         properties,
         body_text,
         body_base64,
-        message_track_list: None,
+        message_track_list: Some(map_message_track_list(message_tracks)),
     }
 }
 
@@ -1447,6 +1469,10 @@ mod tests {
     use super::*;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::message::message_builder::MessageBuilder;
+    #[allow(deprecated)]
+    use rocketmq_common::common::tools::message_track::MessageTrack;
+    #[allow(deprecated)]
+    use rocketmq_common::common::tools::track_type::TrackType;
 
     #[test]
     fn map_message_summary_extracts_topic_tags_keys_and_store_timestamp() {
@@ -1584,7 +1610,7 @@ mod tests {
         message_ext.set_store_host("172.20.48.1:10911".parse().expect("store host"));
         message_ext.set_born_host("172.20.48.1:61266".parse().expect("born host"));
 
-        let detail = map_message_detail(message_ext);
+        let detail = map_message_detail(message_ext, Vec::new());
 
         assert_eq!(detail.topic, "TopicTest");
         assert_eq!(detail.msg_id, "msg-2");
@@ -1601,7 +1627,7 @@ mod tests {
             detail.properties.get("order_source").map(String::as_str),
             Some("mobile")
         );
-        assert_eq!(detail.message_track_list, None);
+        assert_eq!(detail.message_track_list, Some(Vec::new()));
     }
 
     #[test]
@@ -1615,10 +1641,25 @@ mod tests {
         message_ext.set_message_inner(message);
         message_ext.set_msg_id(CheetahString::from("msg-bin"));
 
-        let detail = map_message_detail(message_ext);
+        let detail = map_message_detail(message_ext, Vec::new());
 
         assert_eq!(detail.body_text, None);
         assert_eq!(detail.body_base64.as_deref(), Some("/wBB"));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn map_message_track_list_serializes_track_types_and_exceptions() {
+        let tracks = map_message_track_list(vec![MessageTrack {
+            consumer_group: "group-a".to_string(),
+            track_type: Some(TrackType::ConsumedButFiltered),
+            exception_desc: "CODE:213 DESC:broadcast".to_string(),
+        }]);
+
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].consumer_group, "group-a");
+        assert_eq!(tracks[0].track_type, "CONSUMED_BUT_FILTERED");
+        assert_eq!(tracks[0].exception_desc.as_deref(), Some("CODE:213 DESC:broadcast"));
     }
 
     #[test]
