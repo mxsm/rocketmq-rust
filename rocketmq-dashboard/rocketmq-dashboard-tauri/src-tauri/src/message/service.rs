@@ -18,16 +18,23 @@ use crate::message::types::MessageDetailView;
 use crate::message::types::MessageResult;
 use crate::message::types::MessageSummaryListResponse;
 use crate::message::types::MessageSummaryView;
+use crate::message::types::MessageTraceConsumerGroupView;
+use crate::message::types::MessageTraceDetailView;
+use crate::message::types::MessageTraceNodeView;
 use crate::nameserver::NameServerRuntimeState;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_dashboard_common::ViewMessageRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
+use rocketmq_dashboard_common::MessageTraceQueryRequest;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -141,6 +148,76 @@ impl MessageManager {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
                     log::warn!("Retrying `view_message_detail` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn query_message_trace_by_id(
+        &self,
+        request: MessageTraceQueryRequest,
+    ) -> MessageResult<MessageSummaryListResponse> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.query_message_trace_by_id_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "query_message_trace_by_id failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_message_trace_by_id` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn view_message_trace_detail(
+        &self,
+        request: MessageTraceQueryRequest,
+    ) -> MessageResult<MessageTraceDetailView> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.view_message_trace_detail_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "view_message_trace_detail failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `view_message_trace_detail` after reconnect: {}", error);
                 }
                 Err(error) => return Err(error),
             }
@@ -273,6 +350,121 @@ impl MessageManager {
         let messages = result.message_list().to_vec();
         first_message_or_validation_error(messages)
     }
+
+    async fn query_message_trace_by_id_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: MessageTraceQueryRequest,
+    ) -> MessageResult<MessageSummaryListResponse> {
+        let (_, message_id, seeds) = self.query_trace_seeds_with_admin(admin, request).await?;
+        let summary = build_trace_summary(&message_id, seeds)?;
+
+        Ok(MessageSummaryListResponse {
+            items: vec![summary],
+            total: 1,
+        })
+    }
+
+    async fn view_message_trace_detail_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: MessageTraceQueryRequest,
+    ) -> MessageResult<MessageTraceDetailView> {
+        let (trace_topic, message_id, seeds) = self.query_trace_seeds_with_admin(admin, request).await?;
+        build_trace_detail(&message_id, &trace_topic, seeds)
+    }
+
+    async fn query_trace_seeds_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: MessageTraceQueryRequest,
+    ) -> MessageResult<(String, String, Vec<TraceSeed>)> {
+        let trace_topic = normalize_trace_topic(request.trace_topic);
+        let message_id = normalize_required_field("messageId", request.message_id)?;
+
+        let result = admin
+            .query_message_by_key(
+                None,
+                CheetahString::from(trace_topic.clone()),
+                CheetahString::from(message_id.clone()),
+                64,
+                0,
+                i64::MAX,
+                CheetahString::from_static_str(""),
+                None,
+            )
+            .await
+            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+
+        let mut seeds = Vec::new();
+
+        for trace_message in result.message_list() {
+            let Some(body) = trace_message.body() else {
+                continue;
+            };
+            let body_text = String::from_utf8_lossy(body.as_ref());
+            if body_text.trim().is_empty() {
+                continue;
+            }
+
+            for context in TraceDataEncoder::decoder_from_trace_data_string(&body_text) {
+                let trace_type = context
+                    .trace_type
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let group_name = context.group_name.to_string();
+                let cost_time = context.cost_time;
+                let status = if context.is_success {
+                    "success".to_string()
+                } else {
+                    "failed".to_string()
+                };
+
+                if let Some(trace_beans) = context.trace_beans {
+                    for bean in trace_beans {
+                        if bean.msg_id.as_str() != message_id {
+                            continue;
+                        }
+
+                        seeds.push(TraceSeed {
+                            trace_type: trace_type.clone(),
+                            group_name: group_name.clone(),
+                            client_host: if bean.client_host.is_empty() {
+                                trace_message.born_host().to_string()
+                            } else {
+                                bean.client_host.to_string()
+                            },
+                            store_host: if bean.store_host.is_empty() {
+                                trace_message.store_host().to_string()
+                            } else {
+                                bean.store_host.to_string()
+                            },
+                            timestamp: if bean.store_time > 0 {
+                                bean.store_time
+                            } else {
+                                context.time_stamp as i64
+                            },
+                            cost_time,
+                            status: status.clone(),
+                            topic: non_empty(bean.topic.as_str()),
+                            tags: non_empty(bean.tags.as_str()),
+                            keys: non_empty(bean.keys.as_str()),
+                            retry_times: bean.retry_times,
+                            from_transaction_check: bean.from_transaction_check,
+                        });
+                    }
+                }
+            }
+        }
+
+        if seeds.is_empty() {
+            return Err(MessageError::Validation(
+                "No trace information matched the current message.".to_string(),
+            ));
+        }
+
+        Ok((trace_topic, message_id, seeds))
+    }
 }
 
 fn normalize_required_field(field_name: &str, value: String) -> MessageResult<String> {
@@ -283,6 +475,15 @@ fn normalize_required_field(field_name: &str, value: String) -> MessageResult<St
         )));
     }
     Ok(normalized)
+}
+
+fn normalize_trace_topic(value: String) -> String {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string()
+    } else {
+        normalized.to_string()
+    }
 }
 
 fn sort_message_summaries_desc(items: &mut [MessageSummaryView]) {
@@ -319,6 +520,159 @@ fn map_message_summary(message: MessageExt) -> MessageSummaryView {
         tags: message.get_tags().map(|value| value.to_string()),
         keys: extract_keys(&message),
         store_timestamp: message.store_timestamp(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TraceSeed {
+    trace_type: String,
+    group_name: String,
+    client_host: String,
+    store_host: String,
+    timestamp: i64,
+    cost_time: i32,
+    status: String,
+    topic: Option<String>,
+    tags: Option<String>,
+    keys: Option<String>,
+    retry_times: i32,
+    from_transaction_check: bool,
+}
+
+fn build_trace_summary(message_id: &str, mut seeds: Vec<TraceSeed>) -> MessageResult<MessageSummaryView> {
+    if seeds.is_empty() {
+        return Err(MessageError::Validation(
+            "No trace information matched the current message.".to_string(),
+        ));
+    }
+
+    seeds.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    let selected = seeds
+        .iter()
+        .find(|seed| seed.trace_type == "Pub")
+        .or_else(|| seeds.first())
+        .expect("trace seeds should not be empty");
+
+    Ok(MessageSummaryView {
+        topic: selected.topic.clone().unwrap_or_default(),
+        msg_id: message_id.to_string(),
+        tags: selected.tags.clone(),
+        keys: selected.keys.clone(),
+        store_timestamp: selected.timestamp,
+    })
+}
+
+fn build_trace_detail(
+    message_id: &str,
+    trace_topic: &str,
+    mut seeds: Vec<TraceSeed>,
+) -> MessageResult<MessageTraceDetailView> {
+    if seeds.is_empty() {
+        return Err(MessageError::Validation(
+            "No trace information matched the current message.".to_string(),
+        ));
+    }
+
+    seeds.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.group_name.cmp(&right.group_name))
+    });
+
+    let topic = seeds.iter().find_map(|seed| seed.topic.clone());
+    let tags = seeds.iter().find_map(|seed| seed.tags.clone());
+    let keys = seeds.iter().find_map(|seed| seed.keys.clone());
+    let store_host = seeds.iter().find_map(|seed| non_empty(seed.store_host.as_str()));
+    let producer_seed = seeds
+        .iter()
+        .find(|seed| trace_role(seed) == "PRODUCER")
+        .cloned();
+
+    let mut grouped_consumers: HashMap<String, Vec<MessageTraceNodeView>> = HashMap::new();
+    let mut transaction_checks = Vec::new();
+    let mut timeline = Vec::new();
+
+    for seed in seeds {
+        let role = trace_role(&seed).to_string();
+        let node = MessageTraceNodeView {
+            trace_type: seed.trace_type.clone(),
+            role: role.clone(),
+            group_name: seed.group_name.clone(),
+            client_host: seed.client_host.clone(),
+            store_host: seed.store_host.clone(),
+            timestamp: seed.timestamp,
+            cost_time: seed.cost_time,
+            status: seed.status.clone(),
+            retry_times: seed.retry_times,
+            from_transaction_check: seed.from_transaction_check,
+        };
+
+        match role.as_str() {
+            "CONSUMER" => {
+                grouped_consumers
+                    .entry(seed.group_name.clone())
+                    .or_default()
+                    .push(node.clone());
+            }
+            "TRANSACTION" => transaction_checks.push(node.clone()),
+            _ => {}
+        }
+
+        timeline.push(node);
+    }
+
+    let mut consumer_groups = grouped_consumers
+        .into_iter()
+        .map(|(consumer_group, mut nodes)| {
+            nodes.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+            MessageTraceConsumerGroupView { consumer_group, nodes }
+        })
+        .collect::<Vec<_>>();
+    consumer_groups.sort_by(|left, right| left.consumer_group.cmp(&right.consumer_group));
+
+    let min_timestamp = timeline.iter().map(|node| node.timestamp).min();
+    let max_timestamp = timeline.iter().map(|node| node.timestamp).max();
+    let total_span_ms = min_timestamp.zip(max_timestamp).map(|(start, end)| end - start);
+
+    Ok(MessageTraceDetailView {
+        msg_id: message_id.to_string(),
+        trace_topic: trace_topic.to_string(),
+        topic,
+        tags,
+        keys,
+        store_host,
+        producer_group: producer_seed.as_ref().map(|seed| seed.group_name.clone()),
+        producer_client_host: producer_seed.as_ref().map(|seed| seed.client_host.clone()),
+        producer_store_host: producer_seed.as_ref().map(|seed| seed.store_host.clone()),
+        producer_timestamp: producer_seed.as_ref().map(|seed| seed.timestamp),
+        producer_cost_time: producer_seed.as_ref().map(|seed| seed.cost_time),
+        producer_status: producer_seed.as_ref().map(|seed| seed.status.clone()),
+        producer_trace_type: producer_seed.as_ref().map(|seed| seed.trace_type.clone()),
+        min_timestamp,
+        max_timestamp,
+        total_span_ms,
+        timeline,
+        consumer_groups,
+        transaction_checks,
+    })
+}
+
+fn trace_role(seed: &TraceSeed) -> &'static str {
+    if seed.trace_type == "Pub" {
+        "PRODUCER"
+    } else if seed.trace_type == "EndTransaction" || seed.from_transaction_check {
+        "TRANSACTION"
+    } else {
+        "CONSUMER"
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -474,5 +828,147 @@ mod tests {
 
         assert_eq!(detail.body_text, None);
         assert_eq!(detail.body_base64.as_deref(), Some("/wBB"));
+    }
+
+    #[test]
+    fn build_trace_summary_uses_pub_context_fields() {
+        let summary = build_trace_summary(
+            "msg-1",
+            vec![
+                trace_seed(
+                    "Pub",
+                    "producer-group",
+                    1_700_000_000_000,
+                    12,
+                    true,
+                    "TopicTest",
+                    "TagA",
+                    "KeyA",
+                    "broker-a:10911",
+                    "client-a",
+                    0,
+                    false,
+                ),
+                trace_seed(
+                    "SubAfter",
+                    "consumer-group",
+                    1_700_000_000_120,
+                    30,
+                    true,
+                    "TopicTest",
+                    "TagA",
+                    "KeyA",
+                    "broker-a:10911",
+                    "client-b",
+                    1,
+                    false,
+                ),
+            ],
+        )
+        .expect("trace summary should build");
+
+        assert_eq!(summary.msg_id, "msg-1");
+        assert_eq!(summary.topic, "TopicTest");
+        assert_eq!(summary.tags.as_deref(), Some("TagA"));
+        assert_eq!(summary.keys.as_deref(), Some("KeyA"));
+        assert_eq!(summary.store_timestamp, 1_700_000_000_000);
+    }
+
+    #[test]
+    fn build_trace_detail_groups_consumer_nodes_and_transaction_checks() {
+        let detail = build_trace_detail(
+            "msg-1",
+            "RMQ_SYS_TRACE_TOPIC",
+            vec![
+                trace_seed(
+                    "Pub",
+                    "producer-group",
+                    1_700_000_000_000,
+                    12,
+                    true,
+                    "TopicTest",
+                    "TagA",
+                    "KeyA",
+                    "broker-a:10911",
+                    "client-a",
+                    0,
+                    false,
+                ),
+                trace_seed(
+                    "SubAfter",
+                    "consumer-group-a",
+                    1_700_000_000_120,
+                    30,
+                    true,
+                    "TopicTest",
+                    "TagA",
+                    "KeyA",
+                    "broker-a:10911",
+                    "client-b",
+                    1,
+                    false,
+                ),
+                trace_seed(
+                    "EndTransaction",
+                    "producer-group",
+                    1_700_000_000_200,
+                    18,
+                    true,
+                    "TopicTest",
+                    "TagA",
+                    "KeyA",
+                    "broker-a:10911",
+                    "client-a",
+                    0,
+                    true,
+                ),
+            ],
+        )
+        .expect("trace detail should build");
+
+        assert_eq!(detail.msg_id, "msg-1");
+        assert_eq!(detail.trace_topic, "RMQ_SYS_TRACE_TOPIC");
+        assert_eq!(detail.topic.as_deref(), Some("TopicTest"));
+        assert_eq!(detail.producer_group.as_deref(), Some("producer-group"));
+        assert_eq!(detail.consumer_groups.len(), 1);
+        assert_eq!(detail.consumer_groups[0].consumer_group, "consumer-group-a");
+        assert_eq!(detail.consumer_groups[0].nodes.len(), 1);
+        assert_eq!(detail.transaction_checks.len(), 1);
+        assert_eq!(detail.timeline.len(), 3);
+        assert_eq!(detail.total_span_ms, Some(200));
+    }
+
+    fn trace_seed(
+        trace_type: &str,
+        group_name: &str,
+        timestamp: i64,
+        cost_time: i32,
+        is_success: bool,
+        topic: &str,
+        tags: &str,
+        keys: &str,
+        store_host: &str,
+        client_host: &str,
+        retry_times: i32,
+        from_transaction_check: bool,
+    ) -> TraceSeed {
+        TraceSeed {
+            trace_type: trace_type.to_string(),
+            group_name: group_name.to_string(),
+            client_host: client_host.to_string(),
+            store_host: store_host.to_string(),
+            timestamp,
+            cost_time,
+            status: if is_success {
+                "success".to_string()
+            } else {
+                "failed".to_string()
+            },
+            topic: Some(topic.to_string()),
+            tags: Some(tags.to_string()),
+            keys: Some(keys.to_string()),
+            retry_times,
+            from_transaction_check,
+        }
     }
 }

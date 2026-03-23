@@ -112,6 +112,8 @@ pub fn run() {
             message::commands::query_message_by_topic_key,
             message::commands::query_message_by_id,
             message::commands::view_message_detail,
+            message::commands::query_message_trace_by_id,
+            message::commands::view_message_trace_detail,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,

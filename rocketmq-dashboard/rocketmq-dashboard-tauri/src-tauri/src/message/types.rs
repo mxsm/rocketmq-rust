@@ -87,3 +87,49 @@ pub(crate) struct MessageDetailView {
     pub(crate) body_base64: Option<String>,
     pub(crate) message_track_list: Option<Vec<MessageTrackView>>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MessageTraceNodeView {
+    pub(crate) trace_type: String,
+    pub(crate) role: String,
+    pub(crate) group_name: String,
+    pub(crate) client_host: String,
+    pub(crate) store_host: String,
+    pub(crate) timestamp: i64,
+    pub(crate) cost_time: i32,
+    pub(crate) status: String,
+    pub(crate) retry_times: i32,
+    pub(crate) from_transaction_check: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MessageTraceConsumerGroupView {
+    pub(crate) consumer_group: String,
+    pub(crate) nodes: Vec<MessageTraceNodeView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MessageTraceDetailView {
+    pub(crate) msg_id: String,
+    pub(crate) trace_topic: String,
+    pub(crate) topic: Option<String>,
+    pub(crate) tags: Option<String>,
+    pub(crate) keys: Option<String>,
+    pub(crate) store_host: Option<String>,
+    pub(crate) producer_group: Option<String>,
+    pub(crate) producer_client_host: Option<String>,
+    pub(crate) producer_store_host: Option<String>,
+    pub(crate) producer_timestamp: Option<i64>,
+    pub(crate) producer_cost_time: Option<i32>,
+    pub(crate) producer_status: Option<String>,
+    pub(crate) producer_trace_type: Option<String>,
+    pub(crate) min_timestamp: Option<i64>,
+    pub(crate) max_timestamp: Option<i64>,
+    pub(crate) total_span_ms: Option<i64>,
+    pub(crate) timeline: Vec<MessageTraceNodeView>,
+    pub(crate) consumer_groups: Vec<MessageTraceConsumerGroupView>,
+    pub(crate) transaction_checks: Vec<MessageTraceNodeView>,
+}

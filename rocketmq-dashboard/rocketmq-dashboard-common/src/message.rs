@@ -38,6 +38,13 @@ pub struct ViewMessageRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct MessageTraceQueryRequest {
+    pub trace_topic: String,
+    pub message_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MessagePageQueryRequest {
     pub topic: String,
     pub begin_timestamp: i64,
@@ -94,5 +101,18 @@ mod tests {
         assert!(json.contains("\"pageNum\""));
         assert!(json.contains("\"pageSize\""));
         assert!(json.contains("\"taskId\""));
+    }
+
+    #[test]
+    fn message_trace_query_request_uses_java_dashboard_field_names() {
+        let request = super::MessageTraceQueryRequest {
+            trace_topic: "RMQ_SYS_TRACE_TOPIC".to_string(),
+            message_id: "msg-1".to_string(),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize trace query request");
+
+        assert!(json.contains("\"traceTopic\""));
+        assert!(json.contains("\"messageId\""));
     }
 }
