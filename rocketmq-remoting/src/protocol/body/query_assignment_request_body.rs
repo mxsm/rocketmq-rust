@@ -87,12 +87,8 @@ mod tests {
     #[test]
     fn test_default_message_model() {
         let body = QueryAssignmentRequestBody::default();
-        let _ = body.message_model;
+        assert_eq!(body.message_model, MessageModel::default());
     }
-
-    // =========================================================================
-    // Clone Trait Tests
-    // =========================================================================
 
     #[test]
     fn test_clone_topic() {
@@ -302,7 +298,6 @@ mod tests {
             strategy_name: CheetahString::from("AVG"),
             ..Default::default()
         };
-        // Different cases must not compare equal
         assert_ne!(lower.strategy_name, upper.strategy_name);
     }
 
@@ -331,7 +326,6 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_value(&body).unwrap();
-        // Verify the JSON value is not null and represents the expected variant
         assert!(!json["messageModel"].is_null());
         assert_eq!(json["messageModel"].as_str().unwrap_or(""), "CLUSTERING");
     }
@@ -564,8 +558,8 @@ mod tests {
     fn test_empty_struct_serialization() {
         let body = QueryAssignmentRequestBody::default();
         let json = serde_json::to_string(&body).unwrap();
-        // Must be valid JSON even when all fields are empty/default
         let decoded: QueryAssignmentRequestBody = serde_json::from_str(&json).unwrap();
+        
         assert!(decoded.topic.is_empty());
         assert!(decoded.consumer_group.is_empty());
         assert!(decoded.client_id.is_empty());
