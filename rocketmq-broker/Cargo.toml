@@ -71,7 +71,7 @@ thiserror      = { workspace = true }
 trait-variant  = { workspace = true }
 cheetah-string = { workspace = true }
 dashmap        = { workspace = true }
-arc-swap       = "1.7"
+arc-swap       = "1.9"
 
 crossbeam-skiplist = "0.1"
 

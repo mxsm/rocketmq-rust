@@ -57,7 +57,7 @@ dirs.workspace = true
 
 parking_lot.workspace = true
 bytes.workspace       = true
-arc-swap              = "1.8"
+arc-swap              = "1.9"
 
 #tokio
 tokio.workspace      = true
