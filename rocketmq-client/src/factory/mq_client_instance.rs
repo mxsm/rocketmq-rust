@@ -1731,7 +1731,7 @@ impl MQClientInstance {
     ) -> Option<ConsumeMessageDirectlyResult> {
         let consumer_inner = self.consumer_table.get(consumer_group);
         if let Some(entry) = consumer_inner {
-            entry.value().consume_message_directly(message, broker_name).await;
+            return entry.value().consume_message_directly(message, broker_name).await;
         }
 
         None

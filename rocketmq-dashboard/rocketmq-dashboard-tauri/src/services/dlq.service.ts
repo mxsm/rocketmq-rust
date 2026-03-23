@@ -4,6 +4,8 @@ import type {
     DlqMessageDetailRequest,
     DlqMessagePageQueryRequest,
     DlqMessagePageResponse,
+    DlqResendMessageRequest,
+    DlqResendMessageResult,
 } from '../features/dlq/types/dlq.types';
 
 export class DlqService {
@@ -15,5 +17,9 @@ export class DlqService {
 
     static async viewDlqMessageDetail(request: DlqMessageDetailRequest): Promise<DlqMessageDetail> {
         return invoke<DlqMessageDetail>('view_dlq_message_detail', { request });
+    }
+
+    static async resendDlqMessage(request: DlqResendMessageRequest): Promise<DlqResendMessageResult> {
+        return invoke<DlqResendMessageResult>('resend_dlq_message', { request });
     }
 }

@@ -84,6 +84,7 @@ use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionG
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
@@ -1400,18 +1401,46 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
-        todo!()
+        let consumer_connection = self
+            .examine_consumer_connection_info(consumer_group.clone(), None)
+            .await?;
+        let (resolved_client_id, client_addr) =
+            select_consumer_direct_connection(&consumer_group, &consumer_connection, Some(&client_id))?;
+        let message = MQAdminExt::query_message(self, CheetahString::default(), topic.clone(), msg_id.clone()).await?;
+        let request_header = ConsumeMessageDirectlyResultRequestHeader {
+            consumer_group,
+            client_id: Some(resolved_client_id),
+            msg_id: Some(msg_id),
+            broker_name: (!message.broker_name().is_empty()).then(|| message.broker_name.clone()),
+            topic: Some(topic),
+            topic_sys_flag: None,
+            group_sys_flag: None,
+            topic_request_header: None,
+        };
+
+        self.client_instance
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+            .get_mq_client_api_impl()
+            .consume_message_directly(
+                &client_addr,
+                request_header,
+                &message,
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn consume_message_directly_ext(
         &self,
-        cluster_name: CheetahString,
+        _cluster_name: CheetahString,
         consumer_group: CheetahString,
         client_id: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
-        todo!()
+        self.consume_message_directly(consumer_group, client_id, topic, msg_id)
+            .await
     }
 
     async fn clone_group_offset(
@@ -2689,16 +2718,47 @@ fn merge_order_conf_entries(existing: &str, value: &str) -> String {
         .join(";")
 }
 
+fn select_consumer_direct_connection(
+    consumer_group: &CheetahString,
+    consumer_connection: &ConsumerConnection,
+    requested_client_id: Option<&CheetahString>,
+) -> rocketmq_error::RocketMQResult<(CheetahString, CheetahString)> {
+    let requested = requested_client_id.filter(|client_id| !client_id.is_empty());
+    let connection = consumer_connection
+        .get_connection_set()
+        .iter()
+        .find(|connection| {
+            requested
+                .map(|client_id| connection.get_client_id() == *client_id)
+                .unwrap_or_else(|| !connection.get_client_id().is_empty())
+        })
+        .ok_or_else(|| {
+            let message = requested
+                .map(|client_id| {
+                    format!(
+                        "Client `{}` was not found in consumer group `{}`",
+                        client_id, consumer_group
+                    )
+                })
+                .unwrap_or_else(|| format!("NO CONSUMER for consumer group `{}`", consumer_group));
+            rocketmq_error::RocketMQError::IllegalArgument(message)
+        })?;
+
+    Ok((connection.get_client_id(), connection.get_client_addr()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use cheetah_string::CheetahString;
     use rocketmq_remoting::protocol::body::connection::Connection;
+    use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
     use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 
     use super::encode_topic_attributes;
     use super::merge_order_conf_entries;
+    use super::select_consumer_direct_connection;
 
     #[test]
     fn merge_order_conf_entries_replaces_existing_broker_value() {
@@ -2736,5 +2796,55 @@ mod tests {
         connection.connection_set_mut().insert(entry);
 
         assert_eq!(connection.connection_set().len(), 1);
+    }
+
+    #[test]
+    fn select_consumer_direct_connection_uses_requested_client_when_present() {
+        let consumer_group = CheetahString::from("group-a");
+        let requested_client_id = CheetahString::from("client-b");
+        let mut consumer_connection = ConsumerConnection::new();
+        let mut first = Connection::new();
+        first.set_client_id("client-a".into());
+        first.set_client_addr("127.0.0.1:1001".into());
+        let mut second = Connection::new();
+        second.set_client_id(requested_client_id.clone());
+        second.set_client_addr("127.0.0.1:1002".into());
+        consumer_connection.insert_connection(first);
+        consumer_connection.insert_connection(second);
+
+        let (client_id, client_addr) =
+            select_consumer_direct_connection(&consumer_group, &consumer_connection, Some(&requested_client_id))
+                .expect("requested client should be selected");
+
+        assert_eq!(client_id, requested_client_id);
+        assert_eq!(client_addr, CheetahString::from("127.0.0.1:1002"));
+    }
+
+    #[test]
+    fn select_consumer_direct_connection_returns_first_available_client_when_unspecified() {
+        let consumer_group = CheetahString::from("group-a");
+        let mut consumer_connection = ConsumerConnection::new();
+        let mut only = Connection::new();
+        only.set_client_id("client-a".into());
+        only.set_client_addr("127.0.0.1:1001".into());
+        consumer_connection.insert_connection(only);
+
+        let (client_id, client_addr) =
+            select_consumer_direct_connection(&consumer_group, &consumer_connection, Some(&CheetahString::default()))
+                .expect("single consumer should be selected");
+
+        assert_eq!(client_id, CheetahString::from("client-a"));
+        assert_eq!(client_addr, CheetahString::from("127.0.0.1:1001"));
+    }
+
+    #[test]
+    fn select_consumer_direct_connection_errors_when_group_is_offline() {
+        let consumer_group = CheetahString::from("group-a");
+        let consumer_connection = ConsumerConnection::new();
+
+        let error = select_consumer_direct_connection(&consumer_group, &consumer_connection, None)
+            .expect_err("offline group should not resolve a client");
+
+        assert!(error.to_string().contains("NO CONSUMER"));
     }
 }

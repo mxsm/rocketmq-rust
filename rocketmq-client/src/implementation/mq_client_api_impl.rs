@@ -45,6 +45,7 @@ use cheetah_string::CheetahString;
 
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -98,6 +99,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_request_header::C
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
@@ -3647,6 +3649,41 @@ impl MQClientAPIImpl {
                 Err(mq_client_err!(
                     "get_consumer_running_info response body is empty".to_string()
                 ))
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn consume_message_directly(
+        &self,
+        client_addr: &CheetahString,
+        request_header: ConsumeMessageDirectlyResultRequestHeader,
+        message: &MessageExt,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult>
+    {
+        let body = message_decoder::encode(message, false)?;
+        let request = RemotingCommand::create_request_command(RequestCode::ConsumeMessageDirectly, request_header)
+            .set_body(body.to_vec());
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(client_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.take_body() {
+                    rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult::decode(
+                        body.as_ref(),
+                    )
+                } else {
+                    Err(mq_client_err!(
+                        "consume_message_directly response body is empty".to_string()
+                    ))
+                }
             }
             _ => Err(mq_client_err!(
                 response.code(),

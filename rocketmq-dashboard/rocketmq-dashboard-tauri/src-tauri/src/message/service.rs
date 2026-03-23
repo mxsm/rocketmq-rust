@@ -13,17 +13,18 @@
 // limitations under the License.
 
 use crate::message::admin::ManagedMessageAdmin;
-use crate::message::page_cache::build_page_selection;
-use crate::message::page_cache::normalize_message_page_query;
 use crate::message::page_cache::MessagePageCache;
 use crate::message::page_cache::MessagePageCacheEntry;
 use crate::message::page_cache::MessagePageCacheKey;
 use crate::message::page_cache::NormalizedMessagePageQuery;
 use crate::message::page_cache::QueueScanState;
-use crate::message::types::MessageError;
+use crate::message::page_cache::build_page_selection;
+use crate::message::page_cache::normalize_message_page_query;
 use crate::message::types::MessageDetailView;
+use crate::message::types::MessageError;
 use crate::message::types::MessagePageResponse;
 use crate::message::types::MessagePageView;
+use crate::message::types::MessageResendResult;
 use crate::message::types::MessageResult;
 use crate::message::types::MessageSummaryListResponse;
 use crate::message::types::MessageSummaryView;
@@ -31,23 +32,26 @@ use crate::message::types::MessageTraceConsumerGroupView;
 use crate::message::types::MessageTraceDetailView;
 use crate::message::types::MessageTraceNodeView;
 use crate::nameserver::NameServerRuntimeState;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_client_rust::TraceDataEncoder;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
+use rocketmq_dashboard_common::DlqResendMessageRequest;
 use rocketmq_dashboard_common::DlqViewMessageRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
 use rocketmq_dashboard_common::MessageTraceQueryRequest;
 use rocketmq_dashboard_common::ViewMessageRequest;
+use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -219,6 +223,41 @@ impl MessageManager {
             message_id: request.message_id,
         })
         .await
+    }
+
+    pub(crate) async fn resend_dlq_message(
+        &self,
+        request: DlqResendMessageRequest,
+    ) -> MessageResult<MessageResendResult> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.resend_dlq_message_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "resend_dlq_message failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `resend_dlq_message` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn query_message_trace_by_id(
@@ -454,9 +493,7 @@ impl MessageManager {
         }
 
         let selection = build_page_selection(&queue_states, query);
-        let items = self
-            .load_page_messages(admin, query, &selection.queue_states)
-            .await?;
+        let items = self.load_page_messages(admin, query, &selection.queue_states).await?;
         let task_id = self
             .page_cache
             .put(
@@ -494,16 +531,9 @@ impl MessageManager {
         entry: &MessagePageCacheEntry,
     ) -> MessageResult<MessagePageResponse> {
         let selection = build_page_selection(&entry.queue_states, query);
-        let items = self
-            .load_page_messages(admin, query, &selection.queue_states)
-            .await?;
+        let items = self.load_page_messages(admin, query, &selection.queue_states).await?;
 
-        Ok(build_message_page_response(
-            items,
-            entry.total,
-            query,
-            &entry.task_id,
-        ))
+        Ok(build_message_page_response(items, entry.total, query, &entry.task_id))
     }
 
     async fn build_topic_queue_states(
@@ -543,8 +573,7 @@ impl MessageManager {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| MessageError::RocketMQ(error.to_string()))?
-                    as i64;
+                    .map_err(|error| MessageError::RocketMQ(error.to_string()))? as i64;
                 let end = admin
                     .search_offset(
                         CheetahString::from(broker_addr.clone()),
@@ -554,8 +583,7 @@ impl MessageManager {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| MessageError::RocketMQ(error.to_string()))?
-                    as i64;
+                    .map_err(|error| MessageError::RocketMQ(error.to_string()))? as i64;
 
                 queue_states.push(QueueScanState::new(
                     idx,
@@ -730,8 +758,7 @@ impl MessageManager {
             let mut remaining = queue_state.selection_len();
 
             while remaining > 0 && pull_offset < queue_state.end_offset {
-                let batch_size = ((queue_state.end_offset - pull_offset).min(PULL_BATCH_SIZE as i64))
-                    .max(1) as i32;
+                let batch_size = ((queue_state.end_offset - pull_offset).min(PULL_BATCH_SIZE as i64)).max(1) as i32;
                 let result = admin
                     .pull_message_from_queue(
                         queue_state.broker_addr.as_str(),
@@ -758,8 +785,7 @@ impl MessageManager {
                                 break;
                             }
                             let message_ref: &MessageExt = message;
-                            if message_ref.store_timestamp() < query.begin
-                                || message_ref.store_timestamp() > query.end
+                            if message_ref.store_timestamp() < query.begin || message_ref.store_timestamp() > query.end
                             {
                                 continue;
                             }
@@ -805,12 +831,8 @@ impl MessageManager {
             .await
             .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
 
-        let mut items: Vec<MessageSummaryView> = result
-            .message_list()
-            .iter()
-            .cloned()
-            .map(map_message_summary)
-            .collect();
+        let mut items: Vec<MessageSummaryView> =
+            result.message_list().iter().cloned().map(map_message_summary).collect();
         sort_message_summaries_desc(&mut items);
 
         Ok(MessageSummaryListResponse {
@@ -844,6 +866,34 @@ impl MessageManager {
             .await?;
 
         Ok(map_message_detail(message))
+    }
+
+    async fn resend_dlq_message_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: DlqResendMessageRequest,
+    ) -> MessageResult<MessageResendResult> {
+        let consumer_group = normalize_required_field("consumerGroup", request.consumer_group)?;
+        let dlq_topic = build_dlq_topic(&consumer_group)?;
+        let message_id = normalize_required_field("messageId", request.message_id)?;
+        let dlq_message = self.find_message_by_id_with_admin(admin, dlq_topic, message_id).await?;
+        let resend_target = build_dlq_resend_target(&dlq_message)?;
+        let consume_result = admin
+            .consume_message_directly(
+                CheetahString::from(consumer_group.clone()),
+                CheetahString::default(),
+                CheetahString::from(resend_target.topic.clone()),
+                CheetahString::from(resend_target.msg_id.clone()),
+            )
+            .await
+            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+
+        Ok(build_message_resend_result(
+            consumer_group,
+            resend_target.topic,
+            resend_target.msg_id,
+            consume_result,
+        ))
     }
 
     async fn find_message_by_id_with_admin(
@@ -1071,25 +1121,56 @@ fn build_dlq_topic(consumer_group: &str) -> MessageResult<String> {
     Ok(format!("{}{}", mix_all::DLQ_GROUP_TOPIC_PREFIX, group))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DlqResendTarget {
+    topic: String,
+    msg_id: String,
+}
+
+fn build_dlq_resend_target(message: &MessageExt) -> MessageResult<DlqResendTarget> {
+    let retry_topic = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
+        .map(|value| value.to_string())
+        .and_then(|value| non_empty(&value))
+        .ok_or_else(|| {
+            MessageError::Validation("DLQ message is missing `RETRY_TOPIC`, so it cannot be resent safely.".to_string())
+        })?;
+    let origin_message_id = message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_ORIGIN_MESSAGE_ID,
+        ))
+        .map(|value| value.to_string())
+        .or_else(|| {
+            message
+                .property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_DLQ_ORIGIN_MESSAGE_ID,
+                ))
+                .map(|value| value.to_string())
+        })
+        .and_then(|value| non_empty(&value))
+        .ok_or_else(|| {
+            MessageError::Validation(
+                "DLQ message is missing `ORIGIN_MESSAGE_ID`, so it cannot be resent safely.".to_string(),
+            )
+        })?;
+
+    Ok(DlqResendTarget {
+        topic: retry_topic,
+        msg_id: origin_message_id,
+    })
+}
+
 async fn dlq_topic_exists_with_admin(admin: &mut DefaultMQAdminExt, topic: &str) -> MessageResult<bool> {
     let topic_list = admin
         .fetch_all_topic_list()
         .await
         .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
 
-    Ok(topic_list
-        .topic_list
-        .iter()
-        .any(|item| item.as_str() == topic))
+    Ok(topic_list.topic_list.iter().any(|item| item.as_str() == topic))
 }
 
 fn build_empty_message_page_response(query: &NormalizedMessagePageQuery) -> MessagePageResponse {
-    build_message_page_response(
-        Vec::new(),
-        0,
-        query,
-        query.task_id.as_deref().unwrap_or_default(),
-    )
+    build_message_page_response(Vec::new(), 0, query, query.task_id.as_deref().unwrap_or_default())
 }
 
 fn build_message_page_response(
@@ -1119,6 +1200,39 @@ fn build_message_page_response(
             empty: number_of_elements == 0,
         },
         task_id: task_id.to_string(),
+    }
+}
+
+fn build_message_resend_result(
+    consumer_group: String,
+    topic: String,
+    msg_id: String,
+    consume_result: rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult,
+) -> MessageResendResult {
+    let consume_result_text = consume_result.consume_result().map(|value| value.to_string());
+    let remark = consume_result.remark().map(|value| value.to_string());
+    let success = matches!(
+        consume_result.consume_result(),
+        Some(result) if *result == CMResult::CRSuccess
+    );
+    let mut message = if success {
+        format!("Direct consume succeeded for `{msg_id}` on `{topic}` in consumer group `{consumer_group}`.")
+    } else {
+        let status = consume_result_text.clone().unwrap_or_else(|| "UNKNOWN".to_string());
+        format!("Direct consume returned {status} for `{msg_id}` on `{topic}` in consumer group `{consumer_group}`.")
+    };
+    if let Some(remark_text) = remark.as_deref().and_then(non_empty) {
+        message.push_str(&format!(" Remark: {remark_text}."));
+    }
+
+    MessageResendResult {
+        success,
+        message,
+        consumer_group,
+        topic,
+        msg_id,
+        consume_result: consume_result_text,
+        remark,
     }
 }
 
@@ -1182,10 +1296,7 @@ fn build_trace_detail(
     let tags = seeds.iter().find_map(|seed| seed.tags.clone());
     let keys = seeds.iter().find_map(|seed| seed.keys.clone());
     let store_host = seeds.iter().find_map(|seed| non_empty(seed.store_host.as_str()));
-    let producer_seed = seeds
-        .iter()
-        .find(|seed| trace_role(seed) == "PRODUCER")
-        .cloned();
+    let producer_seed = seeds.iter().find(|seed| trace_role(seed) == "PRODUCER").cloned();
 
     let mut grouped_consumers: HashMap<String, Vec<MessageTraceNodeView>> = HashMap::new();
     let mut transaction_checks = Vec::new();
@@ -1334,6 +1445,7 @@ fn first_message_or_validation_error(mut messages: Vec<MessageExt>) -> MessageRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::message::message_builder::MessageBuilder;
 
     #[test]
@@ -1376,6 +1488,52 @@ mod tests {
             build_dlq_topic("%DLQ%group-a").expect("prefixed group should normalize"),
             format!("{}group-a", mix_all::DLQ_GROUP_TOPIC_PREFIX)
         );
+    }
+
+    #[test]
+    fn build_dlq_resend_target_uses_retry_topic_and_origin_message_id() {
+        let message = MessageBuilder::new()
+            .topic("%DLQ%group-a")
+            .body_slice(b"payload")
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
+            CheetahString::from("%RETRY%group-a"),
+        );
+        message_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_ORIGIN_MESSAGE_ID),
+            CheetahString::from("origin-msg-1"),
+        );
+
+        let target = build_dlq_resend_target(&message_ext).expect("dlq resend target should map");
+
+        assert_eq!(
+            target,
+            DlqResendTarget {
+                topic: "%RETRY%group-a".to_string(),
+                msg_id: "origin-msg-1".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn build_dlq_resend_target_rejects_missing_origin_message_id() {
+        let message = MessageBuilder::new()
+            .topic("%DLQ%group-a")
+            .body_slice(b"payload")
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
+            CheetahString::from("%RETRY%group-a"),
+        );
+
+        let error = build_dlq_resend_target(&message_ext).expect_err("missing origin id should fail");
+
+        assert!(error.to_string().contains("ORIGIN_MESSAGE_ID"));
     }
 
     #[test]
@@ -1461,6 +1619,26 @@ mod tests {
 
         assert_eq!(detail.body_text, None);
         assert_eq!(detail.body_base64.as_deref(), Some("/wBB"));
+    }
+
+    #[test]
+    fn build_message_resend_result_marks_non_success_as_failure() {
+        let mut consume_result =
+            rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult::default();
+        consume_result.set_consume_result(CMResult::CRLater);
+        consume_result.set_remark(CheetahString::from("retry later"));
+
+        let result = build_message_resend_result(
+            "group-a".to_string(),
+            "%RETRY%group-a".to_string(),
+            "origin-msg-1".to_string(),
+            consume_result,
+        );
+
+        assert!(!result.success);
+        assert_eq!(result.consume_result.as_deref(), Some("CR_LATER"));
+        assert_eq!(result.remark.as_deref(), Some("retry later"));
+        assert!(result.message.contains("CR_LATER"));
     }
 
     #[test]

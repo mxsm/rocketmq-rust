@@ -78,6 +78,18 @@ pub(crate) struct MessagePageResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct MessageResendResult {
+    pub(crate) success: bool,
+    pub(crate) message: String,
+    pub(crate) consumer_group: String,
+    pub(crate) topic: String,
+    pub(crate) msg_id: String,
+    pub(crate) consume_result: Option<String>,
+    pub(crate) remark: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub(crate) struct MessageTrackView {
     pub(crate) consumer_group: String,

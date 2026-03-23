@@ -691,7 +691,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .consume_message_directly(consumer_group, client_id, topic, msg_id)
+            .await
     }
 
     async fn consume_message_directly_ext(
@@ -702,7 +704,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .consume_message_directly_ext(cluster_name, consumer_group, client_id, topic, msg_id)
+            .await
     }
 
     async fn clone_group_offset(

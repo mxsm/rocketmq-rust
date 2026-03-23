@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
+import { toast } from 'sonner@2.0.3';
 import {
   AlertCircle,
   ArrowUpRight,
@@ -58,6 +59,7 @@ export const DLQMessageView = () => {
   const [searchError, setSearchError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [resendingMessageId, setResendingMessageId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState('');
   const [pagination, setPagination] = useState(defaultPagination);
   const {
@@ -202,6 +204,43 @@ export const DLQMessageView = () => {
     await queryDlqByMessageId();
   };
 
+  const handleResend = async (message: DlqMessageSummary) => {
+    const normalizedConsumerGroup = consumerGroup.trim();
+    if (!normalizedConsumerGroup) {
+      setSearchError('Consumer group is required.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Request direct consume for DLQ message ${message.msgId} in consumer group ${normalizedConsumerGroup}?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setResendingMessageId(message.msgId);
+    setSearchError('');
+
+    try {
+      const result = await DlqService.resendDlqMessage({
+        consumerGroup: normalizedConsumerGroup,
+        messageId: message.msgId,
+      });
+
+      if (result.success) {
+        toast.success(result.message);
+      } else {
+        toast.error(result.message);
+      }
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Failed to resend DLQ message.';
+      toast.error(messageText);
+      setSearchError(messageText);
+    } finally {
+      setResendingMessageId(null);
+    }
+  };
+
   const renderEmptyCopy = () => {
     if (activeTab === 'Consumer') {
       return 'Enter a consumer group and time range to search DLQ messages.';
@@ -237,7 +276,7 @@ export const DLQMessageView = () => {
 
       <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <div>Phase 5 only enables real DLQ query and detail. Resend and export remain disabled until Phase 6.</div>
+        <div>Phase 6 enables real single-message DLQ resend. Batch resend and export remain disabled.</div>
       </div>
 
       <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
@@ -430,13 +469,23 @@ export const DLQMessageView = () => {
                 </div>
 
                 <div className="border-t border-gray-100 bg-gray-50/30 px-5 py-3 dark:border-gray-800 dark:bg-gray-800/30">
-                  <button
-                    onClick={() => setSelectedMessage(message)}
-                    className="flex w-full items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
-                  >
-                    <FileText className="mr-1.5 h-4 w-4" />
-                    Detail
-                  </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => void handleResend(message)}
+                      disabled={resendingMessageId === message.msgId}
+                      className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
+                    >
+                      <Send className="mr-1.5 h-4 w-4" />
+                      {resendingMessageId === message.msgId ? 'Resending...' : 'Resend'}
+                    </button>
+                    <button
+                      onClick={() => setSelectedMessage(message)}
+                      className="flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                    >
+                      <FileText className="mr-1.5 h-4 w-4" />
+                      Detail
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             ))}

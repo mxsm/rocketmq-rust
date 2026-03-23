@@ -18,6 +18,21 @@ export interface DlqMessageDetailRequest {
     messageId: string;
 }
 
+export interface DlqResendMessageRequest {
+    consumerGroup: string;
+    messageId: string;
+}
+
+export interface DlqResendMessageResult {
+    success: boolean;
+    message: string;
+    consumerGroup: string;
+    topic: string;
+    msgId: string;
+    consumeResult?: string | null;
+    remark?: string | null;
+}
+
 export type DlqMessageSummary = MessageSummary;
 export type DlqMessagePageResponse = MessagePageResponse;
 export type DlqMessageDetail = MessageDetail;

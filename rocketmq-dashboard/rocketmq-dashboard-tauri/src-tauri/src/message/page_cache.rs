@@ -224,7 +224,10 @@ pub(crate) struct PageSelection {
     pub(crate) selected: usize,
 }
 
-pub(crate) fn build_page_selection(queue_states: &[QueueScanState], query: &NormalizedMessagePageQuery) -> PageSelection {
+pub(crate) fn build_page_selection(
+    queue_states: &[QueueScanState],
+    query: &NormalizedMessagePageQuery,
+) -> PageSelection {
     let mut queue_states = queue_states.to_vec();
     for queue_state in &mut queue_states {
         queue_state.reset_selection();
@@ -332,12 +335,12 @@ fn move_end_offset(queue_states: &mut [QueueScanState], page_size: usize, mut ne
 
 #[cfg(test)]
 mod tests {
-    use super::build_page_selection;
-    use super::normalize_message_page_query;
     use super::MessagePageCacheEntry;
     use super::MessagePageCacheKey;
     use super::NormalizedMessagePageQuery;
     use super::QueueScanState;
+    use super::build_page_selection;
+    use super::normalize_message_page_query;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_dashboard_common::MessagePageQueryRequest;
     use std::time::Duration;
@@ -374,11 +377,7 @@ mod tests {
             task_id: None,
         };
         let selection = build_page_selection(
-            &[
-                queue_state(0, 0, 5),
-                queue_state(1, 0, 5),
-                queue_state(2, 0, 5),
-            ],
+            &[queue_state(0, 0, 5), queue_state(1, 0, 5), queue_state(2, 0, 5)],
             &query,
         );
 
