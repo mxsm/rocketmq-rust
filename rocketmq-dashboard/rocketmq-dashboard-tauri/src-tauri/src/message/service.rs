@@ -869,7 +869,10 @@ impl MessageManager {
         let message_tracks = admin
             .message_track_detail(message.clone())
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+            .unwrap_or_else(|error| {
+                log::warn!("Failed to load message track detail: {}", error);
+                Vec::new()
+            });
 
         Ok(map_message_detail(message, message_tracks))
     }
@@ -911,20 +914,14 @@ impl MessageManager {
         let topic = normalize_required_field("topic", topic)?;
         let message_id = normalize_required_field("messageId", message_id)?;
 
-        let result = admin
-            .query_message_by_unique_key(
-                None,
+        admin
+            .query_message(
+                CheetahString::default(),
                 CheetahString::from(topic),
                 CheetahString::from(message_id),
-                32,
-                0,
-                i64::MAX,
             )
             .await
-            .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
-
-        let messages = result.message_list().to_vec();
-        first_message_or_validation_error(messages)
+            .map_err(|error| MessageError::RocketMQ(error.to_string()))
     }
 
     async fn query_message_trace_by_id_with_admin(
@@ -1089,19 +1086,10 @@ fn extract_keys(message: &MessageExt) -> Option<String> {
         .filter(|keys| !keys.is_empty())
 }
 
-fn extract_msg_id(message: &MessageExt) -> String {
-    message
-        .property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-        ))
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| message.msg_id().to_string())
-}
-
 fn map_message_summary(message: MessageExt) -> MessageSummaryView {
     MessageSummaryView {
         topic: message.topic().to_string(),
-        msg_id: extract_msg_id(&message),
+        msg_id: message.msg_id().to_string(),
         tags: message.get_tags().map(|value| value.to_string()),
         keys: extract_keys(&message),
         store_timestamp: message.store_timestamp(),
@@ -1274,7 +1262,7 @@ fn build_trace_summary(message_id: &str, mut seeds: Vec<TraceSeed>) -> MessageRe
         ));
     }
 
-    seeds.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    seeds.sort_by_key(|left| left.timestamp);
     let selected = seeds
         .iter()
         .find(|seed| seed.trace_type == "Pub")
@@ -1349,11 +1337,11 @@ fn build_trace_detail(
     let mut consumer_groups = grouped_consumers
         .into_iter()
         .map(|(consumer_group, mut nodes)| {
-            nodes.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+            nodes.sort_by_key(|left| left.timestamp);
             MessageTraceConsumerGroupView { consumer_group, nodes }
         })
         .collect::<Vec<_>>();
-    consumer_groups.sort_by(|left, right| left.consumer_group.cmp(&right.consumer_group));
+    consumer_groups.sort_by_key(|left| left.consumer_group.clone());
 
     let min_timestamp = timeline.iter().map(|node| node.timestamp).min();
     let max_timestamp = timeline.iter().map(|node| node.timestamp).max();
@@ -1428,7 +1416,7 @@ fn map_message_detail(message: MessageExt, message_tracks: Vec<MessageTrack>) ->
 
     MessageDetailView {
         topic: message.topic().to_string(),
-        msg_id: extract_msg_id(&message),
+        msg_id: message.msg_id().to_string(),
         born_host: Some(message.born_host().to_string()),
         store_host: Some(message.store_host().to_string()),
         born_timestamp: Some(message.born_timestamp()),
@@ -1457,20 +1445,6 @@ fn decode_body_fields(body: &[u8]) -> (Option<String>, Option<String>) {
         Ok(text) => (Some(text), None),
         Err(_) => (None, Some(BASE64_STANDARD.encode(body))),
     }
-}
-
-fn first_message_or_validation_error(mut messages: Vec<MessageExt>) -> MessageResult<MessageExt> {
-    messages.sort_by(|left, right| {
-        right
-            .store_timestamp()
-            .cmp(&left.store_timestamp())
-            .then_with(|| left.msg_id().cmp(right.msg_id()))
-    });
-
-    messages
-        .into_iter()
-        .next()
-        .ok_or_else(|| MessageError::Validation("No message matched the current query.".to_string()))
 }
 
 #[cfg(test)]
@@ -1507,10 +1481,23 @@ mod tests {
     }
 
     #[test]
-    fn first_message_or_validation_error_requires_a_match() {
-        let error = first_message_or_validation_error(Vec::new()).expect_err("empty results should fail");
+    fn map_message_summary_uses_offset_msg_id_instead_of_uniq_key_property() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"payload")
+            .build_unchecked();
 
-        assert!(error.to_string().contains("No message matched the current query"));
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("offset-msg-id"));
+        message_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from("uniq-msg-id"),
+        );
+
+        let summary = map_message_summary(message_ext);
+
+        assert_eq!(summary.msg_id, "offset-msg-id");
     }
 
     #[test]
@@ -1637,6 +1624,26 @@ mod tests {
             Some("mobile")
         );
         assert_eq!(detail.message_track_list, Some(Vec::new()));
+    }
+
+    #[test]
+    fn map_message_detail_uses_offset_msg_id_instead_of_uniq_key_property() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"payload")
+            .build_unchecked();
+
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("offset-msg-id"));
+        message_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from("uniq-msg-id"),
+        );
+
+        let detail = map_message_detail(message_ext, Vec::new());
+
+        assert_eq!(detail.msg_id, "offset-msg-id");
     }
 
     #[test]

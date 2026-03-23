@@ -1352,11 +1352,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn query_message(
         &self,
-        _cluster_name: CheetahString,
-        _topic: CheetahString,
-        _msg_id: CheetahString,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
-        unimplemented!("query_message not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_message(cluster_name, topic, msg_id)
+            .await
     }
 
     async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {
@@ -1520,6 +1522,10 @@ impl MQAdminExt for DefaultMQAdminExt {
 
 #[cfg(test)]
 mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+    use rocketmq_error::RocketMQError;
+
     use super::DefaultMQAdminExt;
     use std::time::Duration;
 
@@ -1537,5 +1543,21 @@ mod tests {
         let grouped_timed_admin =
             DefaultMQAdminExt::with_admin_ext_group_and_timeout("dashboard-test", Duration::from_secs(3));
         assert!(grouped_timed_admin.default_mqadmin_ext_impl.has_inner());
+    }
+
+    #[tokio::test]
+    async fn query_message_delegates_to_inner_impl() {
+        let admin = DefaultMQAdminExt::new();
+
+        let error = admin
+            .query_message(
+                CheetahString::default(),
+                CheetahString::from("TopicTest"),
+                CheetahString::from("msg-id"),
+            )
+            .await
+            .expect_err("unstarted admin should return an error instead of panicking");
+
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
     }
 }
