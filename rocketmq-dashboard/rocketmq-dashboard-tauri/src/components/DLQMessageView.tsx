@@ -1,322 +1,478 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { 
-  AlertTriangle, 
-  RefreshCw, 
-  Search, 
-  Users, 
-  Calendar, 
-  Hash, 
-  Send, 
-  ArrowUpRight, 
-  Check, 
-  RotateCcw, 
-  FileText, 
-  Clock 
+import {
+  AlertCircle,
+  ArrowUpRight,
+  Calendar,
+  Clock,
+  FileText,
+  Hash,
+  Info,
+  Key,
+  Search,
+  Send,
+  Tag,
+  Users,
 } from 'lucide-react';
-import { toast } from 'sonner@2.0.3';
 import { MessageDetailModal } from './MessageDetailModal';
 import { Pagination } from './Pagination';
+import { Input } from './ui/input';
+import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
+import type { DlqMessageSummary } from '../features/dlq/types/dlq.types';
+import { DlqService } from '../services/dlq.service';
+
+type DlqTab = 'Consumer' | 'Message ID';
+
+const DEFAULT_PAGE_SIZE = 20;
+
+const defaultPagination = {
+  currentPage: 1,
+  pageSize: DEFAULT_PAGE_SIZE,
+  totalPages: 0,
+  totalElements: 0,
+};
+
+const pad = (value: number) => value.toString().padStart(2, '0');
+
+const formatDateTimeInput = (date: Date) =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
+    date.getMinutes(),
+  )}:${pad(date.getSeconds())}`;
+
+const toSummary = (detail: Awaited<ReturnType<typeof DlqService.viewDlqMessageDetail>>): DlqMessageSummary => ({
+  topic: detail.topic,
+  msgId: detail.msgId,
+  tags: detail.properties.TAGS ?? null,
+  keys: detail.properties.KEYS ?? null,
+  storeTimestamp: detail.storeTimestamp ?? 0,
+});
 
 export const DLQMessageView = () => {
-  const [subTab, setSubTab] = useState('Consumer');
-  const [consumerGroup, setConsumerGroup] = useState('please_rename_unique_group_name_4');
+  const [activeTab, setActiveTab] = useState<DlqTab>('Consumer');
+  const [consumerGroup, setConsumerGroup] = useState('');
   const [messageId, setMessageId] = useState('');
-  const [beginTime, setBeginTime] = useState('2026-01-28 00:00:00');
-  const [endTime, setEndTime] = useState('2108-11-04 00:00:00');
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [currentPage, setCurrentPage] = useState(1);
-  const [selectedMessage, setSelectedMessage] = useState(null);
-  
-  // Mock Data
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [beginTime, setBeginTime] = useState(formatDateTimeInput(new Date(Date.now() - 3 * 60 * 60 * 1000)));
+  const [endTime, setEndTime] = useState(formatDateTimeInput(new Date()));
+  const [messages, setMessages] = useState<DlqMessageSummary[]>([]);
+  const [selectedMessage, setSelectedMessage] = useState<DlqMessageSummary | null>(null);
+  const [searchError, setSearchError] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [taskId, setTaskId] = useState('');
+  const [pagination, setPagination] = useState(defaultPagination);
+  const {
+    items: consumerItems,
+    isInitialLoading: isConsumerCatalogLoading,
+    error: consumerCatalogError,
+  } = useConsumerCatalog();
 
-  // Initialize with some data for demonstration
+  const consumerGroupOptions = useMemo(
+    () =>
+      consumerItems
+        .filter((item) => item.category !== 'SYSTEM')
+        .map((item) => item.rawGroupName),
+    [consumerItems],
+  );
+
   useEffect(() => {
-    handleSearch();
-  }, []);
+    if (!consumerGroup && consumerGroupOptions.length > 0) {
+      setConsumerGroup(consumerGroupOptions[0]);
+    }
+  }, [consumerGroupOptions, consumerGroup]);
 
-  const handleSearch = () => {
-    setIsLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-        setSearchResults([
-            { msgId: '240E03B350D3A180958DA7182DD5640AA95418B4AAC28D12B6B300C2', tag: 'TagA', key: '-', storeTime: '2026-01-28 09:26:58' },
-            { msgId: '240E03B350D3A180958DA7182DD5640AA95418B4AAC28D12B6B600C4', tag: 'TagA', key: 'Order_123', storeTime: '2026-01-28 09:26:58' },
-            { msgId: '240E03B350D3A180958DA7182DD5640AA95418B4AAC28D12B6B600C6', tag: 'TagA', key: '-', storeTime: '2026-01-28 09:26:58' },
-            { msgId: '240E03B350D3A180958DA7182DD5640AA95418B4AAC28D12B6B600C8', tag: 'TagB', key: 'Payment_999', storeTime: '2026-01-28 09:28:12' },
-            { msgId: '240E03B350D3A180958DA7182DD5640AA95418B4AAC28D12B6B600D1', tag: 'TagC', key: '-', storeTime: '2026-01-28 09:30:45' },
-        ]);
-        setIsLoading(false);
-        toast.success("Search completed");
-    }, 600);
+  useEffect(() => {
+    setMessages([]);
+    setSelectedMessage(null);
+    setSearchError('');
+    setHasSearched(false);
+    setTaskId('');
+    setPagination(defaultPagination);
+  }, [activeTab]);
+
+  const formatTimestamp = (value: number) => {
+    if (!value) {
+      return '-';
+    }
+    return new Date(value).toLocaleString();
   };
 
-  const toggleSelection = (id: any) => {
-    const newSelection = new Set(selectedIds);
-    if (newSelection.has(id)) {
-        newSelection.delete(id);
-    } else {
-        newSelection.add(id);
+  const parseDateTimeInput = (value: string): number | null => {
+    const normalized = value.trim().replace(' ', 'T');
+    if (!normalized) {
+      return null;
     }
-    setSelectedIds(newSelection);
+
+    const parsed = new Date(normalized);
+    const timestamp = parsed.getTime();
+    return Number.isNaN(timestamp) ? null : timestamp;
   };
 
-  const toggleAll = () => {
-    if (selectedIds.size === searchResults.length) {
-        setSelectedIds(new Set());
-    } else {
-        setSelectedIds(new Set(searchResults.map(r => r.msgId)));
+  const resetConsumerPagingState = () => {
+    setMessages([]);
+    setSelectedMessage(null);
+    setSearchError('');
+    setHasSearched(false);
+    setTaskId('');
+    setPagination(defaultPagination);
+  };
+
+  const queryDlqPage = async (pageNum = 1) => {
+    if (!consumerGroup.trim()) {
+      setSearchError('Consumer group is required.');
+      return;
     }
+
+    const begin = parseDateTimeInput(beginTime);
+    const end = parseDateTimeInput(endTime);
+    if (begin === null || end === null) {
+      setSearchError('Begin and end must be valid date-time strings.');
+      return;
+    }
+    if (end < begin) {
+      setSearchError('End time must be greater than or equal to begin time.');
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchError('');
+    setHasSearched(true);
+
+    try {
+      const response = await DlqService.queryDlqMessageByConsumerGroup({
+        consumerGroup: consumerGroup.trim(),
+        begin,
+        end,
+        pageNum,
+        pageSize: pagination.pageSize,
+        taskId: taskId || undefined,
+      });
+
+      setMessages(response.page.content);
+      setTaskId(response.taskId);
+      setPagination({
+        currentPage: response.page.number + 1,
+        pageSize: response.page.size,
+        totalPages: response.page.totalPages,
+        totalElements: response.page.totalElements,
+      });
+    } catch (error) {
+      setMessages([]);
+      setSearchError(error instanceof Error ? error.message : 'Failed to query DLQ messages.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const queryDlqByMessageId = async () => {
+    if (!consumerGroup.trim()) {
+      setSearchError('Consumer group is required.');
+      return;
+    }
+    if (!messageId.trim()) {
+      setSearchError('Message ID is required.');
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchError('');
+    setHasSearched(true);
+    setTaskId('');
+    setPagination(defaultPagination);
+
+    try {
+      const detail = await DlqService.viewDlqMessageDetail({
+        consumerGroup: consumerGroup.trim(),
+        messageId: messageId.trim(),
+      });
+      setMessages([toSummary(detail)]);
+    } catch (error) {
+      setMessages([]);
+      setSearchError(error instanceof Error ? error.message : 'Failed to query DLQ message detail.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSearch = async () => {
+    if (activeTab === 'Consumer') {
+      await queryDlqPage(1);
+      return;
+    }
+
+    await queryDlqByMessageId();
+  };
+
+  const renderEmptyCopy = () => {
+    if (activeTab === 'Consumer') {
+      return 'Enter a consumer group and time range to search DLQ messages.';
+    }
+    return 'Enter a consumer group and message id to load the DLQ message detail.';
   };
 
   return (
-    <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
-        <MessageDetailModal 
-            isOpen={!!selectedMessage} 
-            onClose={() => setSelectedMessage(null)} 
-            message={selectedMessage} 
-        />
-        
-        {/* Navigation Tabs */}
-        <div className="flex justify-center mb-6">
-            <div className="bg-white dark:bg-gray-900 p-1 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm inline-flex transition-colors">
-                <button
-                    onClick={() => setSubTab('Consumer')}
-                    className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${
-                        subTab === 'Consumer'
-                        ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800'
-                    }`}
-                >
-                    Consumer
-                </button>
-                <button
-                    onClick={() => setSubTab('MessageID')}
-                    className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${
-                        subTab === 'MessageID'
-                        ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800'
-                    }`}
-                >
-                    Message ID
-                </button>
+    <div className="mx-auto max-w-[1600px] space-y-6 pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <MessageDetailModal
+        isOpen={!!selectedMessage}
+        onClose={() => setSelectedMessage(null)}
+        message={selectedMessage}
+      />
+
+      <div className="mb-8 flex justify-center">
+        <div className="inline-flex rounded-xl bg-gray-100 p-1 shadow-inner dark:bg-gray-800">
+          {(['Consumer', 'Message ID'] as DlqTab[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`rounded-lg px-6 py-2 text-sm font-medium transition-all duration-200 ${
+                activeTab === tab
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
+                  : 'text-gray-500 hover:bg-gray-200/50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/50 dark:hover:text-gray-200'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <div>Phase 5 only enables real DLQ query and detail. Resend and export remain disabled until Phase 6.</div>
+      </div>
+
+      <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
+        <div className="flex flex-1 flex-wrap items-center gap-4">
+          <div className="flex min-w-[260px] flex-1 items-center space-x-2">
+            <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+              Consumer Group:
+            </span>
+            <div className="relative flex-1">
+              <Input
+                value={consumerGroup}
+                onChange={(event) => {
+                  setConsumerGroup(event.target.value);
+                  if (activeTab === 'Consumer') {
+                    resetConsumerPagingState();
+                  }
+                }}
+                list="dlq-consumer-group-options"
+                placeholder={isConsumerCatalogLoading ? 'Loading consumer groups...' : 'Enter consumer group...'}
+                className="border-gray-200 bg-gray-50 pr-10 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              />
+              <Users className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+              <datalist id="dlq-consumer-group-options">
+                {consumerGroupOptions.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
             </div>
+          </div>
+
+          {activeTab === 'Consumer' ? (
+            <>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Begin:</span>
+                <div className="relative">
+                  <Input
+                    value={beginTime}
+                    onChange={(event) => {
+                      setBeginTime(event.target.value);
+                      resetConsumerPagingState();
+                    }}
+                    className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  />
+                  <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">End:</span>
+                <div className="relative">
+                  <Input
+                    value={endTime}
+                    onChange={(event) => {
+                      setEndTime(event.target.value);
+                      resetConsumerPagingState();
+                    }}
+                    className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                  />
+                  <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex min-w-[320px] flex-1 items-center space-x-2">
+              <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                Message ID:
+              </span>
+              <div className="relative flex-1">
+                <Input
+                  value={messageId}
+                  onChange={(event) => setMessageId(event.target.value)}
+                  placeholder="Enter Message ID..."
+                  className="border-gray-200 bg-gray-50 pr-10 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+                <Hash className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Filters / Toolbar */}
-        <div className="bg-white dark:bg-gray-900 p-5 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm sticky top-0 z-20 backdrop-blur-xl bg-white/90 dark:bg-gray-900/90 transition-colors">
-             <div className="flex flex-col xl:flex-row xl:items-end gap-5">
-                 
-                 {/* Consumer Group Input */}
-                 <div className="space-y-1.5 flex-1 min-w-[200px]">
-                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Consumer Group</label>
-                    <div className="relative group">
-                        <Users className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 group-focus-within:text-blue-500 transition-colors" />
-                        <input 
-                            type="text" 
-                            placeholder="Select or enter consumer group..." 
-                            className="pl-10 pr-4 py-2.5 w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono dark:text-white dark:placeholder:text-gray-500"
-                            value={consumerGroup}
-                            onChange={(e) => setConsumerGroup(e.target.value)}
-                        />
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => void handleSearch()}
+            disabled={isSearching}
+            className="flex items-center rounded-xl bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 dark:border dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:hover:bg-gray-800"
+          >
+            <Search className="mr-2 h-4 w-4" />
+            {isSearching ? 'SEARCHING...' : 'SEARCH'}
+          </button>
+
+          {activeTab === 'Consumer' ? (
+            <>
+              <button
+                disabled
+                className="flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-400 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+              >
+                <Send className="mr-2 h-4 w-4" />
+                Batch Resend
+              </button>
+              <button
+                disabled
+                className="flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-400 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+              >
+                <ArrowUpRight className="mr-2 h-4 w-4" />
+                Batch Export
+              </button>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {consumerCatalogError ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>Failed to load consumer groups: {consumerCatalogError}. Manual input is still available.</div>
+        </div>
+      ) : null}
+
+      {searchError ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>{searchError}</div>
+        </div>
+      ) : null}
+
+      <div>
+        {messages.length > 0 ? (
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
+            {messages.map((message, index) => (
+              <motion.div
+                key={`${message.topic}-${message.msgId}`}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.04 }}
+                className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-200 hover:border-blue-200 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-800"
+              >
+                <div className="border-b border-gray-100 bg-gradient-to-br from-gray-50/70 to-white px-5 py-4 dark:border-gray-800 dark:from-gray-800/50 dark:to-gray-900">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                      Message ID
+                    </span>
+                    <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+                      DLQ
+                    </span>
+                  </div>
+                  <p className="break-all font-mono text-sm font-bold text-gray-900 dark:text-white">{message.msgId}</p>
+                </div>
+
+                <div className="space-y-4 p-5">
+                  <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                      Topic
                     </div>
-                 </div>
+                    <div className="break-all font-mono text-xs text-gray-700 dark:text-gray-300">{message.topic}</div>
+                  </div>
 
-                 {subTab === 'Consumer' ? (
-                     <>
-                        <div className="space-y-1.5 flex-1 min-w-[200px]">
-                            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Begin Time</label>
-                            <div className="relative group">
-                                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 group-focus-within:text-blue-500 transition-colors" />
-                                <input 
-                                    type="text" 
-                                    className="pl-10 pr-4 py-2.5 w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono dark:text-white"
-                                    value={beginTime}
-                                    onChange={(e) => setBeginTime(e.target.value)}
-                                />
-                            </div>
-                        </div>
-                        <div className="space-y-1.5 flex-1 min-w-[200px]">
-                            <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">End Time</label>
-                            <div className="relative group">
-                                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 group-focus-within:text-blue-500 transition-colors" />
-                                <input 
-                                    type="text" 
-                                    className="pl-10 pr-4 py-2.5 w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono dark:text-white"
-                                    value={endTime}
-                                    onChange={(e) => setEndTime(e.target.value)}
-                                />
-                            </div>
-                        </div>
-                     </>
-                 ) : (
-                     <div className="space-y-1.5 flex-[2] min-w-[300px]">
-                        <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Message ID</label>
-                        <div className="relative group">
-                            <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 group-focus-within:text-blue-500 transition-colors" />
-                            <input 
-                                type="text" 
-                                placeholder="Enter Message ID..." 
-                                className="pl-10 pr-4 py-2.5 w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono dark:text-white dark:placeholder:text-gray-500"
-                                value={messageId}
-                                onChange={(e) => setMessageId(e.target.value)}
-                            />
-                        </div>
-                     </div>
-                 )}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+                      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                        <Tag className="h-3.5 w-3.5" />
+                        Tags
+                      </div>
+                      <div className="break-all font-mono text-xs text-gray-700 dark:text-gray-300">
+                        {message.tags || '-'}
+                      </div>
+                    </div>
 
-                 <div className="flex items-center gap-3 pb-0.5">
-                     <button 
-                        onClick={handleSearch}
-                        className="flex items-center px-6 py-2.5 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg active:scale-95 whitespace-nowrap dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                     >
-                        {isLoading ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Search className="w-4 h-4 mr-2" />}
-                        Search
-                     </button>
-                     
-                     {subTab === 'Consumer' && (
-                         <>
-                            <button className="flex items-center px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 rounded-xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-gray-300 dark:hover:border-gray-600 transition-all shadow-sm active:scale-95 whitespace-nowrap">
-                                <Send className="w-4 h-4 mr-2" />
-                                Batch Resend
-                            </button>
-                            <button className="flex items-center px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 rounded-xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-gray-300 dark:hover:border-gray-600 transition-all shadow-sm active:scale-95 whitespace-nowrap">
-                                <ArrowUpRight className="w-4 h-4 mr-2" />
-                                Batch Export
-                            </button>
-                         </>
-                     )}
-                 </div>
-             </div>
-        </div>
+                    <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+                      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                        <Key className="h-3.5 w-3.5" />
+                        Keys
+                      </div>
+                      <div className="break-all font-mono text-xs text-gray-700 dark:text-gray-300">
+                        {message.keys || '-'}
+                      </div>
+                    </div>
+                  </div>
 
-        {/* Select Toggle */}
-        {searchResults.length > 0 && subTab === 'Consumer' && (
-            <div className="flex items-center px-4">
-                 <button 
-                    onClick={toggleAll}
-                    className="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
-                 >
-                     <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedIds.size === searchResults.length && searchResults.length > 0 ? 'bg-blue-500 border-blue-500' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800'}`}>
-                        {selectedIds.size === searchResults.length && searchResults.length > 0 && <Check className="w-3.5 h-3.5 text-white" />}
-                     </div>
-                     <span className="font-medium">Select All ({searchResults.length})</span>
-                 </button>
-                 <span className="mx-3 text-gray-300 dark:text-gray-700">|</span>
-                 <span className="text-sm text-gray-500 dark:text-gray-400">{selectedIds.size} selected</span>
+                  <div className="flex items-center rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
+                    <Clock className="mr-2.5 h-4 w-4 text-gray-400 dark:text-gray-500" />
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                        Store Time
+                      </div>
+                      <div className="font-mono text-sm text-gray-900 dark:text-white">
+                        {formatTimestamp(message.storeTimestamp)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 bg-gray-50/30 px-5 py-3 dark:border-gray-800 dark:bg-gray-800/30">
+                  <button
+                    onClick={() => setSelectedMessage(message)}
+                    className="flex w-full items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                  >
+                    <FileText className="mr-1.5 h-4 w-4" />
+                    Detail
+                  </button>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        ) : hasSearched ? (
+          <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-gray-200 bg-white py-20 text-center text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
+            <div className="mb-4 rounded-full bg-gray-50 p-4 dark:bg-gray-800">
+              <Search className="h-8 w-8 opacity-30" />
             </div>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">No DLQ messages matched this query.</p>
+            <p className="mt-1 text-xs opacity-70">Check the consumer group, time range, or message id and try again.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-gray-200 bg-white py-20 text-center text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
+            <div className="mb-4 rounded-full bg-gray-50 p-4 dark:bg-gray-800">
+              <Info className="h-8 w-8 opacity-30" />
+            </div>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">DLQ query is ready.</p>
+            <p className="mt-1 text-xs opacity-70">{renderEmptyCopy()}</p>
+          </div>
         )}
 
-        {/* Results Grid */}
-        <div>
-            {searchResults.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-6">
-                    {searchResults.map((row, idx) => {
-                        const isSelected = selectedIds.has(row.msgId);
-                        return (
-                            <motion.div
-                                key={row.msgId}
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: idx * 0.05 }}
-                                className={`group bg-white dark:bg-gray-900 rounded-2xl border shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col ${isSelected ? 'ring-2 ring-blue-500 border-transparent' : 'border-gray-100 dark:border-gray-800 hover:border-blue-200 dark:hover:border-blue-800'}`}
-                            >
-                                {/* Header */}
-                                <div className="px-5 py-4 border-b border-gray-50 dark:border-gray-800 bg-gradient-to-br from-gray-50/50 to-white dark:from-gray-800/50 dark:to-gray-900 flex items-start gap-3">
-                                    {subTab === 'Consumer' && (
-                                        <div 
-                                            onClick={() => toggleSelection(row.msgId)}
-                                            className={`mt-1 w-5 h-5 rounded border flex shrink-0 items-center justify-center cursor-pointer transition-colors ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-gray-300 dark:border-gray-600 hover:border-blue-400 bg-white dark:bg-gray-800'}`}
-                                        >
-                                            {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
-                                        </div>
-                                    )}
-                                    <div className="min-w-0 flex-1">
-                                        <div className="flex items-center justify-between mb-1">
-                                            <h3 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Message ID</h3>
-                                        </div>
-                                        <p className="font-mono text-sm font-bold text-gray-900 dark:text-white break-all leading-tight">{row.msgId}</p>
-                                    </div>
-                                </div>
-
-                                {/* Content */}
-                                <div className="p-5 space-y-4 flex-1">
-                                    <div className="grid grid-cols-2 gap-4">
-                                        {/* Tag */}
-                                        <div className="p-3 rounded-xl bg-gray-50/50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
-                                            <p className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">Tag</p>
-                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                                                {row.tag || 'None'}
-                                            </span>
-                                        </div>
-                                        {/* Key */}
-                                        <div className="p-3 rounded-xl bg-gray-50/50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
-                                            <p className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">Key</p>
-                                            <p className="font-mono text-xs font-medium text-gray-700 dark:text-gray-300 truncate" title={row.key}>{row.key}</p>
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Store Time */}
-                                    <div className="flex items-center p-3 rounded-xl bg-gray-50/50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
-                                        <Clock className="w-4 h-4 text-gray-400 dark:text-gray-500 mr-2.5" />
-                                        <div>
-                                            <p className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold leading-none mb-0.5">Store Time</p>
-                                            <p className="text-sm font-medium text-gray-900 dark:text-white font-mono">{row.storeTime}</p>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Actions Footer */}
-                                <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-800/30 flex items-center gap-2">
-                                    <button 
-                                        className="flex-1 flex items-center justify-center px-3 py-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-200 dark:hover:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all shadow-sm"
-                                        onClick={() => setSelectedMessage(row)}
-                                    >
-                                        <FileText className="w-3.5 h-3.5 mr-1.5" />
-                                        Detail
-                                    </button>
-                                    <button 
-                                        className="flex-1 flex items-center justify-center px-3 py-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-green-600 dark:hover:text-green-400 hover:border-green-200 dark:hover:border-green-800 hover:bg-green-50 dark:hover:bg-green-900/20 transition-all shadow-sm"
-                                        onClick={() => toast.success("Message Resent")}
-                                    >
-                                        <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                                        Resend
-                                    </button>
-                                    <button 
-                                        className="flex-1 flex items-center justify-center px-3 py-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all shadow-sm"
-                                        onClick={() => toast.success("Exported")}
-                                    >
-                                        <ArrowUpRight className="w-3.5 h-3.5 mr-1.5" />
-                                        Export
-                                    </button>
-                                </div>
-                            </motion.div>
-                        );
-                    })}
-                </div>
-            ) : (
-                <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-900 rounded-3xl border border-gray-100 dark:border-gray-800 border-dashed">
-                    <div className="w-16 h-16 bg-gray-50 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
-                        <AlertTriangle className="w-8 h-8 opacity-20 text-red-500" />
-                    </div>
-                    <p className="text-sm font-medium">No DLQ messages found</p>
-                    <p className="text-xs opacity-60 mt-1">Try adjusting the time range or consumer group</p>
-                </div>
-            )}
-            
-             {/* Pagination (Mock) */}
-             {searchResults.length > 0 && (
-                <div className="flex items-center justify-center mt-6">
-                    <Pagination
-                        currentPage={currentPage}
-                        totalPages={16}
-                        onPageChange={setCurrentPage}
-                    />
-                </div>
-             )}
-        </div>
+        {activeTab === 'Consumer' && pagination.totalPages > 1 ? (
+          <div className="mt-6 flex items-center justify-center">
+            <Pagination
+              currentPage={pagination.currentPage}
+              totalPages={pagination.totalPages}
+              onPageChange={(page) => {
+                if (!isSearching) {
+                  void queryDlqPage(page);
+                }
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 };

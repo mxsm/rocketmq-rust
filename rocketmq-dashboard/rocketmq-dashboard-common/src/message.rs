@@ -55,6 +55,25 @@ pub struct MessagePageQueryRequest {
     pub task_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DlqMessagePageQueryRequest {
+    pub consumer_group: String,
+    pub begin: i64,
+    pub end: i64,
+    pub page_num: u32,
+    pub page_size: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DlqViewMessageRequest {
+    pub consumer_group: String,
+    pub message_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -113,6 +132,40 @@ mod tests {
         let json = serde_json::to_string(&request).expect("serialize trace query request");
 
         assert!(json.contains("\"traceTopic\""));
+        assert!(json.contains("\"messageId\""));
+    }
+
+    #[test]
+    fn dlq_message_page_query_request_uses_java_dashboard_field_names() {
+        let request = super::DlqMessagePageQueryRequest {
+            consumer_group: "group-a".to_string(),
+            begin: 1_700_000_000_000,
+            end: 1_700_000_100_000,
+            page_num: 2,
+            page_size: 25,
+            task_id: Some("task-1".to_string()),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize dlq page request");
+
+        assert!(json.contains("\"consumerGroup\""));
+        assert!(json.contains("\"begin\""));
+        assert!(json.contains("\"end\""));
+        assert!(json.contains("\"pageNum\""));
+        assert!(json.contains("\"pageSize\""));
+        assert!(json.contains("\"taskId\""));
+    }
+
+    #[test]
+    fn dlq_view_message_request_uses_java_dashboard_field_names() {
+        let request = super::DlqViewMessageRequest {
+            consumer_group: "group-a".to_string(),
+            message_id: "msg-1".to_string(),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize dlq detail request");
+
+        assert!(json.contains("\"consumerGroup\""));
         assert!(json.contains("\"messageId\""));
     }
 }

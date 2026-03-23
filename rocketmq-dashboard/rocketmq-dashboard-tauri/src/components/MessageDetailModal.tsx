@@ -31,7 +31,6 @@ interface MessageDetailModalProps {
 }
 
 export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailModalProps) => {
-  if (!isOpen) return null;
   const [detail, setDetail] = useState<MessageDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -128,6 +127,8 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
       <span className="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-0.5 rounded">{value}</span>
     </div>
   );
+
+  if (!isOpen) return null;
 
   return (
     <AnimatePresence>

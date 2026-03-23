@@ -39,7 +39,10 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
+use rocketmq_dashboard_common::DlqViewMessageRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
@@ -157,6 +160,24 @@ impl MessageManager {
         self.query_first_message_page(query.first_page(), generation).await
     }
 
+    pub(crate) async fn query_dlq_message_by_consumer_group(
+        &self,
+        request: DlqMessagePageQueryRequest,
+    ) -> MessageResult<MessagePageResponse> {
+        let query = normalize_message_page_query(dlq_page_query_to_message_page_request(request)?)?;
+        let generation = self.runtime.generation();
+
+        if let Some(task_id) = query.task_id.as_deref() {
+            if let Some(entry) = self.page_cache.get(task_id).await {
+                if entry.matches_request(&query, generation) {
+                    return self.query_message_page_from_cache(query, entry).await;
+                }
+            }
+        }
+
+        self.query_first_dlq_message_page(query.first_page(), generation).await
+    }
+
     pub(crate) async fn view_message_detail(&self, request: ViewMessageRequest) -> MessageResult<MessageDetailView> {
         let mut attempt = 0;
         loop {
@@ -187,6 +208,17 @@ impl MessageManager {
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    pub(crate) async fn view_dlq_message_detail(
+        &self,
+        request: DlqViewMessageRequest,
+    ) -> MessageResult<MessageDetailView> {
+        self.view_message_detail(ViewMessageRequest {
+            topic: build_dlq_topic(&request.consumer_group)?,
+            message_id: request.message_id,
+        })
+        .await
     }
 
     pub(crate) async fn query_message_trace_by_id(
@@ -334,6 +366,42 @@ impl MessageManager {
         }
     }
 
+    async fn query_first_dlq_message_page(
+        &self,
+        query: NormalizedMessagePageQuery,
+        generation: u64,
+    ) -> MessageResult<MessagePageResponse> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.query_first_dlq_message_page_with_admin(&mut session.admin, &query, generation)
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "query_first_dlq_message_page failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_first_dlq_message_page` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     async fn query_message_page_from_cache(
         &self,
         query: NormalizedMessagePageQuery,
@@ -404,6 +472,19 @@ impl MessageManager {
             .await;
 
         Ok(build_message_page_response(items, selection.total, query, &task_id))
+    }
+
+    async fn query_first_dlq_message_page_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+        generation: u64,
+    ) -> MessageResult<MessagePageResponse> {
+        if !dlq_topic_exists_with_admin(admin, &query.topic).await? {
+            return Ok(build_empty_message_page_response(query));
+        }
+
+        self.query_first_message_page_with_admin(admin, query, generation).await
     }
 
     async fn query_message_page_from_cache_with_admin(
@@ -962,6 +1043,55 @@ fn map_message_summary(message: MessageExt) -> MessageSummaryView {
     }
 }
 
+fn dlq_page_query_to_message_page_request(
+    request: DlqMessagePageQueryRequest,
+) -> MessageResult<MessagePageQueryRequest> {
+    Ok(MessagePageQueryRequest {
+        topic: build_dlq_topic(&request.consumer_group)?,
+        begin: request.begin,
+        end: request.end,
+        page_num: request.page_num,
+        page_size: request.page_size,
+        task_id: request.task_id,
+    })
+}
+
+fn build_dlq_topic(consumer_group: &str) -> MessageResult<String> {
+    let group = consumer_group
+        .trim()
+        .strip_prefix(mix_all::DLQ_GROUP_TOPIC_PREFIX)
+        .unwrap_or(consumer_group.trim())
+        .trim();
+    if group.is_empty() {
+        return Err(MessageError::Validation(
+            "`consumerGroup` is required for DLQ queries.".to_string(),
+        ));
+    }
+
+    Ok(format!("{}{}", mix_all::DLQ_GROUP_TOPIC_PREFIX, group))
+}
+
+async fn dlq_topic_exists_with_admin(admin: &mut DefaultMQAdminExt, topic: &str) -> MessageResult<bool> {
+    let topic_list = admin
+        .fetch_all_topic_list()
+        .await
+        .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+
+    Ok(topic_list
+        .topic_list
+        .iter()
+        .any(|item| item.as_str() == topic))
+}
+
+fn build_empty_message_page_response(query: &NormalizedMessagePageQuery) -> MessagePageResponse {
+    build_message_page_response(
+        Vec::new(),
+        0,
+        query,
+        query.task_id.as_deref().unwrap_or_default(),
+    )
+}
+
 fn build_message_page_response(
     items: Vec<MessageSummaryView>,
     total: usize,
@@ -1234,6 +1364,40 @@ mod tests {
         let error = first_message_or_validation_error(Vec::new()).expect_err("empty results should fail");
 
         assert!(error.to_string().contains("No message matched the current query"));
+    }
+
+    #[test]
+    fn build_dlq_topic_uses_rocketmq_prefix() {
+        assert_eq!(
+            build_dlq_topic("group-a").expect("plain group should map to dlq topic"),
+            format!("{}group-a", mix_all::DLQ_GROUP_TOPIC_PREFIX)
+        );
+        assert_eq!(
+            build_dlq_topic("%DLQ%group-a").expect("prefixed group should normalize"),
+            format!("{}group-a", mix_all::DLQ_GROUP_TOPIC_PREFIX)
+        );
+    }
+
+    #[test]
+    fn build_empty_message_page_response_preserves_page_metadata() {
+        let response = build_empty_message_page_response(&NormalizedMessagePageQuery {
+            topic: "%DLQ%group-a".to_string(),
+            begin: 100,
+            end: 200,
+            page_num: 2,
+            page_index: 1,
+            page_size: 20,
+            task_id: Some("task-1".to_string()),
+        });
+
+        assert_eq!(response.task_id, "task-1");
+        assert_eq!(response.page.number, 1);
+        assert_eq!(response.page.size, 20);
+        assert_eq!(response.page.total_elements, 0);
+        assert_eq!(response.page.total_pages, 0);
+        assert!(!response.page.first);
+        assert!(response.page.last);
+        assert!(response.page.empty);
     }
 
     #[test]

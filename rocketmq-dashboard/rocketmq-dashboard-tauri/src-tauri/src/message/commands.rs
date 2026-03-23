@@ -17,6 +17,8 @@ use crate::message::types::MessageDetailView;
 use crate::message::types::MessagePageResponse;
 use crate::message::types::MessageTraceDetailView;
 use crate::message::types::MessageSummaryListResponse;
+use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
+use rocketmq_dashboard_common::DlqViewMessageRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
@@ -58,12 +60,34 @@ pub async fn query_message_page_by_topic(
 }
 
 #[tauri::command]
+pub async fn query_dlq_message_by_consumer_group(
+    request: DlqMessagePageQueryRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<MessagePageResponse, String> {
+    message_manager
+        .query_dlq_message_by_consumer_group(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn view_message_detail(
     request: ViewMessageRequest,
     message_manager: State<'_, MessageManager>,
 ) -> Result<MessageDetailView, String> {
     message_manager
         .view_message_detail(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn view_dlq_message_detail(
+    request: DlqViewMessageRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<MessageDetailView, String> {
+    message_manager
+        .view_dlq_message_detail(request)
         .await
         .map_err(|error| error.to_string())
 }
