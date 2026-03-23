@@ -559,7 +559,6 @@ mod tests {
         let body = QueryAssignmentRequestBody::default();
         let json = serde_json::to_string(&body).unwrap();
         let decoded: QueryAssignmentRequestBody = serde_json::from_str(&json).unwrap();
-        
         assert!(decoded.topic.is_empty());
         assert!(decoded.consumer_group.is_empty());
         assert!(decoded.client_id.is_empty());
