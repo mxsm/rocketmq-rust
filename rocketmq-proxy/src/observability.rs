@@ -124,6 +124,10 @@ pub struct ProxyMetricsSnapshot {
     pub lite_subscriptions: usize,
     pub prepared_transactions: usize,
     pub telemetry_links: usize,
+    pub pending_telemetry_commands: usize,
+    pub thread_stack_trace_reports: usize,
+    pub verify_message_reports: usize,
+    pub pending_lite_unsubscribe_notices: usize,
 }
 
 #[derive(Default)]
@@ -199,6 +203,10 @@ impl ProxyMetrics {
             lite_subscriptions: sessions.lite_subscription_count(),
             prepared_transactions: sessions.prepared_transaction_count(),
             telemetry_links: sessions.telemetry_link_count(),
+            pending_telemetry_commands: sessions.pending_telemetry_command_count(),
+            thread_stack_trace_reports: sessions.thread_stack_trace_report_count(),
+            verify_message_reports: sessions.verify_message_report_count(),
+            pending_lite_unsubscribe_notices: sessions.pending_lite_unsubscribe_notice_count(),
         }
     }
 
@@ -255,5 +263,9 @@ mod tests {
         assert_eq!(rpc.transport_failures, 1);
         assert_eq!(rpc.payload_failures, 0);
         assert_eq!(rpc.total_latency_micros, 10_000);
+        assert_eq!(snapshot.pending_telemetry_commands, 0);
+        assert_eq!(snapshot.thread_stack_trace_reports, 0);
+        assert_eq!(snapshot.verify_message_reports, 0);
+        assert_eq!(snapshot.pending_lite_unsubscribe_notices, 0);
     }
 }

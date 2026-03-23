@@ -57,6 +57,7 @@ use crate::session::ClientSessionRegistry;
 use crate::session::ClientSettingsSnapshot;
 use crate::session::PreparedTransactionRegistration;
 use crate::session::ReceiptHandleRegistration;
+use crate::session::TelemetryCommandKind;
 use crate::status::ProxyStatusMapper;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
@@ -531,42 +532,93 @@ where
     }
 
     pub fn send_reconnect_endpoints_command(&self, client_id: &str, nonce: impl Into<String>) -> bool {
-        self.send_server_telemetry_command(
+        let nonce = nonce.into();
+        if !self.sessions.register_pending_telemetry_command(
+            client_id,
+            TelemetryCommandKind::ReconnectEndpoints,
+            nonce.as_str(),
+        ) {
+            return false;
+        }
+        if self.send_server_telemetry_command(
             client_id,
             v2::TelemetryCommand {
                 status: Some(ProxyStatusMapper::ok()),
                 command: Some(v2::telemetry_command::Command::ReconnectEndpointsCommand(
-                    v2::ReconnectEndpointsCommand { nonce: nonce.into() },
+                    v2::ReconnectEndpointsCommand { nonce: nonce.clone() },
                 )),
             },
-        )
+        ) {
+            true
+        } else {
+            let _ = self.sessions.remove_pending_telemetry_command(
+                client_id,
+                TelemetryCommandKind::ReconnectEndpoints,
+                nonce.as_str(),
+            );
+            false
+        }
     }
 
     pub fn send_print_thread_stack_trace_command(&self, client_id: &str, nonce: impl Into<String>) -> bool {
-        self.send_server_telemetry_command(
+        let nonce = nonce.into();
+        if !self.sessions.register_pending_telemetry_command(
+            client_id,
+            TelemetryCommandKind::PrintThreadStackTrace,
+            nonce.as_str(),
+        ) {
+            return false;
+        }
+        if self.send_server_telemetry_command(
             client_id,
             v2::TelemetryCommand {
                 status: Some(ProxyStatusMapper::ok()),
                 command: Some(v2::telemetry_command::Command::PrintThreadStackTraceCommand(
-                    v2::PrintThreadStackTraceCommand { nonce: nonce.into() },
+                    v2::PrintThreadStackTraceCommand { nonce: nonce.clone() },
                 )),
             },
-        )
+        ) {
+            true
+        } else {
+            let _ = self.sessions.remove_pending_telemetry_command(
+                client_id,
+                TelemetryCommandKind::PrintThreadStackTrace,
+                nonce.as_str(),
+            );
+            false
+        }
     }
 
     pub fn send_verify_message_command(&self, client_id: &str, nonce: impl Into<String>, message: v2::Message) -> bool {
-        self.send_server_telemetry_command(
+        let nonce = nonce.into();
+        if !self.sessions.register_pending_telemetry_command(
+            client_id,
+            TelemetryCommandKind::VerifyMessage,
+            nonce.as_str(),
+        ) {
+            return false;
+        }
+        if self.send_server_telemetry_command(
             client_id,
             v2::TelemetryCommand {
                 status: Some(ProxyStatusMapper::ok()),
                 command: Some(v2::telemetry_command::Command::VerifyMessageCommand(
                     v2::VerifyMessageCommand {
-                        nonce: nonce.into(),
+                        nonce: nonce.clone(),
                         message: Some(message),
                     },
                 )),
             },
-        )
+        ) {
+            true
+        } else {
+            let _ = self.sessions.remove_pending_telemetry_command(
+                client_id,
+                TelemetryCommandKind::VerifyMessage,
+                nonce.as_str(),
+            );
+            false
+        }
     }
 
     pub fn send_recover_orphaned_transaction_command(
@@ -590,17 +642,31 @@ where
     }
 
     pub fn send_notify_unsubscribe_lite_command(&self, client_id: &str, lite_topic: impl Into<String>) -> bool {
-        self.send_server_telemetry_command(
+        let lite_topic = lite_topic.into();
+        if !self
+            .sessions
+            .register_pending_lite_unsubscribe_notice(client_id, lite_topic.as_str())
+        {
+            return false;
+        }
+        if self.send_server_telemetry_command(
             client_id,
             v2::TelemetryCommand {
                 status: Some(ProxyStatusMapper::ok()),
                 command: Some(v2::telemetry_command::Command::NotifyUnsubscribeLiteCommand(
                     v2::NotifyUnsubscribeLiteCommand {
-                        lite_topic: lite_topic.into(),
+                        lite_topic: lite_topic.clone(),
                     },
                 )),
             },
-        )
+        ) {
+            true
+        } else {
+            let _ = self
+                .sessions
+                .remove_pending_lite_unsubscribe_notice(client_id, lite_topic.as_str());
+            false
+        }
     }
 
     fn send_server_telemetry_command(&self, client_id: &str, command: v2::TelemetryCommand) -> bool {
@@ -969,9 +1035,38 @@ where
                     Err(error) => Self::telemetry_status(ProxyStatusMapper::from_error(&error)),
                 }
             }
-            Some(v2::telemetry_command::Command::ThreadStackTrace(_))
-            | Some(v2::telemetry_command::Command::VerifyMessageResult(_)) => {
-                Self::telemetry_status(ProxyStatusMapper::ok())
+            Some(v2::telemetry_command::Command::ThreadStackTrace(thread_stack_trace)) => {
+                let Some(client_id) = context.client_id() else {
+                    return Self::telemetry_status(ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired));
+                };
+                if self.sessions.complete_print_thread_stack_trace(
+                    client_id,
+                    thread_stack_trace.nonce.as_str(),
+                    thread_stack_trace.thread_stack_trace,
+                ) {
+                    Self::telemetry_status(ProxyStatusMapper::ok())
+                } else {
+                    Self::telemetry_status(ProxyStatusMapper::from_code(
+                        v2::Code::BadRequest,
+                        "client reported a thread stack trace for an unknown telemetry nonce",
+                    ))
+                }
+            }
+            Some(v2::telemetry_command::Command::VerifyMessageResult(verify_message_result)) => {
+                let Some(client_id) = context.client_id() else {
+                    return Self::telemetry_status(ProxyStatusMapper::from_error(&ProxyError::ClientIdRequired));
+                };
+                if self
+                    .sessions
+                    .complete_verify_message(client_id, verify_message_result.nonce.as_str())
+                {
+                    Self::telemetry_status(ProxyStatusMapper::ok())
+                } else {
+                    Self::telemetry_status(ProxyStatusMapper::from_code(
+                        v2::Code::BadRequest,
+                        "client reported a verify-message result for an unknown telemetry nonce",
+                    ))
+                }
             }
             Some(_) => Self::telemetry_status(ProxyStatusMapper::from_code(
                 v2::Code::BadRequest,
@@ -1939,6 +2034,7 @@ mod tests {
     use crate::service::SubscriptionGroupMetadata;
     use crate::service::TransactionService;
     use crate::session::ClientSessionRegistry;
+    use crate::session::TelemetryCommandKind;
     use crate::status::ProxyPayloadStatus;
     use crate::status::ProxyStatusMapper;
     use crate::PreparedTransactionRegistration;
@@ -3401,6 +3497,11 @@ mod tests {
         service.sessions.bind_telemetry_link("client-a", sender);
 
         assert!(service.send_reconnect_endpoints_command("client-a", "nonce-a"));
+        assert!(service.sessions.has_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::ReconnectEndpoints,
+            "nonce-a",
+        ));
 
         let command = receiver.recv().await.expect("telemetry command should be queued");
         match command.command {
@@ -3409,6 +3510,252 @@ mod tests {
             }
             other => panic!("unexpected telemetry command: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn print_thread_stack_trace_command_tracks_pending_nonce_and_consumes_client_report() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        service.sessions.bind_telemetry_link("client-a", sender);
+
+        assert!(service.send_print_thread_stack_trace_command("client-a", "nonce-a"));
+        assert!(service.sessions.has_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::PrintThreadStackTrace,
+            "nonce-a",
+        ));
+
+        let command = receiver.recv().await.expect("telemetry command should be queued");
+        match command.command {
+            Some(v2::telemetry_command::Command::PrintThreadStackTraceCommand(command)) => {
+                assert_eq!(command.nonce, "nonce-a");
+            }
+            other => panic!("unexpected telemetry command: {other:?}"),
+        }
+
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service
+            .context("Telemetry", &request)
+            .expect("context should be constructed");
+
+        let response = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::ThreadStackTrace(v2::ThreadStackTrace {
+                        nonce: "nonce-a".to_owned(),
+                        thread_stack_trace: Some("trace".to_owned()),
+                    })),
+                },
+            )
+            .await;
+
+        assert_eq!(
+            response
+                .status
+                .as_ref()
+                .expect("telemetry response should include status")
+                .code,
+            v2::Code::Ok as i32
+        );
+        assert!(!service.sessions.has_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::PrintThreadStackTrace,
+            "nonce-a",
+        ));
+        let report = service
+            .sessions
+            .thread_stack_trace_report("client-a", "nonce-a")
+            .expect("thread stack trace report should be stored");
+        assert_eq!(report.thread_stack_trace.as_deref(), Some("trace"));
+    }
+
+    #[tokio::test]
+    async fn verify_message_result_rejects_unknown_telemetry_nonce() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service
+            .context("Telemetry", &request)
+            .expect("context should be constructed");
+
+        let response = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::VerifyMessageResult(
+                        v2::VerifyMessageResult {
+                            nonce: "nonce-missing".to_owned(),
+                        },
+                    )),
+                },
+            )
+            .await;
+
+        assert_eq!(
+            response
+                .status
+                .as_ref()
+                .expect("telemetry response should include status")
+                .code,
+            v2::Code::BadRequest as i32
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_message_result_stores_report_for_matching_nonce() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let message = v2::Message {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            user_properties: HashMap::new(),
+            system_properties: Some(v2::SystemProperties {
+                message_id: "msg-1".to_owned(),
+                ..Default::default()
+            }),
+            body: Bytes::from_static(b"hello").to_vec(),
+        };
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        service.sessions.bind_telemetry_link("client-a", sender);
+        assert!(service.send_verify_message_command("client-a", "nonce-a", message));
+        let _ = receiver.recv().await.expect("verify message command should be queued");
+
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service
+            .context("Telemetry", &request)
+            .expect("context should be constructed");
+
+        let response = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::VerifyMessageResult(
+                        v2::VerifyMessageResult {
+                            nonce: "nonce-a".to_owned(),
+                        },
+                    )),
+                },
+            )
+            .await;
+
+        assert_eq!(
+            response
+                .status
+                .as_ref()
+                .expect("telemetry response should include status")
+                .code,
+            v2::Code::Ok as i32
+        );
+        let report = service
+            .sessions
+            .verify_message_report("client-a", "nonce-a")
+            .expect("verify message report should be stored");
+        assert_eq!(report.nonce, "nonce-a");
+    }
+
+    #[tokio::test]
+    async fn notify_unsubscribe_lite_command_registers_pending_notice() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        service.sessions.bind_telemetry_link("client-a", sender);
+
+        assert!(service.send_notify_unsubscribe_lite_command("client-a", "lite-a"));
+        assert!(service
+            .sessions
+            .has_pending_lite_unsubscribe_notice("client-a", "lite-a"));
+
+        let command = receiver.recv().await.expect("unsubscribe command should be queued");
+        match command.command {
+            Some(v2::telemetry_command::Command::NotifyUnsubscribeLiteCommand(command)) => {
+                assert_eq!(command.lite_topic, "lite-a");
+            }
+            other => panic!("unexpected telemetry command: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn telemetry_command_state_is_exposed_via_metrics_snapshot() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        service.sessions.bind_telemetry_link("client-a", sender);
+
+        assert!(service.send_print_thread_stack_trace_command("client-a", "nonce-trace"));
+        assert!(service.send_notify_unsubscribe_lite_command("client-a", "lite-a"));
+        let verify_message = v2::Message {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            user_properties: HashMap::new(),
+            system_properties: Some(v2::SystemProperties {
+                message_id: "msg-1".to_owned(),
+                ..Default::default()
+            }),
+            body: Bytes::from_static(b"hello").to_vec(),
+        };
+        assert!(service.send_verify_message_command("client-a", "nonce-verify", verify_message));
+
+        for _ in 0..3 {
+            let _ = receiver.recv().await.expect("telemetry command should be queued");
+        }
+
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service
+            .context("Telemetry", &request)
+            .expect("context should be constructed");
+
+        let _ = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::ThreadStackTrace(v2::ThreadStackTrace {
+                        nonce: "nonce-trace".to_owned(),
+                        thread_stack_trace: Some("trace".to_owned()),
+                    })),
+                },
+            )
+            .await;
+        let _ = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::VerifyMessageResult(
+                        v2::VerifyMessageResult {
+                            nonce: "nonce-verify".to_owned(),
+                        },
+                    )),
+                },
+            )
+            .await;
+
+        let snapshot = service.metrics_snapshot();
+        assert_eq!(snapshot.pending_telemetry_commands, 0);
+        assert_eq!(snapshot.thread_stack_trace_reports, 1);
+        assert_eq!(snapshot.verify_message_reports, 1);
+        assert_eq!(snapshot.pending_lite_unsubscribe_notices, 1);
     }
 
     #[test]

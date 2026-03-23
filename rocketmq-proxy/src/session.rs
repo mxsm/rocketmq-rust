@@ -168,6 +168,43 @@ pub struct TelemetryLink {
     pub sender: mpsc::UnboundedSender<v2::TelemetryCommand>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TelemetryCommandKind {
+    ReconnectEndpoints,
+    PrintThreadStackTrace,
+    VerifyMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTelemetryCommand {
+    pub client_id: String,
+    pub kind: TelemetryCommandKind,
+    pub nonce: String,
+    pub requested_at: SystemTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadStackTraceReport {
+    pub client_id: String,
+    pub nonce: String,
+    pub thread_stack_trace: Option<String>,
+    pub reported_at: SystemTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyMessageReport {
+    pub client_id: String,
+    pub nonce: String,
+    pub reported_at: SystemTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLiteUnsubscribeNotice {
+    pub client_id: String,
+    pub lite_topic: String,
+    pub requested_at: SystemTime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReapSummary {
     pub removed_sessions: usize,
@@ -232,6 +269,53 @@ impl PreparedTransactionKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TelemetryCommandKey {
+    client_id: String,
+    kind: TelemetryCommandKind,
+    nonce: String,
+}
+
+impl TelemetryCommandKey {
+    fn new(client_id: impl Into<String>, kind: TelemetryCommandKind, nonce: impl Into<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            kind,
+            nonce: nonce.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ThreadStackTraceKey {
+    client_id: String,
+    nonce: String,
+}
+
+impl ThreadStackTraceKey {
+    fn new(client_id: impl Into<String>, nonce: impl Into<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            nonce: nonce.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LiteUnsubscribeNoticeKey {
+    client_id: String,
+    lite_topic: String,
+}
+
+impl LiteUnsubscribeNoticeKey {
+    fn new(client_id: impl Into<String>, lite_topic: impl Into<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            lite_topic: lite_topic.into(),
+        }
+    }
+}
+
 impl From<&TrackedReceiptHandle> for ReceiptHandleKey {
     fn from(value: &TrackedReceiptHandle) -> Self {
         Self::new(
@@ -250,6 +334,10 @@ pub struct ClientSessionRegistry {
     lite_subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscriptionSnapshot>>,
     prepared_transactions: Arc<DashMap<PreparedTransactionKey, PreparedTransactionHandle>>,
     telemetry_links: Arc<DashMap<String, TelemetryLink>>,
+    pending_telemetry_commands: Arc<DashMap<TelemetryCommandKey, PendingTelemetryCommand>>,
+    thread_stack_traces: Arc<DashMap<ThreadStackTraceKey, ThreadStackTraceReport>>,
+    verify_message_reports: Arc<DashMap<TelemetryCommandKey, VerifyMessageReport>>,
+    pending_lite_unsubscribe_notices: Arc<DashMap<LiteUnsubscribeNoticeKey, PendingLiteUnsubscribeNotice>>,
 }
 
 impl ClientSessionRegistry {
@@ -418,6 +506,12 @@ impl ClientSessionRegistry {
             }
         }
 
+        for lite_topic in &request.lite_topic_set {
+            if !current.lite_topic_set.contains(lite_topic) {
+                let _ = self.remove_pending_lite_unsubscribe_notice(client_id, lite_topic);
+            }
+        }
+
         current.version = request.version;
         current.offset_option = request.offset_option;
         current.last_touched = SystemTime::now();
@@ -502,6 +596,7 @@ impl ClientSessionRegistry {
         let result = snapshot.clone();
         let remove_entry = snapshot.lite_topic_set.is_empty();
         drop(snapshot);
+        let _ = self.remove_pending_lite_unsubscribe_notice(client_id, lite_topic);
         if remove_entry {
             self.lite_subscriptions.remove(&key);
         }
@@ -536,7 +631,9 @@ impl ClientSessionRegistry {
         client_id: impl Into<String>,
         sender: mpsc::UnboundedSender<v2::TelemetryCommand>,
     ) {
-        self.telemetry_links.insert(client_id.into(), TelemetryLink { sender });
+        let client_id = client_id.into();
+        self.telemetry_links.insert(client_id.clone(), TelemetryLink { sender });
+        self.clear_pending_telemetry_commands_of_kind(client_id.as_str(), TelemetryCommandKind::ReconnectEndpoints);
     }
 
     pub fn send_telemetry_command(&self, client_id: &str, command: v2::TelemetryCommand) -> bool {
@@ -559,6 +656,147 @@ impl ClientSessionRegistry {
 
     pub fn has_telemetry_link(&self, client_id: &str) -> bool {
         self.telemetry_links.contains_key(client_id)
+    }
+
+    pub fn register_pending_telemetry_command(&self, client_id: &str, kind: TelemetryCommandKind, nonce: &str) -> bool {
+        let trimmed_nonce = nonce.trim();
+        if trimmed_nonce.is_empty() {
+            return false;
+        }
+
+        let key = TelemetryCommandKey::new(client_id, kind, trimmed_nonce);
+        if self.pending_telemetry_commands.contains_key(&key) {
+            return false;
+        }
+
+        self.pending_telemetry_commands.insert(
+            key,
+            PendingTelemetryCommand {
+                client_id: client_id.to_owned(),
+                kind,
+                nonce: trimmed_nonce.to_owned(),
+                requested_at: SystemTime::now(),
+            },
+        );
+        true
+    }
+
+    pub fn has_pending_telemetry_command(&self, client_id: &str, kind: TelemetryCommandKind, nonce: &str) -> bool {
+        self.pending_telemetry_commands
+            .contains_key(&TelemetryCommandKey::new(client_id, kind, nonce.trim()))
+    }
+
+    pub fn remove_pending_telemetry_command(
+        &self,
+        client_id: &str,
+        kind: TelemetryCommandKind,
+        nonce: &str,
+    ) -> Option<PendingTelemetryCommand> {
+        let trimmed_nonce = nonce.trim();
+        if trimmed_nonce.is_empty() {
+            return None;
+        }
+        self.pending_telemetry_commands
+            .remove(&TelemetryCommandKey::new(client_id, kind, trimmed_nonce))
+            .map(|(_, command)| command)
+    }
+
+    pub fn complete_print_thread_stack_trace(
+        &self,
+        client_id: &str,
+        nonce: &str,
+        thread_stack_trace: Option<String>,
+    ) -> bool {
+        let Some(command) =
+            self.remove_pending_telemetry_command(client_id, TelemetryCommandKind::PrintThreadStackTrace, nonce)
+        else {
+            return false;
+        };
+
+        self.thread_stack_traces.insert(
+            ThreadStackTraceKey::new(client_id, command.nonce.as_str()),
+            ThreadStackTraceReport {
+                client_id: client_id.to_owned(),
+                nonce: command.nonce,
+                thread_stack_trace,
+                reported_at: SystemTime::now(),
+            },
+        );
+        true
+    }
+
+    pub fn complete_verify_message(&self, client_id: &str, nonce: &str) -> bool {
+        let Some(command) =
+            self.remove_pending_telemetry_command(client_id, TelemetryCommandKind::VerifyMessage, nonce)
+        else {
+            return false;
+        };
+        self.verify_message_reports.insert(
+            TelemetryCommandKey::new(client_id, TelemetryCommandKind::VerifyMessage, command.nonce.as_str()),
+            VerifyMessageReport {
+                client_id: client_id.to_owned(),
+                nonce: command.nonce,
+                reported_at: SystemTime::now(),
+            },
+        );
+        true
+    }
+
+    pub fn thread_stack_trace_report(&self, client_id: &str, nonce: &str) -> Option<ThreadStackTraceReport> {
+        self.thread_stack_traces
+            .get(&ThreadStackTraceKey::new(client_id, nonce.trim()))
+            .map(|entry| entry.clone())
+    }
+
+    pub fn verify_message_report(&self, client_id: &str, nonce: &str) -> Option<VerifyMessageReport> {
+        self.verify_message_reports
+            .get(&TelemetryCommandKey::new(
+                client_id,
+                TelemetryCommandKind::VerifyMessage,
+                nonce.trim(),
+            ))
+            .map(|entry| entry.clone())
+    }
+
+    pub fn register_pending_lite_unsubscribe_notice(&self, client_id: &str, lite_topic: &str) -> bool {
+        let trimmed_lite_topic = lite_topic.trim();
+        if trimmed_lite_topic.is_empty() {
+            return false;
+        }
+
+        let key = LiteUnsubscribeNoticeKey::new(client_id, trimmed_lite_topic);
+        if self.pending_lite_unsubscribe_notices.contains_key(&key) {
+            return false;
+        }
+
+        self.pending_lite_unsubscribe_notices.insert(
+            key,
+            PendingLiteUnsubscribeNotice {
+                client_id: client_id.to_owned(),
+                lite_topic: trimmed_lite_topic.to_owned(),
+                requested_at: SystemTime::now(),
+            },
+        );
+        true
+    }
+
+    pub fn remove_pending_lite_unsubscribe_notice(
+        &self,
+        client_id: &str,
+        lite_topic: &str,
+    ) -> Option<PendingLiteUnsubscribeNotice> {
+        let trimmed_lite_topic = lite_topic.trim();
+        if trimmed_lite_topic.is_empty() {
+            return None;
+        }
+        self.pending_lite_unsubscribe_notices
+            .remove(&LiteUnsubscribeNoticeKey::new(client_id, trimmed_lite_topic))
+            .map(|(_, notice)| notice)
+    }
+
+    pub fn has_pending_lite_unsubscribe_notice(&self, client_id: &str, lite_topic: &str) -> bool {
+        self.pending_lite_unsubscribe_notices
+            .contains_key(&LiteUnsubscribeNoticeKey::new(client_id, lite_topic.trim()))
     }
 
     pub fn prepared_transaction(
@@ -775,6 +1013,42 @@ impl ClientSessionRegistry {
             let _ = self.prepared_transactions.remove(&key);
         }
         self.telemetry_links.remove(client_id);
+        let pending_telemetry_keys = self
+            .pending_telemetry_commands
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in pending_telemetry_keys {
+            let _ = self.pending_telemetry_commands.remove(&key);
+        }
+        let thread_stack_trace_keys = self
+            .thread_stack_traces
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in thread_stack_trace_keys {
+            let _ = self.thread_stack_traces.remove(&key);
+        }
+        let verify_message_report_keys = self
+            .verify_message_reports
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in verify_message_report_keys {
+            let _ = self.verify_message_reports.remove(&key);
+        }
+        let pending_lite_unsubscribe_keys = self
+            .pending_lite_unsubscribe_notices
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in pending_lite_unsubscribe_keys {
+            let _ = self.pending_lite_unsubscribe_notices.remove(&key);
+        }
         session
     }
 
@@ -810,12 +1084,44 @@ impl ClientSessionRegistry {
         self.telemetry_links.len()
     }
 
+    pub fn pending_telemetry_command_count(&self) -> usize {
+        self.pending_telemetry_commands.len()
+    }
+
+    pub fn verify_message_report_count(&self) -> usize {
+        self.verify_message_reports.len()
+    }
+
+    pub fn thread_stack_trace_report_count(&self) -> usize {
+        self.thread_stack_traces.len()
+    }
+
+    pub fn pending_lite_unsubscribe_notice_count(&self) -> usize {
+        self.pending_lite_unsubscribe_notices.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
             && self.receipt_handles.is_empty()
             && self.lite_subscriptions.is_empty()
             && self.prepared_transactions.is_empty()
             && self.telemetry_links.is_empty()
+            && self.pending_telemetry_commands.is_empty()
+            && self.thread_stack_traces.is_empty()
+            && self.verify_message_reports.is_empty()
+            && self.pending_lite_unsubscribe_notices.is_empty()
+    }
+
+    fn clear_pending_telemetry_commands_of_kind(&self, client_id: &str, kind: TelemetryCommandKind) {
+        let keys = self
+            .pending_telemetry_commands
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id && entry.key().kind == kind)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in keys {
+            let _ = self.pending_telemetry_commands.remove(&key);
+        }
     }
 
     pub fn reap_expired(&self, client_ttl: Duration, receipt_handle_ttl: Duration) -> ReapSummary {
@@ -1055,6 +1361,7 @@ mod tests {
     use super::PreparedTransactionRegistration;
     use super::ReceiptHandleRegistration;
     use super::SubscriptionSettingsSnapshot;
+    use super::TelemetryCommandKind;
     use super::TrackedReceiptHandle;
     use crate::context::ProxyContext;
     use crate::proto::v2;
@@ -1335,6 +1642,91 @@ mod tests {
     }
 
     #[test]
+    fn pending_telemetry_command_can_be_completed_with_thread_stack_trace_report() {
+        let registry = ClientSessionRegistry::default();
+
+        assert!(registry.register_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::PrintThreadStackTrace,
+            "nonce-a",
+        ));
+        assert!(registry.has_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::PrintThreadStackTrace,
+            "nonce-a",
+        ));
+        assert!(registry.complete_print_thread_stack_trace("client-a", "nonce-a", Some("trace".to_owned()),));
+        assert!(!registry.has_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::PrintThreadStackTrace,
+            "nonce-a",
+        ));
+        let report = registry
+            .thread_stack_trace_report("client-a", "nonce-a")
+            .expect("thread stack trace report should be stored");
+        assert_eq!(report.thread_stack_trace.as_deref(), Some("trace"));
+    }
+
+    #[test]
+    fn pending_verify_message_command_requires_matching_nonce() {
+        let registry = ClientSessionRegistry::default();
+
+        assert!(registry.register_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::VerifyMessage,
+            "nonce-a",
+        ));
+        assert!(!registry.complete_verify_message("client-a", "nonce-b"));
+        assert!(registry.complete_verify_message("client-a", "nonce-a"));
+        assert_eq!(registry.pending_telemetry_command_count(), 0);
+        let report = registry
+            .verify_message_report("client-a", "nonce-a")
+            .expect("verify message report should be stored");
+        assert_eq!(report.nonce, "nonce-a");
+    }
+
+    #[test]
+    fn bind_telemetry_link_clears_pending_reconnect_command() {
+        let registry = ClientSessionRegistry::default();
+
+        assert!(registry.register_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::ReconnectEndpoints,
+            "nonce-a",
+        ));
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        registry.bind_telemetry_link("client-a", sender);
+
+        assert!(!registry.has_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::ReconnectEndpoints,
+            "nonce-a",
+        ));
+    }
+
+    #[test]
+    fn sync_lite_subscription_clears_pending_unsubscribe_notice_once_removed() {
+        let registry = ClientSessionRegistry::default();
+
+        let _ = registry.sync_lite_subscription(
+            "client-a",
+            lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-a", "lite-b"]),
+            None,
+        );
+        assert!(registry.register_pending_lite_unsubscribe_notice("client-a", "lite-a"));
+        assert!(registry.has_pending_lite_unsubscribe_notice("client-a", "lite-a"));
+
+        let _ = registry.sync_lite_subscription(
+            "client-a",
+            lite_sync_request(v2::LiteSubscriptionAction::PartialRemove, &["lite-a"]),
+            None,
+        );
+
+        assert!(!registry.has_pending_lite_unsubscribe_notice("client-a", "lite-a"));
+        assert_eq!(registry.pending_lite_unsubscribe_notice_count(), 0);
+    }
+
+    #[test]
     fn remove_client_clears_receipt_handles() {
         let registry = ClientSessionRegistry::default();
         let context = context("client-a");
@@ -1343,6 +1735,17 @@ mod tests {
         registry.track_prepared_transaction(prepared_transaction("client-a", "msg-2", "tx-2"));
         let (sender, _receiver) = mpsc::unbounded_channel();
         registry.bind_telemetry_link("client-a", sender);
+        assert!(registry.register_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::VerifyMessage,
+            "nonce-a",
+        ));
+        assert!(registry.register_pending_telemetry_command(
+            "client-a",
+            TelemetryCommandKind::PrintThreadStackTrace,
+            "nonce-b",
+        ));
+        assert!(registry.complete_print_thread_stack_trace("client-a", "nonce-b", Some("trace".to_owned())));
         let _ = registry.sync_lite_subscription(
             "client-a",
             lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-a"]),
@@ -1357,6 +1760,10 @@ mod tests {
         assert_eq!(registry.lite_subscription_count(), 0);
         assert_eq!(registry.prepared_transaction_count(), 0);
         assert_eq!(registry.telemetry_link_count(), 0);
+        assert_eq!(registry.pending_telemetry_command_count(), 0);
+        assert!(registry.thread_stack_trace_report("client-a", "nonce-b").is_none());
+        assert_eq!(registry.verify_message_report_count(), 0);
+        assert_eq!(registry.pending_lite_unsubscribe_notice_count(), 0);
     }
 
     #[test]
