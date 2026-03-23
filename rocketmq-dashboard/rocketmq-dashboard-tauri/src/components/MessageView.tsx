@@ -15,6 +15,7 @@ import {
 import { toast } from 'sonner@2.0.3';
 import { Input } from './ui/input';
 import { MessageService } from '../services/message.service';
+import { MessageDetailModal } from './MessageDetailModal';
 import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
 import type { MessageSummary } from '../features/message/types/message.types';
 
@@ -26,6 +27,7 @@ export const MessageView = () => {
   const [startDate, setStartDate] = useState('2026-01-27 00:00:00');
   const [endDate, setEndDate] = useState('2026-01-28 00:00:00');
   const [messages, setMessages] = useState<MessageSummary[]>([]);
+  const [selectedMessage, setSelectedMessage] = useState<MessageSummary | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
@@ -235,6 +237,12 @@ export const MessageView = () => {
 
   return (
     <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
+        <MessageDetailModal
+          isOpen={!!selectedMessage}
+          onClose={() => setSelectedMessage(null)}
+          message={selectedMessage}
+        />
+
         {/* Header Tabs */}
         <div className="flex justify-center mb-8">
            <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex shadow-inner">
@@ -404,11 +412,11 @@ export const MessageView = () => {
                     {/* Action Footer - Previous Style (Full Width Black Button) */}
                     <div className="p-4 bg-gray-50/50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
                         <button 
-                            disabled
-                            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-gray-300 text-white text-xs font-bold transition-colors shadow-sm cursor-not-allowed dark:bg-gray-700 dark:text-gray-300"
+                            onClick={() => setSelectedMessage(msg)}
+                            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-gray-900 dark:bg-blue-600 text-white dark:text-white text-xs font-bold hover:bg-gray-800 dark:hover:bg-blue-500 transition-colors shadow-sm active:scale-[0.98]"
                         >
                             <FileText className="w-3.5 h-3.5" />
-                            <span>Detail In Phase 2</span>
+                            <span>View Details</span>
                         </button>
                     </div>
                 </motion.div>

@@ -111,6 +111,7 @@ pub fn run() {
             consumer::commands::delete_consumer_group,
             message::commands::query_message_by_topic_key,
             message::commands::query_message_by_id,
+            message::commands::view_message_detail,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,

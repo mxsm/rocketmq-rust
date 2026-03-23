@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+    MessageDetail,
     MessageIdQueryRequest,
     MessageKeyQueryRequest,
     MessageSummaryListResponse,
+    ViewMessageRequest,
 } from '../features/message/types/message.types';
 
 export class MessageService {
@@ -12,5 +14,9 @@ export class MessageService {
 
     static async queryMessageById(request: MessageIdQueryRequest): Promise<MessageSummaryListResponse> {
         return invoke<MessageSummaryListResponse>('query_message_by_id', { request });
+    }
+
+    static async viewMessageDetail(request: ViewMessageRequest): Promise<MessageDetail> {
+        return invoke<MessageDetail>('view_message_detail', { request });
     }
 }

@@ -14,15 +14,20 @@
 
 use crate::message::admin::ManagedMessageAdmin;
 use crate::message::types::MessageError;
+use crate::message::types::MessageDetailView;
 use crate::message::types::MessageResult;
 use crate::message::types::MessageSummaryListResponse;
 use crate::message::types::MessageSummaryView;
 use crate::nameserver::NameServerRuntimeState;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_dashboard_common::ViewMessageRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -110,6 +115,38 @@ impl MessageManager {
         }
     }
 
+    pub(crate) async fn view_message_detail(&self, request: ViewMessageRequest) -> MessageResult<MessageDetailView> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.view_message_detail_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "view_message_detail failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `view_message_detail` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     async fn ensure_admin_session(&self, session_slot: &mut Option<ManagedMessageAdmin>) -> MessageResult<()> {
         let generation = self.runtime.generation();
         let needs_reconnect = session_slot
@@ -190,8 +227,36 @@ impl MessageManager {
         admin: &mut DefaultMQAdminExt,
         request: MessageIdQueryRequest,
     ) -> MessageResult<MessageSummaryListResponse> {
-        let topic = normalize_required_field("topic", request.topic)?;
-        let message_id = normalize_required_field("messageId", request.message_id)?;
+        let message = self
+            .find_message_by_id_with_admin(admin, request.topic, request.message_id)
+            .await?;
+
+        Ok(MessageSummaryListResponse {
+            items: vec![map_message_summary(message)],
+            total: 1,
+        })
+    }
+
+    async fn view_message_detail_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: ViewMessageRequest,
+    ) -> MessageResult<MessageDetailView> {
+        let message = self
+            .find_message_by_id_with_admin(admin, request.topic, request.message_id)
+            .await?;
+
+        Ok(map_message_detail(message))
+    }
+
+    async fn find_message_by_id_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        topic: String,
+        message_id: String,
+    ) -> MessageResult<MessageExt> {
+        let topic = normalize_required_field("topic", topic)?;
+        let message_id = normalize_required_field("messageId", message_id)?;
 
         let result = admin
             .query_message_by_unique_key(
@@ -206,12 +271,7 @@ impl MessageManager {
             .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
 
         let messages = result.message_list().to_vec();
-        let message = first_message_or_validation_error(messages)?;
-
-        Ok(MessageSummaryListResponse {
-            items: vec![map_message_summary(message)],
-            total: 1,
-        })
+        first_message_or_validation_error(messages)
     }
 }
 
@@ -262,6 +322,48 @@ fn map_message_summary(message: MessageExt) -> MessageSummaryView {
     }
 }
 
+fn map_message_detail(message: MessageExt) -> MessageDetailView {
+    let properties = message
+        .properties()
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let body = message.body().map(|body| body.to_vec()).unwrap_or_default();
+    let (body_text, body_base64) = decode_body_fields(&body);
+
+    MessageDetailView {
+        topic: message.topic().to_string(),
+        msg_id: message.msg_id().to_string(),
+        born_host: Some(message.born_host().to_string()),
+        store_host: Some(message.store_host().to_string()),
+        born_timestamp: Some(message.born_timestamp()),
+        store_timestamp: Some(message.store_timestamp()),
+        queue_id: Some(message.queue_id()),
+        queue_offset: Some(message.queue_offset()),
+        store_size: Some(message.store_size()),
+        reconsume_times: Some(message.reconsume_times()),
+        body_crc: Some(message.body_crc()),
+        sys_flag: Some(message.sys_flag()),
+        flag: Some(message.flag()),
+        prepared_transaction_offset: Some(message.prepared_transaction_offset()),
+        properties,
+        body_text,
+        body_base64,
+        message_track_list: None,
+    }
+}
+
+fn decode_body_fields(body: &[u8]) -> (Option<String>, Option<String>) {
+    if body.is_empty() {
+        return (Some(String::new()), None);
+    }
+
+    match String::from_utf8(body.to_vec()) {
+        Ok(text) => (Some(text), None),
+        Err(_) => (None, Some(BASE64_STANDARD.encode(body))),
+    }
+}
+
 fn first_message_or_validation_error(mut messages: Vec<MessageExt>) -> MessageResult<MessageExt> {
     messages.sort_by(|left, right| {
         right
@@ -309,5 +411,68 @@ mod tests {
         let error = first_message_or_validation_error(Vec::new()).expect_err("empty results should fail");
 
         assert!(error.to_string().contains("No message matched the current query"));
+    }
+
+    #[test]
+    fn map_message_detail_maps_hosts_properties_and_utf8_body() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(br#"{"ok":true}"#)
+            .tags("TagA")
+            .keys(vec!["KeyA".to_string()])
+            .trace_switch(true)
+            .raw_property("order_source", "mobile")
+            .expect("custom property should be accepted")
+            .build_unchecked();
+
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("msg-2"));
+        message_ext.set_store_timestamp(1_700_000_000_123);
+        message_ext.set_born_timestamp(1_700_000_000_000);
+        message_ext.set_queue_id(3);
+        message_ext.set_queue_offset(288);
+        message_ext.set_store_size(264);
+        message_ext.set_reconsume_times(0);
+        message_ext.set_body_crc(613_185_359);
+        message_ext.set_sys_flag(7);
+        message_ext.set_store_host("172.20.48.1:10911".parse().expect("store host"));
+        message_ext.set_born_host("172.20.48.1:61266".parse().expect("born host"));
+
+        let detail = map_message_detail(message_ext);
+
+        assert_eq!(detail.topic, "TopicTest");
+        assert_eq!(detail.msg_id, "msg-2");
+        assert_eq!(detail.store_host.as_deref(), Some("172.20.48.1:10911"));
+        assert_eq!(detail.born_host.as_deref(), Some("172.20.48.1:61266"));
+        assert_eq!(detail.queue_id, Some(3));
+        assert_eq!(detail.queue_offset, Some(288));
+        assert_eq!(detail.store_size, Some(264));
+        assert_eq!(detail.body_text.as_deref(), Some(r#"{"ok":true}"#));
+        assert_eq!(detail.body_base64, None);
+        assert_eq!(detail.properties.get("TAGS").map(String::as_str), Some("TagA"));
+        assert_eq!(detail.properties.get("KEYS").map(String::as_str), Some("KeyA"));
+        assert_eq!(
+            detail.properties.get("order_source").map(String::as_str),
+            Some("mobile")
+        );
+        assert_eq!(detail.message_track_list, None);
+    }
+
+    #[test]
+    fn map_message_detail_falls_back_to_base64_for_binary_body() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body(vec![0xff, 0x00, 0x41])
+            .build_unchecked();
+
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("msg-bin"));
+
+        let detail = map_message_detail(message_ext);
+
+        assert_eq!(detail.body_text, None);
+        assert_eq!(detail.body_base64.as_deref(), Some("/wBB"));
     }
 }

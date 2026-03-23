@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::message::service::MessageManager;
+use crate::message::types::MessageDetailView;
 use crate::message::types::MessageSummaryListResponse;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
+use rocketmq_dashboard_common::ViewMessageRequest;
 use tauri::State;
 
 #[tauri::command]
@@ -36,6 +38,17 @@ pub async fn query_message_by_id(
 ) -> Result<MessageSummaryListResponse, String> {
     message_manager
         .query_message_by_id(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn view_message_detail(
+    request: ViewMessageRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<MessageDetailView, String> {
+    message_manager
+        .view_message_detail(request)
         .await
         .map_err(|error| error.to_string())
 }

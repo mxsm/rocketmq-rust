@@ -1,56 +1,104 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, FileText, Activity, Users, CheckCircle2, RotateCcw, Copy, Database, Server, Clock, HardDrive, Flag, RefreshCw, Hash, Tag, Globe, Key, Layers, Code, User, AlertCircle } from 'lucide-react';
+import {
+  X,
+  FileText,
+  Activity,
+  Users,
+  Copy,
+  Database,
+  Server,
+  Clock,
+  HardDrive,
+  Flag,
+  RefreshCw,
+  Hash,
+  Tag,
+  Globe,
+  Key,
+  Layers,
+  AlertCircle,
+  Info,
+} from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
+import { MessageService } from '../services/message.service';
+import type { MessageDetail, MessageSummary } from '../features/message/types/message.types';
 
 interface MessageDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
-  message: any;
+  message: MessageSummary | null;
 }
 
 export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailModalProps) => {
   if (!isOpen) return null;
+  const [detail, setDetail] = useState<MessageDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  // Mock data if message is missing some fields, based on screenshot
-  const data = {
-    topic: message?.topic || 'TopicTest',
-    messageId: message?.msgId || '240E03B350D263C087AA69AB77E798719CBC18B4AAC28A91AB100000',
-    storeHost: message?.storeHost || '172.20.48.1:10911',
-    bornHost: message?.bornHost || '172.20.48.1:61266',
-    storeTime: message?.storeTime || '2026-01-27 21:46:42',
-    bornTime: message?.bornTime || '2026-01-27 21:46:42',
-    queueId: message?.queueId || '3',
-    queueOffset: message?.queueOffset || '288',
-    storeSize: message?.storeSize || '264 bytes',
-    reconsume: message?.reconsume || '0',
-    bodyCRC: message?.bodyCRC || '613185359',
-    sysFlag: message?.sysFlag || '0',
-    flag: message?.flag || '0',
-    transOffset: message?.transOffset || '0',
-    // Properties
-    msgRegion: 'DefaultRegion',
-    uniqKey: message?.msgId || '240E03B350D263C087AA69AB77E798719CBC18B4AAC28A91AB100000',
-    cluster: 'DefaultCluster',
-    tags: message?.tag || 'TagA',
-    wait: 'true',
-    traceOn: 'true',
-    // User Props
-    orderSource: 'mobile_app',
-    traceId: 't_88992211',
-    userLevel: 'vip_gold',
-    clientVersion: 'v5.0.1',
-    // Body
-    body: message?.body || 'Hello RocketMQ Key: Key_0',
-    // Tracking
-    consumerGroup: 'please_rename_unique_group_name_4',
-    status: 'CONSUMED'
-  };
+  useEffect(() => {
+    if (!isOpen || !message) {
+      setDetail(null);
+      setError('');
+      setIsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+    setError('');
+    setDetail(null);
+
+    void MessageService.viewMessageDetail({
+      topic: message.topic,
+      messageId: message.msgId,
+    })
+      .then((result) => {
+        if (!cancelled) {
+          setDetail(result);
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load message detail');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, message]);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard");
   };
+
+  const formatTimestamp = (value?: number | null) => {
+    if (!value) {
+      return '-';
+    }
+    return new Date(value).toLocaleString();
+  };
+
+  const systemPropertyEntries = useMemo(() => {
+    if (!detail) {
+      return [];
+    }
+    return Object.entries(detail.properties).filter(([key]) => key === key.toUpperCase());
+  }, [detail]);
+
+  const userPropertyEntries = useMemo(() => {
+    if (!detail) {
+      return [];
+    }
+    return Object.entries(detail.properties).filter(([key]) => key !== key.toUpperCase());
+  }, [detail]);
 
   const InfoItem = ({ icon: Icon, label, value, mono = false, copyable = false }: any) => (
     <div className="flex items-start p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg transition-colors group">
@@ -115,125 +163,131 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
 
           {/* Body Content */}
           <div className="flex-1 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/50 p-6 space-y-6">
-            
-            {/* Message Info Section */}
-            <div className="space-y-3">
-              <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Info</h3>
-              <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-0">
-                <InfoItem icon={Database} label="Topic" value={data.topic} mono />
-                <InfoItem icon={Globe} label="BornHost" value={data.bornHost} mono />
-                
-                <InfoItem icon={Hash} label="Message ID" value={data.messageId} mono copyable />
-                <InfoItem icon={Clock} label="BornTime" value={data.bornTime} mono />
-                
-                <InfoItem icon={Server} label="StoreHost" value={data.storeHost} mono />
-                <InfoItem icon={Clock} label="StoreTime" value={data.storeTime} mono />
-                
-                <InfoItem icon={Layers} label="Queue ID" value={data.queueId} mono />
-                <InfoItem icon={RefreshCw} label="Reconsume" value={data.reconsume} mono />
-                
-                <InfoItem icon={HardDrive} label="StoreSize" value={data.storeSize} mono />
-                <InfoItem icon={Flag} label="SysFlag" value={data.sysFlag} mono />
-                
-                <InfoItem icon={Key} label="BodyCRC" value={data.bodyCRC} mono />
-                <InfoItem icon={RefreshCw} label="Trans Offset" value={data.transOffset} mono />
-                
-                <InfoItem icon={Tag} label="Flag" value={data.flag} mono />
-                <InfoItem icon={Layers} label="Queue Offset" value={data.queueOffset} mono />
+            {isLoading ? (
+              <div className="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                <RefreshCw className="mb-4 h-8 w-8 animate-spin text-blue-500" />
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Loading message detail...</p>
               </div>
-            </div>
+            ) : error ? (
+              <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>{error}</div>
+              </div>
+            ) : detail ? (
+              <>
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Info</h3>
+                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-0">
+                    <InfoItem icon={Database} label="Topic" value={detail.topic} mono />
+                    <InfoItem icon={Globe} label="BornHost" value={detail.bornHost || '-'} mono />
 
-            {/* Properties Section */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-               {/* System Properties */}
-               <div className="space-y-3">
-                  <div className="flex items-center justify-between px-1">
-                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                       <Activity className="w-3.5 h-3.5" /> System Properties
-                    </h3>
-                    <span className="bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-[10px] font-bold px-1.5 py-0.5 rounded">6</span>
-                  </div>
-                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-1">
-                    <PropertyItem label="MSG_REGION" value={data.msgRegion} />
-                    <PropertyItem label="UNIQ_KEY" value={data.uniqKey} />
-                    <PropertyItem label="CLUSTER" value={data.cluster} />
-                    <PropertyItem label="TAGS" value={data.tags} />
-                    <PropertyItem label="WAIT" value={data.wait} />
-                    <PropertyItem label="TRACE_ON" value={data.traceOn} />
-                  </div>
-               </div>
+                    <InfoItem icon={Hash} label="Message ID" value={detail.msgId} mono copyable />
+                    <InfoItem icon={Clock} label="BornTime" value={formatTimestamp(detail.bornTimestamp)} mono />
 
-               {/* User Properties */}
-               <div className="space-y-3">
-                  <div className="flex items-center justify-between px-1">
-                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                       <Users className="w-3.5 h-3.5" /> User Properties
-                    </h3>
-                    <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-[10px] font-bold px-1.5 py-0.5 rounded">4</span>
-                  </div>
-                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-1">
-                    <PropertyItem label="order_source" value={data.orderSource} />
-                    <PropertyItem label="trace_id" value={data.traceId} />
-                    <PropertyItem label="user_level" value={data.userLevel} />
-                    <PropertyItem label="client_version" value={data.clientVersion} />
-                  </div>
-               </div>
-            </div>
+                    <InfoItem icon={Server} label="StoreHost" value={detail.storeHost || '-'} mono />
+                    <InfoItem icon={Clock} label="StoreTime" value={formatTimestamp(detail.storeTimestamp)} mono />
 
-            {/* Message Body */}
-            <div className="space-y-3">
-               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Body</h3>
-               <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 font-mono text-sm text-gray-800 dark:text-gray-200 overflow-x-auto">
-                 {data.body}
-               </div>
-            </div>
+                    <InfoItem icon={Layers} label="Queue ID" value={String(detail.queueId ?? '-')} mono />
+                    <InfoItem icon={RefreshCw} label="Reconsume" value={String(detail.reconsumeTimes ?? '-')} mono />
 
-            {/* Message Tracking */}
-            <div className="space-y-3">
-               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Tracking</h3>
-               <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
-                  <div className="divide-y divide-gray-100 dark:divide-gray-800">
-                    <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                       <div className="flex items-center gap-3">
-                          <Users className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Consumer Group</span>
-                       </div>
-                       <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white">
-                          {data.consumerGroup}
-                       </div>
+                    <InfoItem icon={HardDrive} label="StoreSize" value={detail.storeSize ? `${detail.storeSize} bytes` : '-'} mono />
+                    <InfoItem icon={Flag} label="SysFlag" value={String(detail.sysFlag ?? '-')} mono />
+
+                    <InfoItem icon={Key} label="BodyCRC" value={String(detail.bodyCrc ?? '-')} mono />
+                    <InfoItem icon={RefreshCw} label="Trans Offset" value={String(detail.preparedTransactionOffset ?? '-')} mono />
+
+                    <InfoItem icon={Tag} label="Flag" value={String(detail.flag ?? '-')} mono />
+                    <InfoItem icon={Layers} label="Queue Offset" value={String(detail.queueOffset ?? '-')} mono />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between px-1">
+                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                        <Activity className="w-3.5 h-3.5" /> System Properties
+                      </h3>
+                      <span className="bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                        {systemPropertyEntries.length}
+                      </span>
                     </div>
-                    
-                    <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                       <div className="flex items-center gap-3">
-                          <Activity className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Status</span>
-                       </div>
-                       <div>
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 text-xs font-bold uppercase border border-green-100 dark:border-green-900/30">
-                             <CheckCircle2 className="w-3.5 h-3.5" />
-                             {data.status}
-                          </span>
-                       </div>
-                    </div>
-
-                    <div className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                       <div className="flex items-center gap-3">
-                          <RotateCcw className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Operation</span>
-                       </div>
-                       <div>
-                          <button 
-                            onClick={() => toast.success("Message resend requested")}
-                            className="flex items-center px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors shadow-sm"
-                          >
-                             <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                             Resend Message
-                          </button>
-                       </div>
+                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-1">
+                      {systemPropertyEntries.length > 0 ? systemPropertyEntries.map(([key, value]) => (
+                        <PropertyItem key={key} label={key} value={value} />
+                      )) : (
+                        <div className="text-sm text-gray-500 dark:text-gray-400">No system properties</div>
+                      )}
                     </div>
                   </div>
-               </div>
-            </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between px-1">
+                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                        <Users className="w-3.5 h-3.5" /> User Properties
+                      </h3>
+                      <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                        {userPropertyEntries.length}
+                      </span>
+                    </div>
+                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-1">
+                      {userPropertyEntries.length > 0 ? userPropertyEntries.map(([key, value]) => (
+                        <PropertyItem key={key} label={key} value={value} />
+                      )) : (
+                        <div className="text-sm text-gray-500 dark:text-gray-400">No user properties</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Body</h3>
+                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-3">
+                    {detail.bodyText !== null && detail.bodyText !== undefined ? (
+                      <div className="font-mono text-sm text-gray-800 dark:text-gray-200 overflow-x-auto whitespace-pre-wrap break-all">
+                        {detail.bodyText}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+                          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>消息体不是有效 UTF-8，当前以 base64 形式展示。</span>
+                        </div>
+                        <div className="font-mono text-xs text-gray-800 dark:text-gray-200 overflow-x-auto break-all">
+                          {detail.bodyBase64 || '-'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Tracking</h3>
+                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4">
+                    {detail.messageTrackList && detail.messageTrackList.length > 0 ? (
+                      <div className="space-y-2">
+                        {detail.messageTrackList.map((track) => (
+                          <div key={`${track.consumerGroup}-${track.trackType}`} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm dark:border-gray-800 dark:bg-gray-800/40">
+                            <div className="font-medium text-gray-900 dark:text-white">{track.consumerGroup}</div>
+                            <div className="mt-1 text-gray-600 dark:text-gray-300">{track.trackType}</div>
+                            {track.exceptionDesc && (
+                              <div className="mt-1 font-mono text-xs text-red-600 dark:text-red-300 break-all">{track.exceptionDesc}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-3 rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-4 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-800/40 dark:text-gray-300">
+                        <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
+                        <div>
+                          `messageTrackList` 依赖的底层 `message_track_detail` 能力在 `rocketmq-rust` 里尚未实现。
+                          当前 Phase 2 先保证详情主数据真实，Track 与 Resend 留到后续 phase。
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : null}
 
           </div>
 

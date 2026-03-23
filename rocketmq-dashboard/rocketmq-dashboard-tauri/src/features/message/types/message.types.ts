@@ -20,3 +20,35 @@ export interface MessageIdQueryRequest {
     topic: string;
     messageId: string;
 }
+
+export interface ViewMessageRequest {
+    topic: string;
+    messageId: string;
+}
+
+export interface MessageTrack {
+    consumerGroup: string;
+    trackType: string;
+    exceptionDesc?: string | null;
+}
+
+export interface MessageDetail {
+    topic: string;
+    msgId: string;
+    bornHost?: string | null;
+    storeHost?: string | null;
+    bornTimestamp?: number | null;
+    storeTimestamp?: number | null;
+    queueId?: number | null;
+    queueOffset?: number | null;
+    storeSize?: number | null;
+    reconsumeTimes?: number | null;
+    bodyCrc?: number | null;
+    sysFlag?: number | null;
+    flag?: number | null;
+    preparedTransactionOffset?: number | null;
+    properties: Record<string, string>;
+    bodyText?: string | null;
+    bodyBase64?: string | null;
+    messageTrackList?: MessageTrack[] | null;
+}
