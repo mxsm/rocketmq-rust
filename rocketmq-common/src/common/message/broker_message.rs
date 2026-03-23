@@ -307,8 +307,8 @@ impl MessageTrait for BrokerMessage {
         self.properties_string = Self::serialize_properties(&properties);
     }
 
-    fn get_transaction_id(&self) -> Option<&CheetahString> {
-        self.envelope.message().get_transaction_id()
+    fn transaction_id(&self) -> Option<&CheetahString> {
+        self.envelope.message().transaction_id()
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {

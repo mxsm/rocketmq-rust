@@ -385,8 +385,8 @@ impl crate::common::message::MessageTrait for MessageEnvelope {
         self.message.set_properties(properties);
     }
 
-    fn get_transaction_id(&self) -> Option<&CheetahString> {
-        self.message.get_transaction_id()
+    fn transaction_id(&self) -> Option<&CheetahString> {
+        self.message.transaction_id()
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {

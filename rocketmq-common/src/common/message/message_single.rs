@@ -625,7 +625,7 @@ impl MessageTrait for Message {
     }
 
     #[inline]
-    fn get_transaction_id(&self) -> Option<&CheetahString> {
+    fn transaction_id(&self) -> Option<&CheetahString> {
         self.transaction_id.as_ref()
     }
 

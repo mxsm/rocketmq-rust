@@ -125,8 +125,8 @@ impl MessageTrait for MessageClientExt {
     }
 
     #[inline]
-    fn get_transaction_id(&self) -> Option<&CheetahString> {
-        self.message_ext_inner.get_transaction_id()
+    fn transaction_id(&self) -> Option<&CheetahString> {
+        self.message_ext_inner.transaction_id()
     }
 
     #[inline]

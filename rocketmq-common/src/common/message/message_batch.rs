@@ -86,7 +86,7 @@ impl MessageBatch {
                     m.set_body(Some(body.clone()));
                 }
                 m.set_flag(msg.get_flag());
-                if let Some(transaction_id) = msg.get_transaction_id() {
+                if let Some(transaction_id) = msg.transaction_id() {
                     m.set_transaction_id(transaction_id.clone());
                 }
                 m.set_properties(msg.get_properties().clone());
@@ -230,8 +230,8 @@ impl MessageTrait for MessageBatch {
     }
 
     #[inline]
-    fn get_transaction_id(&self) -> Option<&CheetahString> {
-        self.final_message.get_transaction_id()
+    fn transaction_id(&self) -> Option<&CheetahString> {
+        self.final_message.transaction_id()
     }
 
     #[inline]
