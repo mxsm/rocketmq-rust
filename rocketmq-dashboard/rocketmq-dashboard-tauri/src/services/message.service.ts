@@ -3,6 +3,8 @@ import type {
     MessageDetail,
     MessageIdQueryRequest,
     MessageKeyQueryRequest,
+    MessagePageQueryRequest,
+    MessagePageResponse,
     MessageSummaryListResponse,
     ViewMessageRequest,
 } from '../features/message/types/message.types';
@@ -14,6 +16,10 @@ export class MessageService {
 
     static async queryMessageById(request: MessageIdQueryRequest): Promise<MessageSummaryListResponse> {
         return invoke<MessageSummaryListResponse>('query_message_by_id', { request });
+    }
+
+    static async queryMessagePageByTopic(request: MessagePageQueryRequest): Promise<MessagePageResponse> {
+        return invoke<MessagePageResponse>('query_message_page_by_topic', { request });
     }
 
     static async viewMessageDetail(request: ViewMessageRequest): Promise<MessageDetail> {

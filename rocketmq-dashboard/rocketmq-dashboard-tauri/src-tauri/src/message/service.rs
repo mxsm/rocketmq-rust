@@ -13,8 +13,17 @@
 // limitations under the License.
 
 use crate::message::admin::ManagedMessageAdmin;
+use crate::message::page_cache::build_page_selection;
+use crate::message::page_cache::normalize_message_page_query;
+use crate::message::page_cache::MessagePageCache;
+use crate::message::page_cache::MessagePageCacheEntry;
+use crate::message::page_cache::MessagePageCacheKey;
+use crate::message::page_cache::NormalizedMessagePageQuery;
+use crate::message::page_cache::QueueScanState;
 use crate::message::types::MessageError;
 use crate::message::types::MessageDetailView;
+use crate::message::types::MessagePageResponse;
+use crate::message::types::MessagePageView;
 use crate::message::types::MessageResult;
 use crate::message::types::MessageSummaryListResponse;
 use crate::message::types::MessageSummaryView;
@@ -26,22 +35,29 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_dashboard_common::ViewMessageRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
+use rocketmq_dashboard_common::MessagePageQueryRequest;
 use rocketmq_dashboard_common::MessageTraceQueryRequest;
+use rocketmq_dashboard_common::ViewMessageRequest;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+const PULL_BATCH_SIZE: i32 = 32;
+const PULL_TIMEOUT_MILLIS: u64 = 3000;
+
 #[derive(Clone)]
 pub(crate) struct MessageManager {
     runtime: Arc<NameServerRuntimeState>,
     admin_session: Arc<Mutex<Option<ManagedMessageAdmin>>>,
+    page_cache: MessagePageCache,
 }
 
 impl MessageManager {
@@ -49,6 +65,7 @@ impl MessageManager {
         Self {
             runtime,
             admin_session: Arc::new(Mutex::new(None)),
+            page_cache: MessagePageCache::new(),
         }
     }
 
@@ -120,6 +137,24 @@ impl MessageManager {
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    pub(crate) async fn query_message_page_by_topic(
+        &self,
+        request: MessagePageQueryRequest,
+    ) -> MessageResult<MessagePageResponse> {
+        let query = normalize_message_page_query(request)?;
+        let generation = self.runtime.generation();
+
+        if let Some(task_id) = query.task_id.as_deref() {
+            if let Some(entry) = self.page_cache.get(task_id).await {
+                if entry.matches_request(&query, generation) {
+                    return self.query_message_page_from_cache(query, entry).await;
+                }
+            }
+        }
+
+        self.query_first_message_page(query.first_page(), generation).await
     }
 
     pub(crate) async fn view_message_detail(&self, request: ViewMessageRequest) -> MessageResult<MessageDetailView> {
@@ -261,6 +296,410 @@ impl MessageManager {
             Err(MessageError::RocketMQ(message)) => is_reconnect_worthy_error(message),
             _ => false,
         }
+    }
+
+    async fn query_first_message_page(
+        &self,
+        query: NormalizedMessagePageQuery,
+        generation: u64,
+    ) -> MessageResult<MessagePageResponse> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.query_first_message_page_with_admin(&mut session.admin, &query, generation)
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "query_first_message_page failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_first_message_page` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn query_message_page_from_cache(
+        &self,
+        query: NormalizedMessagePageQuery,
+        entry: MessagePageCacheEntry,
+    ) -> MessageResult<MessagePageResponse> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.query_message_page_from_cache_with_admin(&mut session.admin, &query, &entry)
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "query_message_page_from_cache failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_message_page_from_cache` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn query_first_message_page_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+        generation: u64,
+    ) -> MessageResult<MessagePageResponse> {
+        let mut queue_states = self.build_topic_queue_states(admin, query).await?;
+
+        for queue_state in &mut queue_states {
+            self.align_queue_start(admin, query, queue_state).await?;
+        }
+        for queue_state in &mut queue_states {
+            self.align_queue_end(admin, query, queue_state).await?;
+        }
+
+        let selection = build_page_selection(&queue_states, query);
+        let items = self
+            .load_page_messages(admin, query, &selection.queue_states)
+            .await?;
+        let task_id = self
+            .page_cache
+            .put(
+                MessagePageCacheKey {
+                    topic: query.topic.clone(),
+                    begin: query.begin,
+                    end: query.end,
+                },
+                generation,
+                selection.total,
+                queue_states,
+            )
+            .await;
+
+        Ok(build_message_page_response(items, selection.total, query, &task_id))
+    }
+
+    async fn query_message_page_from_cache_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+        entry: &MessagePageCacheEntry,
+    ) -> MessageResult<MessagePageResponse> {
+        let selection = build_page_selection(&entry.queue_states, query);
+        let items = self
+            .load_page_messages(admin, query, &selection.queue_states)
+            .await?;
+
+        Ok(build_message_page_response(
+            items,
+            entry.total,
+            query,
+            &entry.task_id,
+        ))
+    }
+
+    async fn build_topic_queue_states(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+    ) -> MessageResult<Vec<QueueScanState>> {
+        let route = admin
+            .examine_topic_route_info(CheetahString::from(query.topic.clone()))
+            .await
+            .map_err(|error| MessageError::RocketMQ(error.to_string()))?
+            .unwrap_or_default();
+
+        let mut broker_addr_map = HashMap::new();
+        for broker_data in &route.broker_datas {
+            if let Some(addr) = broker_data.select_broker_addr() {
+                broker_addr_map.insert(broker_data.broker_name().to_string(), addr.to_string());
+            }
+        }
+
+        let mut queue_states = Vec::new();
+        let mut idx = 0usize;
+        for queue_data in &route.queue_datas {
+            let broker_name = queue_data.broker_name().to_string();
+            let Some(broker_addr) = broker_addr_map.get(&broker_name) else {
+                continue;
+            };
+
+            for queue_id in 0..queue_data.read_queue_nums() {
+                let queue_id = i32::try_from(queue_id).expect("queue id should fit within i32");
+                let start = admin
+                    .search_offset(
+                        CheetahString::from(broker_addr.clone()),
+                        CheetahString::from(query.topic.clone()),
+                        queue_id,
+                        query.begin as u64,
+                        PULL_TIMEOUT_MILLIS,
+                    )
+                    .await
+                    .map_err(|error| MessageError::RocketMQ(error.to_string()))?
+                    as i64;
+                let end = admin
+                    .search_offset(
+                        CheetahString::from(broker_addr.clone()),
+                        CheetahString::from(query.topic.clone()),
+                        queue_id,
+                        query.end as u64,
+                        PULL_TIMEOUT_MILLIS,
+                    )
+                    .await
+                    .map_err(|error| MessageError::RocketMQ(error.to_string()))?
+                    as i64;
+
+                queue_states.push(QueueScanState::new(
+                    idx,
+                    broker_addr.clone(),
+                    rocketmq_common::common::message::message_queue::MessageQueue::from_parts(
+                        query.topic.as_str(),
+                        broker_name.as_str(),
+                        queue_id,
+                    ),
+                    start,
+                    end,
+                ));
+                idx += 1;
+            }
+        }
+
+        if queue_states.is_empty() {
+            return Err(MessageError::Validation(format!(
+                "No readable message queue was found for topic `{}`.",
+                query.topic
+            )));
+        }
+
+        Ok(queue_states)
+    }
+
+    async fn align_queue_start(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+        queue_state: &mut QueueScanState,
+    ) -> MessageResult<()> {
+        let mut start = queue_state.start;
+        let mut has_data = false;
+
+        while start < queue_state.end {
+            let batch_size = ((queue_state.end - start).min(PULL_BATCH_SIZE as i64)).max(1) as i32;
+            let result = admin
+                .pull_message_from_queue(
+                    queue_state.broker_addr.as_str(),
+                    &queue_state.message_queue,
+                    "*",
+                    start,
+                    batch_size,
+                    PULL_TIMEOUT_MILLIS,
+                )
+                .await
+                .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+
+            match result.pull_status() {
+                PullStatus::Found => {
+                    let Some(messages) = result.msg_found_list() else {
+                        break;
+                    };
+                    if messages.is_empty() {
+                        break;
+                    }
+
+                    has_data = true;
+                    let mut advanced = false;
+                    for message in messages {
+                        let message_ref: &MessageExt = message;
+                        if message_ref.store_timestamp() < query.begin {
+                            start += 1;
+                            advanced = true;
+                        } else {
+                            advanced = false;
+                            break;
+                        }
+                    }
+
+                    if !advanced {
+                        break;
+                    }
+                }
+                PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => break,
+            }
+        }
+
+        if !has_data || start >= queue_state.end {
+            queue_state.end = start;
+        }
+        queue_state.start = start;
+        queue_state.reset_selection();
+
+        Ok(())
+    }
+
+    async fn align_queue_end(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+        queue_state: &mut QueueScanState,
+    ) -> MessageResult<()> {
+        if queue_state.start >= queue_state.end {
+            queue_state.end = queue_state.start;
+            queue_state.reset_selection();
+            return Ok(());
+        }
+
+        let mut end = queue_state.end;
+        let mut pull_offset = end;
+        let mut has_illegal_offset = true;
+
+        while has_illegal_offset {
+            let mut pull_size = PULL_BATCH_SIZE as i64;
+            if pull_offset - pull_size > queue_state.start {
+                pull_offset -= pull_size;
+            } else {
+                pull_offset = queue_state.start;
+                pull_size = end - pull_offset;
+            }
+
+            if pull_size <= 0 {
+                break;
+            }
+
+            let result = admin
+                .pull_message_from_queue(
+                    queue_state.broker_addr.as_str(),
+                    &queue_state.message_queue,
+                    "*",
+                    pull_offset,
+                    pull_size as i32,
+                    PULL_TIMEOUT_MILLIS,
+                )
+                .await
+                .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+
+            match result.pull_status() {
+                PullStatus::Found => {
+                    if let Some(messages) = result.msg_found_list() {
+                        for message in messages.iter().rev() {
+                            let message_ref: &MessageExt = message;
+                            if message_ref.store_timestamp() > query.end {
+                                end -= 1;
+                            } else {
+                                has_illegal_offset = false;
+                                break;
+                            }
+                        }
+                    } else {
+                        has_illegal_offset = false;
+                    }
+                }
+                PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => {
+                    has_illegal_offset = false;
+                }
+            }
+
+            if pull_offset == queue_state.start {
+                break;
+            }
+        }
+
+        queue_state.end = end.max(queue_state.start);
+        queue_state.reset_selection();
+
+        Ok(())
+    }
+
+    async fn load_page_messages(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        query: &NormalizedMessagePageQuery,
+        queue_states: &[QueueScanState],
+    ) -> MessageResult<Vec<MessageSummaryView>> {
+        let mut items = Vec::new();
+
+        for queue_state in queue_states {
+            let mut pull_offset = queue_state.start_offset;
+            let mut remaining = queue_state.selection_len();
+
+            while remaining > 0 && pull_offset < queue_state.end_offset {
+                let batch_size = ((queue_state.end_offset - pull_offset).min(PULL_BATCH_SIZE as i64))
+                    .max(1) as i32;
+                let result = admin
+                    .pull_message_from_queue(
+                        queue_state.broker_addr.as_str(),
+                        &queue_state.message_queue,
+                        "*",
+                        pull_offset,
+                        batch_size,
+                        PULL_TIMEOUT_MILLIS,
+                    )
+                    .await
+                    .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
+
+                match result.pull_status() {
+                    PullStatus::Found => {
+                        let Some(messages) = result.msg_found_list() else {
+                            break;
+                        };
+                        if messages.is_empty() {
+                            break;
+                        }
+
+                        for message in messages {
+                            if remaining == 0 {
+                                break;
+                            }
+                            let message_ref: &MessageExt = message;
+                            if message_ref.store_timestamp() < query.begin
+                                || message_ref.store_timestamp() > query.end
+                            {
+                                continue;
+                            }
+
+                            items.push(map_message_summary(message_ref.clone()));
+                            remaining -= 1;
+                        }
+
+                        let next_begin_offset = result.next_begin_offset() as i64;
+                        if next_begin_offset <= pull_offset {
+                            break;
+                        }
+                        pull_offset = next_begin_offset;
+                    }
+                    PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => break,
+                }
+            }
+        }
+
+        sort_message_summaries_desc(&mut items);
+        Ok(items)
     }
 
     async fn query_message_by_topic_key_with_admin(
@@ -520,6 +959,36 @@ fn map_message_summary(message: MessageExt) -> MessageSummaryView {
         tags: message.get_tags().map(|value| value.to_string()),
         keys: extract_keys(&message),
         store_timestamp: message.store_timestamp(),
+    }
+}
+
+fn build_message_page_response(
+    items: Vec<MessageSummaryView>,
+    total: usize,
+    query: &NormalizedMessagePageQuery,
+    task_id: &str,
+) -> MessagePageResponse {
+    let total_pages = if total == 0 {
+        0
+    } else {
+        total.div_ceil(query.page_size) as u32
+    };
+    let number = query.page_index as u32;
+    let number_of_elements = items.len();
+
+    MessagePageResponse {
+        page: MessagePageView {
+            content: items,
+            number,
+            size: query.page_size as u32,
+            total_elements: total,
+            total_pages,
+            number_of_elements,
+            first: number == 0,
+            last: total_pages == 0 || number + 1 >= total_pages,
+            empty: number_of_elements == 0,
+        },
+        task_id: task_id.to_string(),
     }
 }
 

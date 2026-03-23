@@ -14,10 +14,12 @@
 
 use crate::message::service::MessageManager;
 use crate::message::types::MessageDetailView;
+use crate::message::types::MessagePageResponse;
 use crate::message::types::MessageTraceDetailView;
 use crate::message::types::MessageSummaryListResponse;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
+use rocketmq_dashboard_common::MessagePageQueryRequest;
 use rocketmq_dashboard_common::MessageTraceQueryRequest;
 use rocketmq_dashboard_common::ViewMessageRequest;
 use tauri::State;
@@ -40,6 +42,17 @@ pub async fn query_message_by_id(
 ) -> Result<MessageSummaryListResponse, String> {
     message_manager
         .query_message_by_id(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn query_message_page_by_topic(
+    request: MessagePageQueryRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<MessagePageResponse, String> {
+    message_manager
+        .query_message_page_by_topic(request)
         .await
         .map_err(|error| error.to_string())
 }

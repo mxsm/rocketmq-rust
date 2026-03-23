@@ -1,26 +1,38 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  ChevronDown,
-  Calendar,
-  Search,
-  FileText,
-  Copy,
-  Tag,
-  Key,
-  Clock,
   AlertCircle,
+  Calendar,
+  ChevronDown,
+  Clock,
+  Copy,
+  FileText,
   Info,
+  Key,
+  Search,
+  Tag,
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
-import { Input } from './ui/input';
-import { MessageService } from '../services/message.service';
 import { MessageDetailModal } from './MessageDetailModal';
+import { Pagination } from './Pagination';
+import { Input } from './ui/input';
 import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
 import type { MessageSummary } from '../features/message/types/message.types';
+import { MessageService } from '../services/message.service';
+
+type MessageTab = 'Topic' | 'Message Key' | 'Message ID';
+
+const DEFAULT_PAGE_SIZE = 10;
+
+const defaultPagination = {
+  currentPage: 1,
+  pageSize: DEFAULT_PAGE_SIZE,
+  totalPages: 0,
+  totalElements: 0,
+};
 
 export const MessageView = () => {
-  const [activeTab, setActiveTab] = useState('Topic');
+  const [activeTab, setActiveTab] = useState<MessageTab>('Topic');
   const [topic, setTopic] = useState('');
   const [msgKey, setMsgKey] = useState('');
   const [msgId, setMsgId] = useState('');
@@ -31,6 +43,8 @@ export const MessageView = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
+  const [topicTaskId, setTopicTaskId] = useState('');
+  const [topicPagination, setTopicPagination] = useState(defaultPagination);
   const { data: topicCatalog, isLoading: isTopicCatalogLoading, error: topicCatalogError } = useTopicCatalog();
 
   const availableTopics = useMemo(
@@ -46,8 +60,11 @@ export const MessageView = () => {
 
   useEffect(() => {
     setMessages([]);
+    setSelectedMessage(null);
     setSearchError('');
     setHasSearched(false);
+    setTopicTaskId('');
+    setTopicPagination(defaultPagination);
   }, [activeTab]);
 
   const formatTimestamp = (value: number) => {
@@ -57,27 +74,91 @@ export const MessageView = () => {
     return new Date(value).toLocaleString();
   };
 
+  const resetTopicPagingState = () => {
+    setMessages([]);
+    setSelectedMessage(null);
+    setSearchError('');
+    setHasSearched(false);
+    setTopicTaskId('');
+    setTopicPagination(defaultPagination);
+  };
+
+  const parseDateTimeInput = (value: string): number | null => {
+    const normalized = value.trim().replace(' ', 'T');
+    if (!normalized) {
+      return null;
+    }
+
+    const parsed = new Date(normalized);
+    const timestamp = parsed.getTime();
+    return Number.isNaN(timestamp) ? null : timestamp;
+  };
+
+  const queryTopicPage = async (pageNum = 1) => {
+    if (!topic.trim()) {
+      setSearchError('Topic is required.');
+      return;
+    }
+
+    const begin = parseDateTimeInput(startDate);
+    const end = parseDateTimeInput(endDate);
+    if (begin === null || end === null) {
+      setSearchError('Begin and end must be valid date-time strings.');
+      return;
+    }
+    if (end < begin) {
+      setSearchError('End time must be greater than or equal to begin time.');
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchError('');
+    setHasSearched(true);
+
+    try {
+      const response = await MessageService.queryMessagePageByTopic({
+        topic: topic.trim(),
+        begin,
+        end,
+        pageNum,
+        pageSize: topicPagination.pageSize,
+        taskId: topicTaskId || undefined,
+      });
+
+      setMessages(response.page.content);
+      setTopicTaskId(response.taskId);
+      setTopicPagination({
+        currentPage: response.page.number + 1,
+        pageSize: response.page.size,
+        totalPages: response.page.totalPages,
+        totalElements: response.page.totalElements,
+      });
+    } catch (error) {
+      setMessages([]);
+      setSearchError(error instanceof Error ? error.message : 'Failed to query messages by topic.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   const handleSearch = async () => {
     if (activeTab === 'Topic') {
-      setMessages([]);
-      setHasSearched(false);
-      setSearchError('Topic + 时间范围分页查询属于后续 phase，本轮只接通了 Message Key / Message ID 的真实链路。');
-      toast.message('Topic 查询将在后续阶段接入真实分页链路');
+      await queryTopicPage(1);
       return;
     }
 
     if (!topic.trim()) {
-      setSearchError('请选择 Topic。');
+      setSearchError('Topic is required.');
       return;
     }
 
     if (activeTab === 'Message Key' && !msgKey.trim()) {
-      setSearchError('请输入 Message Key。');
+      setSearchError('Message Key is required.');
       return;
     }
 
     if (activeTab === 'Message ID' && !msgId.trim()) {
-      setSearchError('请输入 Message ID。');
+      setSearchError('Message ID is required.');
       return;
     }
 
@@ -99,342 +180,333 @@ export const MessageView = () => {
       setMessages(response.items);
     } catch (error) {
       setMessages([]);
-      setSearchError(error instanceof Error ? error.message : '消息查询失败');
+      setSearchError(error instanceof Error ? error.message : 'Failed to query messages.');
     } finally {
       setIsSearching(false);
     }
   };
-  
+
+  const renderTopicSelector = () => (
+    <div className="flex items-center space-x-2">
+      <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Topic:</span>
+      <div className="relative group">
+        <select
+          value={topic}
+          onChange={(event) => {
+            setTopic(event.target.value);
+            if (activeTab === 'Topic') {
+              resetTopicPagingState();
+            }
+          }}
+          className="w-48 cursor-pointer appearance-none rounded-xl border border-gray-200 bg-gray-50 py-2 pl-3 pr-8 text-sm font-medium text-gray-700 transition-all focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+        >
+          {availableTopics.length === 0 ? (
+            <option value="">
+              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
+            </option>
+          ) : (
+            availableTopics.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))
+          )}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+      </div>
+    </div>
+  );
+
   const renderSearchArea = () => {
     switch (activeTab) {
       case 'Topic':
         return (
-           <>
-              <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Topic:</span>
-                  <div className="relative group">
-                      <select 
-                          value={topic}
-                          onChange={(e) => setTopic(e.target.value)}
-                          className="pl-3 pr-8 py-2 w-48 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer text-gray-700 dark:text-gray-300 font-medium"
-                      >
-                          {availableTopics.length === 0 ? (
-                            <option value="">
-                              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
-                            </option>
-                          ) : (
-                            availableTopics.map((item) => (
-                              <option key={item} value={item}>{item}</option>
-                            ))
-                          )}
-                      </select>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-                  </div>
+          <>
+            {renderTopicSelector()}
+            <div className="mx-2 hidden h-8 w-px bg-gray-200 dark:bg-gray-700 xl:block" />
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Begin:</span>
+              <div className="relative">
+                <Input
+                  value={startDate}
+                  onChange={(event) => {
+                    setStartDate(event.target.value);
+                    resetTopicPagingState();
+                  }}
+                  className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+                <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               </div>
-              <div className="h-8 w-px bg-gray-200 dark:bg-gray-700 mx-2 hidden xl:block"></div>
-              <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Begin:</span>
-                  <div className="relative">
-                      <Input 
-                        value={startDate} 
-                        onChange={(e) => setStartDate(e.target.value)}
-                        className="w-48 font-mono text-xs bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white" 
-                      />
-                      <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-                  </div>
+            </div>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">End:</span>
+              <div className="relative">
+                <Input
+                  value={endDate}
+                  onChange={(event) => {
+                    setEndDate(event.target.value);
+                    resetTopicPagingState();
+                  }}
+                  className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                />
+                <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               </div>
-              <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">End:</span>
-                  <div className="relative">
-                      <Input 
-                        value={endDate} 
-                        onChange={(e) => setEndDate(e.target.value)}
-                        className="w-48 font-mono text-xs bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white" 
-                      />
-                      <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-                  </div>
-              </div>
-           </>
+            </div>
+          </>
         );
       case 'Message Key':
         return (
           <>
-             <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Topic:</span>
-                  <div className="relative group">
-                      <select 
-                          value={topic}
-                          onChange={(e) => setTopic(e.target.value)}
-                          className="pl-3 pr-8 py-2 w-48 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer text-gray-700 dark:text-gray-300 font-medium"
-                      >
-                          {availableTopics.length === 0 ? (
-                            <option value="">
-                              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
-                            </option>
-                          ) : (
-                            availableTopics.map((item) => (
-                              <option key={item} value={item}>{item}</option>
-                            ))
-                          )}
-                      </select>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-                  </div>
-              </div>
-              <div className="h-8 w-px bg-gray-200 dark:bg-gray-700 mx-2 hidden md:block"></div>
-              <div className="flex items-center space-x-2 flex-1">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">Key:</span>
-                  <Input 
-                    value={msgKey} 
-                    onChange={(e) => setMsgKey(e.target.value)}
-                    placeholder="Enter Message Key..."
-                    className="flex-1 min-w-[200px] bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white placeholder:text-gray-500" 
-                  />
-              </div>
-              <div className="text-xs text-orange-500 dark:text-orange-400 font-medium bg-orange-50 dark:bg-orange-900/20 px-2 py-1 rounded border border-orange-100 dark:border-orange-900/30 whitespace-nowrap">
-                Only return 64 messages
-              </div>
+            {renderTopicSelector()}
+            <div className="mx-2 hidden h-8 w-px bg-gray-200 dark:bg-gray-700 md:block" />
+            <div className="flex flex-1 items-center space-x-2">
+              <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Key:</span>
+              <Input
+                value={msgKey}
+                onChange={(event) => setMsgKey(event.target.value)}
+                placeholder="Enter Message Key..."
+                className="min-w-[200px] flex-1 border-gray-200 bg-gray-50 text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              />
+            </div>
+            <div className="whitespace-nowrap rounded border border-orange-100 bg-orange-50 px-2 py-1 text-xs font-medium text-orange-500 dark:border-orange-900/30 dark:bg-orange-900/20 dark:text-orange-400">
+              Only returns up to 64 messages
+            </div>
           </>
         );
       case 'Message ID':
         return (
           <>
-             <div className="flex items-center space-x-2">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Topic:</span>
-                  <div className="relative group">
-                      <select 
-                          value={topic}
-                          onChange={(e) => setTopic(e.target.value)}
-                          className="pl-3 pr-8 py-2 w-48 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer text-gray-700 dark:text-gray-300 font-medium"
-                      >
-                          {availableTopics.length === 0 ? (
-                            <option value="">
-                              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
-                            </option>
-                          ) : (
-                            availableTopics.map((item) => (
-                              <option key={item} value={item}>{item}</option>
-                            ))
-                          )}
-                      </select>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-                  </div>
-              </div>
-              <div className="h-8 w-px bg-gray-200 dark:bg-gray-700 mx-2 hidden md:block"></div>
-              <div className="flex items-center space-x-2 flex-1">
-                  <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">Message ID:</span>
-                  <Input 
-                    value={msgId} 
-                    onChange={(e) => setMsgId(e.target.value)}
-                    placeholder="Enter Message ID..."
-                    className="flex-1 min-w-[300px] font-mono bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white placeholder:text-gray-500" 
-                  />
-              </div>
+            {renderTopicSelector()}
+            <div className="mx-2 hidden h-8 w-px bg-gray-200 dark:bg-gray-700 md:block" />
+            <div className="flex flex-1 items-center space-x-2">
+              <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Message ID:</span>
+              <Input
+                value={msgId}
+                onChange={(event) => setMsgId(event.target.value)}
+                placeholder="Enter Message ID..."
+                className="min-w-[300px] flex-1 border-gray-200 bg-gray-50 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+              />
+            </div>
           </>
         );
-      default: return null;
+      default:
+        return null;
     }
   };
 
+  const renderEmptyCopy = () => {
+    if (activeTab === 'Topic') {
+      return 'Select a topic and time window to load paged results.';
+    }
+    if (activeTab === 'Message Key') {
+      return 'Enter a topic and message key to start searching.';
+    }
+    return 'Enter a topic and message id to start searching.';
+  };
+
   return (
-    <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
-        <MessageDetailModal
-          isOpen={!!selectedMessage}
-          onClose={() => setSelectedMessage(null)}
-          message={selectedMessage}
-        />
+    <div className="mx-auto max-w-[1600px] space-y-6 pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <MessageDetailModal
+        isOpen={!!selectedMessage}
+        onClose={() => setSelectedMessage(null)}
+        message={selectedMessage}
+      />
 
-        {/* Header Tabs */}
-        <div className="flex justify-center mb-8">
-           <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex shadow-inner">
-              {['Topic', 'Message Key', 'Message ID'].map(tab => (
-                 <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`px-6 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
-                       activeTab === tab 
-                       ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' 
-                       : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-gray-700/50'
-                    }`}
-                 >
-                    {tab}
-                 </button>
-              ))}
-           </div>
+      <div className="mb-8 flex justify-center">
+        <div className="inline-flex rounded-xl bg-gray-100 p-1 shadow-inner dark:bg-gray-800">
+          {(['Topic', 'Message Key', 'Message ID'] as MessageTab[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`rounded-lg px-6 py-2 text-sm font-medium transition-all duration-200 ${
+                activeTab === tab
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
+                  : 'text-gray-500 hover:bg-gray-200/50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/50 dark:hover:text-gray-200'
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
+        <div className="flex flex-1 flex-wrap items-center gap-4">
+          {renderSearchArea()}
         </div>
 
-        {/* Toolbar */}
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm sticky top-0 z-20 backdrop-blur-xl bg-white/90 dark:bg-gray-900/90 transition-colors">
-             {/* Search Inputs */}
-             <div className="flex flex-wrap items-center gap-4 flex-1">
-                {renderSearchArea()}
-             </div>
-
-             {/* Actions */}
-             <div>
-                 <button 
-                    onClick={() => void handleSearch()}
-                    disabled={isSearching || isTopicCatalogLoading}
-                    className="flex items-center px-6 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg active:scale-95 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                 >
-                    <Search className="w-4 h-4 mr-2" />
-                    {isSearching ? 'SEARCHING...' : 'SEARCH'}
-                 </button>
-             </div>
+        <div>
+          <button
+            onClick={() => void handleSearch()}
+            disabled={isSearching || isTopicCatalogLoading}
+            className="flex items-center rounded-xl bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg active:scale-95 dark:border dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:hover:bg-gray-800"
+          >
+            <Search className="mr-2 h-4 w-4" />
+            {isSearching ? 'SEARCHING...' : 'SEARCH'}
+          </button>
         </div>
+      </div>
 
-        {topicCatalogError && (
-          <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>Topic 列表加载失败：{topicCatalogError}</div>
-          </div>
-        )}
+      {topicCatalogError ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>Failed to load topic catalog: {topicCatalogError}</div>
+        </div>
+      ) : null}
 
-        {searchError && (
-          <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>{searchError}</div>
-          </div>
-        )}
+      {searchError ? (
+        <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>{searchError}</div>
+        </div>
+      ) : null}
 
-        {activeTab !== 'Topic' && (
-          <div className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
-            <div className="flex items-center gap-2">
-              <Info className="h-4 w-4 text-blue-500" />
-              <span>本轮已接入真实查询链路，详情弹窗与 Topic 分页将在后续 phase 继续迁移。</span>
-            </div>
-            <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
-              {hasSearched ? `${messages.length} result(s)` : 'ready'}
-            </span>
-          </div>
-        )}
+      <div className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
+        <div className="flex items-center gap-2">
+          <Info className="h-4 w-4 text-blue-500" />
+          <span>
+            {activeTab === 'Topic'
+              ? 'Topic tab now uses real topic/time pagination with backend taskId continuity.'
+              : 'Message Key and Message ID remain on the real query path introduced in earlier phases.'}
+          </span>
+        </div>
+        <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
+          {activeTab === 'Topic'
+            ? hasSearched
+              ? `${messages.length} item(s) on page ${topicPagination.currentPage} / ${Math.max(topicPagination.totalPages, 1)}`
+              : 'ready'
+            : hasSearched
+              ? `${messages.length} result(s)`
+              : 'ready'}
+        </span>
+      </div>
 
-        {/* Card Grid */}
-        {activeTab === 'Topic' ? (
-          <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-300">
-              <Info className="h-7 w-7" />
-            </div>
-            <p className="text-lg font-semibold text-gray-900 dark:text-white">Topic 时间分页查询尚未接入</p>
-            <p className="mt-2 max-w-2xl text-sm text-gray-500 dark:text-gray-400">
-              当前批次先保证 `Message Key / Message ID` 的真实闭环，避免在 Topic 分页、taskId 缓存和详情同时改动时把整个页面搞坏。
-            </p>
-          </div>
-        ) : isSearching ? (
-          <div className="flex flex-col items-center justify-center rounded-[28px] border border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <Search className="mb-4 h-10 w-10 animate-pulse text-blue-500" />
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">正在查询消息...</p>
-          </div>
-        ) : messages.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6">
+      {isSearching ? (
+        <div className="flex flex-col items-center justify-center rounded-[28px] border border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <Search className="mb-4 h-10 w-10 animate-pulse text-blue-500" />
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Querying messages...</p>
+        </div>
+      ) : messages.length > 0 ? (
+        <>
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
             {messages.map((msg, index) => (
-                <motion.div
-                    key={msg.msgId}
-                    initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    whileHover={{ 
-                      y: -4, 
-                      boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)" 
-                    }}
-                    transition={{ 
-                      duration: 0.3, 
-                      delay: index * 0.05,
-                      ease: [0.22, 1, 0.36, 1]
-                    }}
-                    className="group bg-white dark:bg-gray-900 rounded-[20px] border border-gray-100 dark:border-gray-800 shadow-sm hover:border-blue-200 dark:hover:border-blue-800 transition-all duration-300 flex flex-col overflow-hidden"
-                >
-                    {/* Header - Message ID Focused */}
-                    <div className="p-5 bg-gradient-to-br from-gray-50/80 to-white dark:from-gray-800/80 dark:to-gray-900 border-b border-gray-100 dark:border-gray-800">
-                        <div className="flex items-center gap-3 mb-3">
-                            <div className="h-10 w-10 rounded-xl bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 shadow-sm flex items-center justify-center shrink-0">
-                                <FileText className="w-5 h-5 text-blue-600 dark:text-blue-500" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                                <div className="flex items-center justify-between">
-                                <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-0.5">Message ID</span>
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(msg.msgId); toast.success("Copied ID"); }}
-                                        className="text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400 transition-colors p-1"
-                                    >
-                                        <Copy className="w-3.5 h-3.5" />
-                                    </button>
-                                </div>
-                                <h3 className="font-mono text-xs font-bold text-gray-900 dark:text-white truncate" title={msg.msgId}>
-                                    {msg.msgId}
-                                </h3>
-                            </div>
-                        </div>
+              <motion.div
+                key={msg.msgId}
+                initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                whileHover={{
+                  y: -4,
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)',
+                }}
+                transition={{
+                  duration: 0.3,
+                  delay: index * 0.05,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+                className="group flex flex-col overflow-hidden rounded-[20px] border border-gray-100 bg-white shadow-sm transition-all duration-300 hover:border-blue-200 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-800"
+              >
+                <div className="border-b border-gray-100 bg-gradient-to-br from-gray-50/80 to-white p-5 dark:border-gray-800 dark:from-gray-800/80 dark:to-gray-900">
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-100 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                      <FileText className="h-5 w-5 text-blue-600 dark:text-blue-500" />
                     </div>
-
-                    {/* Body Content */}
-                    <div className="p-5 flex-1 space-y-4">
-                        {/* Tag Section */}
-                        <div className="flex items-start gap-3">
-                            <div className="mt-0.5 w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
-                                <Tag className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                            </div>
-                            <div>
-                                <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Tag</div>
-                                <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-300 shadow-sm">
-                                    {msg.tags || '-'}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            {/* Key Section */}
-                            <div className="flex items-start gap-3">
-                                <div className="mt-0.5 w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
-                                    <Key className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                                </div>
-                                <div className="min-w-0">
-                                    <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Key</div>
-                                    <div className="font-mono text-xs font-medium text-gray-900 dark:text-gray-300 truncate" title={msg.keys || '-'}>
-                                        {msg.keys || '-'}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Time Section */}
-                            <div className="flex items-start gap-3">
-                                <div className="mt-0.5 w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
-                                    <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                                </div>
-                                <div className="min-w-0">
-                                    <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Store Time</div>
-                                    <div className="font-mono text-xs font-medium text-gray-900 dark:text-gray-300 truncate" title={formatTimestamp(msg.storeTimestamp)}>
-                                        {formatTimestamp(msg.storeTimestamp)}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Action Footer - Previous Style (Full Width Black Button) */}
-                    <div className="p-4 bg-gray-50/50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
-                        <button 
-                            onClick={() => setSelectedMessage(msg)}
-                            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-gray-900 dark:bg-blue-600 text-white dark:text-white text-xs font-bold hover:bg-gray-800 dark:hover:bg-blue-500 transition-colors shadow-sm active:scale-[0.98]"
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="mb-0.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Message ID</span>
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            navigator.clipboard.writeText(msg.msgId);
+                            toast.success('Copied ID');
+                          }}
+                          className="p-1 text-gray-300 transition-colors hover:text-blue-600 dark:text-gray-600 dark:hover:text-blue-400"
                         >
-                            <FileText className="w-3.5 h-3.5" />
-                            <span>View Details</span>
+                          <Copy className="h-3.5 w-3.5" />
                         </button>
+                      </div>
+                      <h3 className="truncate font-mono text-xs font-bold text-gray-900 dark:text-white" title={msg.msgId}>
+                        {msg.msgId}
+                      </h3>
                     </div>
-                </motion.div>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-4 p-5">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900/30">
+                      <Tag className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <div>
+                      <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Tag</div>
+                      <span className="inline-flex items-center rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-bold text-gray-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                        {msg.tags || '-'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 dark:bg-amber-900/30">
+                        <Key className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Key</div>
+                        <div className="truncate font-mono text-xs font-medium text-gray-900 dark:text-gray-300" title={msg.keys || '-'}>
+                          {msg.keys || '-'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-900/30">
+                        <Clock className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">Store Time</div>
+                        <div className="truncate font-mono text-xs font-medium text-gray-900 dark:text-gray-300" title={formatTimestamp(msg.storeTimestamp)}>
+                          {formatTimestamp(msg.storeTimestamp)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-gray-800/50">
+                  <button
+                    onClick={() => setSelectedMessage(msg)}
+                    className="flex w-full items-center justify-center space-x-2 rounded-xl bg-gray-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-gray-800 active:scale-[0.98] dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>View Details</span>
+                  </button>
+                </div>
+              </motion.div>
             ))}
           </div>
-        ) : hasSearched ? (
-          <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">没有查到匹配消息</p>
-            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">请检查 Topic 与 Key / Message ID 是否匹配。</p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">输入查询条件后开始检索</p>
-            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">当前批次已接通真实的 Message Key / Message ID 查询。</p>
-          </div>
-        )}
+
+          {activeTab === 'Topic' && topicPagination.totalPages > 1 ? (
+            <div className="flex items-center justify-center pt-2">
+              <Pagination
+                currentPage={topicPagination.currentPage}
+                totalPages={topicPagination.totalPages}
+                onPageChange={(page) => void queryTopicPage(page)}
+              />
+            </div>
+          ) : null}
+        </>
+      ) : hasSearched ? (
+        <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">No matching messages were found</p>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Check the current topic, time range, key, or message id.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Search is ready</p>
+          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{renderEmptyCopy()}</p>
+        </div>
+      )}
     </div>
   );
 };

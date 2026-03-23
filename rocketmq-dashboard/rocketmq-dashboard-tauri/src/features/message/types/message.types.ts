@@ -21,6 +21,32 @@ export interface MessageIdQueryRequest {
     messageId: string;
 }
 
+export interface MessagePageQueryRequest {
+    topic: string;
+    begin: number;
+    end: number;
+    pageNum: number;
+    pageSize: number;
+    taskId?: string | null;
+}
+
+export interface MessagePage {
+    content: MessageSummary[];
+    number: number;
+    size: number;
+    totalElements: number;
+    totalPages: number;
+    numberOfElements: number;
+    first: boolean;
+    last: boolean;
+    empty: boolean;
+}
+
+export interface MessagePageResponse {
+    page: MessagePage;
+    taskId: string;
+}
+
 export interface ViewMessageRequest {
     topic: string;
     messageId: string;

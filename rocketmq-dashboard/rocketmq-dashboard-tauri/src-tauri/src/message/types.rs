@@ -57,6 +57,27 @@ pub(crate) struct MessageSummaryListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct MessagePageView {
+    pub(crate) content: Vec<MessageSummaryView>,
+    pub(crate) number: u32,
+    pub(crate) size: u32,
+    pub(crate) total_elements: usize,
+    pub(crate) total_pages: u32,
+    pub(crate) number_of_elements: usize,
+    pub(crate) first: bool,
+    pub(crate) last: bool,
+    pub(crate) empty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MessagePageResponse {
+    pub(crate) page: MessagePageView,
+    pub(crate) task_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub(crate) struct MessageTrackView {
     pub(crate) consumer_group: String,

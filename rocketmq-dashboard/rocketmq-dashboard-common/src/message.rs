@@ -47,8 +47,8 @@ pub struct MessageTraceQueryRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MessagePageQueryRequest {
     pub topic: String,
-    pub begin_timestamp: i64,
-    pub end_timestamp: i64,
+    pub begin: i64,
+    pub end: i64,
     pub page_num: u32,
     pub page_size: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,8 +87,8 @@ mod tests {
     fn message_page_query_request_uses_java_dashboard_field_names() {
         let request = super::MessagePageQueryRequest {
             topic: "TopicTest".to_string(),
-            begin_timestamp: 1_700_000_000_000,
-            end_timestamp: 1_700_000_100_000,
+            begin: 1_700_000_000_000,
+            end: 1_700_000_100_000,
             page_num: 2,
             page_size: 25,
             task_id: Some("task-1".to_string()),
@@ -96,8 +96,8 @@ mod tests {
 
         let json = serde_json::to_string(&request).expect("serialize page request");
 
-        assert!(json.contains("\"beginTimestamp\""));
-        assert!(json.contains("\"endTimestamp\""));
+        assert!(json.contains("\"begin\""));
+        assert!(json.contains("\"end\""));
         assert!(json.contains("\"pageNum\""));
         assert!(json.contains("\"pageSize\""));
         assert!(json.contains("\"taskId\""));
