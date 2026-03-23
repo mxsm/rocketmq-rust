@@ -347,7 +347,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// A reference to the transaction ID as a `&str`.
-    fn get_transaction_id(&self) -> Option<&CheetahString>;
+    fn transaction_id(&self) -> Option<&CheetahString>;
 
     /// Sets the transaction ID for the message.
     ///
