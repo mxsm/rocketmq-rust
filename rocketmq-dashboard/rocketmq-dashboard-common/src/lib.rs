@@ -20,6 +20,7 @@
 pub mod api;
 pub mod cluster;
 pub mod consumer;
+pub mod message;
 pub mod models;
 pub mod nameserver;
 pub mod producer;
@@ -29,6 +30,7 @@ pub mod topic;
 pub use api::*;
 pub use cluster::*;
 pub use consumer::*;
+pub use message::*;
 pub use models::*;
 pub use nameserver::*;
 pub use producer::*;

@@ -1,39 +1,108 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { 
-  ChevronDown, 
-  Calendar, 
-  Search, 
-  FileText, 
-  Copy, 
-  Tag, 
-  Key, 
-  Clock 
+import {
+  ChevronDown,
+  Calendar,
+  Search,
+  FileText,
+  Copy,
+  Tag,
+  Key,
+  Clock,
+  AlertCircle,
+  Info,
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
-import { MessageDetailModal } from './MessageDetailModal';
-import { Pagination } from './Pagination';
 import { Input } from './ui/input';
+import { MessageService } from '../services/message.service';
+import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
+import type { MessageSummary } from '../features/message/types/message.types';
 
 export const MessageView = () => {
   const [activeTab, setActiveTab] = useState('Topic');
-  const [topic, setTopic] = useState('TopicTest');
+  const [topic, setTopic] = useState('');
   const [msgKey, setMsgKey] = useState('');
   const [msgId, setMsgId] = useState('');
   const [startDate, setStartDate] = useState('2026-01-27 00:00:00');
   const [endDate, setEndDate] = useState('2026-01-28 00:00:00');
-  const [selectedMessage, setSelectedMessage] = useState(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  
-  // Mock Data
-  const messages = Array.from({ length: 12 }).map((_, i) => ({
-    msgId: `240E03B350D263C087AA69AB77E798719CBC18B4AAC28A91AB${100000 + i}`,
-    tag: 'TagA',
-    key: i % 3 === 0 ? `Key_${i}` : null,
-    storeTime: '2026-01-27 21:46:42',
-    topic: 'TopicTest'
-  }));
+  const [messages, setMessages] = useState<MessageSummary[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
+  const { data: topicCatalog, isLoading: isTopicCatalogLoading, error: topicCatalogError } = useTopicCatalog();
 
+  const availableTopics = useMemo(
+    () => topicCatalog?.items.map((item) => item.topic) ?? [],
+    [topicCatalog],
+  );
+
+  useEffect(() => {
+    if (!topic && availableTopics.length > 0) {
+      setTopic(availableTopics[0]);
+    }
+  }, [availableTopics, topic]);
+
+  useEffect(() => {
+    setMessages([]);
+    setSearchError('');
+    setHasSearched(false);
+  }, [activeTab]);
+
+  const formatTimestamp = (value: number) => {
+    if (!value) {
+      return '-';
+    }
+    return new Date(value).toLocaleString();
+  };
+
+  const handleSearch = async () => {
+    if (activeTab === 'Topic') {
+      setMessages([]);
+      setHasSearched(false);
+      setSearchError('Topic + 时间范围分页查询属于后续 phase，本轮只接通了 Message Key / Message ID 的真实链路。');
+      toast.message('Topic 查询将在后续阶段接入真实分页链路');
+      return;
+    }
+
+    if (!topic.trim()) {
+      setSearchError('请选择 Topic。');
+      return;
+    }
+
+    if (activeTab === 'Message Key' && !msgKey.trim()) {
+      setSearchError('请输入 Message Key。');
+      return;
+    }
+
+    if (activeTab === 'Message ID' && !msgId.trim()) {
+      setSearchError('请输入 Message ID。');
+      return;
+    }
+
+    setIsSearching(true);
+    setSearchError('');
+    setHasSearched(true);
+
+    try {
+      const response = activeTab === 'Message Key'
+        ? await MessageService.queryMessageByTopicKey({
+            topic: topic.trim(),
+            key: msgKey.trim(),
+          })
+        : await MessageService.queryMessageById({
+            topic: topic.trim(),
+            messageId: msgId.trim(),
+          });
+
+      setMessages(response.items);
+    } catch (error) {
+      setMessages([]);
+      setSearchError(error instanceof Error ? error.message : '消息查询失败');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+  
   const renderSearchArea = () => {
     switch (activeTab) {
       case 'Topic':
@@ -47,8 +116,15 @@ export const MessageView = () => {
                           onChange={(e) => setTopic(e.target.value)}
                           className="pl-3 pr-8 py-2 w-48 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer text-gray-700 dark:text-gray-300 font-medium"
                       >
-                          <option>TopicTest</option>
-                          <option>BenchmarkTest</option>
+                          {availableTopics.length === 0 ? (
+                            <option value="">
+                              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
+                            </option>
+                          ) : (
+                            availableTopics.map((item) => (
+                              <option key={item} value={item}>{item}</option>
+                            ))
+                          )}
                       </select>
                       <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
                   </div>
@@ -89,8 +165,15 @@ export const MessageView = () => {
                           onChange={(e) => setTopic(e.target.value)}
                           className="pl-3 pr-8 py-2 w-48 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer text-gray-700 dark:text-gray-300 font-medium"
                       >
-                          <option>TopicTest</option>
-                          <option>BenchmarkTest</option>
+                          {availableTopics.length === 0 ? (
+                            <option value="">
+                              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
+                            </option>
+                          ) : (
+                            availableTopics.map((item) => (
+                              <option key={item} value={item}>{item}</option>
+                            ))
+                          )}
                       </select>
                       <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
                   </div>
@@ -121,8 +204,15 @@ export const MessageView = () => {
                           onChange={(e) => setTopic(e.target.value)}
                           className="pl-3 pr-8 py-2 w-48 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer text-gray-700 dark:text-gray-300 font-medium"
                       >
-                          <option>TopicTest</option>
-                          <option>BenchmarkTest</option>
+                          {availableTopics.length === 0 ? (
+                            <option value="">
+                              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
+                            </option>
+                          ) : (
+                            availableTopics.map((item) => (
+                              <option key={item} value={item}>{item}</option>
+                            ))
+                          )}
                       </select>
                       <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
                   </div>
@@ -145,13 +235,6 @@ export const MessageView = () => {
 
   return (
     <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
-        {/* Detail Modal */}
-        <MessageDetailModal 
-          isOpen={!!selectedMessage} 
-          onClose={() => setSelectedMessage(null)} 
-          message={selectedMessage} 
-        />
-
         {/* Header Tabs */}
         <div className="flex justify-center mb-8">
            <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl inline-flex shadow-inner">
@@ -181,18 +264,61 @@ export const MessageView = () => {
              {/* Actions */}
              <div>
                  <button 
-                    onClick={() => toast.success("Searching messages...")}
+                    onClick={() => void handleSearch()}
+                    disabled={isSearching || isTopicCatalogLoading}
                     className="flex items-center px-6 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg active:scale-95 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
                  >
                     <Search className="w-4 h-4 mr-2" />
-                    SEARCH
+                    {isSearching ? 'SEARCHING...' : 'SEARCH'}
                  </button>
              </div>
         </div>
 
+        {topicCatalogError && (
+          <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>Topic 列表加载失败：{topicCatalogError}</div>
+          </div>
+        )}
+
+        {searchError && (
+          <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>{searchError}</div>
+          </div>
+        )}
+
+        {activeTab !== 'Topic' && (
+          <div className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
+            <div className="flex items-center gap-2">
+              <Info className="h-4 w-4 text-blue-500" />
+              <span>本轮已接入真实查询链路，详情弹窗与 Topic 分页将在后续 phase 继续迁移。</span>
+            </div>
+            <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
+              {hasSearched ? `${messages.length} result(s)` : 'ready'}
+            </span>
+          </div>
+        )}
+
         {/* Card Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6">
-            {messages.map((msg: any, index) => (
+        {activeTab === 'Topic' ? (
+          <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-300">
+              <Info className="h-7 w-7" />
+            </div>
+            <p className="text-lg font-semibold text-gray-900 dark:text-white">Topic 时间分页查询尚未接入</p>
+            <p className="mt-2 max-w-2xl text-sm text-gray-500 dark:text-gray-400">
+              当前批次先保证 `Message Key / Message ID` 的真实闭环，避免在 Topic 分页、taskId 缓存和详情同时改动时把整个页面搞坏。
+            </p>
+          </div>
+        ) : isSearching ? (
+          <div className="flex flex-col items-center justify-center rounded-[28px] border border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <Search className="mb-4 h-10 w-10 animate-pulse text-blue-500" />
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">正在查询消息...</p>
+          </div>
+        ) : messages.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6">
+            {messages.map((msg, index) => (
                 <motion.div
                     key={msg.msgId}
                     initial={{ opacity: 0, y: 20, scale: 0.95 }}
@@ -216,9 +342,9 @@ export const MessageView = () => {
                             </div>
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-0.5">Message ID</span>
+                                <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-0.5">Message ID</span>
                                     <button 
-                                        onClick={(e) => { e.stopPropagation(); toast.success("Copied ID"); }}
+                                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(msg.msgId); toast.success("Copied ID"); }}
                                         className="text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400 transition-colors p-1"
                                     >
                                         <Copy className="w-3.5 h-3.5" />
@@ -241,7 +367,7 @@ export const MessageView = () => {
                             <div>
                                 <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Tag</div>
                                 <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-300 shadow-sm">
-                                    {msg.tag}
+                                    {msg.tags || '-'}
                                 </span>
                             </div>
                         </div>
@@ -254,8 +380,8 @@ export const MessageView = () => {
                                 </div>
                                 <div className="min-w-0">
                                     <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Key</div>
-                                    <div className="font-mono text-xs font-medium text-gray-900 dark:text-gray-300 truncate" title={msg.key || '-'}>
-                                        {msg.key || '-'}
+                                    <div className="font-mono text-xs font-medium text-gray-900 dark:text-gray-300 truncate" title={msg.keys || '-'}>
+                                        {msg.keys || '-'}
                                     </div>
                                 </div>
                             </div>
@@ -267,8 +393,8 @@ export const MessageView = () => {
                                 </div>
                                 <div className="min-w-0">
                                     <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">Store Time</div>
-                                    <div className="font-mono text-xs font-medium text-gray-900 dark:text-gray-300 truncate" title={msg.storeTime}>
-                                        {msg.storeTime}
+                                    <div className="font-mono text-xs font-medium text-gray-900 dark:text-gray-300 truncate" title={formatTimestamp(msg.storeTimestamp)}>
+                                        {formatTimestamp(msg.storeTimestamp)}
                                     </div>
                                 </div>
                             </div>
@@ -278,24 +404,29 @@ export const MessageView = () => {
                     {/* Action Footer - Previous Style (Full Width Black Button) */}
                     <div className="p-4 bg-gray-50/50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800">
                         <button 
-                            onClick={() => setSelectedMessage(msg)}
-                            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-gray-900 dark:bg-blue-600 text-white dark:text-white text-xs font-bold hover:bg-gray-800 dark:hover:bg-blue-500 transition-colors shadow-sm active:scale-[0.98]"
+                            disabled
+                            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl bg-gray-300 text-white text-xs font-bold transition-colors shadow-sm cursor-not-allowed dark:bg-gray-700 dark:text-gray-300"
                         >
                             <FileText className="w-3.5 h-3.5" />
-                            <span>View Details</span>
+                            <span>Detail In Phase 2</span>
                         </button>
                     </div>
                 </motion.div>
             ))}
-        </div>
-
-        <div className="flex items-center justify-center pt-6">
-            <Pagination 
-                currentPage={currentPage}
-                totalPages={5} 
-                onPageChange={setCurrentPage}
-            />
-        </div>
+          </div>
+        ) : hasSearched ? (
+          <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">没有查到匹配消息</p>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">请检查 Topic 与 Key / Message ID 是否匹配。</p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">输入查询条件后开始检索</p>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">当前批次已接通真实的 Message Key / Message ID 查询。</p>
+          </div>
+        )}
     </div>
   );
 };
