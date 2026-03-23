@@ -1089,10 +1089,19 @@ fn extract_keys(message: &MessageExt) -> Option<String> {
         .filter(|keys| !keys.is_empty())
 }
 
+fn extract_msg_id(message: &MessageExt) -> String {
+    message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+        ))
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| message.msg_id().to_string())
+}
+
 fn map_message_summary(message: MessageExt) -> MessageSummaryView {
     MessageSummaryView {
         topic: message.topic().to_string(),
-        msg_id: message.msg_id().to_string(),
+        msg_id: extract_msg_id(&message),
         tags: message.get_tags().map(|value| value.to_string()),
         keys: extract_keys(&message),
         store_timestamp: message.store_timestamp(),
@@ -1419,7 +1428,7 @@ fn map_message_detail(message: MessageExt, message_tracks: Vec<MessageTrack>) ->
 
     MessageDetailView {
         topic: message.topic().to_string(),
-        msg_id: message.msg_id().to_string(),
+        msg_id: extract_msg_id(&message),
         born_host: Some(message.born_host().to_string()),
         store_host: Some(message.store_host().to_string()),
         born_timestamp: Some(message.born_timestamp()),
