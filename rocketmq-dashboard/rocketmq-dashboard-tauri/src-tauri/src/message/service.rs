@@ -20,6 +20,7 @@ use crate::message::page_cache::NormalizedMessagePageQuery;
 use crate::message::page_cache::QueueScanState;
 use crate::message::page_cache::build_page_selection;
 use crate::message::page_cache::normalize_message_page_query;
+use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
 use crate::message::types::MessageError;
 use crate::message::types::MessagePageResponse;
@@ -45,6 +46,7 @@ use rocketmq_common::common::mix_all;
 #[allow(deprecated)]
 use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_dashboard_common::DlqBatchResendMessageRequest;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
 use rocketmq_dashboard_common::DlqViewMessageRequest;
@@ -261,6 +263,34 @@ impl MessageManager {
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    pub(crate) async fn batch_resend_dlq_message(
+        &self,
+        request: DlqBatchResendMessageRequest,
+    ) -> MessageResult<MessageBatchResendResponse> {
+        let requests = normalize_batch_resend_requests(request.messages)?;
+        let mut items = Vec::with_capacity(requests.len());
+
+        for request in requests {
+            let consumer_group = request.consumer_group.trim().to_string();
+            let message_id = request.message_id.trim().to_string();
+            let result = match self.resend_dlq_message(request).await {
+                Ok(result) => result,
+                Err(error) => build_failed_message_resend_result(consumer_group, message_id, error),
+            };
+            items.push(result);
+        }
+
+        let success_count = items.iter().filter(|item| item.success).count();
+        let total = items.len();
+
+        Ok(MessageBatchResendResponse {
+            items,
+            total,
+            success_count,
+            failure_count: total.saturating_sub(success_count),
+        })
     }
 
     pub(crate) async fn consume_message_directly(
@@ -1138,6 +1168,26 @@ fn normalize_required_field(field_name: &str, value: String) -> MessageResult<St
     Ok(normalized)
 }
 
+fn normalize_batch_resend_requests(
+    requests: Vec<DlqResendMessageRequest>,
+) -> MessageResult<Vec<DlqResendMessageRequest>> {
+    if requests.is_empty() {
+        return Err(MessageError::Validation(
+            "At least one DLQ message must be selected for batch resend.".to_string(),
+        ));
+    }
+
+    requests
+        .into_iter()
+        .map(|request| {
+            Ok(DlqResendMessageRequest {
+                consumer_group: normalize_required_field("consumerGroup", request.consumer_group)?,
+                message_id: normalize_required_field("messageId", request.message_id)?,
+            })
+        })
+        .collect()
+}
+
 fn normalize_trace_topic(value: String) -> String {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -1354,6 +1404,22 @@ fn build_message_resend_result(
         msg_id,
         consume_result: consume_result_text,
         remark,
+    }
+}
+
+fn build_failed_message_resend_result(
+    consumer_group: String,
+    msg_id: String,
+    error: MessageError,
+) -> MessageResendResult {
+    MessageResendResult {
+        success: false,
+        message: format!("Direct consume failed for `{msg_id}` in consumer group `{consumer_group}`."),
+        consumer_group,
+        topic: String::new(),
+        msg_id,
+        consume_result: None,
+        remark: Some(error.to_string()),
     }
 }
 
@@ -1879,6 +1945,48 @@ mod tests {
         assert_eq!(result.consume_result.as_deref(), Some("CR_LATER"));
         assert_eq!(result.remark.as_deref(), Some("retry later"));
         assert!(result.message.contains("CR_LATER"));
+    }
+
+    #[test]
+    fn normalize_batch_resend_requests_rejects_empty_input() {
+        let error = normalize_batch_resend_requests(Vec::new()).expect_err("empty batch resend should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("At least one DLQ message must be selected for batch resend")
+        );
+    }
+
+    #[test]
+    fn normalize_batch_resend_requests_trims_fields() {
+        let requests = normalize_batch_resend_requests(vec![DlqResendMessageRequest {
+            consumer_group: " group-a ".to_string(),
+            message_id: " msg-1 ".to_string(),
+        }])
+        .expect("batch resend requests should normalize");
+
+        assert_eq!(
+            requests,
+            vec![DlqResendMessageRequest {
+                consumer_group: "group-a".to_string(),
+                message_id: "msg-1".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn build_failed_message_resend_result_preserves_error_context() {
+        let result = build_failed_message_resend_result(
+            "group-a".to_string(),
+            "msg-1".to_string(),
+            MessageError::Validation("missing origin id".to_string()),
+        );
+
+        assert!(!result.success);
+        assert_eq!(result.consumer_group, "group-a");
+        assert_eq!(result.msg_id, "msg-1");
+        assert_eq!(result.remark.as_deref(), Some("Validation error: missing origin id"));
     }
 
     #[test]

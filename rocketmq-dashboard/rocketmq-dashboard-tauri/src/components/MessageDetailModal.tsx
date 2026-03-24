@@ -325,10 +325,6 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
                       <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
                         <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
                         <div>No consumer track records matched the current message.</div>
-                        <div className="hidden">
-                          `messageTrackList` 依赖的底层 `message_track_detail` 能力在 `rocketmq-rust` 里尚未实现。
-                          当前 Phase 2 先保证详情主数据真实，Track 与 Resend 留到后续 phase。
-                        </div>
                       </div>
                     )}
                   </div>

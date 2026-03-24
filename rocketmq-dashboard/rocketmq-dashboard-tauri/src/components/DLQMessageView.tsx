@@ -33,6 +33,8 @@ const defaultPagination = {
   totalElements: 0,
 };
 
+const EMPTY_SELECTED_IDS = new Set<string>();
+
 const pad = (value: number) => value.toString().padStart(2, '0');
 
 const formatDateTimeInput = (date: Date) =>
@@ -61,6 +63,8 @@ export const DLQMessageView = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [resendingMessageId, setResendingMessageId] = useState<string | null>(null);
+  const [isBatchResending, setIsBatchResending] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(EMPTY_SELECTED_IDS);
   const [taskId, setTaskId] = useState('');
   const [pagination, setPagination] = useState(defaultPagination);
   const {
@@ -88,6 +92,7 @@ export const DLQMessageView = () => {
     setSelectedMessage(null);
     setSearchError('');
     setHasSearched(false);
+    setSelectedMessageIds(EMPTY_SELECTED_IDS);
     setTaskId('');
     setPagination(defaultPagination);
   }, [activeTab]);
@@ -115,6 +120,7 @@ export const DLQMessageView = () => {
     setSelectedMessage(null);
     setSearchError('');
     setHasSearched(false);
+    setSelectedMessageIds(EMPTY_SELECTED_IDS);
     setTaskId('');
     setPagination(defaultPagination);
   };
@@ -151,6 +157,7 @@ export const DLQMessageView = () => {
       });
 
       setMessages(response.page.content);
+      setSelectedMessageIds(EMPTY_SELECTED_IDS);
       setTaskId(response.taskId);
       setPagination({
         currentPage: response.page.number + 1,
@@ -179,6 +186,7 @@ export const DLQMessageView = () => {
     setIsSearching(true);
     setSearchError('');
     setHasSearched(true);
+    setSelectedMessageIds(EMPTY_SELECTED_IDS);
     setTaskId('');
     setPagination(defaultPagination);
 
@@ -242,6 +250,98 @@ export const DLQMessageView = () => {
     }
   };
 
+  const isMessageSelected = (message: DlqMessageSummary) => selectedMessageIds.has(message.queryMsgId);
+
+  const allVisibleSelected =
+    messages.length > 0 && messages.every((message) => selectedMessageIds.has(message.queryMsgId));
+
+  const toggleMessageSelection = (message: DlqMessageSummary) => {
+    setSelectedMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(message.queryMsgId)) {
+        next.delete(message.queryMsgId);
+      } else {
+        next.add(message.queryMsgId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = () => {
+    setSelectedMessageIds((current) => {
+      if (messages.length === 0) {
+        return current;
+      }
+
+      const next = new Set(current);
+      if (messages.every((message) => next.has(message.queryMsgId))) {
+        messages.forEach((message) => next.delete(message.queryMsgId));
+      } else {
+        messages.forEach((message) => next.add(message.queryMsgId));
+      }
+      return next;
+    });
+  };
+
+  const handleBatchResend = async () => {
+    const normalizedConsumerGroup = consumerGroup.trim();
+    if (!normalizedConsumerGroup) {
+      setSearchError('Consumer group is required.');
+      return;
+    }
+
+    const selectedMessages = messages.filter((message) => selectedMessageIds.has(message.queryMsgId));
+    if (selectedMessages.length === 0) {
+      setSearchError('Select at least one DLQ message to resend.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Request direct consume for ${selectedMessages.length} DLQ message(s) in consumer group ${normalizedConsumerGroup}?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBatchResending(true);
+    setSearchError('');
+
+    try {
+      const response = await DlqService.batchResendDlqMessage({
+        messages: selectedMessages.map((message) => ({
+          consumerGroup: normalizedConsumerGroup,
+          messageId: message.queryMsgId,
+        })),
+      });
+
+      if (response.failureCount === 0) {
+        toast.success(`Batch resend completed for ${response.successCount} DLQ message(s).`);
+      } else if (response.successCount === 0) {
+        const failureMessage =
+          response.items.find((item) => !item.success)?.remark ??
+          `Batch resend failed for ${response.failureCount} DLQ message(s).`;
+        toast.error(failureMessage);
+        setSearchError(failureMessage);
+      } else {
+        const firstFailure = response.items.find((item) => !item.success)?.remark;
+        toast.warning(
+          `Batch resend completed with ${response.successCount} success and ${response.failureCount} failure(s).`,
+        );
+        if (firstFailure) {
+          setSearchError(firstFailure);
+        }
+      }
+
+      await queryDlqPage(pagination.currentPage || 1);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Failed to batch resend DLQ messages.';
+      toast.error(messageText);
+      setSearchError(messageText);
+    } finally {
+      setIsBatchResending(false);
+    }
+  };
+
   const renderEmptyCopy = () => {
     if (activeTab === 'Consumer') {
       return 'Enter a consumer group and time range to search DLQ messages.';
@@ -277,7 +377,7 @@ export const DLQMessageView = () => {
 
       <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <div>Phase 6 enables real single-message DLQ resend. Batch resend and export remain disabled.</div>
+          <div>Single-message and batch DLQ resend are available. Export is not available yet.</div>
       </div>
 
       <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
@@ -371,11 +471,12 @@ export const DLQMessageView = () => {
           {activeTab === 'Consumer' ? (
             <>
               <button
-                disabled
-                className="flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-400 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+                onClick={() => void handleBatchResend()}
+                disabled={isBatchResending || selectedMessageIds.size === 0}
+                className="flex items-center rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
               >
                 <Send className="mr-2 h-4 w-4" />
-                Batch Resend
+                {isBatchResending ? 'Batch Resending...' : `Batch Resend${selectedMessageIds.size > 0 ? ` (${selectedMessageIds.size})` : ''}`}
               </button>
               <button
                 disabled
@@ -405,10 +506,28 @@ export const DLQMessageView = () => {
 
       <div>
         {messages.length > 0 ? (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
+          <>
+            {activeTab === 'Consumer' ? (
+              <div className="mb-4 flex items-center justify-between rounded-2xl border border-gray-100 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
+                <label className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-800"
+                  />
+                  <span>Select all messages on this page</span>
+                </label>
+                <span className="text-xs font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                  {selectedMessageIds.size} selected
+                </span>
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
             {messages.map((message, index) => (
               <motion.div
-              key={`${message.topic}-${message.queryMsgId}`}
+                key={`${message.topic}-${message.queryMsgId}`}
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.04 }}
@@ -419,9 +538,19 @@ export const DLQMessageView = () => {
                     <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
                       Message ID
                     </span>
-                    <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
-                      DLQ
-                    </span>
+                    <div className="flex items-center gap-3">
+                      {activeTab === 'Consumer' ? (
+                        <input
+                          type="checkbox"
+                          checked={isMessageSelected(message)}
+                          onChange={() => toggleMessageSelection(message)}
+                          className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-800"
+                        />
+                      ) : null}
+                      <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+                        DLQ
+                      </span>
+                    </div>
                   </div>
                   <p className="break-all font-mono text-sm font-bold text-gray-900 dark:text-white">{message.msgId}</p>
                 </div>
@@ -473,11 +602,11 @@ export const DLQMessageView = () => {
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => void handleResend(message)}
-                  disabled={resendingMessageId === message.queryMsgId}
+                      disabled={resendingMessageId === message.queryMsgId || isBatchResending}
                       className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
                     >
                       <Send className="mr-1.5 h-4 w-4" />
-                  {resendingMessageId === message.queryMsgId ? 'Resending...' : 'Resend'}
+                      {resendingMessageId === message.queryMsgId ? 'Resending...' : 'Resend'}
                     </button>
                     <button
                       onClick={() => setSelectedMessage(message)}
@@ -490,7 +619,8 @@ export const DLQMessageView = () => {
                 </div>
               </motion.div>
             ))}
-          </div>
+            </div>
+          </>
         ) : hasSearched ? (
           <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-gray-200 bg-white py-20 text-center text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
             <div className="mb-4 rounded-full bg-gray-50 p-4 dark:bg-gray-800">

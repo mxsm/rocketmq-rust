@@ -23,6 +23,10 @@ export interface DlqResendMessageRequest {
     messageId: string;
 }
 
+export interface DlqBatchResendMessageRequest {
+    messages: DlqResendMessageRequest[];
+}
+
 export interface DlqResendMessageResult {
     success: boolean;
     message: string;
@@ -31,6 +35,13 @@ export interface DlqResendMessageResult {
     msgId: string;
     consumeResult?: string | null;
     remark?: string | null;
+}
+
+export interface DlqBatchResendMessageResponse {
+    items: DlqResendMessageResult[];
+    total: number;
+    successCount: number;
+    failureCount: number;
 }
 
 export type DlqMessageSummary = MessageSummary;

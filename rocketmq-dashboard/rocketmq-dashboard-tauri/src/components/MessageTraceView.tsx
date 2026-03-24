@@ -483,7 +483,7 @@ export const MessageTraceView = () => {
           </div>
           <div>
             <h2 className="text-lg font-bold text-gray-900 dark:text-white">Message Trace</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Query lifecycle events without reintroducing the old mock page.</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Query lifecycle events from the selected trace topic.</p>
           </div>
         </div>
 

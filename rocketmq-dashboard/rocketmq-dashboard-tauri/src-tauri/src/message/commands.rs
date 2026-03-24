@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::message::service::MessageManager;
+use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
 use crate::message::types::MessagePageResponse;
 use crate::message::types::MessageResendResult;
 use crate::message::types::MessageSummaryListResponse;
 use crate::message::types::MessageTraceDetailView;
+use rocketmq_dashboard_common::DlqBatchResendMessageRequest;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
 use rocketmq_dashboard_common::DlqViewMessageRequest;
@@ -102,6 +104,17 @@ pub async fn resend_dlq_message(
 ) -> Result<MessageResendResult, String> {
     message_manager
         .resend_dlq_message(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn batch_resend_dlq_message(
+    request: DlqBatchResendMessageRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<MessageBatchResendResponse, String> {
+    message_manager
+        .batch_resend_dlq_message(request)
         .await
         .map_err(|error| error.to_string())
 }

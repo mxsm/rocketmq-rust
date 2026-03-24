@@ -83,6 +83,12 @@ pub struct DlqResendMessageRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct DlqBatchResendMessageRequest {
+    pub messages: Vec<DlqResendMessageRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageDirectConsumeRequest {
     pub topic: String,
     pub consumer_group: String,
@@ -195,6 +201,22 @@ mod tests {
 
         let json = serde_json::to_string(&request).expect("serialize dlq resend request");
 
+        assert!(json.contains("\"consumerGroup\""));
+        assert!(json.contains("\"messageId\""));
+    }
+
+    #[test]
+    fn dlq_batch_resend_message_request_uses_java_dashboard_field_names() {
+        let request = super::DlqBatchResendMessageRequest {
+            messages: vec![super::DlqResendMessageRequest {
+                consumer_group: "group-a".to_string(),
+                message_id: "msg-1".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize dlq batch resend request");
+
+        assert!(json.contains("\"messages\""));
         assert!(json.contains("\"consumerGroup\""));
         assert!(json.contains("\"messageId\""));
     }
