@@ -20,6 +20,7 @@ use crate::message::page_cache::NormalizedMessagePageQuery;
 use crate::message::page_cache::QueueScanState;
 use crate::message::page_cache::build_page_selection;
 use crate::message::page_cache::normalize_message_page_query;
+use crate::message::types::DlqMessageExportView;
 use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
 use crate::message::types::MessageError;
@@ -36,6 +37,8 @@ use crate::nameserver::NameServerRuntimeState;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use cheetah_string::CheetahString;
+use chrono::Local;
+use chrono::TimeZone;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
@@ -291,6 +294,41 @@ impl MessageManager {
             success_count,
             failure_count: total.saturating_sub(success_count),
         })
+    }
+
+    pub(crate) async fn export_dlq_message(
+        &self,
+        request: DlqViewMessageRequest,
+    ) -> MessageResult<DlqMessageExportView> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.export_dlq_message_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "export_dlq_message failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `export_dlq_message` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn consume_message_directly(
@@ -966,6 +1004,20 @@ impl MessageManager {
         .await
     }
 
+    async fn export_dlq_message_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: DlqViewMessageRequest,
+    ) -> MessageResult<DlqMessageExportView> {
+        let consumer_group = normalize_required_field("consumerGroup", request.consumer_group)?;
+        let topic = build_dlq_topic(&consumer_group)?;
+        let message_id = normalize_required_field("messageId", request.message_id)?;
+        let message = self
+            .find_message_by_id_with_admin(admin, topic.clone(), message_id)
+            .await?;
+        Ok(build_dlq_export_view(topic, message))
+    }
+
     async fn consume_message_directly_with_admin(
         &self,
         admin: &mut DefaultMQAdminExt,
@@ -1421,6 +1473,103 @@ fn build_failed_message_resend_result(
         consume_result: None,
         remark: Some(error.to_string()),
     }
+}
+
+fn build_dlq_export_view(request_topic: String, message: MessageExt) -> DlqMessageExportView {
+    let row = [
+        request_topic.clone(),
+        message.msg_id().to_string(),
+        message.born_host().to_string(),
+        format_export_timestamp(message.born_timestamp()),
+        format_export_timestamp(message.store_timestamp()),
+        message.reconsume_times().to_string(),
+        format_java_properties_string(&message),
+        decode_export_message_body(&message),
+        message.body_crc().to_string(),
+        String::new(),
+    ];
+
+    let header = [
+        "topic",
+        "msgId",
+        "bornHost",
+        "bornTimestamp",
+        "storeTimestamp",
+        "reconsumeTimes",
+        "properties",
+        "messageBody",
+        "bodyCRC",
+        "exception",
+    ];
+
+    DlqMessageExportView {
+        file_name: format!(
+            "dlq-{}-{}.csv",
+            sanitize_export_file_fragment(request_topic.trim_start_matches(mix_all::DLQ_GROUP_TOPIC_PREFIX)),
+            sanitize_export_file_fragment(message.msg_id().as_str()),
+        ),
+        mime_type: "text/csv;charset=utf-8".to_string(),
+        content: format!(
+            "{}\n{}\n",
+            header.into_iter().map(csv_escape).collect::<Vec<_>>().join(","),
+            row.into_iter().map(csv_escape).collect::<Vec<_>>().join(",")
+        ),
+    }
+}
+
+fn format_export_timestamp(value: i64) -> String {
+    if value <= 0 {
+        return String::new();
+    }
+
+    Local
+        .timestamp_millis_opt(value)
+        .single()
+        .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_default()
+}
+
+fn format_java_properties_string(message: &MessageExt) -> String {
+    let mut entries = message
+        .properties()
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>();
+    entries.sort();
+    format!("{{{}}}", entries.join(", "))
+}
+
+fn decode_export_message_body(message: &MessageExt) -> String {
+    let body = message.body().map(|body| body.to_vec()).unwrap_or_default();
+
+    match String::from_utf8(body.clone()) {
+        Ok(text) => text,
+        Err(_) => format!("base64:{}", BASE64_STANDARD.encode(body)),
+    }
+}
+
+fn sanitize_export_file_fragment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| match character {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            _ => character,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string();
+
+    if sanitized.is_empty() {
+        "message".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn csv_escape(value: impl AsRef<str>) -> String {
+    let value = value.as_ref();
+    let escaped = value.replace('"', "\"\"");
+    format!("\"{escaped}\"")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1987,6 +2136,52 @@ mod tests {
         assert_eq!(result.consumer_group, "group-a");
         assert_eq!(result.msg_id, "msg-1");
         assert_eq!(result.remark.as_deref(), Some("Validation error: missing origin id"));
+    }
+
+    #[test]
+    fn build_dlq_export_view_maps_java_dashboard_columns() {
+        let message = MessageBuilder::new()
+            .topic("%DLQ%group-a")
+            .body_slice(b"payload")
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("msg-1"));
+        message_ext.set_born_timestamp(1_700_000_000_000);
+        message_ext.set_store_timestamp(1_700_000_100_000);
+        message_ext.set_reconsume_times(2);
+        message_ext.set_body_crc(613_185_359);
+        message_ext.set_born_host("172.20.48.1:61266".parse().expect("born host"));
+        message_ext.put_property(CheetahString::from("KEYS"), CheetahString::from("order-1"));
+
+        let export = build_dlq_export_view("%DLQ%group-a".to_string(), message_ext);
+
+        assert_eq!(export.file_name, "dlq-group-a-msg-1.csv");
+        assert_eq!(export.mime_type, "text/csv;charset=utf-8");
+        assert!(export.content.contains("\"topic\",\"msgId\",\"bornHost\""));
+        assert!(
+            export
+                .content
+                .contains("\"%DLQ%group-a\",\"msg-1\",\"172.20.48.1:61266\"")
+        );
+        assert!(export.content.contains("\"{KEYS=order-1}\""));
+        assert!(export.content.contains("\"payload\""));
+        assert!(export.content.contains("\"613185359\""));
+    }
+
+    #[test]
+    fn build_dlq_export_view_falls_back_to_base64_for_binary_body() {
+        let message = MessageBuilder::new()
+            .topic("%DLQ%group-a")
+            .body(vec![0xff, 0x00, 0x41])
+            .build_unchecked();
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("msg-bin"));
+
+        let export = build_dlq_export_view("%DLQ%group-a".to_string(), message_ext);
+
+        assert!(export.content.contains("\"base64:/wBB\""));
     }
 
     #[test]

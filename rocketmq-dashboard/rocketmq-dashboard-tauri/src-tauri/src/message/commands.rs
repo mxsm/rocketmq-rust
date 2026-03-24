@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::message::service::MessageManager;
+use crate::message::types::DlqMessageExportView;
 use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
 use crate::message::types::MessagePageResponse;
@@ -115,6 +116,17 @@ pub async fn batch_resend_dlq_message(
 ) -> Result<MessageBatchResendResponse, String> {
     message_manager
         .batch_resend_dlq_message(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn export_dlq_message(
+    request: DlqViewMessageRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<DlqMessageExportView, String> {
+    message_manager
+        .export_dlq_message(request)
         .await
         .map_err(|error| error.to_string())
 }

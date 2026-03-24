@@ -100,6 +100,14 @@ pub(crate) struct MessageBatchResendResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct DlqMessageExportView {
+    pub(crate) file_name: String,
+    pub(crate) mime_type: String,
+    pub(crate) content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub(crate) struct MessageTrackView {
     pub(crate) consumer_group: String,

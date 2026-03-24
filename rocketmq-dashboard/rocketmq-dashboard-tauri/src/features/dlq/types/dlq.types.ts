@@ -18,6 +18,11 @@ export interface DlqMessageDetailRequest {
     messageId: string;
 }
 
+export interface DlqMessageExportRequest {
+    consumerGroup: string;
+    messageId: string;
+}
+
 export interface DlqResendMessageRequest {
     consumerGroup: string;
     messageId: string;
@@ -42,6 +47,12 @@ export interface DlqBatchResendMessageResponse {
     total: number;
     successCount: number;
     failureCount: number;
+}
+
+export interface DlqMessageExportPayload {
+    fileName: string;
+    mimeType: string;
+    content: string;
 }
 
 export type DlqMessageSummary = MessageSummary;

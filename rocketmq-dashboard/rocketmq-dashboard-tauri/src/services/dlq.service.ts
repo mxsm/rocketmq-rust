@@ -4,6 +4,8 @@ import type {
     DlqBatchResendMessageResponse,
     DlqMessageDetail,
     DlqMessageDetailRequest,
+    DlqMessageExportPayload,
+    DlqMessageExportRequest,
     DlqMessagePageQueryRequest,
     DlqMessagePageResponse,
     DlqResendMessageRequest,
@@ -29,5 +31,9 @@ export class DlqService {
         request: DlqBatchResendMessageRequest,
     ): Promise<DlqBatchResendMessageResponse> {
         return invoke<DlqBatchResendMessageResponse>('batch_resend_dlq_message', { request });
+    }
+
+    static async exportDlqMessage(request: DlqMessageExportRequest): Promise<DlqMessageExportPayload> {
+        return invoke<DlqMessageExportPayload>('export_dlq_message', { request });
     }
 }

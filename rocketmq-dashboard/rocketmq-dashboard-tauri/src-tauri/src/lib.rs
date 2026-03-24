@@ -117,6 +117,7 @@ pub fn run() {
             message::commands::view_dlq_message_detail,
             message::commands::resend_dlq_message,
             message::commands::batch_resend_dlq_message,
+            message::commands::export_dlq_message,
             message::commands::consume_message_directly,
             message::commands::query_message_trace_by_id,
             message::commands::view_message_trace_detail,

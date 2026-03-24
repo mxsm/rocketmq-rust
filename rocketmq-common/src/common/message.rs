@@ -292,6 +292,27 @@ pub trait MessageTrait: Any + Display + Debug {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
+#[cfg(test)]
+mod tests {
+    use super::MessageTrait;
+    use crate::common::message::message_builder::MessageBuilder;
+    use crate::common::message::message_single::Message;
+    use cheetah_string::CheetahString;
+
+    #[test]
+    fn trait_object_get_transaction_id_uses_default_compat_accessor() {
+        let mut message: Message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"payload")
+            .build_unchecked();
+        MessageTrait::set_transaction_id(&mut message, CheetahString::from("tx-123"));
+
+        let message_trait: &dyn MessageTrait = &message;
+
+        assert_eq!(message_trait.transaction_id(), Some(&CheetahString::from("tx-123")));
+    }
+}
+
 /// Magic code for message format version 1.
 pub const MESSAGE_MAGIC_CODE_V1: i32 = -626843481;
 

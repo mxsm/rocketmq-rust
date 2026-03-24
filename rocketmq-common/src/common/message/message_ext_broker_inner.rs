@@ -187,6 +187,11 @@ impl MessageExtBrokerInner {
     }
 
     #[inline]
+    pub fn get_transaction_id(&self) -> Option<&CheetahString> {
+        self.message_ext_inner.get_transaction_id()
+    }
+
+    #[inline]
     pub fn is_wait_store_msg_ok(&self) -> bool {
         self.message_ext_inner.message.is_wait_store_msg_ok()
     }
@@ -375,5 +380,20 @@ impl From<crate::common::message::broker_message::BrokerMessage> for MessageExtB
             encode_completed: broker_msg.is_encode_completed(),
             version: broker_msg.version(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessageExtBrokerInner;
+    use crate::common::message::MessageTrait;
+    use cheetah_string::CheetahString;
+
+    #[test]
+    fn message_ext_broker_inner_get_transaction_id_delegates_to_inner_message() {
+        let mut message = MessageExtBrokerInner::default();
+        MessageTrait::set_transaction_id(&mut message, CheetahString::from("tx-123"));
+
+        assert_eq!(message.get_transaction_id(), Some(&CheetahString::from("tx-123")));
     }
 }

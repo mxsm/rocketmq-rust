@@ -51,6 +51,18 @@ const toSummary = (detail: Awaited<ReturnType<typeof DlqService.viewDlqMessageDe
   storeTimestamp: detail.storeTimestamp ?? 0,
 });
 
+const downloadExportPayload = (fileName: string, mimeType: string, content: string) => {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+};
+
 export const DLQMessageView = () => {
   const [activeTab, setActiveTab] = useState<DlqTab>('Consumer');
   const [consumerGroup, setConsumerGroup] = useState('');
@@ -63,6 +75,7 @@ export const DLQMessageView = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [resendingMessageId, setResendingMessageId] = useState<string | null>(null);
+  const [exportingMessageId, setExportingMessageId] = useState<string | null>(null);
   const [isBatchResending, setIsBatchResending] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(EMPTY_SELECTED_IDS);
   const [taskId, setTaskId] = useState('');
@@ -342,6 +355,32 @@ export const DLQMessageView = () => {
     }
   };
 
+  const handleExport = async (message: DlqMessageSummary) => {
+    const normalizedConsumerGroup = consumerGroup.trim();
+    if (!normalizedConsumerGroup) {
+      setSearchError('Consumer group is required.');
+      return;
+    }
+
+    setExportingMessageId(message.queryMsgId);
+    setSearchError('');
+
+    try {
+      const payload = await DlqService.exportDlqMessage({
+        consumerGroup: normalizedConsumerGroup,
+        messageId: message.queryMsgId,
+      });
+      downloadExportPayload(payload.fileName, payload.mimeType, payload.content);
+      toast.success(`Exported DLQ message ${message.msgId}.`);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Failed to export DLQ message.';
+      toast.error(messageText);
+      setSearchError(messageText);
+    } finally {
+      setExportingMessageId(null);
+    }
+  };
+
   const renderEmptyCopy = () => {
     if (activeTab === 'Consumer') {
       return 'Enter a consumer group and time range to search DLQ messages.';
@@ -377,7 +416,7 @@ export const DLQMessageView = () => {
 
       <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>Single-message and batch DLQ resend are available. Export is not available yet.</div>
+          <div>Single-message export and resend are available. Batch resend is available. Batch export is not available yet.</div>
       </div>
 
       <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
@@ -599,14 +638,30 @@ export const DLQMessageView = () => {
                 </div>
 
                 <div className="border-t border-gray-100 bg-gray-50/30 px-5 py-3 dark:border-gray-800 dark:bg-gray-800/30">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <button
                       onClick={() => void handleResend(message)}
-                      disabled={resendingMessageId === message.queryMsgId || isBatchResending}
+                      disabled={
+                        resendingMessageId === message.queryMsgId ||
+                        exportingMessageId === message.queryMsgId ||
+                        isBatchResending
+                      }
                       className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
                     >
                       <Send className="mr-1.5 h-4 w-4" />
                       {resendingMessageId === message.queryMsgId ? 'Resending...' : 'Resend'}
+                    </button>
+                    <button
+                      onClick={() => void handleExport(message)}
+                      disabled={
+                        exportingMessageId === message.queryMsgId ||
+                        resendingMessageId === message.queryMsgId ||
+                        isBatchResending
+                      }
+                      className="flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                    >
+                      <ArrowUpRight className="mr-1.5 h-4 w-4" />
+                      {exportingMessageId === message.queryMsgId ? 'Exporting...' : 'Export'}
                     </button>
                     <button
                       onClick={() => setSelectedMessage(message)}
