@@ -22,7 +22,7 @@ import { MessageService } from '../services/message.service';
 
 type MessageTab = 'Topic' | 'Message Key' | 'Message ID';
 
-const DEFAULT_PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE = 12;
 
 const defaultPagination = {
   currentPage: 1,

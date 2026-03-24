@@ -81,6 +81,16 @@ pub struct DlqResendMessageRequest {
     pub message_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageDirectConsumeRequest {
+    pub topic: String,
+    pub consumer_group: String,
+    pub message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -187,5 +197,22 @@ mod tests {
 
         assert!(json.contains("\"consumerGroup\""));
         assert!(json.contains("\"messageId\""));
+    }
+
+    #[test]
+    fn message_direct_consume_request_uses_java_dashboard_field_names() {
+        let request = super::MessageDirectConsumeRequest {
+            topic: "TopicTest".to_string(),
+            consumer_group: "group-a".to_string(),
+            message_id: "msg-1".to_string(),
+            client_id: Some("client-a".to_string()),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize direct consume request");
+
+        assert!(json.contains("\"topic\""));
+        assert!(json.contains("\"consumerGroup\""));
+        assert!(json.contains("\"messageId\""));
+        assert!(json.contains("\"clientId\""));
     }
 }

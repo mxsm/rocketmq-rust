@@ -52,6 +52,13 @@ export interface ViewMessageRequest {
     messageId: string;
 }
 
+export interface MessageDirectConsumeRequest {
+    topic: string;
+    consumerGroup: string;
+    messageId: string;
+    clientId?: string | null;
+}
+
 export interface MessageTrack {
     consumerGroup: string;
     trackType: string;
@@ -77,4 +84,14 @@ export interface MessageDetail {
     bodyText?: string | null;
     bodyBase64?: string | null;
     messageTrackList?: MessageTrack[] | null;
+}
+
+export interface MessageDirectConsumeResult {
+    success: boolean;
+    message: string;
+    consumerGroup: string;
+    topic: string;
+    msgId: string;
+    consumeResult?: string | null;
+    remark?: string | null;
 }

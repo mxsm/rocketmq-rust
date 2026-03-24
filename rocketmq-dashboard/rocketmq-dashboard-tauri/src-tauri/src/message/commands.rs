@@ -21,6 +21,7 @@ use crate::message::types::MessageTraceDetailView;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
 use rocketmq_dashboard_common::DlqViewMessageRequest;
+use rocketmq_dashboard_common::MessageDirectConsumeRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
@@ -101,6 +102,17 @@ pub async fn resend_dlq_message(
 ) -> Result<MessageResendResult, String> {
     message_manager
         .resend_dlq_message(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn consume_message_directly(
+    request: MessageDirectConsumeRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<MessageResendResult, String> {
+    message_manager
+        .consume_message_directly(request)
         .await
         .map_err(|error| error.to_string())
 }

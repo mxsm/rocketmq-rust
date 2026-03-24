@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
     MessageDetail,
+    MessageDirectConsumeRequest,
+    MessageDirectConsumeResult,
     MessageIdQueryRequest,
     MessageKeyQueryRequest,
     MessagePageQueryRequest,
@@ -24,5 +26,11 @@ export class MessageService {
 
     static async viewMessageDetail(request: ViewMessageRequest): Promise<MessageDetail> {
         return invoke<MessageDetail>('view_message_detail', { request });
+    }
+
+    static async consumeMessageDirectly(
+        request: MessageDirectConsumeRequest,
+    ): Promise<MessageDirectConsumeResult> {
+        return invoke<MessageDirectConsumeResult>('consume_message_directly', { request });
     }
 }

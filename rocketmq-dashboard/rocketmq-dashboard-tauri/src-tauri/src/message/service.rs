@@ -48,6 +48,7 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
 use rocketmq_dashboard_common::DlqViewMessageRequest;
+use rocketmq_dashboard_common::MessageDirectConsumeRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
 use rocketmq_dashboard_common::MessageKeyQueryRequest;
 use rocketmq_dashboard_common::MessagePageQueryRequest;
@@ -256,6 +257,42 @@ impl MessageManager {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
                     log::warn!("Retrying `resend_dlq_message` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn consume_message_directly(
+        &self,
+        request: MessageDirectConsumeRequest,
+    ) -> MessageResult<MessageResendResult> {
+        let request = normalize_direct_consume_request(request)?;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.consume_message_directly_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "consume_message_directly failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `consume_message_directly` after reconnect: {}", error);
                 }
                 Err(error) => return Err(error),
             }
@@ -887,20 +924,38 @@ impl MessageManager {
         let message_id = normalize_required_field("messageId", request.message_id)?;
         let dlq_message = self.find_message_by_id_with_admin(admin, dlq_topic, message_id).await?;
         let resend_target = build_dlq_resend_target(&dlq_message)?;
+        self.consume_message_directly_with_admin(
+            admin,
+            NormalizedDirectConsumeRequest {
+                topic: resend_target.topic,
+                consumer_group,
+                message_id: resend_target.msg_id,
+                client_id: None,
+            },
+        )
+        .await
+    }
+
+    async fn consume_message_directly_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: NormalizedDirectConsumeRequest,
+    ) -> MessageResult<MessageResendResult> {
+        let client_id = request.client_id.clone().unwrap_or_default();
         let consume_result = admin
             .consume_message_directly(
-                CheetahString::from(consumer_group.clone()),
-                CheetahString::default(),
-                CheetahString::from(resend_target.topic.clone()),
-                CheetahString::from(resend_target.msg_id.clone()),
+                CheetahString::from(request.consumer_group.clone()),
+                CheetahString::from(client_id),
+                CheetahString::from(request.topic.clone()),
+                CheetahString::from(request.message_id.clone()),
             )
             .await
             .map_err(|error| MessageError::RocketMQ(error.to_string()))?;
 
         Ok(build_message_resend_result(
-            consumer_group,
-            resend_target.topic,
-            resend_target.msg_id,
+            request.consumer_group,
+            request.topic,
+            request.message_id,
             consume_result,
         ))
     }
@@ -913,6 +968,39 @@ impl MessageManager {
     ) -> MessageResult<MessageExt> {
         let topic = normalize_required_field("topic", topic)?;
         let message_id = normalize_required_field("messageId", message_id)?;
+
+        match admin
+            .query_message_by_unique_key(
+                None,
+                CheetahString::from(topic.clone()),
+                CheetahString::from(message_id.clone()),
+                32,
+                0,
+                i64::MAX,
+            )
+            .await
+        {
+            Ok(result) if !result.message_list().is_empty() => {
+                return first_message_or_validation_error(result.message_list().to_vec());
+            }
+            Ok(_) => {
+                log::warn!(
+                    "query_message_by_unique_key returned no match for topic `{}` and messageId `{}`, falling back to \
+                     direct query_message",
+                    topic,
+                    message_id
+                );
+            }
+            Err(error) => {
+                log::warn!(
+                    "query_message_by_unique_key failed for topic `{}` and messageId `{}`: {}. Falling back to direct \
+                     query_message",
+                    topic,
+                    message_id,
+                    error
+                );
+            }
+        }
 
         admin
             .query_message(
@@ -1086,10 +1174,20 @@ fn extract_keys(message: &MessageExt) -> Option<String> {
         .filter(|keys| !keys.is_empty())
 }
 
+fn resolve_message_summary_id(message: &MessageExt) -> String {
+    message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+        ))
+        .map(|value| value.to_string())
+        .and_then(|value| non_empty(&value))
+        .unwrap_or_else(|| message.msg_id().to_string())
+}
+
 fn map_message_summary(message: MessageExt) -> MessageSummaryView {
     MessageSummaryView {
         topic: message.topic().to_string(),
-        msg_id: message.msg_id().to_string(),
+        msg_id: resolve_message_summary_id(&message),
         tags: message.get_tags().map(|value| value.to_string()),
         keys: extract_keys(&message),
         store_timestamp: message.store_timestamp(),
@@ -1130,6 +1228,14 @@ struct DlqResendTarget {
     msg_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedDirectConsumeRequest {
+    topic: String,
+    consumer_group: String,
+    message_id: String,
+    client_id: Option<String>,
+}
+
 fn build_dlq_resend_target(message: &MessageExt) -> MessageResult<DlqResendTarget> {
     let retry_topic = message
         .property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
@@ -1160,6 +1266,17 @@ fn build_dlq_resend_target(message: &MessageExt) -> MessageResult<DlqResendTarge
     Ok(DlqResendTarget {
         topic: retry_topic,
         msg_id: origin_message_id,
+    })
+}
+
+fn normalize_direct_consume_request(
+    request: MessageDirectConsumeRequest,
+) -> MessageResult<NormalizedDirectConsumeRequest> {
+    Ok(NormalizedDirectConsumeRequest {
+        topic: normalize_required_field("topic", request.topic)?,
+        consumer_group: normalize_required_field("consumerGroup", request.consumer_group)?,
+        message_id: normalize_required_field("messageId", request.message_id)?,
+        client_id: request.client_id.as_deref().and_then(non_empty),
     })
 }
 
@@ -1447,6 +1564,20 @@ fn decode_body_fields(body: &[u8]) -> (Option<String>, Option<String>) {
     }
 }
 
+fn first_message_or_validation_error(mut messages: Vec<MessageExt>) -> MessageResult<MessageExt> {
+    messages.sort_by(|left, right| {
+        right
+            .store_timestamp()
+            .cmp(&left.store_timestamp())
+            .then_with(|| left.msg_id().cmp(right.msg_id()))
+    });
+
+    messages
+        .into_iter()
+        .next()
+        .ok_or_else(|| MessageError::Validation("No message matched the current query.".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1481,7 +1612,7 @@ mod tests {
     }
 
     #[test]
-    fn map_message_summary_uses_offset_msg_id_instead_of_uniq_key_property() {
+    fn map_message_summary_prefers_uniq_key_property_over_offset_msg_id() {
         let message = MessageBuilder::new()
             .topic("TopicTest")
             .body_slice(b"payload")
@@ -1497,7 +1628,54 @@ mod tests {
 
         let summary = map_message_summary(message_ext);
 
+        assert_eq!(summary.msg_id, "uniq-msg-id");
+    }
+
+    #[test]
+    fn map_message_summary_falls_back_to_offset_msg_id_when_uniq_key_is_blank() {
+        let message = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"payload")
+            .build_unchecked();
+
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(CheetahString::from("offset-msg-id"));
+        message_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from("   "),
+        );
+
+        let summary = map_message_summary(message_ext);
+
         assert_eq!(summary.msg_id, "offset-msg-id");
+    }
+
+    #[test]
+    fn first_message_or_validation_error_prefers_latest_store_timestamp() {
+        let first = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"one")
+            .build_unchecked();
+        let second = MessageBuilder::new()
+            .topic("TopicTest")
+            .body_slice(b"two")
+            .build_unchecked();
+
+        let mut first_ext = MessageExt::default();
+        first_ext.set_message_inner(first);
+        first_ext.set_msg_id(CheetahString::from("msg-1"));
+        first_ext.set_store_timestamp(100);
+
+        let mut second_ext = MessageExt::default();
+        second_ext.set_message_inner(second);
+        second_ext.set_msg_id(CheetahString::from("msg-2"));
+        second_ext.set_store_timestamp(200);
+
+        let selected =
+            first_message_or_validation_error(vec![first_ext, second_ext]).expect("latest message should be selected");
+
+        assert_eq!(selected.msg_id(), "msg-2");
     }
 
     #[test]
@@ -1696,6 +1874,23 @@ mod tests {
         assert_eq!(result.consume_result.as_deref(), Some("CR_LATER"));
         assert_eq!(result.remark.as_deref(), Some("retry later"));
         assert!(result.message.contains("CR_LATER"));
+    }
+
+    #[test]
+    fn normalize_direct_consume_request_trims_and_drops_blank_client_id() {
+        let request = rocketmq_dashboard_common::MessageDirectConsumeRequest {
+            topic: " TopicTest ".to_string(),
+            consumer_group: " group-a ".to_string(),
+            message_id: " msg-1 ".to_string(),
+            client_id: Some("   ".to_string()),
+        };
+
+        let normalized = normalize_direct_consume_request(request).expect("request should normalize");
+
+        assert_eq!(normalized.topic, "TopicTest");
+        assert_eq!(normalized.consumer_group, "group-a");
+        assert_eq!(normalized.message_id, "msg-1");
+        assert_eq!(normalized.client_id, None);
     }
 
     #[test]
