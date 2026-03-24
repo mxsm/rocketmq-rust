@@ -20,6 +20,7 @@ use crate::message::page_cache::NormalizedMessagePageQuery;
 use crate::message::page_cache::QueueScanState;
 use crate::message::page_cache::build_page_selection;
 use crate::message::page_cache::normalize_message_page_query;
+use crate::message::types::DlqBatchMessageExportView;
 use crate::message::types::DlqMessageExportView;
 use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
@@ -49,6 +50,7 @@ use rocketmq_common::common::mix_all;
 #[allow(deprecated)]
 use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_dashboard_common::DlqBatchExportMessageRequest;
 use rocketmq_dashboard_common::DlqBatchResendMessageRequest;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
@@ -325,6 +327,41 @@ impl MessageManager {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
                     log::warn!("Retrying `export_dlq_message` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn batch_export_dlq_message(
+        &self,
+        request: DlqBatchExportMessageRequest,
+    ) -> MessageResult<DlqBatchMessageExportView> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("message admin session should be initialized before use");
+                self.batch_export_dlq_message_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "batch_export_dlq_message failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `batch_export_dlq_message` after reconnect: {}", error);
                 }
                 Err(error) => return Err(error),
             }
@@ -1018,6 +1055,38 @@ impl MessageManager {
         Ok(build_dlq_export_view(topic, message))
     }
 
+    async fn batch_export_dlq_message_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: DlqBatchExportMessageRequest,
+    ) -> MessageResult<DlqBatchMessageExportView> {
+        let requests = normalize_batch_export_requests(request.messages)?;
+        let mut rows = Vec::with_capacity(requests.len());
+        let mut success_count = 0usize;
+        let mut failure_count = 0usize;
+
+        for request in requests {
+            let consumer_group = request.consumer_group.clone();
+            let message_id = request.message_id.clone();
+            let topic = build_dlq_topic(&consumer_group)?;
+            match self
+                .find_message_by_id_with_admin(admin, topic.clone(), message_id.clone())
+                .await
+            {
+                Ok(message) => {
+                    rows.push(build_dlq_export_row(topic, message, String::new()));
+                    success_count += 1;
+                }
+                Err(error) => {
+                    rows.push(build_failed_dlq_export_row(topic, message_id, error));
+                    failure_count += 1;
+                }
+            }
+        }
+
+        Ok(build_batch_dlq_export_view(rows, success_count, failure_count))
+    }
+
     async fn consume_message_directly_with_admin(
         &self,
         admin: &mut DefaultMQAdminExt,
@@ -1233,6 +1302,24 @@ fn normalize_batch_resend_requests(
         .into_iter()
         .map(|request| {
             Ok(DlqResendMessageRequest {
+                consumer_group: normalize_required_field("consumerGroup", request.consumer_group)?,
+                message_id: normalize_required_field("messageId", request.message_id)?,
+            })
+        })
+        .collect()
+}
+
+fn normalize_batch_export_requests(requests: Vec<DlqViewMessageRequest>) -> MessageResult<Vec<DlqViewMessageRequest>> {
+    if requests.is_empty() {
+        return Err(MessageError::Validation(
+            "At least one DLQ message must be selected for batch export.".to_string(),
+        ));
+    }
+
+    requests
+        .into_iter()
+        .map(|request| {
+            Ok(DlqViewMessageRequest {
                 consumer_group: normalize_required_field("consumerGroup", request.consumer_group)?,
                 message_id: normalize_required_field("messageId", request.message_id)?,
             })
@@ -1476,19 +1563,38 @@ fn build_failed_message_resend_result(
 }
 
 fn build_dlq_export_view(request_topic: String, message: MessageExt) -> DlqMessageExportView {
-    let row = [
-        request_topic.clone(),
-        message.msg_id().to_string(),
-        message.born_host().to_string(),
-        format_export_timestamp(message.born_timestamp()),
-        format_export_timestamp(message.store_timestamp()),
-        message.reconsume_times().to_string(),
-        format_java_properties_string(&message),
-        decode_export_message_body(&message),
-        message.body_crc().to_string(),
-        String::new(),
-    ];
+    let msg_id = message.msg_id().to_string();
+    let row = build_dlq_export_row(request_topic.clone(), message, String::new());
 
+    DlqMessageExportView {
+        file_name: format!(
+            "dlq-{}-{}.csv",
+            sanitize_export_file_fragment(request_topic.trim_start_matches(mix_all::DLQ_GROUP_TOPIC_PREFIX)),
+            sanitize_export_file_fragment(&msg_id),
+        ),
+        mime_type: "text/csv;charset=utf-8".to_string(),
+        content: build_dlq_export_csv(vec![row]),
+    }
+}
+
+fn build_batch_dlq_export_view(
+    rows: Vec<[String; 10]>,
+    success_count: usize,
+    failure_count: usize,
+) -> DlqBatchMessageExportView {
+    let timestamp = Local::now().format("%Y%m%d%H%M%S");
+
+    DlqBatchMessageExportView {
+        file_name: format!("dlqs-{timestamp}.csv"),
+        mime_type: "text/csv;charset=utf-8".to_string(),
+        content: build_dlq_export_csv(rows),
+        total: success_count + failure_count,
+        success_count,
+        failure_count,
+    }
+}
+
+fn build_dlq_export_csv(rows: Vec<[String; 10]>) -> String {
     let header = [
         "topic",
         "msgId",
@@ -1502,19 +1608,43 @@ fn build_dlq_export_view(request_topic: String, message: MessageExt) -> DlqMessa
         "exception",
     ];
 
-    DlqMessageExportView {
-        file_name: format!(
-            "dlq-{}-{}.csv",
-            sanitize_export_file_fragment(request_topic.trim_start_matches(mix_all::DLQ_GROUP_TOPIC_PREFIX)),
-            sanitize_export_file_fragment(message.msg_id().as_str()),
-        ),
-        mime_type: "text/csv;charset=utf-8".to_string(),
-        content: format!(
-            "{}\n{}\n",
-            header.into_iter().map(csv_escape).collect::<Vec<_>>().join(","),
-            row.into_iter().map(csv_escape).collect::<Vec<_>>().join(",")
-        ),
-    }
+    let mut csv_rows = Vec::with_capacity(rows.len() + 1);
+    csv_rows.push(header.into_iter().map(csv_escape).collect::<Vec<_>>().join(","));
+    csv_rows.extend(
+        rows.into_iter()
+            .map(|row| row.into_iter().map(csv_escape).collect::<Vec<_>>().join(",")),
+    );
+    format!("{}\n", csv_rows.join("\n"))
+}
+
+fn build_dlq_export_row(request_topic: String, message: MessageExt, exception: String) -> [String; 10] {
+    [
+        request_topic,
+        message.msg_id().to_string(),
+        message.born_host().to_string(),
+        format_export_timestamp(message.born_timestamp()),
+        format_export_timestamp(message.store_timestamp()),
+        message.reconsume_times().to_string(),
+        format_java_properties_string(&message),
+        decode_export_message_body(&message),
+        message.body_crc().to_string(),
+        exception,
+    ]
+}
+
+fn build_failed_dlq_export_row(topic: String, message_id: String, error: MessageError) -> [String; 10] {
+    [
+        topic,
+        message_id,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        error.to_string(),
+    ]
 }
 
 fn format_export_timestamp(value: i64) -> String {
@@ -2139,6 +2269,34 @@ mod tests {
     }
 
     #[test]
+    fn normalize_batch_export_requests_rejects_empty_input() {
+        let error = normalize_batch_export_requests(Vec::new()).expect_err("empty batch export should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("At least one DLQ message must be selected for batch export")
+        );
+    }
+
+    #[test]
+    fn normalize_batch_export_requests_trims_fields() {
+        let requests = normalize_batch_export_requests(vec![DlqViewMessageRequest {
+            consumer_group: " group-a ".to_string(),
+            message_id: " msg-1 ".to_string(),
+        }])
+        .expect("batch export requests should normalize");
+
+        assert_eq!(
+            requests,
+            vec![DlqViewMessageRequest {
+                consumer_group: "group-a".to_string(),
+                message_id: "msg-1".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn build_dlq_export_view_maps_java_dashboard_columns() {
         let message = MessageBuilder::new()
             .topic("%DLQ%group-a")
@@ -2182,6 +2340,36 @@ mod tests {
         let export = build_dlq_export_view("%DLQ%group-a".to_string(), message_ext);
 
         assert!(export.content.contains("\"base64:/wBB\""));
+    }
+
+    #[test]
+    fn build_batch_dlq_export_view_includes_failure_rows() {
+        let rows = vec![
+            build_failed_dlq_export_row(
+                "%DLQ%group-a".to_string(),
+                "msg-1".to_string(),
+                MessageError::Validation("Failed to query message by Id: msg-1".to_string()),
+            ),
+            build_failed_dlq_export_row(
+                "%DLQ%group-a".to_string(),
+                "msg-2".to_string(),
+                MessageError::Validation("boom".to_string()),
+            ),
+        ];
+
+        let export = build_batch_dlq_export_view(rows, 0, 2);
+
+        assert_eq!(export.total, 2);
+        assert_eq!(export.success_count, 0);
+        assert_eq!(export.failure_count, 2);
+        assert!(export.file_name.starts_with("dlqs-"));
+        assert!(export.content.contains("\"exception\""));
+        assert!(
+            export
+                .content
+                .contains("\"Validation error: Failed to query message by Id: msg-1\"")
+        );
+        assert!(export.content.contains("\"msg-2\""));
     }
 
     #[test]

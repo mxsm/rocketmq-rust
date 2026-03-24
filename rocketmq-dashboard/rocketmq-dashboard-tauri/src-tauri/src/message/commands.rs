@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::message::service::MessageManager;
+use crate::message::types::DlqBatchMessageExportView;
 use crate::message::types::DlqMessageExportView;
 use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
@@ -20,6 +21,7 @@ use crate::message::types::MessagePageResponse;
 use crate::message::types::MessageResendResult;
 use crate::message::types::MessageSummaryListResponse;
 use crate::message::types::MessageTraceDetailView;
+use rocketmq_dashboard_common::DlqBatchExportMessageRequest;
 use rocketmq_dashboard_common::DlqBatchResendMessageRequest;
 use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
 use rocketmq_dashboard_common::DlqResendMessageRequest;
@@ -127,6 +129,17 @@ pub async fn export_dlq_message(
 ) -> Result<DlqMessageExportView, String> {
     message_manager
         .export_dlq_message(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn batch_export_dlq_message(
+    request: DlqBatchExportMessageRequest,
+    message_manager: State<'_, MessageManager>,
+) -> Result<DlqBatchMessageExportView, String> {
+    message_manager
+        .batch_export_dlq_message(request)
         .await
         .map_err(|error| error.to_string())
 }

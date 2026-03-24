@@ -77,6 +77,7 @@ export const DLQMessageView = () => {
   const [resendingMessageId, setResendingMessageId] = useState<string | null>(null);
   const [exportingMessageId, setExportingMessageId] = useState<string | null>(null);
   const [isBatchResending, setIsBatchResending] = useState(false);
+  const [isBatchExporting, setIsBatchExporting] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(EMPTY_SELECTED_IDS);
   const [taskId, setTaskId] = useState('');
   const [pagination, setPagination] = useState(defaultPagination);
@@ -381,6 +382,54 @@ export const DLQMessageView = () => {
     }
   };
 
+  const handleBatchExport = async () => {
+    const normalizedConsumerGroup = consumerGroup.trim();
+    if (!normalizedConsumerGroup) {
+      setSearchError('Consumer group is required.');
+      return;
+    }
+
+    const selectedMessages = messages.filter((message) => selectedMessageIds.has(message.queryMsgId));
+    if (selectedMessages.length === 0) {
+      setSearchError('Select at least one DLQ message to export.');
+      return;
+    }
+
+    setIsBatchExporting(true);
+    setSearchError('');
+
+    try {
+      const payload = await DlqService.batchExportDlqMessage({
+        messages: selectedMessages.map((message) => ({
+          consumerGroup: normalizedConsumerGroup,
+          messageId: message.queryMsgId,
+        })),
+      });
+
+      downloadExportPayload(payload.fileName, payload.mimeType, payload.content);
+
+      if (payload.failureCount === 0) {
+        toast.success(`Batch export completed for ${payload.successCount} DLQ message(s).`);
+      } else if (payload.successCount === 0) {
+        const failureMessage = `Batch export completed with ${payload.failureCount} failure row(s).`;
+        toast.warning(failureMessage);
+        setSearchError(failureMessage);
+      } else {
+        const partialMessage = `Batch export completed with ${payload.successCount} success and ${payload.failureCount} failure row(s).`;
+        toast.warning(partialMessage);
+        setSearchError(partialMessage);
+      }
+
+      setSelectedMessageIds(EMPTY_SELECTED_IDS);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Failed to batch export DLQ messages.';
+      toast.error(messageText);
+      setSearchError(messageText);
+    } finally {
+      setIsBatchExporting(false);
+    }
+  };
+
   const renderEmptyCopy = () => {
     if (activeTab === 'Consumer') {
       return 'Enter a consumer group and time range to search DLQ messages.';
@@ -416,7 +465,7 @@ export const DLQMessageView = () => {
 
       <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>Single-message export and resend are available. Batch resend is available. Batch export is not available yet.</div>
+          <div>Single-message export and resend are available. Batch resend and batch export are available.</div>
       </div>
 
       <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
@@ -511,18 +560,19 @@ export const DLQMessageView = () => {
             <>
               <button
                 onClick={() => void handleBatchResend()}
-                disabled={isBatchResending || selectedMessageIds.size === 0}
+                disabled={isBatchResending || isBatchExporting || selectedMessageIds.size === 0}
                 className="flex items-center rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
               >
                 <Send className="mr-2 h-4 w-4" />
                 {isBatchResending ? 'Batch Resending...' : `Batch Resend${selectedMessageIds.size > 0 ? ` (${selectedMessageIds.size})` : ''}`}
               </button>
               <button
-                disabled
-                className="flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-400 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-500"
+                onClick={() => void handleBatchExport()}
+                disabled={isBatchExporting || isBatchResending || selectedMessageIds.size === 0}
+                className="flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
               >
                 <ArrowUpRight className="mr-2 h-4 w-4" />
-                Batch Export
+                {isBatchExporting ? 'Batch Exporting...' : `Batch Export${selectedMessageIds.size > 0 ? ` (${selectedMessageIds.size})` : ''}`}
               </button>
             </>
           ) : null}
@@ -644,7 +694,8 @@ export const DLQMessageView = () => {
                       disabled={
                         resendingMessageId === message.queryMsgId ||
                         exportingMessageId === message.queryMsgId ||
-                        isBatchResending
+                        isBatchResending ||
+                        isBatchExporting
                       }
                       className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
                     >
@@ -656,7 +707,8 @@ export const DLQMessageView = () => {
                       disabled={
                         exportingMessageId === message.queryMsgId ||
                         resendingMessageId === message.queryMsgId ||
-                        isBatchResending
+                        isBatchResending ||
+                        isBatchExporting
                       }
                       className="flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
                     >

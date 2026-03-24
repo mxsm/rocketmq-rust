@@ -32,6 +32,10 @@ export interface DlqBatchResendMessageRequest {
     messages: DlqResendMessageRequest[];
 }
 
+export interface DlqBatchExportMessageRequest {
+    messages: DlqMessageExportRequest[];
+}
+
 export interface DlqResendMessageResult {
     success: boolean;
     message: string;
@@ -53,6 +57,15 @@ export interface DlqMessageExportPayload {
     fileName: string;
     mimeType: string;
     content: string;
+}
+
+export interface DlqBatchMessageExportPayload {
+    fileName: string;
+    mimeType: string;
+    content: string;
+    total: number;
+    successCount: number;
+    failureCount: number;
 }
 
 export type DlqMessageSummary = MessageSummary;

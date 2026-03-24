@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+    DlqBatchExportMessageRequest,
+    DlqBatchMessageExportPayload,
     DlqBatchResendMessageRequest,
     DlqBatchResendMessageResponse,
     DlqMessageDetail,
@@ -35,5 +37,11 @@ export class DlqService {
 
     static async exportDlqMessage(request: DlqMessageExportRequest): Promise<DlqMessageExportPayload> {
         return invoke<DlqMessageExportPayload>('export_dlq_message', { request });
+    }
+
+    static async batchExportDlqMessage(
+        request: DlqBatchExportMessageRequest,
+    ): Promise<DlqBatchMessageExportPayload> {
+        return invoke<DlqBatchMessageExportPayload>('batch_export_dlq_message', { request });
     }
 }

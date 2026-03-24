@@ -108,6 +108,17 @@ pub(crate) struct DlqMessageExportView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct DlqBatchMessageExportView {
+    pub(crate) file_name: String,
+    pub(crate) mime_type: String,
+    pub(crate) content: String,
+    pub(crate) total: usize,
+    pub(crate) success_count: usize,
+    pub(crate) failure_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub(crate) struct MessageTrackView {
     pub(crate) consumer_group: String,
