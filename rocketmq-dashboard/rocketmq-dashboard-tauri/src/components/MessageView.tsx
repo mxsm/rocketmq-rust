@@ -176,6 +176,7 @@ export const MessageView = () => {
       setSelectedMessage({
         topic: topic.trim(),
         msgId: msgId.trim(),
+        queryMsgId: msgId.trim(),
         tags: null,
         keys: null,
         storeTimestamp: 0,

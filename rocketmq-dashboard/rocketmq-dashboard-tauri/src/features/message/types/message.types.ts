@@ -1,6 +1,7 @@
 export interface MessageSummary {
     topic: string;
     msgId: string;
+    queryMsgId: string;
     tags?: string | null;
     keys?: string | null;
     storeTimestamp: number;

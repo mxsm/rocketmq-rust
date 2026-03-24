@@ -308,7 +308,7 @@ impl MessageTrait for BrokerMessage {
     }
 
     fn transaction_id(&self) -> Option<&CheetahString> {
-        self.envelope.message().transaction_id()
+        MessageTrait::transaction_id(self.envelope.message())
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {

@@ -43,6 +43,7 @@ impl std::error::Error for MessageError {}
 pub(crate) struct MessageSummaryView {
     pub(crate) topic: String,
     pub(crate) msg_id: String,
+    pub(crate) query_msg_id: String,
     pub(crate) tags: Option<String>,
     pub(crate) keys: Option<String>,
     pub(crate) store_timestamp: i64,

@@ -52,7 +52,7 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
 
     void MessageService.viewMessageDetail({
       topic: message.topic,
-      messageId: message.msgId,
+      messageId: message.queryMsgId,
     })
       .then((result) => {
         if (!cancelled) {

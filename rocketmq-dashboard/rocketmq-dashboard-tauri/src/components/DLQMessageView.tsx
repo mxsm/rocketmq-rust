@@ -42,7 +42,8 @@ const formatDateTimeInput = (date: Date) =>
 
 const toSummary = (detail: Awaited<ReturnType<typeof DlqService.viewDlqMessageDetail>>): DlqMessageSummary => ({
   topic: detail.topic,
-  msgId: detail.msgId,
+  msgId: detail.properties.UNIQ_KEY?.trim() || detail.msgId,
+  queryMsgId: detail.msgId,
   tags: detail.properties.TAGS ?? null,
   keys: detail.properties.KEYS ?? null,
   storeTimestamp: detail.storeTimestamp ?? 0,
@@ -218,13 +219,13 @@ export const DLQMessageView = () => {
       return;
     }
 
-    setResendingMessageId(message.msgId);
+    setResendingMessageId(message.queryMsgId);
     setSearchError('');
 
     try {
       const result = await DlqService.resendDlqMessage({
         consumerGroup: normalizedConsumerGroup,
-        messageId: message.msgId,
+        messageId: message.queryMsgId,
       });
 
       if (result.success) {
@@ -407,7 +408,7 @@ export const DLQMessageView = () => {
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
             {messages.map((message, index) => (
               <motion.div
-                key={`${message.topic}-${message.msgId}`}
+              key={`${message.topic}-${message.queryMsgId}`}
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.04 }}
@@ -472,11 +473,11 @@ export const DLQMessageView = () => {
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => void handleResend(message)}
-                      disabled={resendingMessageId === message.msgId}
+                  disabled={resendingMessageId === message.queryMsgId}
                       className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
                     >
                       <Send className="mr-1.5 h-4 w-4" />
-                      {resendingMessageId === message.msgId ? 'Resending...' : 'Resend'}
+                  {resendingMessageId === message.queryMsgId ? 'Resending...' : 'Resend'}
                     </button>
                     <button
                       onClick={() => setSelectedMessage(message)}

@@ -341,6 +341,11 @@ impl Message {
     }
 
     #[inline]
+    pub fn get_transaction_id(&self) -> Option<&CheetahString> {
+        self.transaction_id.as_ref()
+    }
+
+    #[inline]
     pub fn get_tags(&self) -> Option<CheetahString> {
         self.properties.as_map().get(MessageConst::PROPERTY_TAGS).cloned()
     }
@@ -769,6 +774,16 @@ mod tests {
         assert_eq!(msg.topic().as_str(), "test_topic");
         assert!(!msg.is_wait_store_msg_ok());
         assert_eq!(msg.body().unwrap(), body);
+    }
+
+    #[test]
+    fn test_get_transaction_id_returns_cheetah_string_ref() {
+        let mut msg = Message::new("test_topic", b"test_body");
+        msg.set_transaction_id(CheetahString::from_static_str("tx-123"));
+
+        let transaction_id = msg.get_transaction_id();
+
+        assert_eq!(transaction_id, Some(&CheetahString::from_static_str("tx-123")));
     }
 
     #[test]

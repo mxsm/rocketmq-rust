@@ -24,6 +24,7 @@ use crate::common::message::message_client_id_setter::MessageClientIDSetter;
 use crate::common::message::message_single::Message;
 use crate::common::message::routing_context::RoutingContext;
 use crate::common::message::storage_metadata::StorageMetadata;
+use crate::common::message::MessageTrait;
 
 /// Complete message envelope (stored message)
 ///
@@ -386,7 +387,7 @@ impl crate::common::message::MessageTrait for MessageEnvelope {
     }
 
     fn transaction_id(&self) -> Option<&CheetahString> {
-        self.message.transaction_id()
+        MessageTrait::transaction_id(&self.message)
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {

@@ -1188,6 +1188,7 @@ fn map_message_summary(message: MessageExt) -> MessageSummaryView {
     MessageSummaryView {
         topic: message.topic().to_string(),
         msg_id: resolve_message_summary_id(&message),
+        query_msg_id: message.msg_id().to_string(),
         tags: message.get_tags().map(|value| value.to_string()),
         keys: extract_keys(&message),
         store_timestamp: message.store_timestamp(),
@@ -1389,6 +1390,7 @@ fn build_trace_summary(message_id: &str, mut seeds: Vec<TraceSeed>) -> MessageRe
     Ok(MessageSummaryView {
         topic: selected.topic.clone().unwrap_or_default(),
         msg_id: message_id.to_string(),
+        query_msg_id: message_id.to_string(),
         tags: selected.tags.clone(),
         keys: selected.keys.clone(),
         store_timestamp: selected.timestamp,
@@ -1606,6 +1608,7 @@ mod tests {
 
         assert_eq!(summary.topic, "TopicTest");
         assert_eq!(summary.msg_id, "msg-1");
+        assert_eq!(summary.query_msg_id, "msg-1");
         assert_eq!(summary.tags.as_deref(), Some("TagA"));
         assert_eq!(summary.keys.as_deref(), Some("KeyA KeyB"));
         assert_eq!(summary.store_timestamp, 1_700_000_000_123);
@@ -1629,6 +1632,7 @@ mod tests {
         let summary = map_message_summary(message_ext);
 
         assert_eq!(summary.msg_id, "uniq-msg-id");
+        assert_eq!(summary.query_msg_id, "offset-msg-id");
     }
 
     #[test]
@@ -1649,6 +1653,7 @@ mod tests {
         let summary = map_message_summary(message_ext);
 
         assert_eq!(summary.msg_id, "offset-msg-id");
+        assert_eq!(summary.query_msg_id, "offset-msg-id");
     }
 
     #[test]
@@ -1931,6 +1936,7 @@ mod tests {
         .expect("trace summary should build");
 
         assert_eq!(summary.msg_id, "msg-1");
+        assert_eq!(summary.query_msg_id, "msg-1");
         assert_eq!(summary.topic, "TopicTest");
         assert_eq!(summary.tags.as_deref(), Some("TagA"));
         assert_eq!(summary.keys.as_deref(), Some("KeyA"));

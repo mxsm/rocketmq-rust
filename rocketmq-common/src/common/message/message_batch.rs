@@ -231,7 +231,7 @@ impl MessageTrait for MessageBatch {
 
     #[inline]
     fn transaction_id(&self) -> Option<&CheetahString> {
-        self.final_message.transaction_id()
+        MessageTrait::transaction_id(&self.final_message)
     }
 
     #[inline]

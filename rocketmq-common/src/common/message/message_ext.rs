@@ -342,7 +342,7 @@ impl MessageTrait for MessageExt {
 
     #[inline]
     fn transaction_id(&self) -> Option<&CheetahString> {
-        self.message.transaction_id()
+        MessageTrait::transaction_id(&self.message)
     }
 
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
@@ -440,5 +440,23 @@ impl From<crate::common::message::message_envelope::MessageEnvelope> for Message
             reconsume_times: envelope.reconsume_times(),
             prepared_transaction_offset: envelope.prepared_transaction_offset(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+    use crate::common::message::MessageTrait;
+
+    #[test]
+    fn message_ext_message_trait_transaction_id_returns_cheetah_string_ref() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_transaction_id(CheetahString::from_static_str("tx-123"));
+
+        let transaction_id = <MessageExt as MessageTrait>::transaction_id(&message_ext);
+
+        assert_eq!(transaction_id, Some(&CheetahString::from_static_str("tx-123")));
     }
 }
