@@ -22,11 +22,11 @@ use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryConsumeQueueResponseBody {
-    subscription_data: SubscriptionData,
-    filter_data: CheetahString,
-    queue_data: Vec<ConsumeQueueData>,
-    max_queue_index: i64,
-    min_queue_index: i64,
+    pub subscription_data: Option<SubscriptionData>,
+    pub filter_data: Option<CheetahString>,
+    pub queue_data: Option<Vec<ConsumeQueueData>>,
+    pub max_queue_index: i64,
+    pub min_queue_index: i64,
 }
 
 #[cfg(test)]
@@ -36,9 +36,9 @@ mod tests {
     #[test]
     fn query_consume_queue_response_body_default_values() {
         let response_body: QueryConsumeQueueResponseBody = Default::default();
-        //assert_eq!(response_body.subscription_data, SubscriptionData::default());
-        assert_eq!(response_body.filter_data, "");
-        assert!(response_body.queue_data.is_empty());
+        assert!(response_body.subscription_data.is_none());
+        assert!(response_body.filter_data.is_none());
+        assert!(response_body.queue_data.is_none());
         assert_eq!(response_body.max_queue_index, 0);
         assert_eq!(response_body.min_queue_index, 0);
     }

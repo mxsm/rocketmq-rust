@@ -19,7 +19,7 @@
 //! - [`AdminGuard`] - RAII wrapper for automatic resource cleanup
 
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::RocketMQResult;
@@ -118,7 +118,7 @@ impl AdminBuilder {
         // Apply instance name (default: "tools-{timestamp}")
         let instance_name = self
             .instance_name
-            .unwrap_or_else(|| format!("tools-{}", get_current_millis()));
+            .unwrap_or_else(|| format!("tools-{}", current_millis()));
         admin.client_config_mut().set_instance_name(instance_name.into());
 
         // Note: timeout_millis and unit_name are stored but not currently applied

@@ -20,8 +20,10 @@ use serde::Serialize;
 use serde_json_any_key::*;
 
 use crate::protocol::admin::offset_wrapper::OffsetWrapper;
+use crate::protocol::RemotingDeserializable;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConsumeStats {
     #[serde(with = "any_key_map")]
     pub offset_table: HashMap<MessageQueue, OffsetWrapper>,
@@ -69,6 +71,196 @@ impl ConsumeStats {
     pub fn set_consume_tps(&mut self, consume_tps: f64) {
         self.consume_tps = consume_tps;
     }
+
+    pub fn decode(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+        match <Self as RemotingDeserializable>::decode(body) {
+            Ok(stats) => Ok(stats),
+            Err(error) => {
+                let Ok(raw_body) = std::str::from_utf8(body) else {
+                    return Err(error);
+                };
+                let normalized_body = normalize_nonstandard_offset_table_keys(raw_body);
+                if normalized_body == raw_body {
+                    return Err(error);
+                }
+                <Self as RemotingDeserializable>::decode_str(&normalized_body)
+            }
+        }
+    }
+}
+
+fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
+    let chars = input.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] != '"' {
+            output.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let string_end = consume_string_end(&chars, index);
+        output.extend(chars[index..=string_end].iter());
+        let key = chars[index + 1..string_end].iter().collect::<String>();
+        index = string_end + 1;
+
+        if key != "offsetTable" {
+            continue;
+        }
+
+        while index < chars.len() && chars[index].is_whitespace() {
+            output.push(chars[index]);
+            index += 1;
+        }
+        if index >= chars.len() || chars[index] != ':' {
+            continue;
+        }
+        output.push(':');
+        index += 1;
+
+        while index < chars.len() && chars[index].is_whitespace() {
+            output.push(chars[index]);
+            index += 1;
+        }
+        if index >= chars.len() || chars[index] != '{' {
+            continue;
+        }
+
+        output.push('{');
+        index += 1;
+        let (normalized_map, next_index) = normalize_object_key_map_body(&chars, index);
+        output.push_str(&normalized_map);
+        index = next_index;
+    }
+    output
+}
+
+fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, usize) {
+    let mut output = String::new();
+    let mut expecting_key = true;
+    let mut nested_value_depth = 0usize;
+    let length = chars.len();
+
+    while index < length {
+        let current = chars[index];
+        if expecting_key {
+            match current {
+                '}' => {
+                    output.push('}');
+                    return (output, index + 1);
+                }
+                '{' => {
+                    let object_end = consume_balanced_object_end(chars, index);
+                    let raw_key = chars[index..=object_end].iter().collect::<String>();
+                    output.push_str(&serde_json::to_string(&raw_key).expect("stringify object key"));
+                    index = object_end + 1;
+                    expecting_key = false;
+                }
+                '"' => {
+                    let string_end = consume_string_end(chars, index);
+                    output.extend(chars[index..=string_end].iter());
+                    index = string_end + 1;
+                    expecting_key = false;
+                }
+                _ => {
+                    output.push(current);
+                    index += 1;
+                }
+            }
+            continue;
+        }
+
+        match current {
+            '"' => {
+                let string_end = consume_string_end(chars, index);
+                output.extend(chars[index..=string_end].iter());
+                index = string_end + 1;
+            }
+            '{' | '[' => {
+                nested_value_depth += 1;
+                output.push(current);
+                index += 1;
+            }
+            '}' => {
+                if nested_value_depth == 0 {
+                    output.push('}');
+                    return (output, index + 1);
+                }
+                nested_value_depth -= 1;
+                output.push('}');
+                index += 1;
+            }
+            ']' => {
+                nested_value_depth = nested_value_depth.saturating_sub(1);
+                output.push(']');
+                index += 1;
+            }
+            ',' if nested_value_depth == 0 => {
+                output.push(',');
+                index += 1;
+                expecting_key = true;
+            }
+            _ => {
+                output.push(current);
+                index += 1;
+            }
+        }
+    }
+
+    (output, index)
+}
+
+fn consume_string_end(chars: &[char], start: usize) -> usize {
+    let mut index = start + 1;
+    let mut escaped = false;
+    while index < chars.len() {
+        if escaped {
+            escaped = false;
+        } else if chars[index] == '\\' {
+            escaped = true;
+        } else if chars[index] == '"' {
+            return index;
+        }
+        index += 1;
+    }
+    chars.len().saturating_sub(1)
+}
+
+fn consume_balanced_object_end(chars: &[char], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut index = start;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while index < chars.len() {
+        let current = chars[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if current == '\\' {
+                escaped = true;
+            } else if current == '"' {
+                in_string = false;
+            }
+        } else {
+            match current {
+                '"' => in_string = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return index;
+                    }
+                }
+                _ => {}
+            }
+        }
+        index += 1;
+    }
+
+    chars.len().saturating_sub(1)
 }
 
 #[cfg(test)]
@@ -149,11 +341,40 @@ mod tests {
 
         let serialized = serde_json::to_string(&stats).expect("Serialization failed");
 
-        assert!(serialized.contains("offset_table"));
-        assert!(serialized.contains("consume_tps"));
+        assert!(serialized.contains("offsetTable"));
+        assert!(serialized.contains("consumeTps"));
 
         let deserialized: ConsumeStats = serde_json::from_str(&serialized).expect("Deserialization failed");
         assert_eq!(deserialized.get_offset_table().len(), 1);
         assert_eq!(deserialized.compute_total_diff(), 5);
+    }
+
+    #[test]
+    fn decode_accepts_nonstandard_offset_table_object_keys() {
+        let body = r#"{"offsetTable":{{"topic":"TopicTest","brokerName":"broker-a","queueId":1}:{"brokerOffset":120,"consumerOffset":20,"pullOffset":80,"lastTimestamp":1700000000000}},"consumeTps":1.5}"#;
+
+        let decoded = ConsumeStats::decode(body.as_bytes()).expect("consume stats should decode");
+
+        assert_eq!(decoded.get_offset_table().len(), 1);
+        assert_eq!(decoded.get_consume_tps(), 1.5);
+        let (queue, offset) = decoded.get_offset_table().iter().next().expect("one queue");
+        assert_eq!(queue.topic_str(), "TopicTest");
+        assert_eq!(queue.broker_name(), "broker-a");
+        assert_eq!(queue.queue_id(), 1);
+        assert_eq!(offset.get_broker_offset(), 120);
+        assert_eq!(offset.get_consumer_offset(), 20);
+        assert_eq!(offset.get_pull_offset(), 80);
+        assert_eq!(offset.get_last_timestamp(), 1_700_000_000_000);
+    }
+
+    #[test]
+    fn normalize_nonstandard_offset_table_keys_stringifies_object_keys() {
+        let input = r#"{"offsetTable":{{"topic":"TopicTest","brokerName":"broker-a","queueId":1}:{"brokerOffset":120}},"consumeTps":1.5}"#;
+        let normalized = normalize_nonstandard_offset_table_keys(input);
+
+        assert_eq!(
+            normalized,
+            r#"{"offsetTable":{"{\"topic\":\"TopicTest\",\"brokerName\":\"broker-a\",\"queueId\":1}":{"brokerOffset":120}},"consumeTps":1.5}"#
+        );
     }
 }

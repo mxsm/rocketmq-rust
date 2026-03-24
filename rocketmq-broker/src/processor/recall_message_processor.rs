@@ -23,7 +23,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::producer::recall_message_handle::RecallMessageHandle;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -129,7 +129,7 @@ where
             .broker_runtime_inner
             .broker_config()
             .start_accept_send_request_time_stamp;
-        if get_current_millis() < start_timestamp as u64 {
+        if current_millis() < start_timestamp as u64 {
             return Ok(response.set_code(ResponseCode::ServiceNotAvailable).set_remark(
                 CheetahString::from_static_str("recall failed, broker service not available"),
             ));
@@ -191,7 +191,7 @@ where
         }
 
         let timestamp = handle_timestamp_str.parse::<i64>().unwrap_or(-1);
-        let current_time_millis = get_current_millis() as i64;
+        let current_time_millis = current_millis() as i64;
         let time_left = timestamp - current_time_millis;
         let timer_max_delay_sec = self.broker_runtime_inner.message_store_config().timer_max_delay_sec as i64;
 
@@ -209,7 +209,7 @@ where
             handle_message_id,
         );
 
-        let begin_time_millis = get_current_millis();
+        let begin_time_millis = current_millis();
         let put_message_result = self
             .broker_runtime_inner
             .message_store_mut()
@@ -258,7 +258,7 @@ where
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_BORN_TIMESTAMP),
-            CheetahString::from_string(get_current_millis().to_string()),
+            CheetahString::from_string(current_millis().to_string()),
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_CONTEXT),
@@ -294,7 +294,7 @@ where
             store_size: 0,
             queue_offset: 0,
             sys_flag: 0,
-            born_timestamp: get_current_millis() as i64,
+            born_timestamp: current_millis() as i64,
             born_host,
             store_timestamp: 0,
             store_host,
@@ -348,7 +348,7 @@ where
                     .broker_stats_manager()
                     .inc_broker_put_nums(&topic, msg_num);
 
-                let latency = (get_current_millis() - begin_time_millis) as i32;
+                let latency = (current_millis() - begin_time_millis) as i32;
                 self.broker_runtime_inner
                     .broker_stats_manager()
                     .inc_topic_put_latency(&topic, 0, latency);

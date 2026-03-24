@@ -50,7 +50,7 @@ impl Acl {
     /// Create from subject key/type and policies
     pub fn of_with_policies(subject_key: impl Into<String>, subject_type: SubjectType, policies: Vec<Policy>) -> Self {
         Acl {
-            subject_key: subject_key.into(),
+            subject_key: normalize_subject_key(subject_key.into(), subject_type),
             subject_type,
             policies,
         }
@@ -118,6 +118,13 @@ impl Acl {
     pub fn set_subject_type(&mut self, t: SubjectType) {
         self.subject_type = t;
     }
+}
+
+fn normalize_subject_key(subject_key: String, subject_type: SubjectType) -> String {
+    if let Some((_, raw_name)) = subject_key.split_once(':') {
+        return format!("{}:{}", subject_type.name(), raw_name);
+    }
+    format!("{}:{}", subject_type.name(), subject_key)
 }
 
 impl fmt::Display for Acl {

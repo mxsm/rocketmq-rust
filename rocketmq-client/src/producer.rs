@@ -20,6 +20,7 @@ pub mod mq_producer;
 pub mod produce_accumulator;
 pub mod producer_config_validation;
 pub mod producer_impl;
+pub mod queue_selector;
 pub mod request_callback;
 pub(crate) mod request_future_holder;
 pub(crate) mod request_response_future;

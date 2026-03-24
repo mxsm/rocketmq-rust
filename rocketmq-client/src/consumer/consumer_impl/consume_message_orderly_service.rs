@@ -284,9 +284,16 @@ impl ConsumeMessageOrderlyService {
         context: &ConsumeOrderlyContext,
         consume_request: &mut ConsumeRequest,
     ) -> bool {
+        let msg_count = msgs.len() as u64;
         let (continue_consume, commit_offset) = if context.is_auto_commit() {
             match status {
-                ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::Commit => {
+                ConsumeOrderlyStatus::Success => (true, consume_request.process_queue.commit().await),
+                ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::Commit => {
+                    warn!(
+                        "the message queue consume result is illegal, we think you want to ack these messages, so we \
+                         will ack them: {}",
+                        consume_request.message_queue
+                    );
                     (true, consume_request.process_queue.commit().await)
                 }
                 ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
@@ -307,8 +314,8 @@ impl ConsumeMessageOrderlyService {
         } else {
             match status {
                 ConsumeOrderlyStatus::Success => (true, -1),
-                ConsumeOrderlyStatus::Rollback => (true, consume_request.process_queue.commit().await),
-                ConsumeOrderlyStatus::Commit => {
+                ConsumeOrderlyStatus::Commit => (true, consume_request.process_queue.commit().await),
+                ConsumeOrderlyStatus::Rollback => {
                     consume_request.process_queue.rollback().await;
                     self.submit_consume_request_later(
                         consume_request.process_queue.clone(),
@@ -334,6 +341,28 @@ impl ConsumeMessageOrderlyService {
                 }
             }
         };
+
+        // Update per-topic/group consume throughput counters based on the orderly consume result.
+        if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
+            if let Some(client_instance) = impl_.client_instance.as_ref() {
+                let mgr = client_instance.consumer_stats_manager();
+                let topic = consume_request.message_queue.topic().as_str();
+                let group = self.consumer_group.as_str();
+                let is_ok = if context.is_auto_commit() {
+                    matches!(
+                        status,
+                        ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::Commit
+                    )
+                } else {
+                    matches!(status, ConsumeOrderlyStatus::Success)
+                };
+                if is_ok {
+                    mgr.inc_consume_ok_tps(group, topic, msg_count);
+                } else if matches!(status, ConsumeOrderlyStatus::SuspendCurrentQueueAMoment) {
+                    mgr.inc_consume_failed_tps(group, topic, msg_count);
+                }
+            }
+        }
 
         if commit_offset >= 0 && !consume_request.process_queue.is_dropped() {
             let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
@@ -524,7 +553,7 @@ impl ConsumeRequest {
 
         consume_message_orderly_service
             .active_tasks
-            .fetch_add(1, Ordering::SeqCst);
+            .fetch_add(1, Ordering::AcqRel);
         let active_tasks = consume_message_orderly_service.active_tasks.clone();
 
         struct TaskGuard {
@@ -533,13 +562,11 @@ impl ConsumeRequest {
 
         impl Drop for TaskGuard {
             fn drop(&mut self) {
-                self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+                self.active_tasks.fetch_sub(1, Ordering::AcqRel);
             }
         }
 
-        let _guard = TaskGuard {
-            active_tasks: active_tasks.clone(),
-        };
+        let _guard = TaskGuard { active_tasks };
 
         let mut consume_message_orderly_service_inner = consume_message_orderly_service.clone();
         let lock = consume_message_orderly_service_inner
@@ -548,9 +575,13 @@ impl ConsumeRequest {
             .await;
         let locked = lock.lock().await;
         let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap().clone();
-        if MessageModel::Broadcasting == default_mqpush_consumer_impl.message_model()
+        let message_model = default_mqpush_consumer_impl.message_model();
+        if MessageModel::Broadcasting == message_model
             || self.process_queue.is_locked() && !self.process_queue.is_lock_expired()
         {
+            let consume_batch_size = consume_message_orderly_service_inner
+                .consumer_config
+                .consume_message_batch_max_size;
             let begin_time = Instant::now();
             loop {
                 if self.process_queue.is_dropped() {
@@ -560,9 +591,7 @@ impl ConsumeRequest {
                     );
                     break;
                 }
-                if MessageModel::Clustering == default_mqpush_consumer_impl.message_model()
-                    && !self.process_queue.is_locked()
-                {
+                if MessageModel::Clustering == message_model && !self.process_queue.is_locked() {
                     warn!(
                         "the message queue not be able to consume, because it's not locked. {}",
                         self.message_queue
@@ -578,9 +607,7 @@ impl ConsumeRequest {
                     break;
                 }
 
-                if MessageModel::Clustering == default_mqpush_consumer_impl.message_model()
-                    && self.process_queue.is_lock_expired()
-                {
+                if MessageModel::Clustering == message_model && self.process_queue.is_lock_expired() {
                     warn!(
                         "the message queue lock expired, so consume later {}",
                         self.message_queue
@@ -607,9 +634,6 @@ impl ConsumeRequest {
                         .await;
                     break;
                 }
-                let consume_batch_size = consume_message_orderly_service_inner
-                    .consumer_config
-                    .consume_message_batch_max_size;
                 let mut msgs = self.process_queue.take_messages(consume_batch_size).await;
                 default_mqpush_consumer_impl.reset_retry_and_namespace(
                     &mut msgs,
@@ -618,30 +642,24 @@ impl ConsumeRequest {
                 if msgs.is_empty() {
                     break;
                 }
-                let mut context = ConsumeOrderlyContext::new(self.message_queue.clone());
                 let mut consume_message_context = None;
                 let mut status = None;
                 if default_mqpush_consumer_impl.has_hook() {
-                    let queue = self.message_queue.clone();
-                    consume_message_context = Some(ConsumeMessageContext {
-                        consumer_group: self.consumer_group.clone(),
-                        msg_list: &msgs,
-                        mq: Some(queue),
-                        success: false,
-                        status: CheetahString::from_static_str(""),
-                        mq_trace_context: None,
-                        props: Default::default(),
-                        namespace: default_mqpush_consumer_impl
-                            .client_config
-                            .get_namespace()
-                            .unwrap_or_default(),
-                        access_channel: Default::default(),
-                    });
-                    default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
+                    consume_message_context = Some(
+                        ConsumeMessageContext::new(self.consumer_group.clone(), &msgs)
+                            .with_mq(self.message_queue.clone())
+                            .with_namespace(
+                                default_mqpush_consumer_impl
+                                    .client_config
+                                    .get_namespace()
+                                    .unwrap_or_default(),
+                            ),
+                    );
+                    default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_mut().unwrap());
                 }
                 let begin_timestamp = Instant::now();
                 let mut has_exception = false;
-                let consume_lock = self.process_queue.consume_lock.write().await;
+                let consume_lock = self.process_queue.consume_lock.clone().read_owned().await;
                 if self.process_queue.is_dropped() {
                     warn!(
                         "consumeMessage, the message queue not be able to consume, because it's dropped. {}",
@@ -649,12 +667,26 @@ impl ConsumeRequest {
                     );
                     break;
                 }
-                let vec = &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>()[..];
-
-                match consume_message_orderly_service_inner
-                    .message_listener
-                    .consume_message(vec, &mut context)
-                {
+                let msgs_owned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
+                let listener = consume_message_orderly_service_inner.message_listener.clone();
+                let mq_for_spawn = self.message_queue.clone();
+                let (consume_result, context) = tokio::task::spawn_blocking(move || {
+                    let mut ctx = ConsumeOrderlyContext::new(mq_for_spawn);
+                    let vec: Vec<&MessageExt> = msgs_owned.iter().collect();
+                    let result = listener.consume_message(&vec, &mut ctx);
+                    drop(consume_lock);
+                    (result, ctx)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    (
+                        Err(rocketmq_error::RocketMQError::InvalidProperty(format!(
+                            "orderly consume task panicked: {e}"
+                        ))),
+                        ConsumeOrderlyContext::new(self.message_queue.clone()),
+                    )
+                });
+                match consume_result {
                     Ok(value) => {
                         status = Some(value);
                     }
@@ -669,7 +701,6 @@ impl ConsumeRequest {
                         );
                     }
                 }
-                drop(consume_lock);
                 if status.is_none()
                     || *status.as_ref().unwrap() == ConsumeOrderlyStatus::Rollback
                     || *status.as_ref().unwrap() == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment
@@ -695,10 +726,7 @@ impl ConsumeRequest {
                             ConsumeReturnType::TimeOut
                         } else if status_value == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment {
                             ConsumeReturnType::Failed
-                        } else if status_value == ConsumeOrderlyStatus::Success {
-                            ConsumeReturnType::Success
                         } else {
-                            // Handle other status cases
                             ConsumeReturnType::Success
                         }
                     }
@@ -714,10 +742,19 @@ impl ConsumeRequest {
                 }
                 if default_mqpush_consumer_impl.has_hook() {
                     let status = *status.as_ref().unwrap();
-                    consume_message_context.as_mut().unwrap().success =
-                        status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
-                    consume_message_context.as_mut().unwrap().status = status.to_string().into();
-                    default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
+                    let cmc = consume_message_context.as_mut().unwrap();
+                    cmc.success = status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
+                    cmc.status = status.to_string().into();
+                    cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
+                    default_mqpush_consumer_impl.execute_hook_after(cmc);
+                }
+                // Record message consume round-trip time.
+                if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {
+                    client_instance.consumer_stats_manager().inc_consume_rt(
+                        consume_message_orderly_service_inner.consumer_group.as_str(),
+                        self.message_queue.topic().as_str(),
+                        consume_rt,
+                    );
                 }
                 let continue_consume = consume_message_orderly_service_inner
                     .process_consume_result(

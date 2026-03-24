@@ -72,7 +72,7 @@ impl ClientRequestProcessor {
 
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
-            startup_time_millis: TimeUtils::get_current_millis(),
+            startup_time_millis: TimeUtils::current_millis(),
             wait_seconds_millis,
             need_wait_for_service,
             order_message_enable,
@@ -90,7 +90,7 @@ impl ClientRequestProcessor {
 
         // Early return: Check if nameserver is ready (using cached config)
         if self.need_wait_for_service {
-            let elapsed_millis = TimeUtils::get_current_millis().saturating_sub(self.startup_time_millis);
+            let elapsed_millis = TimeUtils::current_millis().saturating_sub(self.startup_time_millis);
             let namesrv_ready =
                 !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= self.wait_seconds_millis;
 

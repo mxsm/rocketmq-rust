@@ -57,7 +57,7 @@ dirs.workspace = true
 
 parking_lot.workspace = true
 bytes.workspace       = true
-arc-swap              = "1.8"
+arc-swap              = "1.9"
 
 #tokio
 tokio.workspace      = true
@@ -70,11 +70,11 @@ tracing.workspace = true
 serde.workspace      = true
 serde_json.workspace = true
 
-tempfile = "3.25.0"
+tempfile = "3.27.0"
 
 memmap2                 = "0.9.10"
 trait-variant.workspace = true
-sysinfo                 = "0.38.2"
+sysinfo                 = "0.38.4"
 cheetah-string          = { workspace = true }
 thiserror               = { workspace = true }
 
@@ -93,7 +93,7 @@ rayon     = "1.11"
 tokio-uring = { version = "0.5", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.182"
+libc = "0.2.183"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -106,7 +106,7 @@ windows = { version = "0.62.2", features = [
 
 
 [dev-dependencies]
-tempfile  = "3.25.0"
+tempfile  = "3.27.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]

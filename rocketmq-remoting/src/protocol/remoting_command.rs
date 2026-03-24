@@ -933,6 +933,17 @@ impl RemotingCommand {
             ext.entry(key.into()).or_insert(value.into());
         }
     }
+
+    /// Ensures the extension fields map is initialized.
+    ///
+    /// If `ext_fields` is `None`, initializes it with an empty `HashMap`.
+    /// This method is idempotent and safe to call multiple times.
+    #[inline]
+    pub fn ensure_ext_fields_initialized(&mut self) {
+        if self.ext_fields.is_none() {
+            self.ext_fields = Some(std::collections::HashMap::new());
+        }
+    }
 }
 
 /// Extract header length from the combined serialize_type field

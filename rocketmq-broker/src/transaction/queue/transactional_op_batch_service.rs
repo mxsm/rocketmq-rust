@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
@@ -86,12 +86,12 @@ where
         info!("TransactionalOpBatchService started");
         let transaction_op_batch_interval = self.broker_config.transaction_op_batch_interval;
         self.wakeup_timestamp.store(
-            get_current_millis() + transaction_op_batch_interval,
+            current_millis() + transaction_op_batch_interval,
             std::sync::atomic::Ordering::Relaxed,
         );
         while !context.is_stopped() {
             let mut interval =
-                self.wakeup_timestamp.load(std::sync::atomic::Ordering::Relaxed) as i64 - get_current_millis() as i64;
+                self.wakeup_timestamp.load(std::sync::atomic::Ordering::Relaxed) as i64 - current_millis() as i64;
             if interval <= 0 {
                 interval = 0;
                 context.wakeup();

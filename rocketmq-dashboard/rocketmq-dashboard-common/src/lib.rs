@@ -18,9 +18,21 @@
 //! that can be reused across different dashboard implementations (GPUI, Tauri, etc.)
 
 pub mod api;
+pub mod cluster;
+pub mod consumer;
+pub mod message;
 pub mod models;
+pub mod nameserver;
+pub mod producer;
 pub mod service;
+pub mod topic;
 
 pub use api::*;
+pub use cluster::*;
+pub use consumer::*;
+pub use message::*;
 pub use models::*;
+pub use nameserver::*;
+pub use producer::*;
 pub use service::*;
+pub use topic::*;

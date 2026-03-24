@@ -18,6 +18,7 @@ pub mod authentication;
 pub mod authorization;
 pub mod config;
 pub mod migration;
+pub mod runtime;
 
 // Re-export commonly used authentication types
 pub use authentication::context::default_authentication_context::DefaultAuthenticationContext;
@@ -34,3 +35,8 @@ pub use authorization::context::default_authorization_context::DefaultAuthorizat
 pub use authorization::evaluator::AuthorizationEvaluator;
 pub use authorization::provider::AuthorizationProvider;
 pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
+pub use runtime::AuthRuntime;
+pub use runtime::AuthRuntimeBuilder;
+pub use runtime::AuthenticationService;
+pub use runtime::AuthorizationService;
+pub use runtime::ProviderRegistry;

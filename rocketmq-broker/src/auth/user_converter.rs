@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::enums::user_status::UserStatus;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_auth::authentication::model::user::User;
@@ -46,5 +47,18 @@ impl UserConverter {
         }
 
         user
+    }
+
+    pub fn convert_user_info(user: &User) -> UserInfo {
+        UserInfo {
+            username: Some(user.username().clone()),
+            password: user.password().cloned(),
+            user_type: user
+                .user_type()
+                .map(|user_type| CheetahString::from_static_str(user_type.name())),
+            user_status: user
+                .user_status()
+                .map(|user_status| CheetahString::from_static_str(user_status.name())),
+        }
     }
 }

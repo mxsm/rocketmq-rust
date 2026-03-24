@@ -166,7 +166,7 @@ impl ReceiptHandle {
     /// let expired = handle.is_expired();
     /// ```
     pub fn is_expired(&self) -> bool {
-        self.next_visible_time <= TimeUtils::get_current_millis() as i64
+        self.next_visible_time <= TimeUtils::current_millis() as i64
     }
 
     /// Decode a receipt handle from its string representation

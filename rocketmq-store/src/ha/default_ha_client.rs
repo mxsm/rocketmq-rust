@@ -24,7 +24,7 @@ use bytes::BufMut;
 use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -162,7 +162,7 @@ impl Inner {
                     // Initialize current reported offset
                     let max_offset = self.default_message_store.get_max_phy_offset();
                     self.current_reported_offset.store(max_offset, Ordering::Release);
-                    let now = get_current_millis();
+                    let now = current_millis();
                     self.last_read_timestamp.store(now, Ordering::SeqCst);
                     Ok(Some(stream))
                 }
@@ -209,7 +209,7 @@ impl DefaultHAClient {
     pub fn new(default_message_store: ArcMut<LocalFileMessageStore>) -> Result<Self, HAClientError> {
         let flow_monitor = Arc::new(FlowMonitor::new(default_message_store.message_store_config()));
 
-        let now = get_current_millis();
+        let now = current_millis();
 
         Ok(Self {
             inner: ArcMut::new(Inner {
@@ -390,7 +390,7 @@ impl HAClient for DefaultHAClient {
                                     }
                                     // housekeeping
                                     _ = house.tick() => {
-                                        let interval = get_current_millis().saturating_sub(client.last_read_timestamp.load(Ordering::SeqCst));
+                                        let interval = current_millis().saturating_sub(client.last_read_timestamp.load(Ordering::SeqCst));
                                         // If the interval exceeds the configured value, it indicates that the connection may have been disconnected.
                                         if interval > client.default_message_store.message_store_config_ref().ha_housekeeping_interval {
                                             warn!(
@@ -542,7 +542,7 @@ impl ReaderTask {
                     if !self.dispatch_read().await? {
                         bail!("dispatchReadRequest error");
                     }
-                    self.last_read_timestamp.store(get_current_millis(), Ordering::SeqCst);
+                    self.last_read_timestamp.store(current_millis(), Ordering::SeqCst);
                 }
                 Some(Err(e)) => {
                     bail!(e);
@@ -657,7 +657,7 @@ impl WriterTask {
         self.report_offset.put_i64(max_off);
         let bytes = self.report_offset.split().freeze();
         self.wr.send(bytes).await?;
-        self.last_write_timestamp.store(get_current_millis(), Ordering::Release);
+        self.last_write_timestamp.store(current_millis(), Ordering::Release);
         Ok(())
     }
 }

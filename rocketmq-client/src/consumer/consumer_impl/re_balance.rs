@@ -23,6 +23,7 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 
 pub(crate) mod rebalance_impl;
+pub(crate) mod rebalance_lite_pull_impl;
 pub(crate) mod rebalance_push_impl;
 pub(crate) mod rebalance_service;
 

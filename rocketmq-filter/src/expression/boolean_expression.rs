@@ -157,9 +157,8 @@ impl Expression for AlwaysTrueExpression {
     fn evaluate(
         &self,
         _context: &dyn EvaluationContext,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
-    {
-        Ok(Box::new(true))
+    ) -> Result<crate::expression::Value, crate::expression::EvaluationError> {
+        Ok(crate::expression::Value::Boolean(true))
     }
 }
 
@@ -198,9 +197,8 @@ impl Expression for AlwaysFalseExpression {
     fn evaluate(
         &self,
         _context: &dyn EvaluationContext,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
-    {
-        Ok(Box::new(false))
+    ) -> Result<crate::expression::Value, crate::expression::EvaluationError> {
+        Ok(crate::expression::Value::Boolean(false))
     }
 }
 
@@ -281,9 +279,8 @@ impl Expression for PropertyEqualsExpression {
     fn evaluate(
         &self,
         context: &dyn EvaluationContext,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
-    {
-        Ok(Box::new(self.matches(context)))
+    ) -> Result<crate::expression::Value, crate::expression::EvaluationError> {
+        Ok(crate::expression::Value::Boolean(self.matches(context)))
     }
 }
 
@@ -338,9 +335,8 @@ impl Expression for AndExpression {
     fn evaluate(
         &self,
         context: &dyn EvaluationContext,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
-    {
-        Ok(Box::new(self.matches(context)))
+    ) -> Result<crate::expression::Value, crate::expression::EvaluationError> {
+        Ok(crate::expression::Value::Boolean(self.matches(context)))
     }
 }
 
@@ -395,9 +391,8 @@ impl Expression for OrExpression {
     fn evaluate(
         &self,
         context: &dyn EvaluationContext,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
-    {
-        Ok(Box::new(self.matches(context)))
+    ) -> Result<crate::expression::Value, crate::expression::EvaluationError> {
+        Ok(crate::expression::Value::Boolean(self.matches(context)))
     }
 }
 
@@ -444,9 +439,8 @@ impl Expression for NotExpression {
     fn evaluate(
         &self,
         context: &dyn EvaluationContext,
-    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
-    {
-        Ok(Box::new(self.matches(context)))
+    ) -> Result<crate::expression::Value, crate::expression::EvaluationError> {
+        Ok(crate::expression::Value::Boolean(self.matches(context)))
     }
 }
 

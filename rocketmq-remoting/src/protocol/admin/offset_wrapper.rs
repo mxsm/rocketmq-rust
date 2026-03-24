@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct OffsetWrapper {
     broker_offset: i64,
     consumer_offset: i64,
@@ -108,7 +109,7 @@ mod tests {
         wrapper.set_last_timestamp(-400);
 
         let serialized = serde_json::to_string(&wrapper).unwrap();
-        let expected = r#"{"broker_offset":-100,"consumer_offset":-200,"pull_offset":-300,"last_timestamp":-400}"#;
+        let expected = r#"{"brokerOffset":-100,"consumerOffset":-200,"pullOffset":-300,"lastTimestamp":-400}"#;
         assert_eq!(serialized, expected);
 
         let deserialized: OffsetWrapper = serde_json::from_str(&serialized).unwrap();

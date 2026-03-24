@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -32,7 +32,7 @@ use crate::client::client_channel_info::ClientChannelInfo;
 #[derive(Clone)]
 pub struct ConsumerGroupInfo {
     group_name: CheetahString,
-    subscription_table: Arc<DashMap<CheetahString, SubscriptionData>>,
+    subscription_table: Arc<DashMap<CheetahString, Arc<SubscriptionData>>>,
     channel_info_table: Arc<DashMap<Channel, ClientChannelInfo>>,
     consume_type: ConsumeType,
     message_model: MessageModel,
@@ -54,7 +54,7 @@ impl ConsumerGroupInfo {
             consume_type,
             message_model,
             consume_from_where,
-            last_update_timestamp: get_current_millis(),
+            last_update_timestamp: current_millis(),
         }
     }
 
@@ -66,7 +66,7 @@ impl ConsumerGroupInfo {
             consume_type: ConsumeType::ConsumePassively,
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
-            last_update_timestamp: get_current_millis(),
+            last_update_timestamp: current_millis(),
         }
     }
 
@@ -79,7 +79,7 @@ impl ConsumerGroupInfo {
         None
     }
 
-    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, SubscriptionData>> {
+    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, Arc<SubscriptionData>>> {
         Arc::clone(&self.subscription_table)
     }
 
@@ -158,7 +158,7 @@ impl ConsumerGroupInfo {
                 );
                 *info_old = info_new;
             }
-            info_old.set_last_update_timestamp(get_current_millis());
+            info_old.set_last_update_timestamp(current_millis());
         } else {
             self.channel_info_table
                 .insert(info_new.channel().clone(), info_new.clone());
@@ -170,7 +170,7 @@ impl ConsumerGroupInfo {
             updated = true;
         }
 
-        self.last_update_timestamp = get_current_millis();
+        self.last_update_timestamp = current_millis();
 
         updated
     }
@@ -188,10 +188,10 @@ impl ConsumerGroupInfo {
                         );
                     }
                     drop(old); //release lock
-                    self.subscription_table.insert(sub.topic.clone(), sub.clone());
+                    self.subscription_table.insert(sub.topic.clone(), Arc::new(sub.clone()));
                 }
             } else {
-                self.subscription_table.insert(sub.topic.clone(), sub.clone());
+                self.subscription_table.insert(sub.topic.clone(), Arc::new(sub.clone()));
                 info!(
                     "Subscription changed, add new topic, group: {} {}",
                     self.group_name, sub.topic
@@ -212,7 +212,7 @@ impl ConsumerGroupInfo {
                 true
             }
         });
-        self.last_update_timestamp = get_current_millis();
+        self.last_update_timestamp = current_millis();
         updated
     }
 
@@ -220,8 +220,17 @@ impl ConsumerGroupInfo {
         self.subscription_table.iter().map(|item| item.key().clone()).collect()
     }
 
-    pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
+    /// Returns subscription data wrapped in Arc to avoid cloning.
+    /// This is the preferred method for high-frequency access.
+    pub fn find_subscription_data_arc(&self, topic: &CheetahString) -> Option<Arc<SubscriptionData>> {
         self.subscription_table.get(topic).map(|item| item.value().clone())
+    }
+
+    /// Returns cloned subscription data for backward compatibility.
+    /// Consider using `find_subscription_data_arc` to avoid cloning overhead.
+    pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
+        self.find_subscription_data_arc(topic)
+            .map(|arc_data| (*arc_data).clone())
     }
 
     pub fn get_consume_type(&self) -> ConsumeType {

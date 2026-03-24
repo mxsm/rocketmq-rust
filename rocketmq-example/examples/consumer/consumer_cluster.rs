@@ -22,6 +22,8 @@
 //! 1. **Closure-based** (simple and direct)
 //! 2. **Struct-based** (better for complex logic and testing)
 
+#![recursion_limit = "256"]
+
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;

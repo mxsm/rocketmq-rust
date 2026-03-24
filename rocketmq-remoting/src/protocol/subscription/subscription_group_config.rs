@@ -24,7 +24,7 @@ use crate::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use crate::protocol::subscription::simple_subscription_data::SimpleSubscriptionData;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct SubscriptionGroupConfig {
     group_name: CheetahString,
 

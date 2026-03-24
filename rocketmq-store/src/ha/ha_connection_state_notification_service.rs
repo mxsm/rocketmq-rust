@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
@@ -66,7 +66,7 @@ impl Inner {
             if connection_state == request.expect_state() {
                 request.complete(true).await;
             } else if connection_state == HAConnectionState::Ready {
-                if get_current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
+                if current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
                     > CONNECTION_ESTABLISH_TIMEOUT
                 {
                     error!("Wait HA connection establish with {} timeout", request.remote_addr());
@@ -74,7 +74,7 @@ impl Inner {
                 }
             } else {
                 self.last_check_time_stamp
-                    .store(get_current_millis(), std::sync::atomic::Ordering::Relaxed);
+                    .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
             }
         } else {
             let mut connection_found = false;
@@ -86,10 +86,10 @@ impl Inner {
 
             if connection_found {
                 self.last_check_time_stamp
-                    .store(get_current_millis(), std::sync::atomic::Ordering::Relaxed);
+                    .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
             }
             if !connection_found
-                && (get_current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
+                && (current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
                     > CONNECTION_ESTABLISH_TIMEOUT)
             {
                 error!("Wait HA connection establish with {} timeout", request.remote_addr());
@@ -173,6 +173,6 @@ impl HAConnectionStateNotificationService {
         *guard = Some(request);
         self.inner
             .last_check_time_stamp
-            .store(get_current_millis(), std::sync::atomic::Ordering::Relaxed);
+            .store(current_millis(), std::sync::atomic::Ordering::Relaxed);
     }
 }

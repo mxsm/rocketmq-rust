@@ -22,7 +22,7 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::FileUtils::string_to_file;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
@@ -463,7 +463,7 @@ impl TopicQueueMappingUtils {
     ) -> RocketMQResult<TopicRemappingDetailWrapper> {
         TopicQueueMappingUtils::check_target_brokers_complete(target_brokers, broker_config_map)?;
         let mut global_id_map = HashMap::new();
-        let mut max_epoch_and_num = (get_current_millis(), queue_num);
+        let mut max_epoch_and_num = (current_millis(), queue_num);
         if !broker_config_map.is_empty() {
             let new_max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
                 &CheetahString::from(topic),
@@ -513,7 +513,7 @@ impl TopicQueueMappingUtils {
         let new_id_to_broker = allocator.id_to_broker();
 
         //construct the topic configAndMapping
-        let new_epoch = (max_epoch_and_num.0 + 1000).max(get_current_millis());
+        let new_epoch = (max_epoch_and_num.0 + 1000).max(current_millis());
         for e in new_id_to_broker {
             let queue_id = e.0;
             let broker = e.1;
@@ -530,7 +530,7 @@ impl TopicQueueMappingUtils {
                             topic.into(),
                             0,
                             broker.into(),
-                            get_current_millis() as i64,
+                            current_millis() as i64,
                         ),
                         hosted_queues: None,
                     })),
@@ -777,7 +777,7 @@ impl TopicQueueMappingUtils {
             }
         }
 
-        let new_epoch = ((max_epoch_and_num.0 as u64 + 1000).max(get_current_millis())) as i64;
+        let new_epoch = ((max_epoch_and_num.0 as u64 + 1000).max(current_millis())) as i64;
 
         // construct the remapping info
         let mut brokers_to_map_out: HashSet<CheetahString> = HashSet::new();

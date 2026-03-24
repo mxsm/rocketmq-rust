@@ -39,7 +39,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -59,7 +59,7 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
@@ -176,7 +176,7 @@ where
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let begin_time_mills = get_current_millis();
+        let begin_time_mills = current_millis();
         request.add_ext_field_if_not_exist(CheetahString::from_static_str(BORN_TIME), begin_time_mills.to_string());
 
         if request
@@ -352,7 +352,7 @@ where
                     request_header.topic.clone(),
                     request_header.exp.clone(),
                     request_header.exp_type.clone(),
-                    get_current_millis(),
+                    current_millis(),
                 );
                 if consumer_filter_data.is_none() {
                     warn!(
@@ -365,7 +365,7 @@ where
                     )));
                 }
                 let consumer_filter_data = consumer_filter_data.unwrap();
-                let message_filter: Box<dyn MessageFilter> = Box::new(ExpressionMessageFilter::new(
+                let message_filter: ArcMessageFilter = Arc::new(ExpressionMessageFilter::new(
                     Some(subscription_data.clone()),
                     Some(consumer_filter_data),
                     Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
@@ -456,9 +456,8 @@ where
         } else {
             String::new()
         };
-        let pop_time = get_current_millis();
+        let pop_time = current_millis();
 
-        let message_filter = message_filter.map(Arc::new);
         let mut rest_num = 0; // remaining number of messages to be fetched
         if need_retry && !request_header.order.unwrap_or(false) {
             rest_num = if need_retry_v1 {
@@ -701,7 +700,7 @@ where
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
         order_count_info: &mut str,
@@ -741,7 +740,7 @@ where
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
         order_count_info: &mut str,
@@ -785,7 +784,7 @@ where
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
         order_count_info: &mut str,
@@ -1447,7 +1446,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         msg.set_body(Bytes::from(ck.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = revive_qid;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::CK_TAG));
-        msg.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        msg.message_ext_inner.born_timestamp = current_millis() as i64;
         msg.message_ext_inner.born_host = store_host;
         msg.message_ext_inner.store_host = store_host;
         msg.set_delay_time_ms((ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL) as u64);
@@ -1469,7 +1468,7 @@ impl TimedLock {
     pub fn new() -> Self {
         TimedLock {
             lock: AtomicBool::new(false),
-            lock_time: AtomicU64::new(get_current_millis()),
+            lock_time: AtomicU64::new(current_millis()),
         }
     }
 
@@ -1479,7 +1478,7 @@ impl TimedLock {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         {
             Ok(_) => {
-                self.lock_time.store(get_current_millis(), Ordering::Relaxed);
+                self.lock_time.store(current_millis(), Ordering::Relaxed);
                 true
             }
             Err(_) => false,
@@ -1556,7 +1555,7 @@ impl QueueLockManager {
     pub async fn clean_unused_locks(&self, used_expire_millis: u64) -> usize {
         let mut cache = self.expired_local_cache.write().await;
         let count = cache.len();
-        cache.retain(|_, lock| get_current_millis() - lock.get_lock_time() <= used_expire_millis);
+        cache.retain(|_, lock| current_millis() - lock.get_lock_time() <= used_expire_millis);
         count
     }
 

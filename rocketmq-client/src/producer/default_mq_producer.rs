@@ -41,13 +41,13 @@ use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHookImpl;
 use crate::trace::hook::send_message_trace_hook_impl::SendMessageTraceHookImpl;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
 
 #[derive(Clone)]
@@ -85,7 +85,7 @@ pub struct ProducerConfig {
     retry_another_broker_when_not_store_ok: bool,
     /// Maximum allowed message size in bytes.
     max_message_size: u32,
-    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    trace_dispatcher: Option<ArcTraceDispatcher>,
     /// Switch flag instance for automatic batch message
     auto_batch: bool,
     /// Maximum hold time of accumulator in milliseconds.
@@ -129,7 +129,7 @@ impl ProducerConfig {
     pub fn create_topic_key(&self) -> &CheetahString {
         &self.create_topic_key
     }
-
+    #[inline]
     pub fn default_topic_queue_nums(&self) -> u32 {
         self.default_topic_queue_nums
     }
@@ -163,7 +163,7 @@ impl ProducerConfig {
         self.max_message_size
     }
 
-    pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+    pub fn trace_dispatcher(&self) -> Option<&ArcTraceDispatcher> {
         self.trace_dispatcher.as_ref()
     }
 
@@ -343,7 +343,7 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+    pub fn trace_dispatcher(&self) -> Option<&ArcTraceDispatcher> {
         self.producer_config.trace_dispatcher()
     }
 
@@ -462,7 +462,7 @@ impl DefaultMQProducer {
         self.producer_config.max_message_size = max_message_size;
     }
 
-    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) {
+    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: ArcTraceDispatcher) {
         self.producer_config.trace_dispatcher = Some(trace_dispatcher);
     }
 
@@ -598,7 +598,7 @@ impl DefaultMQProducer {
         &mut self,
         mut msg: M,
         mq: Option<MessageQueue>,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
@@ -626,7 +626,7 @@ impl DefaultMQProducer {
         &mut self,
         mut msg: M,
         mq: Option<MessageQueue>,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + std::marker::Sync + 'static,
@@ -664,7 +664,7 @@ impl DefaultMQProducer {
             return false;
         }
         // delay message do not support batch processing
-        if msg.get_delay_time_level() > 0
+        if msg.delay_time_level() > 0
             || msg.get_delay_time_ms() > 0
             || msg.get_delay_time_sec() > 0
             || msg.get_deliver_time_ms() > 0
@@ -704,15 +704,16 @@ impl MQProducer for DefaultMQProducer {
             produce_accumulator.start();
         }
         if self.client_config.enable_trace {
-            let mut dispatcher = AsyncTraceDispatcher::new(
+            let dispatcher = AsyncTraceDispatcher::new(
                 self.producer_config.producer_group.as_str(),
                 Type::Produce,
+                20, // batch_num
                 self.client_config.trace_topic.clone().unwrap().as_str(),
-                self.producer_config.rpc_hook.clone(),
+                None, // rpc_hook - convert if needed
             );
             dispatcher.set_host_producer(default_mqproducer_impl.clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
-            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
+            let dispatcher: ArcTraceDispatcher = Arc::new(dispatcher);
             self.producer_config.trace_dispatcher = Some(dispatcher.clone());
             default_mqproducer_impl
                 .register_send_message_hook(Arc::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
@@ -973,7 +974,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
@@ -1001,7 +1002,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where

@@ -14,7 +14,7 @@
 
 use std::sync::atomic::AtomicI32;
 
-use rocketmq_common::TimeUtils::get_current_nano;
+use rocketmq_common::TimeUtils::current_nano;
 
 use crate::base::message_status_enum::PutMessageStatus;
 
@@ -39,7 +39,7 @@ impl Default for GroupCommitRequest {
 
 impl GroupCommitRequest {
     pub(crate) fn new(next_offset: i64, timeout_millis: u64) -> Self {
-        let dead_line = get_current_nano() + timeout_millis * 1_000_000;
+        let dead_line = current_nano() + timeout_millis * 1_000_000;
         Self {
             next_offset,
             dead_line,

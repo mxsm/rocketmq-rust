@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use crate::protocol::body::broker_stats_item::BrokerStatsItem;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 /// Represents broker statistics over different time periods (minute, hour, day)
 pub struct BrokerStatsData {
     /// Statistics for the last minute

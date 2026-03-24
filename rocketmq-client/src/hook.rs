@@ -20,5 +20,6 @@ pub(crate) mod end_transaction_context;
 pub(crate) mod end_transaction_hook;
 pub(crate) mod filter_message_context;
 pub(crate) mod filter_message_hook;
+pub(crate) mod namespace_rpc_hook;
 pub(crate) mod send_message_context;
 pub(crate) mod send_message_hook;

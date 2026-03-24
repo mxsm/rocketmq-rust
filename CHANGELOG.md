@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
 - **feat(tools):** Add `broker` command group with `GetBrokerConfigSubCommand` for querying broker configuration by broker address or cluster, with optional `--keyPattern` regex filtering
 - **feat(tools):** Add `CleanExpiredCQSubCommand` under broker commands with broker/cluster/topic target scan, dry-run preview, and cleanup summary reporting
 - **feat(tools):** Add `UpdateBrokerConfigSubCommand` under broker commands with single/multi key updates, value validation, broker or cluster targeting, old/new diff display, and rollback on partial failures
@@ -21,10 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **feat(tools):** Add `UpdateSubGroupSubCommand` in update_sub_group_sub_command.rs ([#5653](https://github.com/mxsm/rocketmq-rust/issues/5653))
 - **feat(tools):** Add `GetControllerMetadataSubCommand` ([#5624](https://github.com/mxsm/rocketmq-rust/issues/5624))
 - **feat(common):** Add `filter_type` module to filter.rs in rocketmq-common crate ([#5454](https://github.com/mxsm/rocketmq-rust/issues/5454))
+- **feat(tools):** Add `consumerProgress` command for querying consumer consumption progress and metrics, supporting both detailed single-group and summary all-groups views
 - **feat(common):** Add test coverage for `MessageQueueAssignment` struct to in rocketmq-common crate ([#5752](https://github.com/mxsm/rocketmq-rust/issues/5752))
 
 ### Changed
 
+- **chore(broker):** Remove commented-out dead logging code in `pull_request_hold_service.rs` ([#6579](https://github.com/mxsm/rocketmq-rust/issues/6579))
 - **refactor(remoting/tools):** Return references from `TopicStatsTable::get_offset_table` and add `into_offset_table`/`get_offset_table_mut` to avoid unnecessary `HashMap` cloning in topic status flows
 - **refactor(common):** Rename foundational `MessageTrait` methods to the idiomatic Rust naming: `get_property` to `property` and `get_property_ref` to `property_ref` (other getters like `get_topic`, `get_flag`, etc.. will be renamed in subsequent commits)
 - **refactor(client):** Refactor `default_mq_producer::start` in `default_mq_producer.rs` removing repeated `as_mut().unwrap()`([#5576](https://github.com/mxsm/rocketmq-rust/issues/5576))
@@ -38,3 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(remoting):** Replace `lazy_static!` with `std::sync::LazyLock` in `remoting_command.rs` and remove `lazy_static` dependency from `rocketmq-remoting` ([#5060](https://github.com/mxsm/rocketmq-rust/issues/5060))
 - **perf(ArcMut):** Add the `#[inline]` attribute to the `mut_from_ref`, `downgrade`, and `get_inner` methods for `ArcMut`, improving performance ([#2876](https://github.com/mxsm/rocketmq-rust/pull/2876))
 - **chore(controller):** Update default controller listen address to use port 60109 ([#5527](https://github.com/mxsm/rocketmq-rust/issues/5527))
+
+### Removed
+
+- **test(store):** Remove obsolete phase3_integration_tests.rs integration test file ([#6649](https://github.com/mxsm/rocketmq-rust/issues/6649))
+- **refactor(broker):** Update ProducerManager to use ProducerGroupName type alias for producer group mapping ([#6638](https://github.com/mxsm/rocketmq-rust/issues/6638))
+- **test(store):** Remove obsolete io_uring_integration_tests.rs integration test file ([#6620](https://github.com/mxsm/rocketmq-rust/issues/6620))
+

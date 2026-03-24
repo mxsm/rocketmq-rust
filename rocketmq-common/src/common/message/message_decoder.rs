@@ -495,10 +495,37 @@ pub fn decode_message(buffer: &mut Bytes) -> Message {
     message
 }
 
-pub fn decode_message_id(msg_id: &str) -> MessageId {
-    let bytes = util_all::string_to_bytes(msg_id).unwrap();
+const MSG_ID_IPV4_LEN: usize = 32;
+const MSG_ID_IPV6_LEN: usize = 56;
+
+pub fn validate_message_id(msg_id: &str) -> Result<(), String> {
+    let msg_id = msg_id.trim();
+
+    if msg_id.is_empty() {
+        return Err("Message ID cannot be empty".to_string());
+    }
+
+    let len = msg_id.len();
+    if len != MSG_ID_IPV4_LEN && len != MSG_ID_IPV6_LEN {
+        return Err(format!(
+            "Invalid message ID length: {len}. Expected {MSG_ID_IPV4_LEN} characters (IPv4) or {MSG_ID_IPV6_LEN} \
+             characters (IPv6)"
+        ));
+    }
+
+    if !msg_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Message ID must be a valid hexadecimal string".to_string());
+    }
+
+    Ok(())
+}
+
+pub fn decode_message_id(msg_id: &str) -> Result<MessageId, String> {
+    validate_message_id(msg_id)?;
+    let bytes = util_all::string_to_bytes(msg_id)
+        .ok_or_else(|| "Failed to decode message ID: invalid hex string".to_string())?;
     let mut buffer = Bytes::from(bytes);
-    let len = if msg_id.len() == 32 {
+    let address = if msg_id.len() == 32 {
         let mut ip = [0u8; 4];
         buffer.copy_to_slice(&mut ip);
         let port = buffer.get_i32();
@@ -509,10 +536,10 @@ pub fn decode_message_id(msg_id: &str) -> MessageId {
         let port = buffer.get_i32();
         SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ip)), port as u16)
     };
-    MessageId {
-        address: len,
+    Ok(MessageId {
+        address,
         offset: buffer.get_i64(),
-    }
+    })
 }
 
 pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
@@ -891,7 +918,7 @@ mod tests {
     #[test]
     fn decode_message_id_ipv4() {
         let msg_id = "7F0000010007D8260BF075769D36C348";
-        let message_id = decode_message_id(msg_id);
+        let message_id = decode_message_id(msg_id).unwrap();
         assert_eq!(message_id.address, "127.0.0.1:55334".parse().unwrap());
         assert_eq!(message_id.offset, 860316681131967304);
     }
@@ -1047,5 +1074,46 @@ mod tests {
             1,
         );
         assert!(decode_properties(&mut bytes.freeze()).is_none());
+    }
+
+    #[test]
+    fn validate_message_id_ipv4_32_chars() {
+        let result = validate_message_id("AC11000100002A9F0000000000000001");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_message_id_ipv6_56_chars() {
+        let result = validate_message_id("20010db800000000000000000000000100002A9F0000000000000001");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_message_id_ipv6_40_chars_rejected() {
+        let result = validate_message_id("20010db800000000000000000000000100000001");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.contains("Invalid message ID length"));
+            assert!(e.contains("56 characters (IPv6)"));
+        }
+    }
+
+    #[test]
+    fn decode_message_id_ipv6() {
+        let msg_id = "20010db800000000000000000000000100002A9F0000000000000001";
+        let message_id = decode_message_id(msg_id).unwrap();
+        assert_eq!(message_id.address, "[2001:db8::1]:10911".parse().unwrap());
+        assert_eq!(message_id.offset, 1);
+    }
+
+    #[test]
+    fn decode_message_id_ipv6_full_address() {
+        let msg_id = "20010db81234567800000000abcdef0100002A9F0000000000001234";
+        let message_id = decode_message_id(msg_id).unwrap();
+        assert_eq!(
+            message_id.address,
+            "[2001:db8:1234:5678::abcd:ef01]:10911".parse().unwrap()
+        );
+        assert_eq!(message_id.offset, 4660);
     }
 }

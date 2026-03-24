@@ -21,7 +21,7 @@ use tokio::time::interval;
 use tokio::time::Duration;
 
 use crate::common::stats::moment_stats_item::MomentStatsItem;
-use crate::TimeUtils::get_current_millis;
+use crate::TimeUtils::current_millis;
 use crate::UtilAll::compute_next_minutes_time_millis;
 
 #[derive(Clone)]
@@ -54,9 +54,8 @@ impl MomentStatsItemSet {
 
     pub fn init(&self) {
         let stats_item_table = Arc::clone(&self.stats_item_table);
-        let initial_delay = Duration::from_millis(
-            (compute_next_minutes_time_millis() as i64 - get_current_millis() as i64).unsigned_abs(),
-        );
+        let initial_delay =
+            Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
         let mut interval = tokio::time::interval(Duration::from_secs(300));
 

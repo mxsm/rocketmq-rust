@@ -304,8 +304,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                         response = response.set_body(body_bytes.to_vec());
                     }
                 } else {
-                    // Transfer by zero-copy (not implemented in this Rust version yet)
-                    // For now, fallback to heap transfer
+                    // Transfer by heap allocation (zero-copy not available in this context)
                     let body = self.read_get_message_result(
                         &get_message_result,
                         &request_header.consumer_group,

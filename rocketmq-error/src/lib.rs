@@ -237,9 +237,6 @@ pub struct MQBrokerErr {
 impl MQBrokerErr {
     pub fn new(response_code: i32, error_message: impl Into<String>) -> Self {
         let error_message = error_message.into();
-        /*let message = FAQUrl::attach_default_url(Some(
-            format!("CODE: {}  DESC: {}", response_code, error_message,).as_str(),
-        ));*/
         let message = "";
         Self {
             response_code,
@@ -256,13 +253,6 @@ impl MQBrokerErr {
     ) -> Self {
         let broker_addr = broker_addr.into();
         let error_message = error_message.into();
-        /*let message = FAQUrl::attach_default_url(Some(
-            format!(
-                "CODE: {}  DESC: {} BROKER: {}",
-                response_code, error_message, broker_addr
-            )
-            .as_str(),
-        ));*/
         let message = "";
         Self {
             response_code,

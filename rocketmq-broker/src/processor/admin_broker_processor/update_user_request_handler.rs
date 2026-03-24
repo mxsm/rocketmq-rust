@@ -1,6 +1,9 @@
+use crate::auth::auth_admin_service::AuthAdminService;
 use crate::auth::user_converter::UserConverter;
 use crate::broker_runtime::BrokerRuntimeInner;
+use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::enums::user_type::UserType;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -11,15 +14,23 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct UpdateUserRequestHandler<MS: MessageStore> {
-    broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    _broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    auth_admin_service: Arc<AuthAdminService>,
 }
 
 impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+    pub fn new(
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        auth_admin_service: Arc<AuthAdminService>,
+    ) -> Self {
+        Self {
+            _broker_runtime_inner: broker_runtime_inner,
+            auth_admin_service,
+        }
     }
 
     pub async fn update_user(
@@ -31,7 +42,7 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateUserRequestHeader>()?;
 
-        let response = RemotingCommand::default();
+        let response = RemotingCommand::create_response_command();
 
         if request_header.username.is_empty() {
             return Ok(Some(
@@ -59,22 +70,43 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         if user.user_type() == Option::from(UserType::Super) && self.is_not_super_user_login(request).await {
             return Ok(Some(
                 response
-                    .set_code(ResponseCode::SystemError)
+                    .set_code(ResponseCode::NoPermission)
                     .set_remark("The super user can only be update by super user"),
             ));
         }
 
-        // TODO get authentication metadata manager and do operations
-        Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
-            "UpdateUser not implemented: authentication metadata manager not configured",
-        )))
+        match self.auth_admin_service.update_user(user).await {
+            Ok(()) => Ok(Some(response.set_code(ResponseCode::Success))),
+            Err(error) => Ok(Some(map_error_response(response, error))),
+        }
     }
 
     async fn is_not_super_user_login(&self, _request: &RemotingCommand) -> bool {
-        // Get "AccessKey" from ext_fields
-        // Check superuser (await the async function)
-        // TODO get the authentication metadata manager and check if the user is superuser
-        let is_super = false;
-        !is_super
+        let Some(access_key) = _request
+            .ext_fields()
+            .and_then(|fields| fields.get(&CheetahString::from_static_str("AccessKey")))
+        else {
+            return false;
+        };
+
+        !self
+            .auth_admin_service
+            .is_super_user(access_key.as_str())
+            .await
+            .unwrap_or(false)
+    }
+}
+
+fn map_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
+    match error {
+        RocketMQError::IllegalArgument(message) => {
+            response.set_code(ResponseCode::InvalidParameter).set_remark(message)
+        }
+        RocketMQError::BrokerPermissionDenied { operation } => {
+            response.set_code(ResponseCode::NoPermission).set_remark(operation)
+        }
+        other => response
+            .set_code(ResponseCode::SystemError)
+            .set_remark(other.to_string()),
     }
 }

@@ -26,6 +26,7 @@ pub mod provider;
 pub mod strategy;
 
 // Re-export commonly used types for convenience
+pub use chain::acl_signer;
 pub use evaluator::AuthenticationEvaluator;
 pub use factory::AuthenticationFactory;
 pub use manager::AuthenticationMetadataManager;

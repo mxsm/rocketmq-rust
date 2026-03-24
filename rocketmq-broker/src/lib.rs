@@ -15,16 +15,26 @@
 #![allow(dead_code)]
 #![allow(incomplete_features)]
 #![feature(duration_constructors)]
-#![feature(impl_trait_in_assoc_type)]
-#![feature(sync_unsafe_cell)]
 #![allow(clippy::mut_from_ref)]
 #![allow(clippy::result_large_err)]
 
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
+pub use proxy_facade::ProxyBrokerFacade;
 
 pub mod command;
+pub mod proxy_facade;
 pub mod send_message_constants;
+
+// Re-export types needed for benchmarking
+#[doc(hidden)]
+pub mod bench_support {
+    pub use crate::client::client_channel_info::ClientChannelInfo;
+    pub use crate::client::consumer_group_event::ConsumerGroupEvent;
+    pub use crate::client::consumer_group_info::ConsumerGroupInfo;
+    pub use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
+    pub use crate::client::manager::consumer_manager::ConsumerManager;
+}
 
 pub(crate) mod broker;
 pub(crate) mod broker_bootstrap;
@@ -50,6 +60,7 @@ pub(crate) mod slave;
 pub(crate) mod subscription;
 pub(crate) mod topic;
 mod transaction;
+pub(crate) mod types;
 pub(crate) mod util;
 
 pub(crate) mod auth;

@@ -27,6 +27,7 @@ pub struct SendResult {
     pub queue_offset: u64,
     pub transaction_id: Option<String>,
     pub offset_msg_id: Option<String>,
+    pub recall_handle: Option<String>,
     pub region_id: Option<String>,
     pub trace_on: bool,
     pub raw_resp_body: Option<Vec<u8>>,
@@ -41,6 +42,7 @@ impl Default for SendResult {
             queue_offset: 0,
             transaction_id: None,
             offset_msg_id: None,
+            recall_handle: None,
             region_id: None,
             trace_on: true,
             raw_resp_body: None,
@@ -63,6 +65,7 @@ impl SendResult {
             queue_offset,
             transaction_id: None,
             offset_msg_id,
+            recall_handle: None,
             region_id: None,
             trace_on: true,
             raw_resp_body: None,
@@ -85,6 +88,7 @@ impl SendResult {
             queue_offset,
             transaction_id,
             offset_msg_id,
+            recall_handle: None,
             region_id,
             trace_on: true,
             raw_resp_body: None,
@@ -137,6 +141,16 @@ impl SendResult {
     }
 
     #[inline]
+    pub fn set_recall_handle(&mut self, recall_handle: String) {
+        self.recall_handle = Some(recall_handle);
+    }
+
+    #[inline]
+    pub fn recall_handle(&self) -> Option<&str> {
+        self.recall_handle.as_deref()
+    }
+
+    #[inline]
     pub fn set_raw_resp_body(&mut self, body: Vec<u8>) {
         self.raw_resp_body = Some(body);
     }
@@ -171,6 +185,7 @@ mod tests {
         assert_eq!(result.queue_offset, 0);
         assert!(result.transaction_id.is_none());
         assert!(result.offset_msg_id.is_none());
+        assert!(result.recall_handle.is_none());
         assert!(result.region_id.is_none());
         assert!(result.is_trace_on());
         assert!(result.get_raw_resp_body().is_none());
@@ -198,6 +213,7 @@ mod tests {
         assert_eq!(result.queue_offset, queue_offset);
         assert!(result.transaction_id.is_none());
         assert_eq!(result.offset_msg_id, offset_msg_id);
+        assert!(result.recall_handle.is_none());
         assert!(result.region_id.is_none());
         assert!(result.is_trace_on());
         assert!(result.get_raw_resp_body().is_none());
@@ -229,6 +245,7 @@ mod tests {
         assert_eq!(result.queue_offset, queue_offset);
         assert_eq!(result.transaction_id, transaction_id);
         assert_eq!(result.offset_msg_id, offset_msg_id);
+        assert!(result.recall_handle.is_none());
         assert_eq!(result.region_id, region_id);
         assert!(result.is_trace_on());
         assert!(result.get_raw_resp_body().is_none());
@@ -263,6 +280,9 @@ mod tests {
         result.set_offset_msg_id("offset_msg_id".to_string());
         assert_eq!(result.offset_msg_id, Some("offset_msg_id".to_string()));
 
+        result.set_recall_handle("recall_handle".to_string());
+        assert_eq!(result.recall_handle(), Some("recall_handle"));
+
         let body = vec![1, 2, 3];
         result.set_raw_resp_body(body.clone());
         assert_eq!(result.get_raw_resp_body(), Some(body.as_slice()));
@@ -293,6 +313,7 @@ mod tests {
         assert_eq!(deserialized.queue_offset, result.queue_offset);
         assert_eq!(deserialized.transaction_id, result.transaction_id);
         assert_eq!(deserialized.offset_msg_id, result.offset_msg_id);
+        assert_eq!(deserialized.recall_handle, result.recall_handle);
         assert_eq!(deserialized.region_id, result.region_id);
         assert_eq!(deserialized.is_trace_on(), result.is_trace_on());
         assert_eq!(deserialized.get_raw_resp_body(), result.get_raw_resp_body());

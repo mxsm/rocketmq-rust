@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod builder;
 pub mod chain;
 pub mod context;
 pub mod enums;

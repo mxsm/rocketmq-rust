@@ -57,7 +57,7 @@ serde_json.workspace = true
 bytes                 = { workspace = true }
 parking_lot.workspace = true
 
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 rand = { workspace = true }
 
 #tools
@@ -71,6 +71,7 @@ thiserror      = { workspace = true }
 trait-variant  = { workspace = true }
 cheetah-string = { workspace = true }
 dashmap        = { workspace = true }
+arc-swap       = "1.9"
 
 crossbeam-skiplist = "0.1"
 
@@ -96,4 +97,8 @@ harness = false
 
 [[bench]]
 name    = "schedule_message_service_performance"
+harness = false
+
+[[bench]]
+name    = "consumer_manager_benchmark"
 harness = false

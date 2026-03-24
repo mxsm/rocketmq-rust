@@ -187,12 +187,6 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    /*async fn check_rocksdb_cq_write_progress(
-        &self,
-        broker_addr: CheetahString,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<CheckRocksdbCqWriteProgressResponseBody>{ unimplemented!()}*/
-
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
         unimplemented!()
     }
@@ -216,11 +210,6 @@ impl MQAdminExtInnerImpl {
     ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
         unimplemented!()
     }
-
-    /* async fn get_all_producer_info(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo>{ unimplemented!()}*/
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
         unimplemented!()

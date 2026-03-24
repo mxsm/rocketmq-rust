@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use std::sync::OnceLock;
+
 use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,6 +30,8 @@ pub struct User {
     user_type: Option<UserType>,
     #[serde(rename = "userStatus")]
     user_status: Option<UserStatus>,
+    #[serde(skip)]
+    subject_key_cache: OnceLock<String>,
 }
 
 impl User {
@@ -37,6 +41,7 @@ impl User {
             password: None,
             user_type: None,
             user_status: None,
+            subject_key_cache: OnceLock::new(),
         }
     }
 
@@ -46,6 +51,7 @@ impl User {
             password: Some(password.into()),
             user_type: None,
             user_status: None,
+            subject_key_cache: OnceLock::new(),
         }
     }
 
@@ -59,6 +65,7 @@ impl User {
             password: Some(password.into()),
             user_type: Some(user_type),
             user_status: None,
+            subject_key_cache: OnceLock::new(),
         }
     }
 }
@@ -91,11 +98,20 @@ impl User {
     pub fn set_user_type(&mut self, user_type: UserType) {
         self.user_type = Some(user_type);
     }
+
+    pub fn username_from_subject_key(subject_key: &str) -> &str {
+        subject_key
+            .split_once(':')
+            .map(|(_, username)| username)
+            .unwrap_or(subject_key)
+    }
 }
 
 impl Subject for User {
     fn subject_key(&self) -> &str {
-        self.username.as_str()
+        self.subject_key_cache
+            .get_or_init(|| format!("{}:{}", SubjectType::User.name(), self.username))
+            .as_str()
     }
 
     fn subject_type(&self) -> SubjectType {
@@ -151,7 +167,7 @@ mod tests {
     fn test_user_subject_trait() {
         let username = "test_user";
         let user = User::of(username);
-        assert_eq!(user.subject_key(), username);
+        assert_eq!(user.subject_key(), "User:test_user");
         assert_eq!(user.subject_type(), SubjectType::User);
     }
 }

@@ -173,4 +173,493 @@ mod tests {
         assert_eq!(header.rpc_request_header.broker_name.as_ref().unwrap(), "broker1");
         assert!(!header.rpc_request_header.oneway.unwrap());
     }
+
+    #[test]
+    fn end_transaction_request_header_to_map() {
+        use crate::protocol::command_custom_header::CommandCustomHeader;
+
+        let header = EndTransactionRequestHeader {
+            topic: CheetahString::from("topic1"),
+            producer_group: CheetahString::from("group1"),
+            tran_state_table_offset: 123,
+            commit_log_offset: 456,
+            commit_or_rollback: 1,
+            from_transaction_check: true,
+            msg_id: CheetahString::from("msg1"),
+            transaction_id: Some(CheetahString::from("tran1")),
+            rpc_request_header: RpcRequestHeader::default(),
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC))
+                .unwrap(),
+            "topic1"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::PRODUCER_GROUP
+            ))
+            .unwrap(),
+            "group1"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET
+            ))
+            .unwrap(),
+            "123"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::COMMIT_LOG_OFFSET
+            ))
+            .unwrap(),
+            "456"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::COMMIT_OR_ROLLBACK
+            ))
+            .unwrap(),
+            "1"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::FROM_TRANSACTION_CHECK
+            ))
+            .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID))
+                .unwrap(),
+            "msg1"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::TRANSACTION_ID
+            ))
+            .unwrap(),
+            "tran1"
+        );
+    }
+
+    #[test]
+    fn end_transaction_request_header_to_map_without_transaction_id() {
+        use crate::protocol::command_custom_header::CommandCustomHeader;
+
+        let header = EndTransactionRequestHeader {
+            topic: CheetahString::from("topic1"),
+            producer_group: CheetahString::from("group1"),
+            tran_state_table_offset: 123,
+            commit_log_offset: 456,
+            commit_or_rollback: 1,
+            from_transaction_check: true,
+            msg_id: CheetahString::from("msg1"),
+            transaction_id: None,
+            rpc_request_header: RpcRequestHeader::default(),
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC))
+                .unwrap(),
+            "topic1"
+        );
+        assert!(!map.contains_key(&CheetahString::from_static_str(
+            EndTransactionRequestHeader::TRANSACTION_ID
+        )));
+    }
+
+    #[test]
+    fn end_transaction_request_header_from_map() {
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC),
+            CheetahString::from_static_str("topic1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::PRODUCER_GROUP),
+            CheetahString::from_static_str("group1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET),
+            CheetahString::from_static_str("123"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_LOG_OFFSET),
+            CheetahString::from_static_str("456"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
+            CheetahString::from_static_str("true"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID),
+            CheetahString::from_static_str("msg1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TRANSACTION_ID),
+            CheetahString::from_static_str("tran1"),
+        );
+
+        let header = <EndTransactionRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, "topic1");
+        assert_eq!(header.producer_group, "group1");
+        assert_eq!(header.tran_state_table_offset, 123);
+        assert_eq!(header.commit_log_offset, 456);
+        assert_eq!(header.commit_or_rollback, 1);
+        assert!(header.from_transaction_check);
+        assert_eq!(header.msg_id, "msg1");
+        assert_eq!(header.transaction_id.unwrap(), "tran1");
+    }
+
+    #[test]
+    fn end_transaction_request_header_from_map_without_transaction_id() {
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC),
+            CheetahString::from_static_str("topic1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::PRODUCER_GROUP),
+            CheetahString::from_static_str("group1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET),
+            CheetahString::from_static_str("123"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_LOG_OFFSET),
+            CheetahString::from_static_str("456"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
+            CheetahString::from_static_str("true"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID),
+            CheetahString::from_static_str("msg1"),
+        );
+
+        let header = <EndTransactionRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, "topic1");
+        assert_eq!(header.producer_group, "group1");
+        assert_eq!(header.tran_state_table_offset, 123);
+        assert_eq!(header.commit_log_offset, 456);
+        assert_eq!(header.commit_or_rollback, 1);
+        assert!(header.from_transaction_check);
+        assert_eq!(header.msg_id, "msg1");
+        assert!(header.transaction_id.is_none());
+    }
+
+    #[test]
+    fn end_transaction_request_header_from_map_missing_required_field() {
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum RequiredField {
+            Topic,
+            ProducerGroup,
+            TranStateTableOffset,
+            CommitLogOffset,
+            CommitOrRollback,
+            FromTransactionCheck,
+            MsgId,
+        }
+
+        impl RequiredField {
+            fn as_str(&self) -> &'static str {
+                match self {
+                    RequiredField::Topic => EndTransactionRequestHeader::TOPIC,
+                    RequiredField::ProducerGroup => EndTransactionRequestHeader::PRODUCER_GROUP,
+                    RequiredField::TranStateTableOffset => EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET,
+                    RequiredField::CommitLogOffset => EndTransactionRequestHeader::COMMIT_LOG_OFFSET,
+                    RequiredField::CommitOrRollback => EndTransactionRequestHeader::COMMIT_OR_ROLLBACK,
+                    RequiredField::FromTransactionCheck => EndTransactionRequestHeader::FROM_TRANSACTION_CHECK,
+                    RequiredField::MsgId => EndTransactionRequestHeader::MSG_ID,
+                }
+            }
+
+            fn test_value(&self) -> &'static str {
+                match self {
+                    RequiredField::Topic => "topic1",
+                    RequiredField::ProducerGroup => "group1",
+                    RequiredField::TranStateTableOffset => "123",
+                    RequiredField::CommitLogOffset => "456",
+                    RequiredField::CommitOrRollback => "1",
+                    RequiredField::FromTransactionCheck => "true",
+                    RequiredField::MsgId => "msg1",
+                }
+            }
+        }
+
+        let all_required_fields: &[RequiredField] = &[
+            RequiredField::Topic,
+            RequiredField::ProducerGroup,
+            RequiredField::TranStateTableOffset,
+            RequiredField::CommitLogOffset,
+            RequiredField::CommitOrRollback,
+            RequiredField::FromTransactionCheck,
+            RequiredField::MsgId,
+        ];
+
+        for &missing_field in all_required_fields {
+            let mut map = HashMap::new();
+            for &field in all_required_fields {
+                if field != missing_field {
+                    map.insert(
+                        CheetahString::from_static_str(field.as_str()),
+                        CheetahString::from_static_str(field.test_value()),
+                    );
+                }
+            }
+
+            let result = <EndTransactionRequestHeader as FromMap>::from(&map);
+            assert!(
+                result.is_err(),
+                "Expected failure when missing required field: {:?}",
+                missing_field
+            );
+        }
+    }
+
+    #[test]
+    fn end_transaction_request_header_from_map_invalid_numeric_field() {
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC),
+            CheetahString::from_static_str("topic1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::PRODUCER_GROUP),
+            CheetahString::from_static_str("group1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_LOG_OFFSET),
+            CheetahString::from_static_str("456"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
+            CheetahString::from_static_str("true"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID),
+            CheetahString::from_static_str("msg1"),
+        );
+
+        let result = <EndTransactionRequestHeader as FromMap>::from(&map);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn end_transaction_request_header_from_map_invalid_bool_field() {
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC),
+            CheetahString::from_static_str("topic1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::PRODUCER_GROUP),
+            CheetahString::from_static_str("group1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET),
+            CheetahString::from_static_str("123"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_LOG_OFFSET),
+            CheetahString::from_static_str("456"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
+            CheetahString::from_static_str("invalid"),
+        );
+        map.insert(
+            CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID),
+            CheetahString::from_static_str("msg1"),
+        );
+
+        let result = <EndTransactionRequestHeader as FromMap>::from(&map);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn end_transaction_request_header_from_map_transaction_state_values() {
+        use crate::protocol::command_custom_header::FromMap;
+        use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+        use std::collections::HashMap;
+
+        struct TestCase {
+            value: i32,
+        }
+
+        let test_cases = &[
+            TestCase {
+                value: MessageSysFlag::TRANSACTION_NOT_TYPE,
+            },
+            TestCase {
+                value: MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+            },
+            TestCase {
+                value: MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+            },
+        ];
+
+        for case in test_cases {
+            let mut map = HashMap::new();
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC),
+                CheetahString::from_static_str("topic1"),
+            );
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::PRODUCER_GROUP),
+                CheetahString::from_static_str("group1"),
+            );
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET),
+                CheetahString::from_static_str("123"),
+            );
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_LOG_OFFSET),
+                CheetahString::from_static_str("456"),
+            );
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
+                CheetahString::from(case.value.to_string()),
+            );
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
+                CheetahString::from_static_str("true"),
+            );
+            map.insert(
+                CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID),
+                CheetahString::from_static_str("msg1"),
+            );
+
+            let result = <EndTransactionRequestHeader as FromMap>::from(&map);
+            assert!(
+                result.is_ok(),
+                "commit_or_rollback={} should parse successfully but got {:?}",
+                case.value,
+                result
+            );
+            let header = result.unwrap();
+            assert_eq!(
+                header.commit_or_rollback, case.value,
+                "commit_or_rollback should be {}",
+                case.value
+            );
+        }
+    }
+
+    #[test]
+    fn end_transaction_request_header_roundtrip() {
+        use crate::protocol::command_custom_header::CommandCustomHeader;
+        use crate::protocol::command_custom_header::FromMap;
+        use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+
+        let original = EndTransactionRequestHeader {
+            topic: CheetahString::from("topic1"),
+            producer_group: CheetahString::from("group1"),
+            tran_state_table_offset: 123,
+            commit_log_offset: 456,
+            commit_or_rollback: MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+            from_transaction_check: true,
+            msg_id: CheetahString::from("msg1"),
+            transaction_id: Some(CheetahString::from("tran1")),
+            rpc_request_header: RpcRequestHeader::default(),
+        };
+
+        let map = original.to_map().unwrap();
+        let restored = <EndTransactionRequestHeader as FromMap>::from(&map).unwrap();
+
+        assert_eq!(original.topic, restored.topic);
+        assert_eq!(original.producer_group, restored.producer_group);
+        assert_eq!(original.tran_state_table_offset, restored.tran_state_table_offset);
+        assert_eq!(original.commit_log_offset, restored.commit_log_offset);
+        assert_eq!(original.commit_or_rollback, restored.commit_or_rollback);
+        assert_eq!(original.from_transaction_check, restored.from_transaction_check);
+        assert_eq!(original.msg_id, restored.msg_id);
+        assert_eq!(original.transaction_id, restored.transaction_id);
+    }
+
+    #[test]
+    fn end_transaction_request_header_via_remoting_command() {
+        use crate::code::request_code::RequestCode;
+        use crate::protocol::remoting_command::RemotingCommand;
+        use bytes::BytesMut;
+        use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+
+        let original = EndTransactionRequestHeader {
+            topic: CheetahString::from("topic1"),
+            producer_group: CheetahString::from("group1"),
+            tran_state_table_offset: 123,
+            commit_log_offset: 456,
+            commit_or_rollback: MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+            from_transaction_check: true,
+            msg_id: CheetahString::from("msg1"),
+            transaction_id: Some(CheetahString::from("tran1")),
+            rpc_request_header: RpcRequestHeader::default(),
+        };
+
+        let mut command = RemotingCommand::create_request_command(RequestCode::EndTransaction, original);
+        let header_bytes = command.encode_header().expect("Failed to encode header");
+
+        let mut buf = BytesMut::from(header_bytes);
+        let decoded_command = RemotingCommand::decode(&mut buf).expect("Failed to decode command");
+        let decoded_command = decoded_command.expect("Decoded command is None");
+
+        assert_eq!(decoded_command.code(), RequestCode::EndTransaction as i32);
+
+        let decoded_header = decoded_command
+            .decode_command_custom_header::<EndTransactionRequestHeader>()
+            .expect("Failed to decode header");
+
+        assert_eq!(decoded_header.topic, "topic1");
+        assert_eq!(decoded_header.producer_group, "group1");
+        assert_eq!(decoded_header.tran_state_table_offset, 123);
+        assert_eq!(decoded_header.commit_log_offset, 456);
+        assert_eq!(
+            decoded_header.commit_or_rollback,
+            MessageSysFlag::TRANSACTION_COMMIT_TYPE
+        );
+        assert!(decoded_header.from_transaction_check);
+        assert_eq!(decoded_header.msg_id, "msg1");
+        assert_eq!(decoded_header.transaction_id.unwrap(), "tran1");
+    }
 }

@@ -20,7 +20,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -48,7 +48,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -227,9 +227,7 @@ where
         let phy_queue_offset = mapping_item.compute_physical_queue_offset(global_offset);
         request_header.queue_id = phy_queue_id;
         request_header.queue_offset = phy_queue_offset;
-        if mapping_item.check_if_end_offset_decided()
-        /* && request_header.max_msg_nums.is_some() */
-        {
+        if mapping_item.check_if_end_offset_decided() {
             request_header.max_msg_nums = std::cmp::min(
                 (mapping_item.end_offset - mapping_item.start_offset) as i32,
                 request_header.max_msg_nums,
@@ -465,16 +463,16 @@ where
         &self,
         subscription_data: &rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData,
         consumer_filter_data: Option<ConsumerFilterData>,
-    ) -> Arc<Box<dyn MessageFilter>> {
+    ) -> ArcMessageFilter {
         // TODO: Consider optimizing consumer_filter_manager clone - Arc wrapper might be better
         if self.broker_runtime_inner.broker_config().filter_support_retry {
-            Arc::new(Box::new(ExpressionForRetryMessageFilter))
+            Arc::new(ExpressionForRetryMessageFilter)
         } else {
-            Arc::new(Box::new(ExpressionMessageFilter::new(
+            Arc::new(ExpressionMessageFilter::new(
                 Some(subscription_data.clone()),
                 consumer_filter_data,
                 Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
-            )))
+            ))
         }
     }
 }
@@ -630,7 +628,7 @@ where
         broker_allow_suspend: bool,
         broker_allow_flow_ctr_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let begin_time_mills = get_current_millis();
+        let begin_time_mills = current_millis();
         let mut response = RemotingCommand::create_response_command();
         response.set_opaque_mut(request.opaque());
         let mut request_header = request

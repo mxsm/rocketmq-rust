@@ -14,17 +14,23 @@
 
 pub mod command_util;
 
-mod auth_commands;
-mod broker_commands;
-mod cluster_commands;
-mod connection_commands;
-mod consumer_commands;
-mod controller_commands;
-mod export_commands;
-mod ha_commands;
-mod namesrv_commands;
+mod auth;
+mod broker;
+mod cluster;
+mod connection;
+mod consumer;
+mod controller;
+mod export;
+mod ha;
+mod lite;
+mod message;
+mod namesrv;
+mod offset;
+mod producer;
+mod queue;
+mod stats;
 mod target;
-mod topic_commands;
+mod topic;
 
 use std::sync::Arc;
 
@@ -78,51 +84,81 @@ pub enum Commands {
     #[command(subcommand)]
     #[command(about = "Auth commands")]
     #[command(name = "auth")]
-    Auth(auth_commands::AuthCommands),
+    Auth(auth::AuthCommands),
 
     #[command(subcommand)]
     #[command(about = "Broker commands")]
     #[command(name = "broker")]
-    Broker(broker_commands::BrokerCommands),
+    Broker(broker::BrokerCommands),
 
     #[command(subcommand)]
     #[command(about = "Cluster commands")]
     #[command(name = "cluster")]
-    Cluster(cluster_commands::ClusterCommands),
+    Cluster(cluster::ClusterCommands),
 
     #[command(subcommand)]
     #[command(about = "Connection commands")]
     #[command(name = "connection")]
-    Connection(connection_commands::ConnectionCommands),
+    Connection(connection::ConnectionCommands),
 
     #[command(subcommand)]
     #[command(about = "Consumer commands")]
     #[command(name = "consumer")]
-    Consumer(consumer_commands::ConsumerCommands),
+    Consumer(consumer::ConsumerCommands),
 
     #[command(subcommand)]
     #[command(about = "Controller commands")]
     #[command(name = "controller")]
-    Controller(controller_commands::ControllerCommands),
+    Controller(controller::ControllerCommands),
 
     #[command(subcommand)]
     #[command(about = "Export commands")]
     #[command(name = "export")]
-    Export(export_commands::ExportCommands),
+    Export(export::ExportCommands),
 
     #[command(subcommand)]
     #[command(about = "HA commands")]
     #[command(name = "ha")]
-    HA(ha_commands::HACommands),
+    HA(ha::HACommands),
+
+    #[command(subcommand)]
+    #[command(about = "Lite commands")]
+    #[command(name = "lite")]
+    Lite(lite::LiteCommands),
+
+    #[command(subcommand)]
+    #[command(about = "Message commands")]
+    #[command(name = "message")]
+    Message(message::MessageCommands),
 
     #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
-    NameServer(namesrv_commands::NameServerCommands),
+    NameServer(namesrv::NameServerCommands),
+
+    #[command(subcommand)]
+    #[command(about = "Offset commands")]
+    #[command(name = "offset")]
+    Offset(offset::OffsetCommands),
+
+    #[command(subcommand)]
+    #[command(about = "Producer commands")]
+    #[command(name = "producer")]
+    Producer(producer::ProducerCommands),
+
+    #[command(subcommand)]
+    #[command(about = "Queue commands")]
+    #[command(name = "queue")]
+    Queue(queue::QueueCommands),
+
+    #[command(subcommand)]
+    #[command(about = "Stats commands")]
+    #[command(name = "stats")]
+    Stats(stats::StatsCommands),
 
     #[command(subcommand)]
     #[command(about = "Topic commands")]
-    Topic(topic_commands::TopicCommands),
+    Topic(topic::TopicCommands),
 
     #[command(about = "Category commands show")]
     Show(ClassificationTablePrint),
@@ -139,7 +175,13 @@ impl CommandExecute for Commands {
             Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Export(value) => value.execute(rpc_hook).await,
             Commands::HA(value) => value.execute(rpc_hook).await,
+            Commands::Lite(value) => value.execute(rpc_hook).await,
+            Commands::Message(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
+            Commands::Offset(value) => value.execute(rpc_hook).await,
+            Commands::Producer(value) => value.execute(rpc_hook).await,
+            Commands::Queue(value) => value.execute(rpc_hook).await,
+            Commands::Stats(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
@@ -312,6 +354,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Consumer",
+                command: "getConsumerConfig",
+                remark: "Get consumer config by subscription group name.",
+            },
+            Command {
+                category: "Consumer",
                 command: "updateSubGroup",
                 remark: "Update consumer sub group.",
             },
@@ -342,8 +389,24 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Export",
+                command: "exportConfigs",
+                remark: "Export configs",
+            },
+            Command {
+                category: "Export",
                 command: "exportMetadata",
                 remark: "Export metadata.",
+            },
+            Command {
+                category: "Export",
+                command: "exportMetadataInRocksDB",
+                remark: "Export RocksDB kv config (topics/subscriptionGroups). Recommend to use [mqadmin \
+                         rocksDBConfigToJson]",
+            },
+            Command {
+                category: "Export",
+                command: "exportPopRecord",
+                remark: "Export pop consumer records.",
             },
             Command {
                 category: "HA",
@@ -354,6 +417,96 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "HA",
                 command: "haStatus",
                 remark: "Fetch ha runtime status data.",
+            },
+            Command {
+                category: "Lite",
+                command: "getBrokerLiteInfo",
+                remark: "Get broker lite info.",
+            },
+            Command {
+                category: "Lite",
+                command: "getLiteClientInfo",
+                remark: "Get lite client info.",
+            },
+            Command {
+                category: "Lite",
+                command: "getLiteGroupInfo",
+                remark: "Get lite group info.",
+            },
+            Command {
+                category: "Lite",
+                command: "getLiteTopicInfo",
+                remark: "Get lite topic info.",
+            },
+            Command {
+                category: "Lite",
+                command: "getParentTopicInfo",
+                remark: "Get parent topic info.",
+            },
+            Command {
+                category: "Lite",
+                command: "triggerLiteDispatch",
+                remark: "Trigger Lite Dispatch.",
+            },
+            Command {
+                category: "Message",
+                command: "checkMsgSendRT",
+                remark: "Check message send response time.",
+            },
+            Command {
+                category: "Message",
+                command: "consumeMessage",
+                remark: "Consume message.",
+            },
+            Command {
+                category: "Message",
+                command: "decodeMessageId",
+                remark: "Decode unique message ID.",
+            },
+            Command {
+                category: "Message",
+                command: "dumpCompactionLog",
+                remark: "Parse compaction log to message.",
+            },
+            Command {
+                category: "Message",
+                command: "printMessage",
+                remark: "Print Message Detail.",
+            },
+            Command {
+                category: "Message",
+                command: "printMsgByQueue",
+                remark: "Print Message Detail by queueId.",
+            },
+            Command {
+                category: "Message",
+                command: "queryMsgById",
+                remark: "Query message by message ID.",
+            },
+            Command {
+                category: "Message",
+                command: "queryMsgByKey",
+                remark: "Query Message by Key.",
+            },
+            Command {
+                category: "Message",
+                command: "queryMsgByOffset",
+                remark: "Query Message by offset.",
+            },
+            Command {
+                category: "Message",
+                command: "queryMsgByUniqueKey",
+                remark: "Query Message by Unique key.",
+            },
+            Command {
+                category: "Message",
+                command: "queryMsgTraceById",
+                remark: "Query message trace by message ID.",
+            },
+            Command {
+                category: "Message",
+                command: "sendMessage",
+                remark: "Send a message.",
             },
             Command {
                 category: "NameServer",
@@ -384,6 +537,51 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "NameServer",
                 command: "wipeWritePerm",
                 remark: "Wipe write perm of broker in all name server.",
+            },
+            Command {
+                category: "Offset",
+                command: "cloneGroupOffset",
+                remark: "Clone offset from other group.",
+            },
+            Command {
+                category: "Offset",
+                command: "getConsumerStatus",
+                remark: "Get consumer status from client.",
+            },
+            Command {
+                category: "Offset",
+                command: "resetOffsetByTime",
+                remark: "Reset consumer group offsets to a specific timestamp (no restart required).",
+            },
+            Command {
+                category: "Offset",
+                command: "resetOffsetByTimeOld",
+                remark: "Reset consumer offset by timestamp (execute this command required client restart).",
+            },
+            Command {
+                category: "Offset",
+                command: "skipAccumulatedMessage",
+                remark: "Skip all messages that are accumulated (not consumed) currently.",
+            },
+            Command {
+                category: "Producer",
+                command: "producer",
+                remark: "Query producer's instances, connection, status, etc.",
+            },
+            Command {
+                category: "Queue",
+                command: "checkRocksdbCqWriteProgress",
+                remark: "Check if rocksdb cq is same as file cq.",
+            },
+            Command {
+                category: "Queue",
+                command: "queryCq",
+                remark: "Query cq command.",
+            },
+            Command {
+                category: "Stats",
+                command: "statsAll",
+                remark: "Topic and Consumer tps stats.",
             },
             Command {
                 category: "Topic",

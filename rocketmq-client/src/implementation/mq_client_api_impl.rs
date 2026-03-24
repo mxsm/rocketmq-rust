@@ -38,12 +38,14 @@ use crate::implementation::communication_mode::CommunicationMode;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use cheetah_string::CheetahString;
+
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -67,37 +69,61 @@ use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::bodies::broker::GetBrokerLiteInfoResponseBody;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
+use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_remoting::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
+use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::list_acl_request_header::ListAclRequestHeader;
@@ -107,25 +133,37 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::query_message_request_header::QueryMessageRequestHeader;
+use rocketmq_remoting::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
+use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
+
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
+use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::headers::client::GetConsumerConnectionListRequestHeader;
+use rocketmq_remoting::protocol::headers::view::SearchOffsetRequestHeader;
+use rocketmq_remoting::protocol::headers::view::SearchOffsetResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -133,6 +171,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
@@ -157,12 +196,49 @@ static SEND_SMART_MSG: LazyLock<bool> = LazyLock::new(|| {
 pub struct MQClientAPIImpl {
     remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
-    // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
     client_config: Arc<ClientConfig>,
 }
 
 impl MQClientAPIImpl {
+    pub(crate) async fn get_kvconfig_value(
+        &self,
+        namespace: CheetahString,
+        key: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<Option<CheetahString>> {
+        let request_header = GetKVConfigRequestHeader::new(namespace, key);
+        let request = RemotingCommand::create_request_command(RequestCode::GetKvConfig, request_header);
+
+        let name_server_address_list = self.remoting_client.get_name_server_address_list();
+        let mut err_response = None;
+        for name_srv_addr in name_server_address_list {
+            let response = self
+                .remoting_client
+                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
+                .await?;
+            match ResponseCode::from(response.code()) {
+                ResponseCode::Success => {
+                    let response_header = response
+                        .decode_command_custom_header::<GetKVConfigResponseHeader>()
+                        .map_err(|error| mq_client_err!(format!("decode GetKVConfigResponseHeader failed: {error}")))?;
+                    return Ok(response_header.value);
+                }
+                ResponseCode::QueryNotFound => return Ok(None),
+                _ => err_response = Some(response),
+            }
+        }
+
+        if let Some(err_response) = err_response {
+            return Err(mq_client_err!(
+                err_response.code(),
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
+            ));
+        }
+
+        Ok(None)
+    }
+
     pub(crate) async fn delete_kvconfig_value(
         &self,
         namespace: CheetahString,
@@ -577,6 +653,181 @@ impl MQClientAPIImpl {
         ))
     }
 
+    pub(crate) async fn get_broker_lite_info(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetBrokerLiteInfoResponseBody> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return GetBrokerLiteInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn check_rocksdb_cq_write_progress(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        check_store_time: i64,
+        timeout_millis: u64,
+    ) -> RocketMQResult<CheckRocksdbCqWriteResult> {
+        let request_header = CheckRocksdbCqWriteProgressRequestHeader {
+            topic,
+            check_store_time,
+            rpc: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::CheckRocksdbCqWriteProgress, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                let result: CheckRocksdbCqWriteResult = serde_json::from_slice(body.as_ref()).map_err(|e| {
+                    mq_client_err!(-1, format!("Failed to deserialize CheckRocksdbCqWriteResult: {}", e))
+                })?;
+                return Ok(result);
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn query_consume_queue(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+        index: i64,
+        count: i32,
+        consumer_group: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<QueryConsumeQueueResponseBody> {
+        let request_header = QueryConsumeQueueRequestHeader {
+            topic,
+            queue_id,
+            index,
+            count,
+            consumer_group: if consumer_group.is_empty() {
+                None
+            } else {
+                Some(consumer_group)
+            },
+            rpc: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                let result: QueryConsumeQueueResponseBody = serde_json::from_slice(body.as_ref()).map_err(|e| {
+                    mq_client_err!(
+                        -1,
+                        format!("Failed to deserialize QueryConsumeQueueResponseBody: {}", e)
+                    )
+                })?;
+                return Ok(result);
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_lite_group_info(
+        &self,
+        addr: &CheetahString,
+        group: CheetahString,
+        lite_topic: CheetahString,
+        top_k: i32,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetLiteGroupInfoResponseBody> {
+        let request_header = GetLiteGroupInfoRequestHeader {
+            group,
+            lite_topic,
+            top_k,
+            rpc: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetLiteGroupInfo, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return GetLiteGroupInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_lite_topic_info(
+        &self,
+        addr: &CheetahString,
+        parent_topic: &CheetahString,
+        lite_topic: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetLiteTopicInfoResponseBody> {
+        let request_header = GetLiteTopicInfoRequestHeader {
+            parent_topic: parent_topic.clone(),
+            lite_topic: lite_topic.clone(),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return GetLiteTopicInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+    pub(crate) async fn get_parent_topic_info(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetParentTopicInfoResponseBody> {
+        let request_header = GetParentTopicInfoRequestHeader { topic, rpc: None };
+        let request = RemotingCommand::create_request_command(RequestCode::GetParentTopicInfo, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return GetParentTopicInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
     pub async fn delete_subscription_group(
         &self,
         addr: &CheetahString,
@@ -627,6 +878,229 @@ impl MQClientAPIImpl {
             return Ok(());
         }
 
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_all_topic_list_from_name_server(
+        &self,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::topic::topic_list::TopicList> {
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetAllTopicListFromNameserver, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(None, request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::body::topic::topic_list::TopicList::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_consume_stats(
+        &self,
+        addr: &CheetahString,
+        request_header: rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumeStats, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_topic_stats_info(
+        &self,
+        addr: &CheetahString,
+        request_header: GetTopicStatsInfoRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetTopicStatsInfo, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_topic_config(
+        &self,
+        addr: &CheetahString,
+        request_header: GetTopicConfigRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<TopicConfigAndQueueMapping> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetTopicConfig, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return serde_json::from_slice(body.as_ref()).map_err(Into::into);
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn query_topic_consume_by_who(
+        &self,
+        addr: &CheetahString,
+        request_header: rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::group_list::GroupList> {
+        let request = RemotingCommand::create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::body::group_list::GroupList::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn update_or_create_topic(
+        &self,
+        addr: &CheetahString,
+        request_header: CreateTopicRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn delete_topic_in_broker(
+        &self,
+        addr: &CheetahString,
+        request_header: DeleteTopicRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInBroker, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn delete_topic_in_nameserver(
+        &self,
+        addr: &CheetahString,
+        request_header: DeleteTopicFromNamesrvRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn invoke_broker_to_reset_offset(
+        &self,
+        addr: &CheetahString,
+        request_header: ResetOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HashMap<MessageQueue, i64>> {
+        let request = RemotingCommand::create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                if let Some(reset_body) = ResetOffsetBody::decode(body.as_ref()) {
+                    return Ok(reset_body.offset_table);
+                }
+            }
+            return Ok(HashMap::new());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn view_broker_stats_data(
+        &self,
+        addr: &CheetahString,
+        request_header: rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData> {
+        let request = RemotingCommand::create_request_command(RequestCode::ViewBrokerStatsData, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData::decode(
+                    body.as_ref(),
+                );
+            }
+        }
         Err(mq_client_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
@@ -787,7 +1261,7 @@ impl MQClientAPIImpl {
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -968,7 +1442,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -1008,7 +1482,7 @@ impl MQClientAPIImpl {
                             producer.execute_send_message_hook_after(context);
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                        send_callback.as_ref().unwrap()(Some(&result), None);
+                        send_callback.as_ref().unwrap().on_success(&result);
                         producer
                             .update_fault_item(&broker_name, duration, false, true)
                             .await;
@@ -1050,7 +1524,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -1150,7 +1624,7 @@ impl MQClientAPIImpl {
         is_batch_message: bool,
         timeout_millis: u64,
         current_request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         _topic_publish_info: Option<TopicPublishInfo>,
         _instance: Option<ArcMut<MQClientInstance>>,
         _retry_times_when_send_failed: u32,
@@ -1194,7 +1668,7 @@ impl MQClientAPIImpl {
                                 response.code(),
                                 response.remark().map_or("".to_string(), |s| s.to_string())
                             );
-                            callback(None, Some(&err_obj as &dyn std::error::Error));
+                            callback.on_exception(&err_obj as &dyn std::error::Error);
                         }
                         return;
                     }
@@ -1230,6 +1704,7 @@ impl MQClientAPIImpl {
                             message_queue: Some(message_queue),
                             queue_offset: response_header.queue_offset() as u64,
                             transaction_id: response_header.transaction_id().map(|s| s.to_string()),
+                            recall_handle: response_header.recall_handle().map(|s| s.to_string()),
                             region_id: Some(region_id),
                             trace_on,
                             ..Default::default()
@@ -1240,7 +1715,7 @@ impl MQClientAPIImpl {
                             .update_fault_item(current_broker_name.clone(), cost, false, true)
                             .await;
                         if let Some(callback) = send_callback {
-                            callback(Some(&send_result), None);
+                            callback.on_success(&send_result);
                         }
                     }
                     Err(_) => {
@@ -1249,7 +1724,7 @@ impl MQClientAPIImpl {
                             .await;
                         if let Some(callback) = send_callback {
                             let err_obj = mq_client_err!("decode SendMessageResponseHeader failed".to_string());
-                            callback(None, Some(&err_obj as &dyn std::error::Error));
+                            callback.on_exception(&err_obj as &dyn std::error::Error);
                         }
                     }
                 }
@@ -1260,7 +1735,7 @@ impl MQClientAPIImpl {
                     .update_fault_item(current_broker_name.clone(), cost, true, true)
                     .await;
                 if let Some(callback) = send_callback {
-                    callback(None, Some(&e as &dyn std::error::Error));
+                    callback.on_exception(&e as &dyn std::error::Error);
                 }
             }
         }
@@ -1329,6 +1804,7 @@ impl MQClientAPIImpl {
             message_queue: Some(message_queue),
             queue_offset: response_header.queue_offset() as u64,
             transaction_id: response_header.transaction_id().map(|s| s.to_string()),
+            recall_handle: response_header.recall_handle().map(|s| s.to_string()),
             region_id: Some(region_id),
             trace_on,
             ..Default::default()
@@ -1343,7 +1819,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         mut request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         times_total: u32,
@@ -1608,6 +2084,128 @@ impl MQClientAPIImpl {
         ))
     }
 
+    pub async fn get_producer_connection_list(
+        &mut self,
+        addr: &str,
+        producer_group: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+        let request_header = GetProducerConnectionListRequestHeader {
+            producer_group,
+            rpc_request_header: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetProducerConnectionList, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    return ProducerConnection::decode(body);
+                }
+            }
+            _ => {
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
+                ));
+            }
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    pub async fn invoke_broker_to_get_consumer_status(
+        &mut self,
+        addr: &str,
+        topic: CheetahString,
+        group: CheetahString,
+        client_addr: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<MessageQueue, i64>>> {
+        let request_header = GetConsumerStatusRequestHeader {
+            topic,
+            group,
+            client_addr: if client_addr.is_empty() {
+                None
+            } else {
+                Some(client_addr)
+            },
+            rpc_request_header: None,
+        };
+        let request =
+            RemotingCommand::create_request_command(RequestCode::InvokeBrokerToGetConsumerStatus, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    if let Some(status_body) = GetConsumerStatusBody::decode(body) {
+                        return Ok(status_body.consumer_table);
+                    }
+                }
+                Ok(HashMap::new())
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                format!(
+                    "invoke broker to get consumer status failed, remark={}",
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                )
+            )),
+        }
+    }
+
+    pub async fn get_all_producer_info(
+        &mut self,
+        addr: &str,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetAllProducerInfo, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    return ProducerTableInfo::decode(body);
+                }
+            }
+            _ => {
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
+                ));
+            }
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
     pub async fn update_consumer_offset_oneway(
         &mut self,
         addr: &str,
@@ -1683,6 +2281,44 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
         ))
+    }
+
+    pub async fn query_message(
+        this: &ArcMut<Self>,
+        addr: &CheetahString,
+        request_header: QueryMessageRequestHeader,
+        unique_key_flag: bool,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<(QueryMessageResponseHeader, Option<bytes::Bytes>)>> {
+        let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, request_header);
+        if unique_key_flag {
+            request.ensure_ext_fields_initialized();
+            request.add_ext_field(mix_all::UNIQUE_MSG_QUERY_FLAG, "true");
+        }
+        let response = this
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let response_header = response
+                    .decode_command_custom_header::<QueryMessageResponseHeader>()
+                    .map_err(|e| {
+                        rocketmq_error::RocketMQError::Internal(format!(
+                            "decode QueryMessageResponseHeader failed: {}",
+                            e
+                        ))
+                    })?;
+                let body = response.body().cloned();
+                Ok(Some((response_header, body)))
+            }
+            ResponseCode::QueryNotFound => Ok(None),
+            _ => Err(client_broker_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string()
+            )),
+        }
     }
 
     pub async fn pull_message<PCB>(
@@ -2012,6 +2648,107 @@ impl MQClientAPIImpl {
             let response_header = response
                 .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
                 .expect("decode error");
+            return Ok(response_header.offset);
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    pub async fn get_min_offset(
+        &mut self,
+        addr: &str,
+        message_queue: &MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let request_header = GetMinOffsetRequestHeader {
+            topic: CheetahString::from_slice(message_queue.topic_str()),
+            queue_id: message_queue.queue_id(),
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(CheetahString::from_slice(message_queue.broker_name())),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+
+        let request = RemotingCommand::create_request_command(RequestCode::GetMinOffset, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(&mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let response_header = response
+                .decode_command_custom_header::<GetMinOffsetResponseHeader>()
+                .expect("decode error");
+            return Ok(response_header.offset);
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    /// Searches for the queue offset whose store timestamp is closest to `timestamp`.
+    ///
+    /// When `boundary_type` is [`BoundaryType::Lower`], the returned offset is the earliest one
+    /// whose store timestamp is greater than or equal to `timestamp`.  When
+    /// [`BoundaryType::Upper`], the latest such offset is returned.
+    ///
+    /// Mirrors `MQClientAPIImpl.searchOffset` in the Java implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the broker returns a non-success response code or is unreachable.
+    pub async fn search_offset_by_timestamp(
+        &mut self,
+        addr: &str,
+        message_queue: &MessageQueue,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let request_header = SearchOffsetRequestHeader {
+            topic: message_queue.topic().clone(),
+            queue_id: message_queue.queue_id(),
+            timestamp,
+            boundary_type,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(message_queue.broker_name().clone()),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::SearchOffsetByTimestamp, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(&mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let response_header = response
+                .decode_command_custom_header::<SearchOffsetResponseHeader>()
+                .expect("decode SearchOffsetResponseHeader error");
             return Ok(response_header.offset);
         }
         Err(client_broker_err!(
@@ -2472,6 +3209,67 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    pub(crate) async fn update_broker_config(
+        &self,
+        addr: &CheetahString,
+        properties: HashMap<CheetahString, CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let validator_input = properties
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<String, String>>();
+        crate::base::validators::Validators::check_broker_config(&validator_input)?;
+
+        let body = mix_all::properties_to_string(&properties);
+        if body.is_empty() {
+            return Ok(());
+        }
+
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(body.to_string());
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn get_broker_config(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let body = response
+                    .get_body()
+                    .ok_or_else(|| mq_client_err!("Broker config response body is empty".to_string()))?;
+                let body_str = String::from_utf8_lossy(body.as_ref());
+                mix_all::string_to_properties(body_str.as_ref())
+                    .ok_or_else(|| mq_client_err!("Failed to parse broker config response body".to_string()))
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
     pub async fn get_name_server_config(
         &self,
         name_servers: Option<Vec<CheetahString>>,
@@ -2763,6 +3561,170 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
+    }
+
+    pub(crate) async fn get_subscription_group_config(
+        &self,
+        addr: &CheetahString,
+        group: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig>
+    {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetSubscriptionGroupConfig,
+            rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader {
+                group,
+                rpc_request_header: None,
+            },
+        );
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                return rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::decode(
+                    body.as_ref(),
+                );
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn create_subscription_group(
+        &self,
+        addr: &CheetahString,
+        config: &rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request =
+            RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
+                .set_body(config.encode()?);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn get_consumer_running_info(
+        &self,
+        addr: &CheetahString,
+        consumer_group: CheetahString,
+        client_id: CheetahString,
+        jstack: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo> {
+        let request_header = GetConsumerRunningInfoRequestHeader {
+            consumer_group,
+            client_id,
+            jstack_enable: jstack,
+            rpc_request_header: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if response.take_body().is_some() {
+                    return Err(mq_client_err!("get_consumer_running_info response decoding is not \
+                                               implemented yet"
+                        .to_string()));
+                }
+                Err(mq_client_err!(
+                    "get_consumer_running_info response body is empty".to_string()
+                ))
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn consume_message_directly(
+        &self,
+        client_addr: &CheetahString,
+        request_header: ConsumeMessageDirectlyResultRequestHeader,
+        message: &MessageExt,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult>
+    {
+        let body = message_decoder::encode(message, false)?;
+        let request = RemotingCommand::create_request_command(RequestCode::ConsumeMessageDirectly, request_header)
+            .set_body(body.to_vec());
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(client_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.take_body() {
+                    rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult::decode(
+                        body.as_ref(),
+                    )
+                } else {
+                    Err(mq_client_err!(
+                        "consume_message_directly response body is empty".to_string()
+                    ))
+                }
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub async fn view_message(
+        &mut self,
+        addr: &CheetahString,
+        request_header: ViewMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<MessageExt> {
+        let request = RemotingCommand::create_request_command(RequestCode::ViewMessageById, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.get_body() {
+                    let mut bytes = body.clone();
+                    let body_len = bytes.len();
+                    MessageDecoder::decode(&mut bytes, true, true, false, false, false).ok_or_else(|| {
+                        mq_client_err!(format!(
+                            "Failed to decode message from view_message response body: body_len={}, possible causes: \
+                             CRC check failed or malformed message data",
+                            body_len
+                        ))
+                    })
+                } else {
+                    Err(mq_client_err!("view_message response body is empty".to_string()))
+                }
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     fn build_queue_offset_sorted_map(

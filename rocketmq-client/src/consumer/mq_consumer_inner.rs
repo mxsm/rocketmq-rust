@@ -51,7 +51,7 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
     fn subscriptions(&self) -> HashSet<SubscriptionData>;
 
     /// Performs the rebalancing of the consumer.
-    fn do_rebalance(&self);
+    async fn do_rebalance(&self);
 
     /// Attempts to perform rebalancing asynchronously and returns a `Result` indicating success or
     /// failure.
@@ -154,8 +154,8 @@ impl MQConsumerInner for MQConsumerInnerImpl {
     }
 
     #[inline]
-    fn do_rebalance(&self) {
-        MQConsumerInner::do_rebalance(self.default_mqpush_consumer_impl.as_ref())
+    async fn do_rebalance(&self) {
+        MQConsumerInner::do_rebalance(self.default_mqpush_consumer_impl.as_ref()).await
     }
 
     #[inline]

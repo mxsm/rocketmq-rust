@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(impl_trait_in_assoc_type)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(clippy::result_large_err)]
@@ -80,8 +79,10 @@ mod hook;
 pub mod implementation;
 mod latency;
 pub mod producer;
+pub mod stat;
 mod trace;
 mod types;
 pub mod utils;
 
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+pub use crate::trace::trace_data_encoder::TraceDataEncoder;

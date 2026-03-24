@@ -25,7 +25,7 @@ use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -43,7 +43,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
@@ -95,7 +95,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
         subscription_data: SubscriptionData,
         subscription_group_config: &SubscriptionGroupConfig,
         broker_allow_suspend: bool,
-        message_filter: Arc<Box<dyn MessageFilter>>,
+        message_filter: ArcMessageFilter,
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
         _begin_time_mills: u64,
@@ -191,7 +191,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         request_header.queue_id,
                     );
                     // Record group get latency
-                    let latency = (get_current_millis() - _begin_time_mills) as i32;
+                    let latency = (current_millis() - _begin_time_mills) as i32;
                     self.broker_runtime_inner.broker_stats_manager().inc_group_get_latency(
                         request_header.consumer_group.as_str(),
                         request_header.topic.as_str(),
@@ -239,7 +239,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         channel,
                         ctx,
                         polling_time_mills,
-                        get_current_millis(),
+                        current_millis(),
                         offset,
                         subscription_data,
                         message_filter,
@@ -369,7 +369,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
 
         // Record disk fall behind time
         if store_timestamp > 0 {
-            let fall_behind_time = get_current_millis() as i64 - store_timestamp;
+            let fall_behind_time = current_millis() as i64 - store_timestamp;
             self.broker_runtime_inner
                 .broker_stats_manager()
                 .record_disk_fall_behind_time(group, topic, queue_id, fall_behind_time);
@@ -436,17 +436,15 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                     context.rcv_msg_size = get_message_result.buffer_total_size();
                     context.commercial_rcv_msg_num = get_message_result.msg_count4_commercial();
                 }
-                ResponseCode::PullNotFound => {
-                    if !broker_allow_suspend {
-                        context.commercial_rcv_stats = StatsType::RcvEpolls;
-                        context.commercial_rcv_times = 1;
-                        context.commercial_owner = owner;
+                ResponseCode::PullNotFound if !broker_allow_suspend => {
+                    context.commercial_rcv_stats = StatsType::RcvEpolls;
+                    context.commercial_rcv_times = 1;
+                    context.commercial_owner = owner;
 
-                        context.rcv_stat = StatsType::RcvEpolls;
-                        context.rcv_msg_num = 0;
-                        context.rcv_msg_size = 0;
-                        context.commercial_rcv_msg_num = 0;
-                    }
+                    context.rcv_stat = StatsType::RcvEpolls;
+                    context.rcv_msg_num = 0;
+                    context.rcv_msg_size = 0;
+                    context.commercial_rcv_msg_num = 0;
                 }
                 ResponseCode::PullRetryImmediately | ResponseCode::PullOffsetMoved => {
                     context.commercial_rcv_stats = StatsType::RcvEpolls;

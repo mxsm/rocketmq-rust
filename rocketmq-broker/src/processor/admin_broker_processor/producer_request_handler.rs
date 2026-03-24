@@ -54,4 +54,16 @@ impl<MS: MessageStore> ProducerRequestHandler<MS> {
         ));
         Ok(Some(response))
     }
+
+    pub async fn get_all_producer_info(
+        &self,
+        _ctx: ConnectionHandlerContext,
+        _request: &RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut response = RemotingCommand::create_response_command();
+        let producer_table_info = self.broker_runtime_inner.producer_manager().get_producer_table();
+        let body = producer_table_info.encode()?;
+        response = response.set_body(body).set_code(ResponseCode::Success);
+        Ok(Some(response))
+    }
 }

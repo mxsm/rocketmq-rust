@@ -24,3 +24,80 @@ pub struct UnlockBatchMqRequestHeader {
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_unlock_batch_mq_request_header_serialization() {
+        let rpc_header = RpcRequestHeader {
+            namespace: Some("test_ns".into()),
+            broker_name: Some("broker_a".into()),
+            oneway: Some(true),
+            ..Default::default()
+        };
+
+        let header = UnlockBatchMqRequestHeader {
+            rpc_request_header: Some(rpc_header),
+        };
+
+        let json = serde_json::to_string(&header).unwrap();
+
+        assert!(json.contains("\"namespace\":\"test_ns\""));
+        assert!(json.contains("\"brokerName\":\"broker_a\""));
+        assert!(json.contains("\"oneway\":true"));
+    }
+
+    #[test]
+    fn test_unlock_batch_mq_request_header_deserialization() {
+        let json = r#"{
+            "namespace": "standard_ns",
+            "namespaced": true,
+            "brokerName": "rocketmq_broker",
+            "oneway": false
+        }"#;
+
+        let decoded: UnlockBatchMqRequestHeader = serde_json::from_str(json).unwrap();
+        let rpc = decoded.rpc_request_header.expect("RpcRequestHeader should be present");
+
+        assert_eq!(rpc.namespace.unwrap().as_str(), "standard_ns");
+        assert_eq!(rpc.namespaced, Some(true));
+        assert_eq!(rpc.broker_name.unwrap().as_str(), "rocketmq_broker");
+        assert_eq!(rpc.oneway, Some(false));
+    }
+
+    #[test]
+    fn test_default_values() {
+        let header = UnlockBatchMqRequestHeader::default();
+        assert!(header.rpc_request_header.is_none());
+    }
+
+    #[test]
+    fn test_rpc_request_header_new() {
+        let ns = Some("ns".into());
+        let namespaced = Some(false);
+        let broker = Some("b1".into());
+        let oneway = Some(true);
+
+        let header = RpcRequestHeader::new(ns.clone(), namespaced, broker.clone(), oneway);
+
+        assert_eq!(header.namespace, ns);
+        assert_eq!(header.namespaced, namespaced);
+        assert_eq!(header.broker_name, broker);
+        assert_eq!(header.oneway, oneway);
+    }
+
+    #[test]
+    fn test_partial_fields_deserialization() {
+        let json = r#"{"brokerName": "only_broker"}"#;
+        let decoded: UnlockBatchMqRequestHeader = serde_json::from_str(json).unwrap();
+
+        let rpc = decoded.rpc_request_header.unwrap();
+
+        assert_eq!(rpc.broker_name.unwrap().as_str(), "only_broker");
+        assert!(rpc.namespace.is_none());
+        assert!(rpc.oneway.is_none());
+    }
+}

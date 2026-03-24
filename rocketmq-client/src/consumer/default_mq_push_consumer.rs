@@ -20,7 +20,7 @@ use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
@@ -33,14 +33,14 @@ use crate::consumer::default_mq_push_consumer_builder::DefaultMQPushConsumerBuil
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
-use crate::consumer::message_queue_listener::MessageQueueListener;
+use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::mq_consumer::MQConsumer;
 use crate::consumer::mq_push_consumer::MQPushConsumer;
 use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHookImpl;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
 
 #[derive(Clone)]
@@ -55,7 +55,7 @@ pub struct ConsumerConfig {
     //this field will be removed in a certain version after April 5, 2020
     pub(crate) subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
     pub(crate) message_listener: Option<ArcMut<MessageListener>>,
-    pub(crate) message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
+    pub(crate) message_queue_listener: Option<ArcMessageQueueListener>,
     pub(crate) consume_thread_min: u32,
     pub(crate) consume_thread_max: u32,
     pub(crate) adjust_thread_pool_nums_threshold: u64,
@@ -77,7 +77,7 @@ pub struct ConsumerConfig {
     pub(crate) pop_invisible_time: u64,
     pub(crate) pop_batch_nums: u32,
     pub(crate) await_termination_millis_when_shutdown: u64,
-    pub(crate) trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    pub(crate) trace_dispatcher: Option<ArcTraceDispatcher>,
     pub(crate) client_rebalance: bool,
     pub(crate) rpc_hook: Option<Arc<dyn RPCHook>>,
 }
@@ -111,7 +111,7 @@ impl ConsumerConfig {
         &self.message_listener
     }*/
 
-    /*    pub fn message_queue_listener(&self) -> &Option<Arc<Box<dyn MessageQueueListener>>> {
+    /*    pub fn message_queue_listener(&self) -> &Option<ArcMessageQueueListener> {
         &self.message_queue_listener
     }*/
 
@@ -199,7 +199,7 @@ impl ConsumerConfig {
         self.await_termination_millis_when_shutdown
     }
 
-    pub fn trace_dispatcher(&self) -> &Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+    pub fn trace_dispatcher(&self) -> &Option<ArcTraceDispatcher> {
         &self.trace_dispatcher
     }
 
@@ -249,7 +249,7 @@ impl ConsumerConfig {
         self.message_listener = message_listener;
     }*/
 
-    pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>) {
+    pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<ArcMessageQueueListener>) {
         self.message_queue_listener = message_queue_listener;
     }
 
@@ -337,7 +337,7 @@ impl ConsumerConfig {
         self.await_termination_millis_when_shutdown = await_termination_millis_when_shutdown;
     }
 
-    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>) {
+    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Option<ArcTraceDispatcher>) {
         self.trace_dispatcher = trace_dispatcher;
     }
 
@@ -359,7 +359,7 @@ impl Default for ConsumerConfig {
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
             consume_timestamp: Some(CheetahString::from_string(util_all::time_millis_to_human_string3(
-                (get_current_millis() - (1000 * 60 * 30)) as i64,
+                (current_millis() - (1000 * 60 * 30)) as i64,
             ))),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
             subscription: ArcMut::new(HashMap::new()),
@@ -428,15 +428,16 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         self.default_mqpush_consumer_impl.as_mut().unwrap().start().await?;
 
         if self.client_config.enable_trace {
-            let mut dispatcher = AsyncTraceDispatcher::new(
+            let dispatcher = AsyncTraceDispatcher::new(
                 self.consumer_config.consumer_group.as_str(),
                 Type::Consume,
+                20, // batch_num
                 self.client_config.trace_topic.clone().unwrap().as_str(),
-                self.consumer_config.rpc_hook.clone(),
+                None, // rpc_hook - convert if needed
             );
             dispatcher.set_host_consumer(self.default_mqpush_consumer_impl.as_ref().unwrap().clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
-            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
+            let dispatcher: ArcTraceDispatcher = Arc::new(dispatcher);
             self.consumer_config.trace_dispatcher = Some(dispatcher.clone());
             let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap();
             default_mqpush_consumer_impl
@@ -508,15 +509,21 @@ impl MQPushConsumer for DefaultMQPushConsumer {
     }
 
     async fn unsubscribe(&mut self, topic: &str) {
-        todo!()
+        if let Some(ref mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.unsubscribe(topic).await;
+        }
     }
 
-    async fn suspend(&mut self) {
-        todo!()
+    async fn suspend(&self) {
+        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.suspend().await;
+        }
     }
 
-    async fn resume(&mut self) {
-        todo!()
+    async fn resume(&self) {
+        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.resume().await;
+        }
     }
 }
 

@@ -29,7 +29,7 @@ pub trait SendMessageHook: Send + Sync + 'static {
     /// # Returns
     ///
     /// A string slice that represents the name of the hook.
-    fn hook_name(&self) -> &str;
+    fn hook_name(&self) -> &'static str;
 
     /// Called before a message is sent.
     ///

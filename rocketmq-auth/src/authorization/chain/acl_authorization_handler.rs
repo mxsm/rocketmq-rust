@@ -32,7 +32,6 @@ use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_error::RocketMQError;
 
 use super::handler::AuthorizationHandler;
-use crate::authentication::model::user::User;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::enums::decision::Decision;
 use crate::authorization::enums::policy_type::PolicyType;
@@ -242,6 +241,21 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
     }
 }
 
+struct SubjectLookup {
+    key: String,
+    subject_type: crate::authentication::enums::subject_type::SubjectType,
+}
+
+impl crate::authentication::model::subject::Subject for SubjectLookup {
+    fn subject_key(&self) -> &str {
+        &self.key
+    }
+
+    fn subject_type(&self) -> crate::authentication::enums::subject_type::SubjectType {
+        self.subject_type
+    }
+}
+
 impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAuthorizationHandler<P> {
     fn handle<'a>(
         &'a self,
@@ -255,7 +269,10 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
                 .ok_or_else(|| RocketMQError::authentication_failed("Subject not found in authorization context"))?;
 
             // Create a User subject for ACL lookup (required by metadata provider trait)
-            let subject = User::of(subject_wrapper.subject_key());
+            let subject = SubjectLookup {
+                key: subject_wrapper.subject_key().to_string(),
+                subject_type: subject_wrapper.subject_type(),
+            };
 
             // Step 2: Fetch ACL from metadata provider
             let acl = self

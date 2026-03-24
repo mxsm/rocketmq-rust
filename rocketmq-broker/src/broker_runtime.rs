@@ -22,6 +22,9 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
@@ -31,7 +34,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -41,6 +44,7 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
@@ -60,6 +64,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::auth::auth_admin_service::AuthAdminService;
 use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
 use crate::client::client_housekeeping_service::ClientHousekeepingService;
@@ -125,12 +130,28 @@ type DefaultServerProcessor =
 type FasterServerProcessor =
     BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
 
+fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
+    AuthConfig {
+        config_name: broker_config.broker_identity.broker_name.clone(),
+        cluster_name: broker_config.broker_identity.broker_cluster_name.clone(),
+        auth_config_path: broker_config.auth_config_path.clone(),
+        authentication_enabled: broker_config.authentication_enabled,
+        authentication_whitelist: broker_config.authentication_whitelist.clone(),
+        init_authentication_user: broker_config.init_authentication_user.clone(),
+        inner_client_authentication_credentials: broker_config.inner_client_authentication_credentials.clone(),
+        authorization_enabled: broker_config.authorization_enabled,
+        authorization_whitelist: broker_config.authorization_whitelist.clone(),
+        ..AuthConfig::default()
+    }
+}
+
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
     inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
     broker_runtime: Option<RocketMQRuntime>,
     shutdown_hook: Option<BrokerShutdownHook>,
-    consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
+    proxy_request_processor: Option<DefaultServerProcessor>,
+    consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
     scheduled_task_manager: ScheduledTaskManager,
 }
@@ -164,8 +185,8 @@ impl BrokerRuntime {
             broker_config.get_broker_addr().into(),
         );
         let producer_manager = ProducerManager::new();
-        let consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>> =
-            Arc::new(Box::new(DefaultConsumerIdsChangeListener {}));
+        let consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static> =
+            Arc::new(DefaultConsumerIdsChangeListener {});
         let consumer_manager =
             ConsumerManager::new_with_broker_stats(consumer_ids_change_listener.clone(), broker_config.clone());
 
@@ -223,10 +244,11 @@ impl BrokerRuntime {
             ack_message_processor: None,
             notification_processor: None,
             query_assignment_processor: None,
+            auth_runtime: None,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
-            last_sync_time_ms: AtomicU64::new(get_current_millis()),
+            last_sync_time_ms: AtomicU64::new(current_millis()),
             broker_pre_online_service: None,
             min_broker_id_in_group: AtomicU64::new(0),
             min_broker_addr_in_group: Default::default(),
@@ -258,6 +280,7 @@ impl BrokerRuntime {
             inner,
             broker_runtime: Some(runtime),
             shutdown_hook: None,
+            proxy_request_processor: None,
             consumer_ids_change_listener,
             topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
             scheduled_task_manager: Default::default(),
@@ -270,6 +293,16 @@ impl BrokerRuntime {
 
     pub(crate) fn message_store_config(&self) -> &MessageStoreConfig {
         self.inner.message_store_config()
+    }
+
+    pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+        self.inner.topic_config_manager().select_topic_config(topic)
+    }
+
+    pub(crate) fn subscription_group(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
+        self.inner
+            .subscription_group_manager()
+            .find_subscription_group_config(group)
     }
 
     pub async fn shutdown(&mut self) {
@@ -286,21 +319,6 @@ impl BrokerRuntime {
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
             client_housekeeping_service.shutdown();
         }
-        /* if let Some(message_store) = &mut self.inner.message_store {
-            message_store.shutdown()
-        }
-
-        self.inner.topic_config_manager().persist();
-        info!("[Broker shutdown]TopicConfigManager persist success");
-        let _ = self.inner.topic_config_manager_mut().stop();
-
-        if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
-            pull_request_hold_service.shutdown();
-        }
-
-        if let Some(runtime) = self.broker_runtime.take() {
-            runtime.shutdown();
-        }*/
     }
 
     async fn unregister_broker(&mut self) {
@@ -555,9 +573,11 @@ impl BrokerRuntime {
             self.initialize_resources();
             self.initialize_scheduled_tasks().await;
             self.initial_transaction().await;
-            self.initial_acl();
-            self.initial_rpc_hooks();
-            self.initial_request_pipeline();
+            result &= self.initial_acl().await;
+            if result {
+                self.initial_rpc_hooks();
+                self.initial_request_pipeline();
+            }
         }
         result
     }
@@ -629,6 +649,9 @@ impl BrokerRuntime {
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
         let mut broker_request_processor = BrokerRequestProcessor::new();
+        if let Some(auth_runtime) = &self.inner.auth_runtime {
+            broker_request_processor.set_auth_runtime(auth_runtime.clone());
+        }
         let send_message_processor = ArcMut::new(send_message_processor);
 
         broker_request_processor.register_processor(
@@ -778,7 +801,12 @@ impl BrokerRuntime {
                 self.inner.clone(),
             ))),
         );
-        let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone()));
+        let auth_admin_service = Arc::new(match &self.inner.auth_runtime {
+            Some(auth_runtime) => AuthAdminService::with_provider_registry(auth_runtime.provider_registry().clone()),
+            None => AuthAdminService::new(build_auth_config(self.inner.broker_config()))
+                .expect("broker auth admin service initialization must succeed"),
+        });
+        let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone(), auth_admin_service));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 
         (broker_request_processor.clone(), broker_request_processor)
@@ -786,7 +814,7 @@ impl BrokerRuntime {
 
     #[allow(clippy::incompatible_msrv)]
     async fn initialize_scheduled_tasks(&mut self) {
-        let initial_delay = compute_next_morning_time_millis() - get_current_millis();
+        let initial_delay = compute_next_morning_time_millis() - current_millis();
         let period = Duration::from_secs(24 * 60 * 60);
         let broker_stats_ = self.inner.clone();
         self.scheduled_task_manager.add_fixed_rate_task_async(
@@ -888,13 +916,11 @@ impl BrokerRuntime {
                     Duration::from_secs(10),
                     Duration::from_secs(3),
                     async move |_ctx| {
-                        if get_current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
+                        if current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
                                 slave_synchronize.sync_all().await;
                             }
-                            inner_clone
-                                .last_sync_time_ms
-                                .store(get_current_millis(), Ordering::Relaxed);
+                            inner_clone.last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
                         }
                         if inner_clone.message_store_config.timer_wheel_enable {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
@@ -959,7 +985,19 @@ impl BrokerRuntime {
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
     }
 
-    fn initial_acl(&mut self) {}
+    async fn initial_acl(&mut self) -> bool {
+        let auth_config = build_auth_config(self.inner.broker_config());
+        match AuthRuntimeBuilder::new(auth_config).build().await {
+            Ok(auth_runtime) => {
+                self.inner.auth_runtime = Some(Arc::new(auth_runtime));
+                true
+            }
+            Err(error) => {
+                error!("Initialize auth runtime failed: {error}");
+                false
+            }
+        }
+    }
 
     fn initial_rpc_hooks(&mut self) {}
 
@@ -983,6 +1021,7 @@ impl BrokerRuntime {
         }
 
         let (request_processor, fast_request_processor) = self.init_processor();
+        self.proxy_request_processor = Some(request_processor.clone());
 
         let mut server = RocketMQServer::new(Arc::new(self.inner.broker_config.broker_server_config.clone()));
         //start nomarl broker remoting_server
@@ -1060,7 +1099,7 @@ impl BrokerRuntime {
 
     pub async fn start(&mut self) {
         self.inner.should_start_time.store(
-            (get_current_millis() as i64 + self.inner.message_store_config.disappear_time_after_start) as u64,
+            (current_millis() as i64 + self.inner.message_store_config.disappear_time_after_start) as u64,
             Ordering::Release,
         );
         if self.inner.message_store_config.total_replicas > 1 && self.inner.broker_config.enable_slave_acting_master {
@@ -1087,7 +1126,7 @@ impl BrokerRuntime {
         self.scheduled_task_manager
             .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
                 let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
-                if get_current_millis() < start_time {
+                if current_millis() < start_time {
                     info!("Register to namesrv after {}", start_time);
                     return Ok(());
                 }
@@ -1208,6 +1247,10 @@ impl BrokerRuntime {
                 self.inner.clone(),
             )
             .await;
+    }
+
+    pub(crate) fn proxy_request_processor(&self) -> Option<DefaultServerProcessor> {
+        self.proxy_request_processor.clone()
     }
 }
 
@@ -1435,6 +1478,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
+    auth_runtime: Option<Arc<AuthRuntime>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<SlaveSynchronize<MS>>,

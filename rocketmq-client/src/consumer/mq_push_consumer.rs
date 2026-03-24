@@ -19,18 +19,25 @@ use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::mq_consumer::MQConsumer;
 
-/// The `MQPushConsumer` trait defines the interface for a push consumer in RocketMQ.
-/// A push consumer receives messages from the broker and processes them using registered listeners.
+/// Defines the push-consumer interface for RocketMQ.
+///
+/// Implementations receive messages from brokers and dispatch them to the
+/// registered concurrent or orderly listener.
 #[allow(async_fn_in_trait)]
 pub trait MQPushConsumer: MQConsumer {
-    /// Starts the push consumer.
+    /// Asynchronously starts the consumer instance.
+    ///
+    /// This method does not block the calling thread.
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
+    /// Returns `Ok(())` when startup succeeds, or an error when initialization
+    /// fails.
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Shuts down the push consumer.
+    /// Asynchronously shuts down the consumer instance.
+    ///
+    /// This method does not block the calling thread.
     async fn shutdown(&mut self);
 
     /// Registers a message listener for concurrent message consumption.
@@ -41,7 +48,7 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// # Type Parameters
     ///
-    /// * `MLC` - The type of the message listener closure.
+    /// * `ML` - The listener type.
     fn register_message_listener_concurrently<ML>(&mut self, message_listener: ML)
     where
         ML: MessageListenerConcurrently + Send + Sync + 'static;
@@ -54,12 +61,14 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// # Type Parameters
     ///
-    /// * `MLO` - The type of the message listener closure.
+    /// * `ML` - The listener type.
     fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
     where
         ML: MessageListenerOrderly + Send + Sync + 'static;
 
-    /// Subscribes to a topic with a subscription expression.
+    /// Asynchronously subscribes to a topic with a subscription expression.
+    ///
+    /// This method does not block the calling thread.
     ///
     /// # Parameters
     ///
@@ -69,7 +78,8 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
+    /// Returns `Ok(())` when the subscription is accepted, or an error when the
+    /// subscription request is invalid or cannot be applied.
     ///
     /// # Examples
     ///
@@ -91,7 +101,9 @@ pub trait MQPushConsumer: MQConsumer {
         sub_expression: impl Into<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Subscribes to a topic with an optional message selector.
+    /// Asynchronously subscribes to a topic with an optional selector.
+    ///
+    /// This method does not block the calling thread.
     ///
     /// # Parameters
     ///
@@ -100,23 +112,30 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
+    /// Returns `Ok(())` when the subscription is accepted, or an error when the
+    /// selector is invalid or cannot be applied.
     async fn subscribe_with_selector(
         &mut self,
         topic: &str,
         selector: Option<MessageSelector>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Unsubscribes from a topic.
+    /// Asynchronously unsubscribes from a topic.
+    ///
+    /// This method does not block the calling thread.
     ///
     /// # Parameters
     ///
     /// * `topic` - The topic to unsubscribe from.
     async fn unsubscribe(&mut self, topic: &str);
 
-    /// Suspends the push consumer.
-    async fn suspend(&mut self);
+    /// Asynchronously suspends message consumption.
+    ///
+    /// This method does not block the calling thread.
+    async fn suspend(&self);
 
-    /// Resumes the push consumer.
-    async fn resume(&mut self);
+    /// Asynchronously resumes message consumption.
+    ///
+    /// This method does not block the calling thread.
+    async fn resume(&self);
 }

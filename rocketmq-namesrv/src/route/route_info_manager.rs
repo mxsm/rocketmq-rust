@@ -64,7 +64,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::TimeUtils;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -328,7 +328,7 @@ impl RouteInfoManager {
         self.broker_live_table.mut_from_ref().insert(
             broker_addr_info.clone(),
             BrokerLiveInfo::new(
-                get_current_millis() as i64,
+                current_millis() as i64,
                 timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME),
                 topic_config_serialize_wrapper
                     .topic_config_serialize_wrapper
@@ -663,7 +663,7 @@ impl RouteInfoManager {
     ) {
         let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
         if let Some(value) = self.broker_live_table.get_mut(broker_addr_info.as_ref()) {
-            value.last_update_timestamp = TimeUtils::get_current_millis() as i64;
+            value.last_update_timestamp = TimeUtils::current_millis() as i64;
         }
     }
 
@@ -875,7 +875,7 @@ impl RouteInfoManager {
     pub fn scan_not_active_broker(&mut self) {
         for (broker_addr_info, broker_live_info) in self.broker_live_table.clone().iter() {
             if broker_live_info.heartbeat_timeout_millis + broker_live_info.last_update_timestamp
-                < TimeUtils::get_current_millis() as i64
+                < TimeUtils::current_millis() as i64
             {
                 self.on_connection_disconnected(broker_addr_info);
             }

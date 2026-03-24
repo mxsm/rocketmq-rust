@@ -69,6 +69,8 @@ pub const ZONE_MODE: &str = "__ZONE_MODE";
 pub const LOGICAL_QUEUE_MOCK_BROKER_PREFIX: &str = "__syslo__";
 pub const METADATA_SCOPE_GLOBAL: &str = "__global__";
 pub const LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST: &str = "__syslo__none__";
+pub const RPC_REQUEST_HEADER_NAMESPACED_FIELD: &str = "nsd";
+pub const RPC_REQUEST_HEADER_NAMESPACE_FIELD: &str = "ns";
 pub static MULTI_PATH_SPLITTER: LazyLock<String> =
     LazyLock::new(|| env::var("rocketmq.broker.multiPathSplitter").unwrap_or_else(|_| ",".to_string()));
 

@@ -25,8 +25,8 @@ use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use crate::consumer::message_queue_listener::MessageQueueListener;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::consumer::message_queue_listener::ArcMessageQueueListener;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 #[derive(Default)]
 pub struct DefaultMQPushConsumerBuilder {
@@ -38,7 +38,7 @@ pub struct DefaultMQPushConsumerBuilder {
     allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     subscription: Option<ArcMut<HashMap<CheetahString, CheetahString>>>,
 
-    message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
+    message_queue_listener: Option<ArcMessageQueueListener>,
 
     consume_thread_min: Option<u32>,
     consume_thread_max: Option<u32>,
@@ -61,7 +61,7 @@ pub struct DefaultMQPushConsumerBuilder {
     pop_invisible_time: Option<u64>,
     pop_batch_nums: Option<u32>,
     await_termination_millis_when_shutdown: Option<u64>,
-    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    trace_dispatcher: Option<ArcTraceDispatcher>,
     client_rebalance: Option<bool>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
 }
@@ -121,10 +121,7 @@ impl DefaultMQPushConsumerBuilder {
     }
 
     #[inline]
-    pub fn message_queue_listener(
-        mut self,
-        message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
-    ) -> Self {
+    pub fn message_queue_listener(mut self, message_queue_listener: Option<ArcMessageQueueListener>) -> Self {
         self.message_queue_listener = message_queue_listener;
         self
     }
@@ -256,7 +253,7 @@ impl DefaultMQPushConsumerBuilder {
     }
 
     #[inline]
-    pub fn trace_dispatcher(mut self, trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: Option<ArcTraceDispatcher>) -> Self {
         self.trace_dispatcher = trace_dispatcher;
         self
     }

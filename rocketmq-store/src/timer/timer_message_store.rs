@@ -17,7 +17,7 @@ use std::sync::atomic::AtomicI64;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::warn;
@@ -91,8 +91,8 @@ impl TimerMessageStore {
     }
 
     pub fn get_enqueue_behind_millis(&self) -> i64 {
-        if get_current_millis() - self.last_enqueue_but_expired_time < 2000 {
-            ((get_current_millis() - self.last_enqueue_but_expired_store_time) / 1000) as i64
+        if current_millis() - self.last_enqueue_but_expired_time < 2000 {
+            ((current_millis() - self.last_enqueue_but_expired_store_time) / 1000) as i64
         } else {
             0
         }

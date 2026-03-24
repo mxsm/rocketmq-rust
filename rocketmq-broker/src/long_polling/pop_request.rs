@@ -18,12 +18,12 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 
 pub struct PopRequest {
     remoting_command: RemotingCommand,
@@ -32,7 +32,7 @@ pub struct PopRequest {
     op: i64,
     expired: u64,
     subscription_data: Option<SubscriptionData>,
-    message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+    message_filter: Option<ArcMessageFilter>,
 }
 
 impl PopRequest {
@@ -41,7 +41,7 @@ impl PopRequest {
         ctx: ConnectionHandlerContext,
         expired: u64,
         subscription_data: Option<SubscriptionData>,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Self {
         static COUNTER: AtomicI64 = AtomicI64::new(i64::MIN);
         let op = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -78,7 +78,7 @@ impl PopRequest {
     }
 
     pub fn is_timeout(&self) -> bool {
-        let now = get_current_millis();
+        let now = current_millis();
         now > (self.expired - 50)
     }
 
@@ -96,7 +96,7 @@ impl PopRequest {
         self.subscription_data.as_ref()
     }
 
-    pub fn get_message_filter(&self) -> Option<&Arc<Box<dyn MessageFilter>>> {
+    pub fn get_message_filter(&self) -> Option<&ArcMessageFilter> {
         self.message_filter.as_ref()
     }
 }

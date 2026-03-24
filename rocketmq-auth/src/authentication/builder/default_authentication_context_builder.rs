@@ -74,7 +74,7 @@ const SLASH: char = '/';
 /// let context = builder.build_from_remoting(&command, Some("channel-123"))?;
 /// assert_eq!(context.username(), Some(&CheetahString::from("testuser")));
 /// ```
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultAuthenticationContextBuilder;
 
 impl DefaultAuthenticationContextBuilder {

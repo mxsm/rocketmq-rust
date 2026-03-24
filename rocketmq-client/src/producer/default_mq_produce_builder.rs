@@ -23,7 +23,7 @@ use rocketmq_remoting::runtime::RPCHook;
 use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 #[derive(Default)]
 pub struct DefaultMQProducerBuilder {
@@ -40,7 +40,7 @@ pub struct DefaultMQProducerBuilder {
     retry_times_when_send_async_failed: Option<u32>,
     retry_another_broker_when_not_store_ok: Option<bool>,
     max_message_size: Option<u32>,
-    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    trace_dispatcher: Option<ArcTraceDispatcher>,
     auto_batch: Option<bool>,
     batch_max_delay_ms: Option<u32>,
     batch_max_bytes: Option<u64>,
@@ -143,7 +143,7 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn trace_dispatcher(mut self, trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: ArcTraceDispatcher) -> Self {
         self.trace_dispatcher = Some(trace_dispatcher);
         self
     }

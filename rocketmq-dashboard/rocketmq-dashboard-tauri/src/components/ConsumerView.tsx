@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -18,12 +18,21 @@ import {
   Hash, 
   Cpu, 
   Layers, 
-  FileBox 
+  FileBox,
+  AlertCircle,
+  LoaderCircle,
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { Pagination } from './Pagination';
+import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
+import { ConsumerClientModal } from '../features/consumer/components/ConsumerClientModal';
+import { ConsumerConfigModal } from '../features/consumer/components/ConsumerConfigModal';
+import { ConsumerDeleteModal } from '../features/consumer/components/ConsumerDeleteModal';
+import { ConsumerDetailModal } from '../features/consumer/components/ConsumerDetailModal';
+import { ConsumerEditorModal } from '../features/consumer/components/ConsumerEditorModal';
+import type { ConsumerGroupListItem } from '../features/consumer/types/consumer.types';
 
-const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
+const LegacyConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
   if (!isOpen) return null;
 
   return (
@@ -50,7 +59,7 @@ const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
                 Consumer Details
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center">
-                <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{consumer?.group}</span>
+                <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
                 <span className="mx-2 text-gray-300 dark:text-gray-600">|</span>
                 <span>Address: 172.20.48.1:10911</span>
               </p>
@@ -72,7 +81,7 @@ const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
                         <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg">
                            <Layers className="w-4 h-4" />
                         </div>
-                        <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">%RETRY%{consumer?.group}</span>
+                        <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">%RETRY%{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
                     </div>
                     <div className="flex items-center space-x-6 text-xs font-mono">
                         <div className="flex items-center text-gray-500 dark:text-gray-400">
@@ -181,7 +190,7 @@ const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
   );
 };
 
-const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
+const LegacyConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
   if (!isOpen) return null;
 
   return (
@@ -208,7 +217,7 @@ const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
                 Configuration
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center">
-                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.group}</span>
+                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
               </p>
             </div>
             <button 
@@ -235,7 +244,7 @@ const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
                      <div className="space-y-1">
                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Group Name</label>
                          <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg text-sm font-mono text-gray-600 dark:text-gray-300 break-all">
-                             {consumer?.group}
+                             {consumer?.displayGroupName ?? consumer?.rawGroupName}
                          </div>
                      </div>
 
@@ -397,7 +406,7 @@ const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
   );
 };
 
-const ConsumerClientModal = ({ isOpen, onClose, consumer }: any) => {
+const LegacyConsumerClientModal = ({ isOpen, onClose, consumer }: any) => {
   if (!isOpen) return null;
 
   return (
@@ -424,7 +433,7 @@ const ConsumerClientModal = ({ isOpen, onClose, consumer }: any) => {
                 Client Information
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center">
-                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.group}</span>
+                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
               </p>
             </div>
             <button 
@@ -565,33 +574,50 @@ export const ConsumerView = () => {
   });
   const [proxy, setProxy] = useState('127.0.0.1:8080');
   const [enableProxy, setEnableProxy] = useState(false);
-  const [detailModal, setDetailModal] = useState<{isOpen: boolean, consumer: any}>({ isOpen: false, consumer: null });
-  const [configModal, setConfigModal] = useState<{isOpen: boolean, consumer: any}>({ isOpen: false, consumer: null });
-  const [clientModal, setClientModal] = useState<{isOpen: boolean, consumer: any}>({ isOpen: false, consumer: null });
+  const [detailModal, setDetailModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
+  const [configModal, setConfigModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
+  const [clientModal, setClientModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
+  const [editorModal, setEditorModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null, preferredBrokerAddress?: string}>({ isOpen: false, consumer: null });
+  const [deleteModal, setDeleteModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 6;
+  const sourceAddress = enableProxy ? proxy : undefined;
+  const {
+    items,
+    summary,
+    response,
+    isInitialLoading,
+    isRefreshPending,
+    isRefreshing,
+    refreshingGroup,
+    error,
+    refresh,
+    refreshGroup,
+  } = useConsumerCatalog(sourceAddress);
 
-  // Mock Data
-  const consumers = [
-    { group: 'please_rename_unique_group_name_4', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: 1000, updateTime: '2026-01-27T12:30:09.589+00:00' },
-    { group: 'SELF_TEST_C_GROUP', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.335+00:00' },
-    { group: 'CID_ONSAPI_PULL', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PULL', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.335+00:00' },
-    { group: 'CID_ONSAPI_OWNER', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.336+00:00' },
-    { group: 'CID_RMQ_SYS_TRANS', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.336+00:00' },
-    { group: 'CID_ONSAPI_PERMISSION', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.336+00:00' },
-    { group: 'CID_ONS-HTTP-PROXY', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.337+00:00' },
-    { group: 'TOOLS_CONSUMER', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.338+00:00' },
-    { group: 'FILTERSRV_CONSUMER', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: -1, updateTime: '2026-01-27T12:29:57.638+00:00' },
-    { group: 'CONSUMER_GROUP_10', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: 0, updateTime: '2026-01-27T12:31:00.000+00:00' },
-    { group: 'CONSUMER_GROUP_11', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: 0, updateTime: '2026-01-27T12:31:00.000+00:00' },
-    { group: 'CONSUMER_GROUP_12', quantity: 0, version: 'V5_4_0', type: 'CLUSTERING', mode: 'PUSH', tps: 0, delay: 0, updateTime: '2026-01-27T12:31:00.000+00:00' },
-  ];
+  const toggleFilter = (key: string) => {
+    setCurrentPage(1);
+    setFilters((prev: any) => ({ ...prev, [key]: !prev[key] }));
+  };
 
-  const toggleFilter = (key: string) => setFilters((prev: any) => ({ ...prev, [key]: !prev[key] }));
+  const filteredConsumers = useMemo(() => {
+    const normalizedTerm = searchTerm.trim().toLowerCase();
+    const activeCategories = Object.entries(filters)
+      .filter(([, value]) => Boolean(value))
+      .map(([key]) => key);
 
-  // Pagination Logic
-  const filteredConsumers = consumers.filter(c => c.group.toLowerCase().includes(searchTerm.toLowerCase()));
-  const totalPages = Math.ceil(filteredConsumers.length / itemsPerPage);
+    return items.filter((consumer) => {
+      const matchesSearch =
+        normalizedTerm.length === 0 ||
+        consumer.displayGroupName.toLowerCase().includes(normalizedTerm) ||
+        consumer.rawGroupName.toLowerCase().includes(normalizedTerm);
+      const matchesCategory =
+        activeCategories.length === 0 || activeCategories.includes(consumer.category);
+      return matchesSearch && matchesCategory;
+    });
+  }, [filters, items, searchTerm]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredConsumers.length / itemsPerPage));
   const currentConsumers = filteredConsumers.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
@@ -603,22 +629,53 @@ export const ConsumerView = () => {
     }
   };
 
+  const handleEditorSaved = async () => {
+    setEditorModal({ isOpen: false, consumer: null });
+    await refresh();
+  };
+
+  const handleDeleteSaved = async () => {
+    setDeleteModal({ isOpen: false, consumer: null });
+    await refresh();
+  };
+
+  const handleEditFromConfig = (consumer: ConsumerGroupListItem, preferredBrokerAddress?: string) => {
+    setConfigModal({ isOpen: false, consumer: null });
+    setEditorModal({ isOpen: true, consumer, preferredBrokerAddress });
+  };
+
   return (
     <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
         <ConsumerDetailModal 
            isOpen={detailModal.isOpen} 
            onClose={() => setDetailModal({ isOpen: false, consumer: null })} 
            consumer={detailModal.consumer} 
+           address={sourceAddress}
         />
         <ConsumerConfigModal
            isOpen={configModal.isOpen}
            onClose={() => setConfigModal({ isOpen: false, consumer: null })}
            consumer={configModal.consumer}
+           onEdit={handleEditFromConfig}
         />
         <ConsumerClientModal
            isOpen={clientModal.isOpen}
            onClose={() => setClientModal({ isOpen: false, consumer: null })}
            consumer={clientModal.consumer}
+           address={sourceAddress}
+        />
+        <ConsumerEditorModal
+           isOpen={editorModal.isOpen}
+           onClose={() => setEditorModal({ isOpen: false, consumer: null })}
+           consumer={editorModal.consumer}
+           preferredBrokerAddress={editorModal.preferredBrokerAddress}
+           onSaved={() => void handleEditorSaved()}
+        />
+        <ConsumerDeleteModal
+           isOpen={deleteModal.isOpen}
+           onClose={() => setDeleteModal({ isOpen: false, consumer: null })}
+           consumer={deleteModal.consumer}
+           onDeleted={() => void handleDeleteSaved()}
         />
         {/* Toolbar */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm sticky top-0 z-20 backdrop-blur-xl bg-white/90 dark:bg-gray-900/90 transition-colors">
@@ -631,7 +688,10 @@ export const ConsumerView = () => {
                       placeholder="SubscriptionGroup..." 
                       className="pl-10 pr-4 py-2 w-64 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all dark:text-white dark:placeholder:text-gray-500"
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        setCurrentPage(1);
+                      }}
                     />
                 </div>
 
@@ -679,22 +739,76 @@ export const ConsumerView = () => {
 
                  <div className="h-8 w-px bg-gray-200 dark:bg-gray-700 mx-2"></div>
 
-                 <button className="flex items-center px-4 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg active:scale-95 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800">
+                 <button
+                    onClick={() => setEditorModal({ isOpen: true, consumer: null })}
+                    className="flex items-center px-4 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg active:scale-95 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
+                 >
                     <Plus className="w-4 h-4 mr-2" />
                     Add/Update
                  </button>
 
-                 <button className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white rounded-lg transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-700">
-                    <RefreshCw className="w-4 h-4" />
+                 <button
+                    onClick={() => void refresh()}
+                    disabled={isRefreshPending || isInitialLoading}
+                    className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white rounded-lg transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title={isRefreshing ? 'Refreshing...' : 'Refresh consumer groups'}
+                 >
+                    {isRefreshing ? (
+                      <LoaderCircle className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className={`w-4 h-4 transition-transform duration-300 ${isRefreshPending ? 'rotate-12 scale-110' : ''}`} />
+                    )}
                  </button>
              </div>
         </div>
 
+        {error && (
+          <div className="flex items-start gap-3 rounded-2xl border border-red-200/70 bg-red-50/80 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {response && (
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-gray-100 bg-white/80 px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-300">
+            <span className="font-semibold text-gray-900 dark:text-white">NameServer:</span>
+            <span className="font-mono">{response.currentNamesrv}</span>
+            <span className="text-gray-300 dark:text-gray-600">/</span>
+            <span>Total:</span>
+            <span className="font-semibold text-gray-900 dark:text-white">{summary?.totalGroups ?? 0}</span>
+            <span className="text-gray-300 dark:text-gray-600">/</span>
+            <span>NORMAL:</span>
+            <span className="font-semibold text-gray-900 dark:text-white">{summary?.normalGroups ?? 0}</span>
+            <span className="text-gray-300 dark:text-gray-600">/</span>
+            <span>FIFO:</span>
+            <span className="font-semibold text-gray-900 dark:text-white">{summary?.fifoGroups ?? 0}</span>
+            <span className="text-gray-300 dark:text-gray-600">/</span>
+            <span>SYSTEM:</span>
+            <span className="font-semibold text-gray-900 dark:text-white">{summary?.systemGroups ?? 0}</span>
+            <span className="ml-auto rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+              {response.useVipChannel ? 'VIP ON' : 'VIP OFF'} / {response.useTls ? 'TLS ON' : 'TLS OFF'}
+            </span>
+          </div>
+        )}
+
+        {isInitialLoading ? (
+          <div className="rounded-2xl border border-gray-100 bg-white/80 px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900/80">
+            <div className="mx-auto flex w-fit items-center gap-3 rounded-full bg-gray-50 px-4 py-2 text-sm text-gray-600 dark:bg-gray-800 dark:text-gray-300">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              Loading consumer groups...
+            </div>
+          </div>
+        ) : filteredConsumers.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-white/70 px-6 py-16 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/70 dark:text-gray-400">
+            No consumer groups matched the current search and category filters.
+          </div>
+        ) : (
+        <>
         {/* Card Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-6">
             {currentConsumers.map((consumer, index) => (
                 <motion.div
-                    key={consumer.group}
+                    key={consumer.rawGroupName}
                     initial={{ opacity: 0, y: 20, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     whileHover={{ 
@@ -713,18 +827,27 @@ export const ConsumerView = () => {
                     <div className="p-5 border-b border-gray-50 dark:border-gray-800 bg-gradient-to-br from-gray-50/50 to-white dark:from-gray-800/50 dark:to-gray-900">
                         <div className="flex justify-between items-start mb-3">
                             <div>
-                                <h3 className="font-bold text-gray-900 dark:text-white text-lg break-all leading-tight">{consumer.group}</h3>
+                                <h3 className="font-bold text-gray-900 dark:text-white text-lg break-all leading-tight">{consumer.displayGroupName}</h3>
                                 <div className="flex items-center mt-2 space-x-2">
                                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-100 dark:border-blue-800 uppercase tracking-wide">
-                                        {consumer.type}
+                                        {consumer.messageModel}
                                      </span>
                                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 border border-purple-100 dark:border-purple-800 uppercase tracking-wide">
-                                        {consumer.mode}
+                                        {consumer.consumeType}
+                                     </span>
+                                     <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wide ${
+                                        consumer.category === 'SYSTEM'
+                                          ? 'bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 border-orange-100 dark:border-orange-800'
+                                          : consumer.category === 'FIFO'
+                                            ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800'
+                                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-100 dark:border-slate-700'
+                                      }`}>
+                                        {consumer.category}
                                      </span>
                                 </div>
                             </div>
                             <div className="text-[10px] font-mono text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-800 px-2 py-1 rounded border border-gray-100 dark:border-gray-700">
-                                {consumer.version}
+                                {consumer.versionDesc}
                             </div>
                         </div>
                     </div>
@@ -733,15 +856,15 @@ export const ConsumerView = () => {
                     <div className="p-5 grid grid-cols-3 gap-4 bg-white dark:bg-gray-900">
                         <div className="flex flex-col items-center p-3 rounded-xl bg-gray-50/50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 group-hover:border-blue-100 dark:group-hover:border-blue-900/50 transition-colors">
                             <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">TPS</span>
-                            <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">{consumer.tps}</span>
+                            <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">{consumer.consumeTps}</span>
                         </div>
                         <div className="flex flex-col items-center p-3 rounded-xl bg-gray-50/50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 group-hover:border-orange-100 dark:group-hover:border-orange-900/50 transition-colors">
-                            <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">Delay</span>
-                            <span className={`text-lg font-mono font-bold ${consumer.delay > 0 ? 'text-orange-500' : 'text-gray-900 dark:text-white'}`}>{consumer.delay}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">Lag</span>
+                            <span className={`text-lg font-mono font-bold ${consumer.diffTotal > 0 ? 'text-orange-500' : 'text-gray-900 dark:text-white'}`}>{consumer.diffTotal}</span>
                         </div>
                         <div className="flex flex-col items-center p-3 rounded-xl bg-gray-50/50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 group-hover:border-green-100 dark:group-hover:border-green-900/50 transition-colors">
-                            <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">Quantity</span>
-                            <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">{consumer.quantity}</span>
+                            <span className="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500 font-semibold mb-1">Clients</span>
+                            <span className="text-lg font-mono font-bold text-gray-900 dark:text-white">{consumer.connectionCount}</span>
                         </div>
                     </div>
 
@@ -750,7 +873,7 @@ export const ConsumerView = () => {
                         <div className="flex items-center justify-between text-xs text-gray-400 dark:text-gray-500 mb-3 px-2">
                             <div className="flex items-center">
                                 <Clock className="w-3 h-3 mr-1" />
-                                Updated: {new Date(consumer.updateTime).toLocaleTimeString()}
+                                Updated: {new Date(consumer.updateTimestamp).toLocaleTimeString()}
                             </div>
                         </div>
                         <div className="grid grid-cols-5 gap-2">
@@ -779,15 +902,20 @@ export const ConsumerView = () => {
                                 <span className="text-[9px] font-medium">Config</span>
                              </button>
                              <button 
-                                onClick={() => toast("Refreshed")}
-                                className="col-span-1 flex flex-col items-center justify-center p-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-200 dark:hover:border-blue-800 transition-all shadow-sm group/btn"
+                                onClick={() => void refreshGroup(consumer.rawGroupName)}
+                                disabled={refreshingGroup === consumer.rawGroupName}
+                                className="col-span-1 flex flex-col items-center justify-center p-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-200 dark:hover:border-blue-800 transition-all shadow-sm group/btn disabled:opacity-60 disabled:cursor-not-allowed"
                                 title="Refresh"
                              >
-                                <RefreshCw className="w-4 h-4 mb-1" />
+                                {refreshingGroup === consumer.rawGroupName ? (
+                                  <LoaderCircle className="w-4 h-4 mb-1 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="w-4 h-4 mb-1" />
+                                )}
                                 <span className="text-[9px] font-medium">Sync</span>
                              </button>
                              <button 
-                                onClick={() => toast("Deleted")}
+                                onClick={() => setDeleteModal({ isOpen: true, consumer })}
                                 className="col-span-1 flex flex-col items-center justify-center p-2 rounded-lg bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-800 transition-all shadow-sm group/btn"
                                 title="Delete"
                              >
@@ -799,6 +927,8 @@ export const ConsumerView = () => {
                 </motion.div>
             ))}
         </div>
+        </>
+        )}
 
         {/* Pagination */}
         <div className="flex items-center justify-center pt-6">

@@ -64,7 +64,7 @@ use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy_arc_mut;
 use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
@@ -94,6 +94,7 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
+use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
@@ -841,7 +842,7 @@ impl MessageStore for LocalFileMessageStore {
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
         self.get_message_with_size_limit(
             group,
@@ -863,7 +864,7 @@ impl MessageStore for LocalFileMessageStore {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
         if self.shutdown.load(Ordering::Relaxed) {
             warn!("message store has shutdown, so getMessage is forbidden");
@@ -1549,7 +1550,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn is_os_page_cache_busy(&self) -> bool {
         let begin = self.commit_log.begin_time_in_lock().load(Ordering::Relaxed);
-        let diff = get_current_millis() - begin;
+        let diff = current_millis() - begin;
         diff < 10000000 && diff > self.message_store_config.os_page_cache_busy_timeout_mills
     }
 
@@ -1675,11 +1676,6 @@ impl MessageStore for LocalFileMessageStore {
     fn get_queue_store(&self) -> &dyn Any {
         self.consume_queue_store.as_any()
     }
-
-    /*fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait> {
-        /*&self.consume_queue_store as &Box<dyn ConsumeQueueStoreTrait>*/
-        unimplemented!("get_queue_store")
-    }*/
 
     fn is_sync_disk_flush(&self) -> bool {
         self.message_store_config.flush_disk_type == FlushDiskType::SyncFlush

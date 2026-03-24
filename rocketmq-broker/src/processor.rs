@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use rocketmq_auth::AuthRuntime;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -138,6 +141,7 @@ pub(crate) type RequestCodeType = i32;
 pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
     process_table: ArcMut<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
     default_request_processor: Option<ArcMut<BrokerProcessorType<MS, TS>>>,
+    auth_runtime: Option<Arc<AuthRuntime>>,
 }
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
@@ -149,6 +153,7 @@ where
         Self {
             process_table: ArcMut::new(HashMap::new()),
             default_request_processor: None,
+            auth_runtime: None,
         }
     }
 
@@ -159,6 +164,10 @@ where
     pub fn register_default_processor(&mut self, processor: BrokerProcessorType<MS, TS>) {
         self.default_request_processor = Some(ArcMut::new(processor));
     }
+
+    pub fn set_auth_runtime(&mut self, auth_runtime: Arc<AuthRuntime>) {
+        self.auth_runtime = Some(auth_runtime);
+    }
 }
 
 impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
@@ -166,6 +175,7 @@ impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
         Self {
             process_table: self.process_table.clone(),
             default_request_processor: self.default_request_processor.clone(),
+            auth_runtime: self.auth_runtime.clone(),
         }
     }
 }
@@ -181,6 +191,17 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        if let Some(auth_runtime) = &self.auth_runtime {
+            if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    error.to_string(),
+                )
+                .set_opaque(request.opaque());
+                return Ok(Some(response));
+            }
+        }
+
         match self.process_table.get_mut(request.code_ref()) {
             Some(processor) => processor.process_request(channel, ctx, request).await,
             None => match self.default_request_processor.as_mut() {

@@ -24,7 +24,7 @@ use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
 use rocketmq_common::utils::name_server_address_utils::NAMESRV_ENDPOINT_PATTERN;
 use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_common::utils::string_utils::StringUtils;
-use rocketmq_common::TimeUtils::get_current_nano;
+use rocketmq_common::TimeUtils::current_nano;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::request_type::RequestType;
 use rocketmq_remoting::protocol::LanguageCode;
@@ -209,7 +209,7 @@ impl ClientConfig {
     #[inline]
     pub fn change_instance_name_to_pid(&mut self) {
         if self.instance_name == "DEFAULT" {
-            self.instance_name = format!("{}#{}", std::process::id(), get_current_nano()).into();
+            self.instance_name = format!("{}#{}", std::process::id(), current_nano()).into();
         }
     }
     #[inline]

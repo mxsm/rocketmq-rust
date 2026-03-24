@@ -12,12 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use crate::hook::consume_message_context::ConsumeMessageContext;
 
-pub trait ConsumeMessageHook {
-    fn hook_name(&self) -> &str;
+/// Type alias for a thread-safe hook reference.
+pub type ConsumeMessageHookArc = Arc<dyn ConsumeMessageHook>;
 
-    fn consume_message_before(&self, context: Option<&mut ConsumeMessageContext>);
+/// Hook for message consumption lifecycle events.
+///
+/// Implementations are invoked synchronously before and after each batch of messages
+/// is consumed by a push consumer. Multiple hooks may be registered and are executed
+/// in registration order.
+///
+/// # Examples
+///
+/// ```ignore
+/// use rocketmq_client::hook::consume_message_hook::ConsumeMessageHook;
+/// use rocketmq_client::hook::consume_message_context::ConsumeMessageContext;
+///
+/// struct LoggingHook;
+///
+/// impl ConsumeMessageHook for LoggingHook {
+///     fn hook_name(&self) -> &'static str {
+///         "LoggingHook"
+///     }
+///
+///     fn consume_message_before(&self, context: &ConsumeMessageContext) {
+///         println!("Before consuming {} messages from {}",
+///                  context.msg_list.len(), context.consumer_group);
+///     }
+///
+///     fn consume_message_after(&self, context: &ConsumeMessageContext) {
+///         println!("After consuming, success: {}", context.success);
+///     }
+/// }
+/// ```
+pub trait ConsumeMessageHook: Send + Sync {
+    /// Returns the unique name of this hook.
+    fn hook_name(&self) -> &'static str;
 
-    fn consume_message_after(&self, context: Option<&mut ConsumeMessageContext>);
+    /// Invoked before message consumption begins.
+    fn consume_message_before(&self, context: &mut ConsumeMessageContext);
+
+    /// Invoked after message consumption completes.
+    ///
+    /// The context reflects the final consumption status, including whether
+    /// the messages were consumed successfully.
+    fn consume_message_after(&self, context: &mut ConsumeMessageContext);
 }

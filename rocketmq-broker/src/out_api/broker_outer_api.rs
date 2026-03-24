@@ -38,7 +38,7 @@ use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -730,11 +730,10 @@ impl BrokerOuterAPI {
             .invoke_request(None, request, timeout_millis)
             .await?;
         match ResponseCode::from(response.code()) {
-            ResponseCode::TopicNotExist => {
-                if allow_topic_not_exist {
-                    warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
-                }
+            ResponseCode::TopicNotExist if allow_topic_not_exist => {
+                warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
             }
+            ResponseCode::TopicNotExist => {}
             ResponseCode::Success => {
                 if let Some(body) = response.body() {
                     let topic_route_data = TopicRouteData::decode(body).unwrap();
@@ -792,7 +791,7 @@ impl BrokerOuterAPI {
             commit_offset: 0,
             suspend_timeout_millis: 0,
             subscription: Some(CheetahString::from_static_str(SubscriptionData::SUB_ALL)),
-            sub_version: get_current_millis() as i64,
+            sub_version: current_millis() as i64,
             expression_type: Some(CheetahString::from_static_str(ExpressionType::TAG)),
             max_msg_bytes: Some(i32::MAX),
             topic_request: Some(TopicRequestHeader {
@@ -1565,7 +1564,7 @@ pub fn process_send_response(
             Some(uniq_msg_id),
             Some(response_header.msg_id().to_string()),
             Some(message_queue),
-            response_header.queue_id() as u64,
+            response_header.queue_offset() as u64,
         );
 
         send_result.set_transaction_id(
@@ -1573,6 +1572,9 @@ pub fn process_send_response(
                 .transaction_id()
                 .map_or("".to_string(), |s| s.to_string()),
         );
+        if let Some(recall_handle) = response_header.recall_handle() {
+            send_result.set_recall_handle(recall_handle.to_string());
+        }
         if let Some(region_id) = response
             .get_ext_fields()
             .unwrap()
@@ -1586,7 +1588,7 @@ pub fn process_send_response(
         if let Some(trace_on) = response
             .get_ext_fields()
             .unwrap()
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION))
+            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH))
         {
             send_result.set_trace_on(trace_on == "true");
         } else {

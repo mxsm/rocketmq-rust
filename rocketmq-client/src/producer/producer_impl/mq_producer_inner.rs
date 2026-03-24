@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -22,14 +21,14 @@ use rocketmq_rust::ArcMut;
 
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::producer::transaction_listener::TransactionListener;
+use crate::producer::transaction_listener::ArcTransactionListener;
 
 pub trait MQProducerInner: Send + Sync + 'static {
     fn get_publish_topic_list(&self) -> HashSet<CheetahString>;
 
     fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool;
 
-    fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>>;
+    fn get_check_listener(&self) -> Option<ArcTransactionListener>;
 
     fn check_transaction_state(
         &self,
@@ -63,7 +62,7 @@ impl MQProducerInnerImpl {
         false
     }
 
-    pub fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>> {
+    pub fn get_check_listener(&self) -> Option<ArcTransactionListener> {
         if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
             return default_mqproducer_impl_inner.get_check_listener();
         }

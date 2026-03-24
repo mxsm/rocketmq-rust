@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,7 +35,7 @@ impl Default for RegisterBrokerToControllerRequestHeader {
             broker_name: None,
             broker_id: None,
             broker_address: None,
-            invoke_time: get_current_millis(),
+            invoke_time: current_millis(),
         }
     }
 }

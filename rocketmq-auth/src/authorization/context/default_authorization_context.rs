@@ -32,6 +32,7 @@ pub struct SubjectWrapper {
 
 impl SubjectWrapper {
     pub fn new(subject_key: String, subject_type: SubjectType) -> Self {
+        let subject_key = normalize_subject_key(subject_key, subject_type);
         Self {
             subject_key,
             subject_type,
@@ -235,6 +236,13 @@ impl DefaultAuthorizationContext {
     }
 }
 
+fn normalize_subject_key(subject_key: String, subject_type: SubjectType) -> String {
+    if let Some((_, raw_name)) = subject_key.split_once(':') {
+        return format!("{}:{}", subject_type.name(), raw_name);
+    }
+    format!("{}:{}", subject_type.name(), subject_key)
+}
+
 /// Builder for constructing `DefaultAuthorizationContext` instances.
 #[derive(Default)]
 pub struct DefaultAuthorizationContextBuilder {
@@ -314,7 +322,7 @@ mod tests {
         let resource = Resource::of_topic("test-topic");
         let context = DefaultAuthorizationContext::of(subject_key, subject_type, resource, Action::Pub, "192.168.1.1");
 
-        assert_eq!(context.subject_key(), Some("user:alice"));
+        assert_eq!(context.subject_key(), Some("User:alice"));
         assert_eq!(context.subject_type(), Some(SubjectType::User));
         assert_eq!(context.actions().len(), 1);
         assert_eq!(context.actions()[0], Action::Pub);
@@ -350,7 +358,7 @@ mod tests {
             .ext_info("region", "us-west")
             .build();
 
-        assert_eq!(context.subject_key(), Some("user:charlie"));
+        assert_eq!(context.subject_key(), Some("User:charlie"));
         assert_eq!(context.rpc_code(), Some("310"));
         assert_eq!(context.ext_info().get("region"), Some(&"us-west".to_string()));
     }
@@ -366,7 +374,7 @@ mod tests {
         context.set_rpc_code("500");
         context.add_ext_info("environment", "production");
 
-        assert_eq!(context.subject_key(), Some("user:dave"));
+        assert_eq!(context.subject_key(), Some("User:dave"));
         assert_eq!(context.actions().len(), 1);
         assert_eq!(context.source_ip(), Some("203.0.113.1"));
         assert_eq!(context.rpc_code(), Some("500"));
@@ -390,7 +398,7 @@ mod tests {
     #[test]
     fn test_subject_wrapper() {
         let wrapper = SubjectWrapper::new("user:test".to_string(), SubjectType::User);
-        assert_eq!(wrapper.subject_key(), "user:test");
+        assert_eq!(wrapper.subject_key(), "User:test");
         assert_eq!(wrapper.subject_type(), SubjectType::User);
 
         // Test clone
@@ -400,6 +408,6 @@ mod tests {
 
         // Test debug
         let debug_str = format!("{:?}", wrapper);
-        assert!(debug_str.contains("user:test"));
+        assert!(debug_str.contains("User:test"));
     }
 }

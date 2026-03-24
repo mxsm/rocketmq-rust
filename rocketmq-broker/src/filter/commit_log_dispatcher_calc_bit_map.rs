@@ -77,16 +77,12 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
             );
 
             // eval true
-            if let Ok(ret) = ret {
-                if let Some(b) = ret.downcast_ref::<bool>() {
-                    if *b {
-                        let _ = self
-                            .consumer_filter_manager
-                            .bloom_filter()
-                            .unwrap()
-                            .hash_to(filter_data.bloom_filter_data().unwrap(), &mut filter_bit_map);
-                    }
-                }
+            if let Ok(rocketmq_filter::expression::Value::Boolean(true)) = ret {
+                let _ = self
+                    .consumer_filter_manager
+                    .bloom_filter()
+                    .unwrap()
+                    .hash_to(filter_data.bloom_filter_data().unwrap(), &mut filter_bit_map);
             }
         }
 

@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 
 #[derive(Clone)]
 pub struct PullRequest {
@@ -29,7 +27,7 @@ pub struct PullRequest {
     suspend_timestamp: u64,
     pull_from_this_offset: i64,
     subscription_data: SubscriptionData,
-    message_filter: Arc<Box<dyn MessageFilter>>,
+    message_filter: ArcMessageFilter,
 }
 
 impl PullRequest {
@@ -41,7 +39,7 @@ impl PullRequest {
         suspend_timestamp: u64,
         pull_from_this_offset: i64,
         subscription_data: SubscriptionData,
-        message_filter: Arc<Box<dyn MessageFilter>>,
+        message_filter: ArcMessageFilter,
     ) -> Self {
         Self {
             request_command,
@@ -75,7 +73,7 @@ impl PullRequest {
         &self.subscription_data
     }
 
-    pub fn message_filter(&self) -> Arc<Box<dyn MessageFilter>> {
+    pub fn message_filter(&self) -> ArcMessageFilter {
         self.message_filter.clone()
     }
 

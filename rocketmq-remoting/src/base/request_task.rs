@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -35,7 +35,7 @@ impl RequestTask {
     pub fn new(runnable: Arc<dyn Fn() + Send + Sync>, channel: Channel, request: RemotingCommand) -> Self {
         Self {
             runnable,
-            create_timestamp: get_current_millis(),
+            create_timestamp: current_millis(),
             channel,
             request,
             stop_run: Arc::new(parking_lot::Mutex::new(false)),

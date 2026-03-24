@@ -21,6 +21,7 @@ pub enum TraceType {
     SubBefore,
     SubAfter,
     EndTransaction,
+    Recall,
 }
 
 impl Display for TraceType {
@@ -30,6 +31,7 @@ impl Display for TraceType {
             TraceType::SubBefore => write!(f, "SubBefore"),
             TraceType::SubAfter => write!(f, "SubAfter"),
             TraceType::EndTransaction => write!(f, "EndTransaction"),
+            TraceType::Recall => write!(f, "Recall"),
         }
     }
 }

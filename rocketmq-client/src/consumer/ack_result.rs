@@ -23,6 +23,20 @@ pub struct AckResult {
     pub(crate) pop_time: i64,
 }
 
+impl AckResult {
+    pub fn status(&self) -> AckStatus {
+        self.status
+    }
+
+    pub fn extra_info(&self) -> &CheetahString {
+        &self.extra_info
+    }
+
+    pub fn pop_time(&self) -> i64 {
+        self.pop_time
+    }
+}
+
 impl std::fmt::Display for AckResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

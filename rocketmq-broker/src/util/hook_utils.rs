@@ -29,7 +29,7 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -159,7 +159,7 @@ impl HookUtils {
                 }
             }
             // Delay Delivery
-            if msg.message_ext_inner.message.get_delay_time_level() > 0 {
+            if msg.message_ext_inner.message.delay_time_level() > 0 {
                 Self::transform_delay_level_message(broker_runtime_inner, msg);
             }
         }
@@ -171,7 +171,7 @@ impl HookUtils {
     }
 
     pub fn check_if_timer_message(msg: &mut MessageExtBrokerInner) -> bool {
-        if msg.message_ext_inner.message.get_delay_time_level() > 0 {
+        if msg.message_ext_inner.message.delay_time_level() > 0 {
             if msg
                 .message_ext_inner
                 .properties()
@@ -233,11 +233,11 @@ impl HookUtils {
         message_store_config: &MessageStoreConfig,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
-        let delay_level = msg.message_ext_inner.message.get_delay_time_level();
+        let delay_level = msg.message_ext_inner.message.delay_time_level();
         let deliver_ms = match msg.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
-            Some(delay_sec) => get_current_millis() + delay_sec.parse::<u64>().unwrap() * 1000,
+            Some(delay_sec) => current_millis() + delay_sec.parse::<u64>().unwrap() * 1000,
             None => match msg.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
-                Some(delay_ms) => get_current_millis() + delay_ms.parse::<u64>().unwrap(),
+                Some(delay_ms) => current_millis() + delay_ms.parse::<u64>().unwrap(),
                 None => match msg.property(MessageConst::PROPERTY_TIMER_DELIVER_MS) {
                     Some(deliver_ms) => deliver_ms.parse::<u64>().unwrap(),
                     None => return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal)),
@@ -245,8 +245,8 @@ impl HookUtils {
             },
         };
 
-        if deliver_ms > get_current_millis() {
-            if delay_level <= 0 && deliver_ms - get_current_millis() > message_store_config.timer_max_delay_sec * 1000 {
+        if deliver_ms > current_millis() {
+            if delay_level <= 0 && deliver_ms - current_millis() > message_store_config.timer_max_delay_sec * 1000 {
                 return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
             }
 
@@ -313,7 +313,7 @@ impl HookUtils {
         msg: &mut MessageExtBrokerInner,
     ) {
         let schedule_message_service = broker_runtime_inner.schedule_message_service();
-        if msg.message_ext_inner.message.get_delay_time_level() > schedule_message_service.get_max_delay_level() {
+        if msg.message_ext_inner.message.delay_time_level() > schedule_message_service.get_max_delay_level() {
             msg.message_ext_inner
                 .message
                 .set_delay_time_level(schedule_message_service.get_max_delay_level());
@@ -334,7 +334,7 @@ impl HookUtils {
         msg.message_ext_inner
             .message
             .set_topic(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
-        msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.get_delay_time_level());
+        msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.delay_time_level());
     }
 
     pub fn send_message_back(
@@ -348,19 +348,6 @@ impl HookUtils {
                 CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
                 CheetahString::from_string(false.to_string()),
             );
-            /*            if let Err(e) = outer_api.send_message_to_specific_broker(
-                broker_addr,
-                broker_name,
-                msg,
-                "InnerSendMessageBackGroup",
-                3000,
-            ) {
-                error!(
-                    "send message back to broker {} addr {} failed: {:?}",
-                    broker_name, broker_addr, e
-                );
-                return false;
-            }*/
         }
         msg_list.clear();
         true

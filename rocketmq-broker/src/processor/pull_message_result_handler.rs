@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -23,7 +22,7 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 
 /// Trait defining the behavior for handling the result of a pull message request.
 ///
@@ -66,7 +65,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
         subscription_data: SubscriptionData,
         subscription_group_config: &SubscriptionGroupConfig,
         broker_allow_suspend: bool,
-        message_filter: Arc<Box<dyn MessageFilter>>,
+        message_filter: ArcMessageFilter,
         response: RemotingCommand,
         mapping_context: TopicQueueMappingContext,
         begin_time_mills: u64,

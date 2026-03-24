@@ -18,12 +18,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -76,7 +77,7 @@ impl RebalancePushImpl {
 }
 
 impl RebalancePushImpl {
-    pub fn get_subscription_inner(&self) -> Arc<RwLock<HashMap<CheetahString, SubscriptionData>>> {
+    pub fn get_subscription_inner(&self) -> Arc<DashMap<CheetahString, SubscriptionData>> {
         self.rebalance_impl_inner.subscription_inner.clone()
     }
 
@@ -107,9 +108,10 @@ impl RebalancePushImpl {
     }
 
     #[inline]
-    pub async fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
-        let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
-        subscription_inner.insert(topic, subscription_data);
+    pub fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
+        self.rebalance_impl_inner
+            .subscription_inner
+            .insert(topic, subscription_data);
     }
 
     pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {
@@ -123,8 +125,10 @@ impl RebalancePushImpl {
         };
 
         let force_unlock =
-            pq.is_dropped() && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
-        let consume_lock = pq.consume_lock.try_write_timeout(Duration::from_millis(500)).await;
+            pq.is_dropped() && (current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
+        let consume_lock = tokio::time::timeout(Duration::from_millis(500), pq.consume_lock.write())
+            .await
+            .ok();
         if force_unlock || consume_lock.is_some() {
             let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
                 error!("Offset store not initialized");
@@ -132,7 +136,7 @@ impl RebalancePushImpl {
             };
             offset_store.persist(mq).await;
             offset_store.remove_offset(mq).await;
-            pq.set_locked(true);
+            pq.set_locked(false);
             self.unlock(mq, true).await;
             return true;
         } else {
@@ -156,39 +160,41 @@ impl Rebalance for RebalancePushImpl {
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
     ) {
-        let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
-        let Some(subscription_data) = subscription_inner.get_mut(topic) else {
-            warn!("Subscription data not found for topic: {}", topic);
-            return;
-        };
-        let new_version = get_current_millis() as i64;
-        info!(
-            "{} Rebalance changed, also update version: {}, {}",
-            topic, subscription_data.sub_version, new_version
-        );
-        subscription_data.sub_version = new_version;
-        drop(subscription_inner);
+        {
+            let Some(mut subscription_data) = self.rebalance_impl_inner.subscription_inner.get_mut(topic) else {
+                warn!("Subscription data not found for topic: {}", topic);
+                return;
+            };
+            let new_version = current_millis() as i64;
+            info!(
+                "{} Rebalance changed, also update version: {}, {}",
+                topic, subscription_data.sub_version, new_version
+            );
+            subscription_data.sub_version = new_version;
+        }
 
-        let process_queue_table = self.rebalance_impl_inner.process_queue_table.read().await;
-        let current_queue_count = process_queue_table.len();
+        let current_queue_count = {
+            let process_queue_table = self.rebalance_impl_inner.process_queue_table.read().await;
+            process_queue_table.len()
+        };
         if current_queue_count != 0 {
             let pull_threshold_for_topic = self.consumer_config.pull_threshold_for_topic;
             if pull_threshold_for_topic != -1 {
                 let new_val = 1.max(pull_threshold_for_topic / current_queue_count as i32);
                 info!(
                     "The pullThresholdForQueue is changed from {} to {}",
-                    pull_threshold_for_topic, new_val
+                    self.consumer_config.pull_threshold_for_queue, new_val
                 );
-                self.consumer_config.pull_threshold_for_topic = new_val;
+                self.consumer_config.pull_threshold_for_queue = new_val as u32;
             }
             let pull_threshold_size_for_topic = self.consumer_config.pull_threshold_size_for_topic;
             if pull_threshold_size_for_topic != -1 {
                 let new_val = 1.max(pull_threshold_size_for_topic / current_queue_count as i32);
                 info!(
                     "The pullThresholdSizeForQueue is changed from {} to {}",
-                    pull_threshold_size_for_topic, new_val
+                    self.consumer_config.pull_threshold_size_for_queue, new_val
                 );
-                self.consumer_config.pull_threshold_size_for_topic = new_val;
+                self.consumer_config.pull_threshold_size_for_queue = new_val as u32;
             }
         }
 
@@ -544,6 +550,26 @@ impl Rebalance for RebalancePushImpl {
             "Destroying RebalancePushImpl for consumer group: {:?}",
             self.rebalance_impl_inner.consumer_group
         );
+        // Mark all process queues as dropped and clear the tables.
+        // Use try_write to avoid blocking; shutdown callers are expected to drain tasks first.
+        if let Ok(mut table) = self.rebalance_impl_inner.process_queue_table.try_write() {
+            for pq in table.values() {
+                pq.set_dropped(true);
+            }
+            table.clear();
+        } else {
+            warn!("destroy: could not acquire write lock on process_queue_table; queues may not be dropped cleanly");
+        }
+        if let Ok(mut pop_table) = self.rebalance_impl_inner.pop_process_queue_table.try_write() {
+            for pq in pop_table.values() {
+                pq.set_dropped(true);
+            }
+            pop_table.clear();
+        } else {
+            warn!(
+                "destroy: could not acquire write lock on pop_process_queue_table; queues may not be dropped cleanly"
+            );
+        }
     }
 }
 
@@ -608,7 +634,7 @@ async fn lock_all_impl(
                                             info!("the message queue locked OK, Group: {:?} {}", consumer_group, mq);
                                         }
                                         pq.set_locked(true);
-                                        pq.set_last_lock_timestamp(get_current_millis());
+                                        pq.set_last_lock_timestamp(current_millis());
                                     } else {
                                         pq.set_locked(false);
                                         warn!("the message queue locked Failed, Group: {:?} {}", consumer_group, mq);

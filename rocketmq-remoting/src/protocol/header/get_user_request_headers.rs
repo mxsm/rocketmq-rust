@@ -22,3 +22,39 @@ use serde::Serialize;
 pub struct GetUserRequestHeader {
     pub username: CheetahString,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_user_request_header_default() {
+        let header = GetUserRequestHeader::default();
+        assert_eq!(header.username, CheetahString::default());
+    }
+
+    #[test]
+    fn get_user_request_header_serialize() {
+        let header = GetUserRequestHeader {
+            username: CheetahString::from("value"),
+        };
+        let json = serde_json::to_string(&header).unwrap();
+        assert_eq!(json, r#"{"username":"value"}"#);
+    }
+
+    #[test]
+    fn get_user_request_header_deserialize() {
+        let json = r#"{"username":"value"}"#;
+        let header: GetUserRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.username, CheetahString::from("value"));
+    }
+
+    #[test]
+    fn get_user_request_header_clone() {
+        let header = GetUserRequestHeader {
+            username: CheetahString::from("value"),
+        };
+        let cloned_header = header.clone();
+        assert_eq!(header.username, cloned_header.username);
+    }
+}

@@ -28,7 +28,7 @@ use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_rust::ArcMut;
@@ -115,7 +115,7 @@ where
     }
 
     pub async fn batch_send_op_message(&self) -> u64 {
-        let start_time = get_current_millis();
+        let start_time = current_millis();
         let broker_config = self.transactional_message_bridge.broker_runtime_inner.broker_config();
         let interval = broker_config.transaction_op_batch_interval;
         let max_size = broker_config.transaction_op_msg_max_size as usize;
@@ -233,7 +233,7 @@ where
         debug!("Check topic={}, queues={:?}", topic, msg_queues);
 
         for message_queue in msg_queues {
-            let start_time = get_current_millis() as i64;
+            let start_time = current_millis() as i64;
             let op_queue = self.get_op_queue(&message_queue).await;
 
             let half_offset = self.transactional_message_bridge.fetch_consume_offset(&message_queue);
@@ -323,7 +323,7 @@ where
         let listener = &mut listener;
 
         loop {
-            let current_time = get_current_millis() as i64;
+            let current_time = current_millis() as i64;
             if current_time - start_time > MAX_PROCESS_TIME_LIMIT as i64 {
                 info!(
                     "Queue={:?} process time reach max={}",
@@ -426,7 +426,7 @@ where
                 }
 
                 // Handle immunity time logic
-                let current_time = get_current_millis() as i64;
+                let current_time = current_millis() as i64;
                 let value_of_current_minus_born = current_time - msg_ext.born_timestamp();
                 let mut check_immunity_time = transaction_timeout as i64;
 
@@ -443,21 +443,13 @@ where
                         consume_half_offset += 1;
                         continue;
                     }
-                } else if 0 <= value_of_current_minus_born && value_of_current_minus_born < check_immunity_time {
-                    /* debug!(
-                        "New arrived, the miss offset={}, check it later checkImmunity={}, born={}",
-                        i,
-                        check_immunity_time,
-                        msg_ext.get_born_timestamp()
-                    );*/
-                    break;
                 }
 
                 // Determine if check is needed
                 let op_msg = if let Some(ref inner) = pull_result {
                     inner.msg_found_list()
                 } else {
-                    &None
+                    None
                 };
                 let is_need_check = self.is_check_needed(
                     op_msg,
@@ -558,7 +550,7 @@ where
         let msg_time = get_result
             .get_msg()
             .map(|msg| msg.store_timestamp())
-            .unwrap_or_else(|| get_current_millis() as i64);
+            .unwrap_or_else(|| current_millis() as i64);
 
         info!(
             "After check, {:?} opOffset={} opOffsetDiff={} msgOffset={} msgOffsetDiff={} msgTime={} \
@@ -569,7 +561,7 @@ where
             new_offset,
             max_msg_offset - new_offset as u64,
             msg_time,
-            get_current_millis() as i64 - msg_time,
+            current_millis() as i64 - msg_time,
             put_in_queue_count
         );
 
@@ -632,13 +624,13 @@ where
     /// Determine if message check is needed
     fn is_check_needed(
         &self,
-        op_msg: &Option<Vec<ArcMut<MessageExt>>>,
+        op_msg: Option<&Vec<ArcMut<MessageExt>>>,
         value_of_current_minus_born: i64,
         check_immunity_time: i64,
         start_time: i64,
         transaction_timeout: i64,
     ) -> bool {
-        if let Some(ref messages) = op_msg {
+        if let Some(messages) = op_msg {
             if let Some(last_msg) = messages.last() {
                 return last_msg.born_timestamp() - start_time > transaction_timeout;
             }
@@ -717,7 +709,7 @@ where
 
     /// Check if message needs to be skipped
     fn need_skip(&self, msg_ext: &MessageExt) -> bool {
-        let value_of_current_minus_born = get_current_millis() as i64 - msg_ext.born_timestamp();
+        let value_of_current_minus_born = current_millis() as i64 - msg_ext.born_timestamp();
 
         let file_reserved_time = self
             .transactional_message_bridge
@@ -912,12 +904,12 @@ where
             debug!(
                 "Topic: {} tags: {:?}, OpOffset: {}, HalfOffset: {}",
                 op_message_ext.topic(),
-                op_message_ext.get_tags(),
+                op_message_ext.tags(),
                 op_message_ext.queue_offset(),
                 queue_offset_body
             );
 
-            if op_message_ext.get_tags() == Some(CheetahString::from_static_str(TransactionalMessageUtil::REMOVE_TAG)) {
+            if op_message_ext.tags() == Some(CheetahString::from_static_str(TransactionalMessageUtil::REMOVE_TAG)) {
                 let offset_array: Vec<&str> = queue_offset_body
                     .split(TransactionalMessageUtil::OFFSET_SEPARATOR)
                     .collect();
@@ -977,7 +969,7 @@ where
         let mut delete_context = self.delete_context.lock().await;
         let mq_context = delete_context
             .entry(queue_id)
-            .or_insert(MessageQueueOpContext::new(get_current_millis(), 20000));
+            .or_insert(MessageQueueOpContext::new(current_millis(), 20000));
         let data = format!(
             "{}{}",
             message_ext.queue_offset,

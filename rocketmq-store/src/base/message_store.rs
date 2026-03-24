@@ -27,7 +27,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -41,6 +41,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
@@ -137,7 +138,7 @@ pub trait MessageStoreInner: Sync + 'static {
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult>;
 
     /*    /// Asynchronous get message
@@ -160,7 +161,7 @@ pub trait MessageStoreInner: Sync + 'static {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult>;
 
     /*    /// Asynchronous get message with size constraint
@@ -315,7 +316,7 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Return the current timestamp of the store.
     #[inline(always)]
     fn now(&self) -> u64 {
-        get_current_millis()
+        current_millis()
     }
 
     /// Delete topic's consume queue file and unused stats.

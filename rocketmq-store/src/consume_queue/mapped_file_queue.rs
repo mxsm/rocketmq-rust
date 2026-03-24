@@ -23,7 +23,7 @@ use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_common::common::boundary_type::BoundaryType;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::error;
 use tracing::info;
@@ -453,7 +453,7 @@ impl MappedFileQueue {
         for (i, mapped_file) in mfs.iter().enumerate().take(mfs_length) {
             let live_max_timestamp = mapped_file.get_last_modified_timestamp() as i64 + expired_time;
 
-            if get_current_millis() as i64 >= live_max_timestamp || clean_immediately {
+            if current_millis() as i64 >= live_max_timestamp || clean_immediately {
                 if mapped_file.destroy(interval_forcibly as u64) {
                     files.push(mapped_file.clone());
                     delete_count += 1;
@@ -890,7 +890,7 @@ impl MappedFileQueue {
             }
 
             let mapped_file = &files[i as usize];
-            let current_time = get_current_millis() as i64;
+            let current_time = current_millis() as i64;
             let recent_swap_time = mapped_file.get_recent_swap_map_time();
 
             // Force swap if interval exceeded
@@ -944,7 +944,7 @@ impl MappedFileQueue {
             }
 
             let mapped_file = &files[i as usize];
-            let current_time = get_current_millis() as i64;
+            let current_time = current_millis() as i64;
             let recent_swap_time = mapped_file.get_recent_swap_map_time();
 
             if current_time - recent_swap_time > force_clean_swap_interval_ms {

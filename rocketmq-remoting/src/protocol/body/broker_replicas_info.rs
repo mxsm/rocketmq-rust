@@ -145,7 +145,7 @@ impl ReplicasInfo {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplicaIdentity {
     broker_name: CheetahString,
@@ -375,5 +375,73 @@ mod tests {
     fn is_exist_in_all_replicas_returns_false_for_non_existing_replica() {
         let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], vec![]);
         assert!(!replicas_info.is_exist_in_all_replicas("broker1", 1, "address1"));
+    }
+    #[test]
+    fn broker_replicas_info_new_creates_empty_table() {
+        let info = BrokerReplicasInfo::new();
+        assert!(info.get_replicas_info_table().is_empty());
+    }
+
+    #[test]
+    fn broker_replicas_info_add_replica_info_inserts_entry() {
+        let mut info = BrokerReplicasInfo::new();
+
+        let replicas = ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]);
+        info.add_replica_info("broker1".into(), replicas);
+
+        assert_eq!(info.get_replicas_info_table().len(), 1);
+    }
+
+    #[test]
+    fn broker_replicas_info_set_replicas_info_table_replaces_table() {
+        let mut info = BrokerReplicasInfo::new();
+
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from("broker1"),
+            ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]),
+        );
+
+        info.set_replicas_info_table(map);
+
+        assert_eq!(info.get_replicas_info_table().len(), 1);
+    }
+    #[test]
+    fn set_in_sync_replicas_updates_list() {
+        let mut info = ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]);
+
+        let replicas = vec![ReplicaIdentity::new("b1", 1, "a1")];
+
+        info.set_in_sync_replicas(replicas.clone());
+
+        assert_eq!(info.get_in_sync_replicas(), &replicas);
+    }
+
+    #[test]
+    fn set_not_in_sync_replicas_updates_list() {
+        let mut info = ReplicasInfo::new(1, "addr", 1, 1, vec![], vec![]);
+
+        let replicas = vec![ReplicaIdentity::new("b2", 2, "a2")];
+
+        info.set_not_in_sync_replicas(replicas.clone());
+
+        assert_eq!(info.get_not_in_sync_replicas(), &replicas);
+    }
+    #[test]
+    fn is_exist_in_sync_returns_false_if_id_differs() {
+        let replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
+
+        let info = ReplicasInfo::new(1, "addr", 1, 1, replicas, vec![]);
+
+        assert!(!info.is_exist_in_sync("broker1", 2, "address1"));
+    }
+
+    #[test]
+    fn is_exist_in_sync_returns_false_if_address_differs() {
+        let replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
+
+        let info = ReplicasInfo::new(1, "addr", 1, 1, replicas, vec![]);
+
+        assert!(!info.is_exist_in_sync("broker1", 1, "address2"));
     }
 }

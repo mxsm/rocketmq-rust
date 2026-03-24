@@ -34,7 +34,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::utils::data_converter::DataConverter;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -129,7 +129,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             });
         }
 
-        let now = get_current_millis();
+        let now = current_millis();
         if point.get_revive_time() - (now as i64) < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500 {
             if broker_config.enable_pop_log {
                 warn!("[PopBuffer]add ck, timeout, {:?}, {}", point, now);
@@ -286,7 +286,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             return false;
         }
         let point = point_wrapper.get_ck();
-        let now = get_current_millis();
+        let now = current_millis();
         let revive_time = point.get_revive_time() as u64;
         let pop_time = point.pop_time as u64;
 
@@ -408,7 +408,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let pop_ck_stay_buffer_time = broker_config.pop_ck_stay_buffer_time as i64;
         let enable_pop_log = broker_config.enable_pop_log;
 
-        let now = get_current_millis() as i64;
+        let now = current_millis() as i64;
         let mut remove_keys = HashSet::with_capacity(256);
 
         for entry in self.buffer.iter() {
@@ -541,7 +541,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
     }
     fn scan_garbage(&mut self) {
-        let current_millis = get_current_millis();
+        let current_millis = current_millis();
         let timeout_threshold = self.minute5;
 
         self.commit_offsets.retain(|key, value| {
@@ -880,7 +880,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         msg.set_body(Bytes::from(batch_ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
-        msg.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        msg.message_ext_inner.born_timestamp = current_millis() as i64;
         msg.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         msg.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         msg.set_delay_time_ms(point.get_revive_time() as u64);
@@ -920,7 +920,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         msg.set_body(Bytes::from(ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
-        msg.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        msg.message_ext_inner.born_timestamp = current_millis() as i64;
         msg.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         msg.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         msg.set_delay_time_ms(point.get_revive_time() as u64);
@@ -975,7 +975,7 @@ impl<T> QueueWithTime<T> {
     pub fn new() -> Self {
         Self {
             queue: Arc::new(tokio::sync::Mutex::new(VecDeque::new())),
-            time: get_current_millis(),
+            time: current_millis(),
         }
     }
 

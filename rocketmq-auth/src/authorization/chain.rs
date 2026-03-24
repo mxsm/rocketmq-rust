@@ -21,7 +21,10 @@
 pub mod acl_authorization_handler;
 pub mod handler;
 pub mod handler_chain;
+pub mod user_authorization_handler;
 
 pub use acl_authorization_handler::AclAuthorizationHandler;
 pub use handler::AuthorizationHandler;
 pub use handler_chain::AuthorizationHandlerChain;
+pub use user_authorization_handler::UserAuthorizationDecision;
+pub use user_authorization_handler::UserAuthorizationHandler;

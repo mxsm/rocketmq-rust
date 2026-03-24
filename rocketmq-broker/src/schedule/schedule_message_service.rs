@@ -39,7 +39,7 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
@@ -586,7 +586,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
         let tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_filter_type,
-            inner.get_tags().as_ref().unwrap_or(&CheetahString::empty()),
+            inner.tags().as_ref().unwrap_or(&CheetahString::empty()),
         );
         inner.tags_code = tags_code;
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
@@ -880,7 +880,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             }
 
             // Check if it's time to deliver the message
-            let now = get_current_millis() as i64;
+            let now = current_millis() as i64;
             let deliver_timestamp = self.correct_deliver_timestamp(now, tags_code);
 
             let curr_offset = cq_unit.queue_offset;
@@ -1235,33 +1235,6 @@ impl<MS: MessageStore> PutResultProcess<MS> {
         }
 
         self
-        /*let this = Arc::new(self);
-        let this_clone = Arc::clone(&this);
-
-        // Handle the future completion
-        tokio::spawn(async move {
-            if let Some(mut future) = this_clone.future.clone() {
-                match future.await {
-                    Ok(result) => {
-                        this_clone.handle_result(result);
-                    }
-                    Err(e) => {
-                        error!(
-                            "ScheduleMessageService put message exceptionally, info: {}",
-                            this_clone,
-                        );
-                        this_clone.on_exception();
-                    }
-                }
-            }
-        });
-
-        // Unwrap the Arc to return self
-        // This is safe because we're the only owner at this point
-        match Arc::try_unwrap(this) {
-            Ok(this) => this,
-            Err(_) => panic!("Failed to unwrap Arc in then_process"),
-        }*/
     }
 
     /// Handle the result of a put operation

@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::producer::send_callback::SendMessageCallback;
+use rocketmq_client_rust::producer::send_callback::ArcSendCallback;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -157,7 +157,7 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
 
     let arg = "selector-arg";
 
-    let callback: SendMessageCallback = Arc::new(
+    let callback: ArcSendCallback = Arc::new(
         |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
             (Some(r), None) => println!("   Callback: Success - {:?}", r),
             (None, Some(e)) => println!("   Callback: Error - {}", e),
@@ -195,7 +195,7 @@ async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -
 
     let arg = "selector-arg";
 
-    let callback: SendMessageCallback = Arc::new(
+    let callback: ArcSendCallback = Arc::new(
         |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
             (Some(r), None) => println!("   Callback: Success - {:?}", r),
             (None, Some(e)) => println!("   Callback: Error - {}", e),
