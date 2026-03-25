@@ -70,11 +70,11 @@ impl Clone for TimerMessageStore {
 }
 
 impl TimerMessageStore {
-    pub fn load(&mut self) -> bool {
+    pub fn load(&self) -> bool {
         true
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         warn!("TimerMessageStore start unimplemented, do nothing");
     }
 
@@ -154,14 +154,14 @@ impl TimerMessageStore {
         self.default_message_store = default_message_store;
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         warn!("TimerMessageStore shutdown unimplemented, do nothing");
     }
 
-    pub fn sync_last_read_time_ms(&mut self) {
+    pub fn sync_last_read_time_ms(&self) {
         error!("sync_last_read_time_ms unimplemented");
     }
-    pub fn set_should_running_dequeue(&mut self, _should_start: bool) {
+    pub fn set_should_running_dequeue(&self, _should_start: bool) {
         error!("set_should_running_dequeue unimplemented");
     }
 }

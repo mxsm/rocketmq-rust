@@ -492,8 +492,9 @@ impl BrokerRuntime {
             let message_store_clone = message_store.clone();
             message_store.set_message_store_arc(message_store_clone);
             if self.inner.message_store_config.is_timer_wheel_enable() {
-                let time_message_store = TimerMessageStore::new(Some(message_store.clone()));
-                message_store.set_timer_message_store(Arc::new(time_message_store));
+                let timer_message_store = Arc::new(TimerMessageStore::new(Some(message_store.clone())));
+                message_store.set_timer_message_store(timer_message_store.clone());
+                self.inner.timer_message_store = Some(timer_message_store);
             }
             self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
             self.inner.message_store = Some(message_store.clone());
@@ -1447,7 +1448,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     message_store: Option<ArcMut<MS>>,
     broker_stats: Option<BrokerStats<MS>>,
     schedule_message_service: Option<ArcMut<ScheduleMessageService<MS>>>,
-    timer_message_store: Option<TimerMessageStore>,
+    timer_message_store: Option<Arc<TimerMessageStore>>,
     broker_outer_api: BrokerOuterAPI,
     producer_manager: ProducerManager,
     consumer_manager: ConsumerManager,
@@ -1566,7 +1567,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn timer_message_store_mut(&mut self) -> &mut Option<TimerMessageStore> {
+    pub fn timer_message_store_mut(&mut self) -> &mut Option<Arc<TimerMessageStore>> {
         &mut self.timer_message_store
     }
 
@@ -1793,13 +1794,19 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn timer_message_store(&self) -> &Option<TimerMessageStore> {
-        &self.timer_message_store
+    pub fn timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
+        self.timer_message_store.as_ref().or_else(|| {
+            self.message_store
+                .as_ref()
+                .and_then(|message_store| message_store.get_timer_message_store())
+        })
     }
 
     #[inline]
     pub fn timer_message_store_unchecked(&self) -> &TimerMessageStore {
-        unimplemented!("timer_message_store_unchecked is not implemented yet")
+        self.timer_message_store()
+            .map(Arc::as_ref)
+            .expect("timer_message_store should be initialized before use")
     }
 
     #[inline]
@@ -2006,7 +2013,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn set_timer_message_store(&mut self, timer_message_store: TimerMessageStore) {
-        self.timer_message_store = Some(timer_message_store);
+        self.timer_message_store = Some(Arc::new(timer_message_store));
     }
 
     #[inline]
@@ -2542,4 +2549,31 @@ fn need_register(
     _in_broker_container: bool,
 ) -> bool {
     unimplemented!()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn timer_message_store_unchecked_returns_configured_store() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        runtime.inner.set_timer_message_store(TimerMessageStore::new_empty());
+
+        let timer_store = runtime.inner.timer_message_store_unchecked();
+        let configured_store = runtime
+            .inner
+            .timer_message_store()
+            .expect("timer store should be present")
+            .as_ref();
+
+        assert!(std::ptr::eq(timer_store, configured_store));
+    }
 }

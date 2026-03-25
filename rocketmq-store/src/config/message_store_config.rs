@@ -837,7 +837,7 @@ impl Default for MessageStoreConfig {
             timer_enable_disruptor: false,
             timer_enable_check_metrics: false,
             timer_intercept_delay_level: false,
-            timer_max_delay_sec: 0,
+            timer_max_delay_sec: 3600 * 24 * 3,
             timer_wheel_enable: true,
             disappear_time_after_start: -1,
             timer_stop_enqueue: false,

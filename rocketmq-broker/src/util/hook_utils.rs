@@ -360,7 +360,11 @@ mod tests {
 
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_store::base::message_status_enum::PutMessageStatus;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
 
     use super::*;
 
@@ -379,5 +383,42 @@ mod tests {
         let result = HookUtils::check_inner_batch(&topic_config_table, &msg);
 
         assert_eq!(result.unwrap().put_message_status(), PutMessageStatus::MessageIllegal);
+    }
+
+    #[test]
+    fn transform_timer_message_accepts_future_delivery_by_default_and_rewrites_topic() {
+        let timer_message_store = TimerMessageStore::new_empty();
+        let message_store_config = MessageStoreConfig::default();
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("test_topic"));
+        msg.message_ext_inner.queue_id = 3;
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+            CheetahString::from_string((current_millis() + 60_000).to_string()),
+        );
+
+        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+
+        assert!(
+            result.is_none(),
+            "future timer message should be accepted under default config"
+        );
+        assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
+        assert_eq!(msg.message_ext_inner.queue_id, 0);
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("test_topic")
+        );
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("3")
+        );
+        assert!(msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+            .is_some());
     }
 }
