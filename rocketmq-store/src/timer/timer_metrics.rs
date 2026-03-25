@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use serde::Deserialize;
 use serde::Serialize;
@@ -124,5 +125,16 @@ impl TimerMetrics {
             .get(key.as_str())
             .map(|metric| metric.count)
             .unwrap_or_default()
+    }
+
+    pub fn add_timing_count(&self, key: &CheetahString, delta: i64) {
+        let mut timing_count = self.timing_count.write();
+        let entry = timing_count.entry(key.to_string()).or_insert(Metric {
+            count: 0,
+            time_stamp: 0,
+        });
+        entry.count = (entry.count + delta).max(0);
+        entry.time_stamp = current_millis() as i64;
+        self.data_version.lock().next_version();
     }
 }

@@ -547,6 +547,28 @@ impl LocalFileMessageStore {
     pub fn get_message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
     }
+
+    pub async fn reput_once(&mut self) {
+        if self.reput_message_service.reput_from_offset.is_none() {
+            let start_offset = self
+                .consume_queue_store
+                .get_max_phy_offset_in_consume_queue_global()
+                .max(0);
+            self.reput_message_service.set_reput_from_offset(start_offset);
+        }
+        let Some(message_store) = self.message_store_arc.clone() else {
+            return;
+        };
+        self.reput_message_service
+            .run_once(
+                self.commit_log.clone(),
+                self.message_store_config.clone(),
+                self.dispatcher.clone(),
+                self.notify_message_arrive_in_batch,
+                message_store,
+            )
+            .await;
+    }
 }
 
 fn estimate_in_mem_by_commit_offset(
@@ -2101,6 +2123,32 @@ impl ReputMessageService {
         // Store task handles for graceful shutdown
         self.reader_handle = Some(reader_handle);
         self.dispatcher_handle = Some(dispatcher_handle);
+    }
+
+    pub async fn run_once(
+        &mut self,
+        commit_log: ArcMut<CommitLog>,
+        message_store_config: Arc<MessageStoreConfig>,
+        dispatcher: ArcMut<CommitLogDispatcherDefault>,
+        notify_message_arrive_in_batch: bool,
+        message_store: ArcMut<LocalFileMessageStore>,
+    ) {
+        if self.reput_from_offset.is_none() {
+            self.reput_from_offset = Some(Arc::new(AtomicI64::new(0)));
+        }
+        if self.inner.is_none() {
+            self.inner = Some(ReputMessageServiceInner {
+                reput_from_offset: self.reput_from_offset.clone().unwrap(),
+                commit_log,
+                message_store_config,
+                dispatcher,
+                notify_message_arrive_in_batch,
+                message_store,
+            });
+        }
+        if let Some(inner) = self.inner.as_mut() {
+            inner.do_reput().await;
+        }
     }
 
     pub async fn shutdown(&mut self) {
