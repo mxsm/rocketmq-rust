@@ -536,9 +536,9 @@ impl TimerMessageStore {
 
     pub async fn process_once(&self) -> usize {
         let _guard = self.process_lock.lock().await;
-        let indexed = self.enqueue_from_timer_topic();
+        let indexed = self.enqueue_from_timer_topic(self.enqueue_batch_limit());
         let delivered = if self.should_running_dequeue.load(Ordering::Relaxed) {
-            self.dequeue_due_messages().await
+            self.dequeue_due_messages(self.dequeue_batch_limit()).await
         } else {
             0
         };
@@ -548,7 +548,7 @@ impl TimerMessageStore {
         indexed + delivered
     }
 
-    fn enqueue_from_timer_topic(&self) -> usize {
+    fn enqueue_from_timer_topic(&self, limit: usize) -> usize {
         let Some(message_store) = self.default_message_store.clone() else {
             return 0;
         };
@@ -563,7 +563,7 @@ impl TimerMessageStore {
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
         let mut indexed = 0usize;
 
-        while queue_offset < max_offset {
+        while queue_offset < max_offset && indexed < limit {
             let Some(cq_unit) = consume_queue.get(queue_offset) else {
                 break;
             };
@@ -609,18 +609,26 @@ impl TimerMessageStore {
         indexed
     }
 
-    async fn dequeue_due_messages(&self) -> usize {
+    async fn dequeue_due_messages(&self, limit: usize) -> usize {
         let now_ms = self.floor_time_ms(current_millis() as i64);
         let mut cursor = self.ensure_dequeue_cursor(now_ms);
+        let mut remaining_budget = limit;
         let mut delivered = 0usize;
 
-        while cursor <= now_ms {
+        while cursor <= now_ms && remaining_budget > 0 {
             if let Some(slot) = self.get_timer_wheel_slot(cursor).filter(|slot| slot.num > 0) {
-                delivered += self.deliver_slot(cursor, slot).await;
+                let delivered_now = self.deliver_slot(cursor, slot, remaining_budget).await;
+                delivered += delivered_now;
+                remaining_budget = remaining_budget.saturating_sub(delivered_now);
                 if self
                     .get_timer_wheel_slot(cursor)
                     .is_some_and(|remaining| remaining.num > 0)
                 {
+                    self.curr_read_time_ms.store(cursor, Ordering::Relaxed);
+                    break;
+                }
+                if remaining_budget == 0 {
+                    cursor += self.precision_ms();
                     self.curr_read_time_ms.store(cursor, Ordering::Relaxed);
                     break;
                 }
@@ -656,7 +664,7 @@ impl TimerMessageStore {
         Ok(())
     }
 
-    async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot) -> usize {
+    async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize) -> usize {
         let Some(message_store) = self.default_message_store.clone() else {
             return 0;
         };
@@ -669,7 +677,7 @@ impl TimerMessageStore {
         };
         let mut delivered = 0usize;
 
-        for entry in &entries {
+        for entry in entries.iter().take(limit) {
             let Some(message) =
                 message_store.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
             else {
@@ -837,6 +845,20 @@ impl TimerMessageStore {
     fn timer_wheel_window_ms(&self) -> i64 {
         self.precision_ms() * (TIMER_WHEEL_TTL_DAY as i64 * DAY_SECS as i64)
     }
+
+    fn enqueue_batch_limit(&self) -> usize {
+        self.message_store_config
+            .max_msgs_num_batch
+            .max(1)
+            .saturating_mul(self.message_store_config.timer_put_message_thread_num.max(1))
+    }
+
+    fn dequeue_batch_limit(&self) -> usize {
+        self.message_store_config
+            .max_msgs_num_batch
+            .max(1)
+            .saturating_mul(self.message_store_config.timer_get_message_thread_num.max(1))
+    }
 }
 
 fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
@@ -887,10 +909,31 @@ mod tests {
         })
     }
 
+    fn config_with_root_and_limits(
+        root_dir: &str,
+        max_msgs_num_batch: usize,
+        timer_get_message_thread_num: usize,
+        timer_put_message_thread_num: usize,
+    ) -> Arc<MessageStoreConfig> {
+        Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir.to_owned()),
+            read_uncommitted: true,
+            max_msgs_num_batch,
+            timer_get_message_thread_num,
+            timer_put_message_thread_num,
+            ..MessageStoreConfig::default()
+        })
+    }
+
     fn build_store_with_timer(
         root_dir: &str,
     ) -> (ArcMut<LocalFileMessageStore>, Arc<TimerMessageStore>, CheetahString) {
-        let config = config_with_root(root_dir);
+        build_store_with_timer_and_config(config_with_root(root_dir))
+    }
+
+    fn build_store_with_timer_and_config(
+        config: Arc<MessageStoreConfig>,
+    ) -> (ArcMut<LocalFileMessageStore>, Arc<TimerMessageStore>, CheetahString) {
         let broker_config = Arc::new(BrokerConfig::default());
         let real_topic = CheetahString::from_static_str("phase3_topic");
         let topic_config_table = Arc::new(DashMap::new());
@@ -1184,5 +1227,76 @@ mod tests {
             reloaded_timer_message_store.curr_queue_offset.load(Ordering::Relaxed),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn process_once_limits_enqueue_work_per_tick() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
+        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+
+        assert!(store.mut_from_ref().load().await);
+        let first_put = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
+            .await;
+        assert!(first_put.is_ok());
+        let second_put = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, current_millis() + 61_000))
+            .await;
+        assert!(second_put.is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        let first_tick = timer_message_store.process_once().await;
+        let second_tick = timer_message_store.process_once().await;
+
+        assert_eq!(first_tick, 1);
+        assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 2);
+        assert_eq!(second_tick, 1);
+    }
+
+    #[tokio::test]
+    async fn process_once_limits_delivery_work_per_tick_for_hot_slot() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
+        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+
+        assert!(store.mut_from_ref().load().await);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        let first_put = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await;
+        assert!(first_put.is_ok());
+        let second_put = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await;
+        assert!(second_put.is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 1);
+        assert_eq!(timer_message_store.process_once().await, 1);
+        let hot_slot_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
+        timer_message_store.set_should_running_dequeue(true);
+
+        let first_delivery_tick = timer_message_store.process_once().await;
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(first_delivery_tick, 1);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+        assert_eq!(timer_message_store.get_timer_wheel_slot(hot_slot_time).unwrap().num, 1);
+
+        let second_delivery_tick = timer_message_store.process_once().await;
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(second_delivery_tick, 1);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 2);
+        assert!(timer_message_store
+            .get_timer_wheel_slot(hot_slot_time)
+            .is_none_or(|slot| slot.num == 0));
     }
 }
