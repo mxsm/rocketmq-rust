@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -590,7 +591,9 @@ impl TimerMessageStore {
                     if let Some(real_topic) =
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                     {
-                        self.timer_metrics.add_timing_count(&real_topic, 1);
+                        if !is_delete_timer_message(&message) {
+                            self.timer_metrics.add_timing_count(&real_topic, 1);
+                        }
                     }
                     queue_offset = cq_unit.queue_offset + 1;
                     self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
@@ -675,7 +678,8 @@ impl TimerMessageStore {
                 return 0;
             }
         };
-        let mut delivered = 0usize;
+        let mut loaded_messages = Vec::with_capacity(limit.min(entries.len()));
+        let mut delete_keys = HashSet::new();
 
         for entry in entries.iter().take(limit) {
             let Some(message) =
@@ -687,8 +691,31 @@ impl TimerMessageStore {
                 );
                 break;
             };
+            if let Some(delete_key) = extract_delete_timer_key(&message) {
+                delete_keys.insert(delete_key);
+            }
+            loaded_messages.push((*entry, message));
+        }
+
+        let mut processed = 0usize;
+        for (_entry, message) in loaded_messages {
+            if is_delete_timer_message(&message) {
+                processed += 1;
+                continue;
+            }
+            if let Some(delete_key) = build_delete_key_for_message(&message) {
+                if delete_keys.contains(&delete_key) {
+                    if let Some(real_topic) =
+                        message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                    {
+                        self.timer_metrics.add_timing_count(&real_topic, -1);
+                    }
+                    processed += 1;
+                    continue;
+                }
+            }
             let Some(deliver_message) = self.restore_timer_message(message) else {
-                delivered += 1;
+                processed += 1;
                 continue;
             };
             let delivered_topic = deliver_message.get_topic().clone();
@@ -702,14 +729,14 @@ impl TimerMessageStore {
                 break;
             }
             self.timer_metrics.add_timing_count(&delivered_topic, -1);
-            delivered += 1;
+            processed += 1;
         }
 
-        if let Err(err) = self.rewrite_slot(slot_time_ms, &entries[delivered..]) {
+        if let Err(err) = self.rewrite_slot(slot_time_ms, &entries[processed..]) {
             error!("rewrite timer slot {} after delivery failed: {}", slot_time_ms, err);
             return 0;
         }
-        delivered
+        processed
     }
 
     fn load_slot_entries(&self, slot: Slot) -> std::io::Result<Vec<TimerLogEntry>> {
@@ -799,6 +826,8 @@ impl TimerMessageStore {
                 }
             }
         }
+        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_TOPIC);
+        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
         Some(inner)
     }
@@ -861,10 +890,32 @@ impl TimerMessageStore {
     }
 }
 
+pub fn build_delete_key(real_topic: &str, unique_key: &str) -> CheetahString {
+    CheetahString::from_string(format!("{}_{}", real_topic, unique_key))
+}
+
 fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
     message
         .property(&CheetahString::from_static_str(TIMER_OUT_MS))
         .and_then(|value| value.parse::<i64>().ok())
+}
+
+fn is_delete_timer_message(message: &MessageExt) -> bool {
+    extract_delete_timer_key(message).is_some()
+}
+
+fn extract_delete_timer_key(message: &MessageExt) -> Option<CheetahString> {
+    message.property(&CheetahString::from_static_str(TIMER_DELETE_UNIQUE_KEY))
+}
+
+fn build_delete_key_for_message(message: &MessageExt) -> Option<CheetahString> {
+    let unique_key = message.property(&CheetahString::from_static_str(
+        MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+    ))?;
+    let real_topic = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+        .unwrap_or_else(|| CheetahString::from_string(message.topic().to_string()));
+    Some(build_delete_key(real_topic.as_str(), unique_key.as_str()))
 }
 
 fn read_i64(buffer: &[u8]) -> std::io::Result<i64> {
@@ -958,6 +1009,14 @@ mod tests {
     }
 
     fn build_timer_message(real_topic: &CheetahString, deliver_ms: u64) -> MessageExtBrokerInner {
+        build_timer_message_with_queue_id(real_topic, 0, deliver_ms)
+    }
+
+    fn build_timer_message_with_queue_id(
+        real_topic: &CheetahString,
+        real_queue_id: i32,
+        deliver_ms: u64,
+    ) -> MessageExtBrokerInner {
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(CheetahString::from_static_str(TIMER_TOPIC));
         msg.message_ext_inner.queue_id = 0;
@@ -968,11 +1027,30 @@ mod tests {
         );
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
-            CheetahString::from_static_str("0"),
+            CheetahString::from_string(real_queue_id.to_string()),
         );
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
             CheetahString::from_string(deliver_ms.to_string()),
+        );
+        msg.properties_string = message_properties_to_string(msg.get_properties());
+        msg
+    }
+
+    fn build_delete_timer_message(
+        real_topic: &CheetahString,
+        unique_key: &str,
+        deliver_ms: u64,
+    ) -> MessageExtBrokerInner {
+        let mut msg = build_timer_message_with_queue_id(real_topic, 0, deliver_ms);
+        msg.set_body(Bytes::from_static(b"0"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY),
+            build_delete_key(real_topic.as_str(), unique_key),
+        );
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_string(unique_key.to_owned()),
         );
         msg.properties_string = message_properties_to_string(msg.get_properties());
         msg
@@ -1165,6 +1243,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_once_does_not_redeliver_future_timer_message_before_due_time() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let deliver_ms = current_millis() + 60_000;
+        let put_result = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await;
+        assert!(put_result.is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        let processed = timer_message_store.process_once().await;
+        let slot_time_ms = timer_message_store.ceil_time_ms(deliver_ms as i64);
+
+        assert_eq!(processed, 1);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
+        assert_eq!(timer_message_store.get_timer_wheel_slot(slot_time_ms).unwrap().num, 1);
+    }
+
+    #[tokio::test]
+    async fn process_once_restores_real_queue_and_removes_internal_routing_properties() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        let put_result = store
+            .mut_from_ref()
+            .put_message(build_timer_message_with_queue_id(&real_topic, 3, deliver_ms))
+            .await;
+        assert!(put_result.is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 2);
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 3), 1);
+        let queue = store.find_consume_queue(&real_topic, 3).unwrap();
+        let queue_unit = queue.get(0).unwrap();
+        let delivered = store
+            .look_message_by_offset_with_size(queue_unit.pos, queue_unit.size)
+            .unwrap();
+        assert_eq!(delivered.topic(), &real_topic);
+        assert_eq!(delivered.queue_id(), 3);
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            .is_none());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+            .is_none());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn process_once_delete_tombstone_skips_matching_timer_message_delivery() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        let unique_key = "delete-me";
+        let mut timer_message = build_timer_message(&real_topic, deliver_ms);
+        timer_message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str(unique_key),
+        );
+        timer_message.properties_string = message_properties_to_string(timer_message.get_properties());
+        assert!(store.mut_from_ref().put_message(timer_message).await.is_ok());
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_delete_timer_message(&real_topic, unique_key, deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        let processed = timer_message_store.process_once().await;
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(processed, 4);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
+        let slot_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
+        assert!(timer_message_store
+            .get_timer_wheel_slot(slot_time)
+            .is_none_or(|slot| slot.num == 0));
+    }
+
+    #[tokio::test]
+    async fn process_once_delete_tombstone_only_cancels_matching_unique_key() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        let mut deleted_message = build_timer_message(&real_topic, deliver_ms);
+        deleted_message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str("deleted-key"),
+        );
+        deleted_message.properties_string = message_properties_to_string(deleted_message.get_properties());
+        assert!(store.mut_from_ref().put_message(deleted_message).await.is_ok());
+
+        let mut survivor_message = build_timer_message(&real_topic, deliver_ms);
+        survivor_message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str("survivor-key"),
+        );
+        survivor_message.properties_string = message_properties_to_string(survivor_message.get_properties());
+        assert!(store.mut_from_ref().put_message(survivor_message).await.is_ok());
+
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_delete_timer_message(&real_topic, "deleted-key", deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        let processed = timer_message_store.process_once().await;
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(processed, 6);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
     async fn restart_recovers_indexed_due_timer_message_from_persisted_wheel() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
@@ -1197,6 +1412,43 @@ mod tests {
             1
         );
         assert_eq!(reloaded_store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn restart_allows_duplicate_delivery_when_checkpoint_lags_after_delivery() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        let put_result = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await;
+        assert!(put_result.is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 2);
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+        store.mut_from_ref().shutdown().await;
+
+        let checkpoint = TimerCheckpoint::new(get_timer_check_path(root_dir.as_str())).unwrap();
+        checkpoint.set_last_timer_queue_offset(0);
+        checkpoint.set_master_timer_queue_offset(0);
+        checkpoint.flush().unwrap();
+
+        let (reloaded_store, reloaded_timer_message_store, reloaded_topic) = build_store_with_timer(root_dir.as_str());
+        assert_eq!(reloaded_topic, real_topic);
+        assert!(reloaded_store.mut_from_ref().load().await);
+        reloaded_timer_message_store.set_should_running_dequeue(true);
+
+        let reprocessed = reloaded_timer_message_store.process_once().await;
+        reloaded_store.mut_from_ref().reput_once().await;
+
+        assert_eq!(reprocessed, 2);
+        assert_eq!(reloaded_store.get_max_offset_in_queue(&real_topic, 0), 2);
     }
 
     #[tokio::test]
@@ -1298,5 +1550,26 @@ mod tests {
         assert!(timer_message_store
             .get_timer_wheel_slot(hot_slot_time)
             .is_none_or(|slot| slot.num == 0));
+    }
+
+    #[tokio::test]
+    async fn timer_processor_does_not_touch_non_timer_messages() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(real_topic.clone());
+        msg.message_ext_inner.queue_id = 0;
+        msg.set_body(Bytes::from_static(b"ordinary-body"));
+
+        let put_result = store.mut_from_ref().put_message(msg).await;
+        assert!(put_result.is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 0);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
     }
 }

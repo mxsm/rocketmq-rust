@@ -37,6 +37,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::timer::timer_message_store::build_delete_key;
 use tracing::info;
 use tracing::warn;
 
@@ -236,7 +237,7 @@ where
         handle_timestamp_str: &str,
         handle_message_id: &str,
     ) -> MessageExtBrokerInner {
-        let timer_del_uniqkey = format!("{}_{}", handle_topic, handle_message_id);
+        let timer_del_uniqkey = build_delete_key(handle_topic, handle_message_id);
 
         let body = Bytes::from_static(b"0");
 
@@ -246,7 +247,7 @@ where
         let mut properties = std::collections::HashMap::new();
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY),
-            CheetahString::from_string(timer_del_uniqkey),
+            timer_del_uniqkey,
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),

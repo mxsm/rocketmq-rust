@@ -421,4 +421,124 @@ mod tests {
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
             .is_some());
     }
+
+    #[test]
+    fn transform_timer_message_accepts_timer_delay_ms_and_preserves_real_queue_id() {
+        let timer_message_store = TimerMessageStore::new_empty();
+        let message_store_config = MessageStoreConfig::default();
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("delay_ms_topic"));
+        msg.message_ext_inner.queue_id = 7;
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("1500"),
+        );
+
+        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+
+        assert!(result.is_none());
+        assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
+        assert_eq!(msg.message_ext_inner.queue_id, 0);
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("delay_ms_topic")
+        );
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("7")
+        );
+        assert!(msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+            .is_some());
+    }
+
+    #[test]
+    fn transform_timer_message_accepts_timer_delay_sec_within_max_delay() {
+        let timer_message_store = TimerMessageStore::new_empty();
+        let message_store_config = MessageStoreConfig {
+            timer_max_delay_sec: 10,
+            ..MessageStoreConfig::default()
+        };
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("delay_sec_topic"));
+        msg.message_ext_inner.queue_id = 2;
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC),
+            CheetahString::from_static_str("1"),
+        );
+
+        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+
+        assert!(result.is_none());
+        assert_eq!(msg.topic().as_str(), TIMER_TOPIC);
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("2")
+        );
+        assert!(msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
+            .is_some());
+    }
+
+    #[test]
+    fn transform_timer_message_rejects_delay_ms_beyond_max_delay_boundary() {
+        let timer_message_store = TimerMessageStore::new_empty();
+        let message_store_config = MessageStoreConfig {
+            timer_max_delay_sec: 1,
+            ..MessageStoreConfig::default()
+        };
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("too_far_topic"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("2000"),
+        );
+
+        let result = HookUtils::transform_timer_message(&timer_message_store, &message_store_config, &mut msg);
+
+        assert_eq!(
+            result.unwrap().put_message_status(),
+            PutMessageStatus::WheelTimerMsgIllegal
+        );
+        assert_eq!(msg.topic().as_str(), "too_far_topic");
+    }
+
+    #[test]
+    fn check_if_timer_message_prefers_fixed_delay_and_strips_timer_properties() {
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(CheetahString::from_static_str("fixed_delay_topic"));
+        msg.set_delay_time_level(3);
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("1000"),
+        );
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC),
+            CheetahString::from_static_str("1"),
+        );
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+            CheetahString::from_string((current_millis() + 5_000).to_string()),
+        );
+
+        let is_timer = HookUtils::check_if_timer_message(&mut msg);
+
+        assert!(!is_timer);
+        assert_eq!(msg.delay_time_level(), 3);
+        assert!(msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS))
+            .is_none());
+        assert!(msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC))
+            .is_none());
+        assert!(msg
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
+            .is_none());
+    }
 }
