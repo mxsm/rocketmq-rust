@@ -632,7 +632,13 @@ impl MessageStore for LocalFileMessageStore {
             info!(
                 "message store recover end, and the max phy offset = {}",
                 self.get_max_phy_offset()
-            )
+            );
+        }
+
+        if result {
+            if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+                result &= timer_message_store.load();
+            }
         }
 
         let max_offset = self.get_max_phy_offset();
@@ -664,6 +670,9 @@ impl MessageStore for LocalFileMessageStore {
         self.commit_log.start();
         self.consume_queue_store.start();
         self.store_stats_service.start();
+        if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+            timer_message_store.start();
+        }
 
         if let Some(ha_service) = self.ha_service.as_mut() {
             ha_service.start().await.map_err(|e| {
@@ -727,6 +736,9 @@ impl MessageStore for LocalFileMessageStore {
 
             if self.message_store_config.rocksdb_cq_double_write_enable {
                 // this.rocksDBMessageStore.consumeQueueStore.shutdown();
+            }
+            if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+                timer_message_store.shutdown();
             }
             self.flush_consume_queue_service.shutdown();
             self.allocate_mapped_file_service.shutdown().await;

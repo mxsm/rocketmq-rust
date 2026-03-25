@@ -62,6 +62,33 @@ pub fn get_delay_offset_store_path(root_dir: &str) -> String {
         .into_owned()
 }
 
+pub fn get_timer_check_path(root_dir: &str) -> String {
+    PathBuf::from(root_dir)
+        .join("config")
+        .join("timercheck")
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub fn get_timer_metrics_path(root_dir: &str) -> String {
+    PathBuf::from(root_dir)
+        .join("config")
+        .join("timermetrics")
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub fn get_timer_log_path(root_dir: &str) -> String {
+    PathBuf::from(root_dir).join("timerlog").to_string_lossy().into_owned()
+}
+
+pub fn get_timer_wheel_path(root_dir: &str) -> String {
+    PathBuf::from(root_dir)
+        .join("timerwheel")
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -116,6 +143,33 @@ mod tests {
             PathBuf::from(root_dir)
                 .join("config")
                 .join("delayOffset.json")
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(
+            get_timer_check_path(root_dir),
+            PathBuf::from(root_dir)
+                .join("config")
+                .join("timercheck")
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(
+            get_timer_metrics_path(root_dir),
+            PathBuf::from(root_dir)
+                .join("config")
+                .join("timermetrics")
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(
+            get_timer_log_path(root_dir),
+            PathBuf::from(root_dir).join("timerlog").to_string_lossy().into_owned()
+        );
+        assert_eq!(
+            get_timer_wheel_path(root_dir),
+            PathBuf::from(root_dir)
+                .join("timerwheel")
                 .to_string_lossy()
                 .into_owned()
         );
