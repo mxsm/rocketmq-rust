@@ -75,6 +75,7 @@ pub const MAGIC_ROLL: i32 = 1 << 1;
 pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
 const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
+const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
 
 #[derive(Clone, Copy, Debug)]
 struct TimerLogRecord {
@@ -143,6 +144,7 @@ pub struct TimerMessageStore {
     timer_log: Mutex<Option<TimerLog>>,
     timer_wheel: Mutex<Option<TimerWheel>>,
     should_running_dequeue: AtomicBool,
+    enqueue_suspended: AtomicBool,
     process_lock: AsyncMutex<()>,
     scheduler_shutdown: Notify,
     scheduler_handle: Mutex<Option<JoinHandle<()>>>,
@@ -304,6 +306,7 @@ impl TimerMessageStore {
             timer_log: Mutex::new(None),
             timer_wheel: Mutex::new(None),
             should_running_dequeue: AtomicBool::new(false),
+            enqueue_suspended: AtomicBool::new(false),
             process_lock: AsyncMutex::new(()),
             scheduler_shutdown: Notify::new(),
             scheduler_handle: Mutex::new(None),
@@ -351,9 +354,16 @@ impl TimerMessageStore {
             .unwrap_or_default();
 
         if let Some(timer_checkpoint) = self.timer_checkpoint.lock().as_ref() {
+            let queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
+            let enqueue_suspended = self.enqueue_suspended.load(Ordering::Relaxed);
+            let master_queue_offset = if enqueue_suspended {
+                timer_checkpoint.master_timer_queue_offset()
+            } else {
+                queue_offset
+            };
             timer_checkpoint.set_last_read_time_ms(self.curr_read_time_ms.load(Ordering::Relaxed));
-            timer_checkpoint.set_last_timer_queue_offset(self.curr_queue_offset.load(Ordering::Relaxed));
-            timer_checkpoint.set_master_timer_queue_offset(self.curr_queue_offset.load(Ordering::Relaxed));
+            timer_checkpoint.set_last_timer_queue_offset(queue_offset.min(master_queue_offset));
+            timer_checkpoint.set_master_timer_queue_offset(master_queue_offset);
             timer_checkpoint.set_last_timer_log_flush_pos(timer_log_len as i64);
             if let Err(err) = timer_checkpoint.flush() {
                 error!("flush timer checkpoint failed: {err}");
@@ -374,7 +384,18 @@ impl TimerMessageStore {
     }
 
     pub fn set_should_running_dequeue(&self, should_start: bool) {
-        self.should_running_dequeue.store(should_start, Ordering::Relaxed);
+        let previous = self.should_running_dequeue.swap(should_start, Ordering::Relaxed);
+        if previous == should_start {
+            return;
+        }
+
+        if should_start {
+            self.restore_progress_on_dequeue_resume();
+            self.enqueue_suspended.store(false, Ordering::Relaxed);
+        } else if previous {
+            self.enqueue_suspended.store(true, Ordering::Relaxed);
+            self.sync_last_read_time_ms();
+        }
     }
 
     pub fn append_timer_log(&self, payload: &[u8]) -> std::io::Result<u64> {
@@ -413,6 +434,22 @@ impl TimerMessageStore {
             .lock()
             .as_ref()
             .and_then(|timer_wheel| timer_wheel.get_slot(time_ms))
+    }
+
+    fn restore_progress_on_dequeue_resume(&self) {
+        let timer_checkpoint_guard = self.timer_checkpoint.lock();
+        let Some(timer_checkpoint) = timer_checkpoint_guard.as_ref() else {
+            return;
+        };
+        let master_queue_offset = timer_checkpoint.master_timer_queue_offset().max(0);
+        let restored_queue_offset = self.curr_queue_offset.load(Ordering::Relaxed).min(master_queue_offset);
+        self.curr_queue_offset.store(restored_queue_offset, Ordering::Relaxed);
+
+        let last_read_time_ms = timer_checkpoint.last_read_time_ms();
+        if last_read_time_ms > 0 {
+            self.curr_read_time_ms
+                .store(self.floor_time_ms(last_read_time_ms), Ordering::Relaxed);
+        }
     }
 
     fn recover_and_revise(
@@ -550,6 +587,9 @@ impl TimerMessageStore {
     }
 
     fn enqueue_from_timer_topic(&self, limit: usize) -> usize {
+        if !self.should_running_enqueue() {
+            return 0;
+        }
         let Some(message_store) = self.default_message_store.clone() else {
             return 0;
         };
@@ -560,6 +600,7 @@ impl TimerMessageStore {
 
         let now_ms = self.floor_time_ms(current_millis() as i64);
         let dequeue_cursor = self.ensure_dequeue_cursor(now_ms);
+        let enqueue_reference_time_ms = dequeue_cursor.max(now_ms);
         let max_offset = consume_queue.get_max_offset_in_queue();
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
         let mut indexed = 0usize;
@@ -585,8 +626,13 @@ impl TimerMessageStore {
                 continue;
             };
 
-            let slot_time_ms = self.align_delivery_time_ms(deliver_time_ms, dequeue_cursor);
-            match self.index_timer_message(slot_time_ms, &cq_unit) {
+            let (slot_time_ms, magic) = self.plan_timer_slot(
+                deliver_time_ms,
+                enqueue_reference_time_ms,
+                dequeue_cursor,
+                is_delete_timer_message(&message),
+            );
+            match self.index_timer_message(slot_time_ms, magic, &cq_unit) {
                 Ok(()) => {
                     if let Some(real_topic) =
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
@@ -643,7 +689,7 @@ impl TimerMessageStore {
         delivered
     }
 
-    fn index_timer_message(&self, slot_time_ms: i64, cq_unit: &CqUnit) -> std::io::Result<()> {
+    fn index_timer_message(&self, slot_time_ms: i64, magic: i32, cq_unit: &CqUnit) -> std::io::Result<()> {
         let current_slot = self.get_timer_wheel_slot(slot_time_ms);
         let prev_pos = current_slot
             .filter(|slot| slot.num > 0)
@@ -655,7 +701,7 @@ impl TimerMessageStore {
             size: cq_unit.size,
             queue_offset: cq_unit.queue_offset,
             prev_pos,
-            magic: MAGIC_DEFAULT,
+            magic,
         };
         let record_pos = self.append_timer_log(&record.encode())? as i64;
         let first_pos = current_slot
@@ -663,7 +709,8 @@ impl TimerMessageStore {
             .map(|slot| slot.first_pos)
             .unwrap_or(record_pos);
         let num = current_slot.map(|slot| slot.num + 1).unwrap_or(1);
-        self.put_timer_wheel_slot(slot_time_ms, first_pos, record_pos, num, MAGIC_DEFAULT)?;
+        let slot_magic = current_slot.map(|slot| slot.magic | magic).unwrap_or(magic);
+        self.put_timer_wheel_slot(slot_time_ms, first_pos, record_pos, num, slot_magic)?;
         Ok(())
     }
 
@@ -698,7 +745,32 @@ impl TimerMessageStore {
         }
 
         let mut processed = 0usize;
-        for (_entry, message) in loaded_messages {
+        for (entry, message) in loaded_messages {
+            if need_roll(entry.record.magic) {
+                let now_ms = self.floor_time_ms(current_millis() as i64);
+                if parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > now_ms) {
+                    let rolled_topic =
+                        message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+                    let Some(rolled_message) = self.convert_timer_message(message, true) else {
+                        processed += 1;
+                        continue;
+                    };
+                    let put_result = message_store.clone().mut_from_ref().put_message(rolled_message).await;
+                    if !put_result.is_ok() {
+                        warn!(
+                            "roll timer message for slot {} failed with status {:?}",
+                            slot_time_ms,
+                            put_result.put_message_status()
+                        );
+                        break;
+                    }
+                    if let Some(real_topic) = rolled_topic {
+                        self.timer_metrics.add_timing_count(&real_topic, -1);
+                    }
+                    processed += 1;
+                    continue;
+                }
+            }
             if is_delete_timer_message(&message) {
                 processed += 1;
                 continue;
@@ -714,7 +786,7 @@ impl TimerMessageStore {
                     continue;
                 }
             }
-            let Some(deliver_message) = self.restore_timer_message(message) else {
+            let Some(deliver_message) = self.convert_timer_message(message, false) else {
                 processed += 1;
                 continue;
             };
@@ -762,23 +834,29 @@ impl TimerMessageStore {
         if remaining_entries.is_empty() {
             self.put_timer_wheel_slot(slot_time_ms, 0, 0, 0, 0)
         } else {
+            let slot_magic = remaining_entries
+                .iter()
+                .fold(0, |combined, entry| combined | entry.record.magic);
             self.put_timer_wheel_slot(
                 slot_time_ms,
                 remaining_entries.first().expect("non-empty slice").position,
                 remaining_entries.last().expect("non-empty slice").position,
                 remaining_entries.len() as i32,
-                MAGIC_DEFAULT,
+                slot_magic,
             )
         }
     }
 
-    fn restore_timer_message(&self, message: MessageExt) -> Option<MessageExtBrokerInner> {
+    fn convert_timer_message(&self, message: MessageExt, need_roll: bool) -> Option<MessageExtBrokerInner> {
         let mut inner = MessageExtBrokerInner::default();
         let sys_flag = message.sys_flag();
         let born_timestamp = message.born_timestamp();
         let born_host = message.born_host();
         let store_host = message.store_host();
         let reconsume_times = message.reconsume_times();
+        let store_timestamp = message.store_timestamp();
+        let timer_topic = message.topic().clone();
+        let timer_queue_id = message.queue_id();
         let message_inner = message.message;
         let message_properties = message_inner.properties().as_map().clone();
 
@@ -787,6 +865,30 @@ impl TimerMessageStore {
         }
         inner.set_flag(message_inner.flag());
         MessageAccessor::set_properties(&mut inner, message_properties);
+        if store_timestamp > 0 {
+            MessageAccessor::put_property(
+                &mut inner,
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS),
+                CheetahString::from_string(store_timestamp.to_string()),
+            );
+        }
+        MessageAccessor::put_property(
+            &mut inner,
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS),
+            CheetahString::from_string(current_millis().to_string()),
+        );
+        if need_roll {
+            let next_roll_times = inner
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES))
+                .and_then(|times| times.parse::<i32>().ok())
+                .unwrap_or_default()
+                + 1;
+            MessageAccessor::put_property(
+                &mut inner,
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES),
+                CheetahString::from_string(next_roll_times.to_string()),
+            );
+        }
         let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
         inner.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_filter_type,
@@ -799,46 +901,50 @@ impl TimerMessageStore {
         inner.message_ext_inner.reconsume_times = reconsume_times;
         inner.set_wait_store_msg_ok(false);
 
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELIVER_MS);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELAY_SEC);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELAY_MS);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_OUT_MS);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_ENQUEUE_MS);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DEQUEUE_MS);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_ROLL_TIMES);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DEL_UNIQKEY);
-
-        let Some(topic) = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)) else {
-            warn!("drop timer message because REAL_TOPIC is missing");
-            return None;
-        };
-        inner.set_topic(topic);
-        let queue_id = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
-        if let Some(queue_id) = queue_id {
-            match queue_id.parse::<i32>() {
-                Ok(queue_id) => {
-                    inner.message_ext_inner.queue_id = queue_id;
-                }
-                Err(err) => {
-                    warn!("drop timer message because REAL_QID is invalid: {}", err);
-                    return None;
+        if need_roll {
+            inner.set_topic(timer_topic);
+            inner.message_ext_inner.queue_id = timer_queue_id;
+        } else {
+            let Some(topic) = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC)) else {
+                warn!("drop timer message because REAL_TOPIC is missing");
+                return None;
+            };
+            inner.set_topic(topic);
+            let queue_id = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
+            if let Some(queue_id) = queue_id {
+                match queue_id.parse::<i32>() {
+                    Ok(queue_id) => {
+                        inner.message_ext_inner.queue_id = queue_id;
+                    }
+                    Err(err) => {
+                        warn!("drop timer message because REAL_QID is invalid: {}", err);
+                        return None;
+                    }
                 }
             }
+            MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_TOPIC);
+            MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
         }
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_TOPIC);
-        MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
         Some(inner)
     }
 
     fn ensure_dequeue_cursor(&self, fallback_time_ms: i64) -> i64 {
         let current = self.curr_read_time_ms.load(Ordering::Relaxed);
+        let aligned = self.floor_time_ms(fallback_time_ms);
+        let max_allowed_cursor = aligned.saturating_add(self.precision_ms() * MAX_FUTURE_CURSOR_SKEW_SLOTS);
+        if current > max_allowed_cursor {
+            warn!(
+                "rewind timer read cursor from {} to {} because it is ahead of system time by more than {} slots",
+                current, aligned, MAX_FUTURE_CURSOR_SKEW_SLOTS
+            );
+            self.curr_read_time_ms.store(aligned, Ordering::Relaxed);
+            return aligned;
+        }
         if current > 0 {
             return self.floor_time_ms(current);
         }
 
-        let aligned = self.floor_time_ms(fallback_time_ms);
         match self
             .curr_read_time_ms
             .compare_exchange(0, aligned, Ordering::AcqRel, Ordering::Relaxed)
@@ -851,6 +957,33 @@ impl TimerMessageStore {
 
     fn align_delivery_time_ms(&self, deliver_time_ms: i64, dequeue_cursor: i64) -> i64 {
         self.ceil_time_ms(deliver_time_ms).max(dequeue_cursor)
+    }
+
+    fn plan_timer_slot(
+        &self,
+        deliver_time_ms: i64,
+        reference_time_ms: i64,
+        lower_bound_ms: i64,
+        is_delete: bool,
+    ) -> (i64, i32) {
+        let mut target_time_ms = deliver_time_ms;
+        let mut magic = if is_delete { MAGIC_DELETE } else { MAGIC_DEFAULT };
+        let roll_window_ms = self.timer_roll_window_ms();
+
+        if deliver_time_ms.saturating_sub(reference_time_ms) >= roll_window_ms {
+            magic |= MAGIC_ROLL;
+            let overflow_ms = deliver_time_ms
+                .saturating_sub(reference_time_ms)
+                .saturating_sub(roll_window_ms);
+            let near_boundary_ms = self.timer_roll_window_half_ms();
+            if overflow_ms < self.timer_roll_window_third_ms() {
+                target_time_ms = reference_time_ms.saturating_add(near_boundary_ms);
+            } else {
+                target_time_ms = reference_time_ms.saturating_add(roll_window_ms);
+            }
+        }
+
+        (self.align_delivery_time_ms(target_time_ms, lower_bound_ms), magic)
     }
 
     fn floor_time_ms(&self, time_ms: i64) -> i64 {
@@ -873,6 +1006,42 @@ impl TimerMessageStore {
 
     fn timer_wheel_window_ms(&self) -> i64 {
         self.precision_ms() * (TIMER_WHEEL_TTL_DAY as i64 * DAY_SECS as i64)
+    }
+
+    fn timer_roll_window_slots(&self) -> i64 {
+        let max_slots = (TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize).saturating_sub(TIMER_BLANK_SLOTS as usize);
+        let configured = self.message_store_config.timer_roll_window_slot;
+        if configured < 2 || configured > max_slots {
+            max_slots as i64
+        } else {
+            configured as i64
+        }
+    }
+
+    fn timer_roll_window_ms(&self) -> i64 {
+        self.timer_roll_window_slots().saturating_mul(self.precision_ms())
+    }
+
+    fn timer_roll_window_half_ms(&self) -> i64 {
+        (self.timer_roll_window_slots() / 2).saturating_mul(self.precision_ms())
+    }
+
+    fn timer_roll_window_third_ms(&self) -> i64 {
+        (self.timer_roll_window_slots() / 3).saturating_mul(self.precision_ms())
+    }
+
+    fn should_running_enqueue(&self) -> bool {
+        if !self.enqueue_suspended.load(Ordering::Relaxed) {
+            return true;
+        }
+
+        self.timer_checkpoint
+            .lock()
+            .as_ref()
+            .map(|timer_checkpoint| {
+                self.curr_queue_offset.load(Ordering::Relaxed) < timer_checkpoint.master_timer_queue_offset()
+            })
+            .unwrap_or(false)
     }
 
     fn enqueue_batch_limit(&self) -> usize {
@@ -916,6 +1085,10 @@ fn build_delete_key_for_message(message: &MessageExt) -> Option<CheetahString> {
         .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
         .unwrap_or_else(|| CheetahString::from_string(message.topic().to_string()));
     Some(build_delete_key(real_topic.as_str(), unique_key.as_str()))
+}
+
+fn need_roll(magic: i32) -> bool {
+    (magic & MAGIC_ROLL) != 0
 }
 
 fn read_i64(buffer: &[u8]) -> std::io::Result<i64> {
@@ -972,6 +1145,20 @@ mod tests {
             max_msgs_num_batch,
             timer_get_message_thread_num,
             timer_put_message_thread_num,
+            ..MessageStoreConfig::default()
+        })
+    }
+
+    fn config_with_root_precision_and_roll_window(
+        root_dir: &str,
+        timer_precision_ms: u64,
+        timer_roll_window_slot: usize,
+    ) -> Arc<MessageStoreConfig> {
+        Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir.to_owned()),
+            read_uncommitted: true,
+            timer_precision_ms,
+            timer_roll_window_slot,
             ..MessageStoreConfig::default()
         })
     }
@@ -1239,7 +1426,13 @@ mod tests {
         assert_eq!(delivered.body().unwrap(), Bytes::from_static(b"phase3-body"));
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
-            .is_none());
+            .is_some());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS))
+            .is_some());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_some());
     }
 
     #[tokio::test]
@@ -1302,7 +1495,91 @@ mod tests {
             .is_none());
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
-            .is_none());
+            .is_some());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS))
+            .is_some());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn process_once_pauses_enqueue_after_role_change_when_master_progress_is_caught_up() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let first_deliver_ms = current_millis() + 60_000;
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, first_deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 1);
+        timer_message_store.set_should_running_dequeue(false);
+
+        let second_deliver_ms = current_millis() + 120_000;
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, second_deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        let paused = timer_message_store.process_once().await;
+
+        assert_eq!(paused, 0);
+        assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 1);
+        let first_slot_time = timer_message_store.ceil_time_ms(first_deliver_ms as i64);
+        let second_slot_time = timer_message_store.ceil_time_ms(second_deliver_ms as i64);
+        assert_eq!(
+            timer_message_store.get_timer_wheel_slot(first_slot_time).unwrap().num,
+            1
+        );
+        assert!(timer_message_store.get_timer_wheel_slot(second_slot_time).is_none());
+    }
+
+    #[tokio::test]
+    async fn process_once_resume_after_role_change_processes_pending_due_messages() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        let first_deliver_ms = current_millis().saturating_sub(2_000);
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, first_deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 2);
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+
+        timer_message_store.set_should_running_dequeue(false);
+        let second_deliver_ms = current_millis().saturating_sub(1_000);
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, second_deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 0);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+
+        timer_message_store.set_should_running_dequeue(true);
+        let resumed = timer_message_store.process_once().await;
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(resumed, 2);
+        assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 2);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 2);
     }
 
     #[tokio::test]
@@ -1550,6 +1827,126 @@ mod tests {
         assert!(timer_message_store
             .get_timer_wheel_slot(hot_slot_time)
             .is_none_or(|slot| slot.num == 0));
+    }
+
+    #[tokio::test]
+    async fn process_once_rolls_far_future_timer_message_into_near_window_slot() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 1_000, 4);
+        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+
+        assert!(store.mut_from_ref().load().await);
+        let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
+        let deliver_ms = (now_floor + 20_000) as u64;
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 1);
+
+        let rolled_slot_time = now_floor + 4_000;
+        let original_slot_time = timer_message_store.ceil_time_ms(deliver_ms as i64);
+        let slot = timer_message_store.get_timer_wheel_slot(rolled_slot_time).unwrap();
+        let entries = timer_message_store.load_slot_entries(slot).unwrap();
+
+        assert!(timer_message_store.get_timer_wheel_slot(original_slot_time).is_none());
+        assert_eq!(slot.num, 1);
+        assert_ne!(entries[0].record.magic & MAGIC_ROLL, 0);
+        assert_eq!(entries[0].record.deliver_time_ms, rolled_slot_time);
+    }
+
+    #[tokio::test]
+    async fn process_once_clamps_future_read_cursor_when_clock_moves_backward() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 1_000, 60);
+        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+
+        assert!(store.mut_from_ref().load().await);
+        let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
+        timer_message_store
+            .curr_read_time_ms
+            .store(now_floor + 10_000, Ordering::Relaxed);
+
+        let deliver_ms = (now_floor + 2_000) as u64;
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 1);
+
+        let slot = timer_message_store
+            .get_timer_wheel_slot(timer_message_store.ceil_time_ms(deliver_ms as i64))
+            .unwrap();
+        let entries = timer_message_store.load_slot_entries(slot).unwrap();
+
+        assert_eq!(
+            entries[0].record.deliver_time_ms,
+            timer_message_store.ceil_time_ms(deliver_ms as i64)
+        );
+    }
+
+    #[tokio::test]
+    async fn process_once_rolls_due_message_back_to_timer_topic_with_tracking_properties() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 50, 4);
+        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
+
+        assert!(store.mut_from_ref().load().await);
+        let deliver_ms = current_millis() + 1_000;
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 1);
+
+        timer_message_store.set_should_running_dequeue(true);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let processed = timer_message_store.process_once().await;
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(processed, 1);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
+        assert_eq!(
+            timer_message_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
+            TimerLogRecord::SIZE as u64
+        );
+        assert_eq!(
+            store.get_max_offset_in_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0),
+            2
+        );
+        let timer_queue = store
+            .find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+            .unwrap();
+        let rolled_queue_unit = timer_queue.get(1).unwrap();
+        let rolled_message = store
+            .look_message_by_offset_with_size(rolled_queue_unit.pos, rolled_queue_unit.size)
+            .unwrap();
+        assert_eq!(rolled_message.topic().as_str(), TIMER_TOPIC);
+        assert_eq!(
+            rolled_message
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ROLL_TIMES))
+                .as_ref()
+                .map(CheetahString::as_str),
+            Some("1")
+        );
+        assert!(rolled_message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS))
+            .is_some());
+        assert!(rolled_message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_some());
     }
 
     #[tokio::test]
