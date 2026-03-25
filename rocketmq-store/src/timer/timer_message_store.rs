@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -76,6 +77,7 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
 const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
 const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
+const TPS_WINDOW_MS: i64 = 1_000;
 
 #[derive(Clone, Copy, Debug)]
 struct TimerLogRecord {
@@ -132,6 +134,54 @@ struct RecoveredTimerState {
     queue_offset: i64,
 }
 
+#[derive(Default)]
+struct TpsCounter {
+    state: Mutex<TpsCounterState>,
+}
+
+#[derive(Default)]
+struct TpsCounterState {
+    buckets: VecDeque<(i64, usize)>,
+    total: usize,
+}
+
+impl TpsCounter {
+    fn record(&self, delta: usize) {
+        if delta == 0 {
+            return;
+        }
+        let now_ms = current_millis() as i64;
+        let mut state = self.state.lock();
+        Self::evict_expired(&mut state, now_ms);
+        if state.buckets.back().is_some_and(|(bucket_ms, _)| *bucket_ms == now_ms) {
+            if let Some((_, count)) = state.buckets.back_mut() {
+                *count += delta;
+            }
+            state.total += delta;
+            return;
+        }
+        state.buckets.push_back((now_ms, delta));
+        state.total += delta;
+    }
+
+    fn get_tps(&self) -> f32 {
+        let now_ms = current_millis() as i64;
+        let mut state = self.state.lock();
+        Self::evict_expired(&mut state, now_ms);
+        state.total as f32
+    }
+
+    fn evict_expired(state: &mut TpsCounterState, now_ms: i64) {
+        while let Some((bucket_ms, count)) = state.buckets.front().copied() {
+            if now_ms - bucket_ms < TPS_WINDOW_MS {
+                break;
+            }
+            state.total = state.total.saturating_sub(count);
+            state.buckets.pop_front();
+        }
+    }
+}
+
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
@@ -148,6 +198,8 @@ pub struct TimerMessageStore {
     process_lock: AsyncMutex<()>,
     scheduler_shutdown: Notify,
     scheduler_handle: Mutex<Option<JoinHandle<()>>>,
+    enqueue_tps_counter: TpsCounter,
+    dequeue_tps_counter: TpsCounter,
 }
 
 impl TimerMessageStore {
@@ -274,11 +326,11 @@ impl TimerMessageStore {
     }
 
     pub fn get_enqueue_tps(&self) -> f32 {
-        0.0
+        self.enqueue_tps_counter.get_tps()
     }
 
     pub fn get_dequeue_tps(&self) -> f32 {
-        0.0
+        self.dequeue_tps_counter.get_tps()
     }
 
     pub fn new(default_message_store: Option<ArcMut<LocalFileMessageStore>>) -> Self {
@@ -310,6 +362,8 @@ impl TimerMessageStore {
             process_lock: AsyncMutex::new(()),
             scheduler_shutdown: Notify::new(),
             scheduler_handle: Mutex::new(None),
+            enqueue_tps_counter: TpsCounter::default(),
+            dequeue_tps_counter: TpsCounter::default(),
         }
     }
 
@@ -641,6 +695,7 @@ impl TimerMessageStore {
                             self.timer_metrics.add_timing_count(&real_topic, 1);
                         }
                     }
+                    self.enqueue_tps_counter.record(1);
                     queue_offset = cq_unit.queue_offset + 1;
                     self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
                     indexed += 1;
@@ -767,6 +822,7 @@ impl TimerMessageStore {
                     if let Some(real_topic) = rolled_topic {
                         self.timer_metrics.add_timing_count(&real_topic, -1);
                     }
+                    self.dequeue_tps_counter.record(1);
                     processed += 1;
                     continue;
                 }
@@ -801,6 +857,7 @@ impl TimerMessageStore {
                 break;
             }
             self.timer_metrics.add_timing_count(&delivered_topic, -1);
+            self.dequeue_tps_counter.record(1);
             processed += 1;
         }
 
@@ -1947,6 +2004,43 @@ mod tests {
         assert!(rolled_message
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn process_once_reports_enqueue_tps_after_indexing_timer_messages() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 1);
+        assert!(timer_message_store.get_enqueue_tps() > 0.0);
+    }
+
+    #[tokio::test]
+    async fn process_once_reports_dequeue_tps_after_redelivery() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        timer_message_store.set_should_running_dequeue(true);
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, current_millis().saturating_sub(2_000)))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 2);
+        assert!(timer_message_store.get_dequeue_tps() > 0.0);
     }
 
     #[tokio::test]
