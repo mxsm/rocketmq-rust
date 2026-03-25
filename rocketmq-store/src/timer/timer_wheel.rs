@@ -150,6 +150,21 @@ impl TimerWheel {
         self.get_slot(time_ms).map(|slot| slot.num as i64).unwrap_or_default()
     }
 
+    pub fn revise_slots<F>(&self, mut revise: F) -> std::io::Result<()>
+    where
+        F: FnMut(Slot) -> Slot,
+    {
+        let mut slots = self.slots.lock();
+        if slots.is_empty() {
+            return Err(std::io::Error::other("timer wheel is not loaded"));
+        }
+
+        for slot in slots.iter_mut() {
+            *slot = revise(*slot);
+        }
+        Ok(())
+    }
+
     pub fn get_all_num(&self, time_start_ms: i64) -> i64 {
         let slots = self.slots.lock();
         if slots.is_empty() {
@@ -221,5 +236,19 @@ mod tests {
         assert_eq!(slot.last_pos, 20);
         assert_eq!(slot.num, 1);
         assert_eq!(slot.magic, 2);
+    }
+
+    #[test]
+    fn revise_slots_can_clear_invalid_slot() {
+        let temp_dir = tempdir().unwrap();
+        let timer_wheel = TimerWheel::new(temp_dir.path().join("timerwheel"), 16, 1_000);
+        timer_wheel.load().unwrap();
+        timer_wheel.put_slot(5_000, 10, 20, 1, 2).unwrap();
+
+        timer_wheel
+            .revise_slots(|slot| if slot.time_ms == 5_000 { empty_slot() } else { slot })
+            .unwrap();
+
+        assert!(timer_wheel.get_slot(5_000).is_none());
     }
 }

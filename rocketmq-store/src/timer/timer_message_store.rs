@@ -124,6 +124,12 @@ struct TimerLogEntry {
     record: TimerLogRecord,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RecoveredTimerState {
+    read_time_ms: i64,
+    queue_offset: i64,
+}
+
 pub struct TimerMessageStore {
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
@@ -171,10 +177,18 @@ impl TimerMessageStore {
             return false;
         }
 
+        let recovered_state = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
+            Ok(recovered_state) => recovered_state,
+            Err(err) => {
+                error!("recover timer state failed: {err}");
+                return false;
+            }
+        };
+
         self.curr_read_time_ms
-            .store(timer_checkpoint.last_read_time_ms(), Ordering::Relaxed);
+            .store(recovered_state.read_time_ms, Ordering::Relaxed);
         self.curr_queue_offset
-            .store(timer_checkpoint.last_timer_queue_offset(), Ordering::Relaxed);
+            .store(recovered_state.queue_offset, Ordering::Relaxed);
         *self.timer_checkpoint.lock() = Some(timer_checkpoint);
         *self.timer_log.lock() = Some(timer_log);
         *self.timer_wheel.lock() = Some(timer_wheel);
@@ -398,6 +412,126 @@ impl TimerMessageStore {
             .lock()
             .as_ref()
             .and_then(|timer_wheel| timer_wheel.get_slot(time_ms))
+    }
+
+    fn recover_and_revise(
+        &self,
+        timer_checkpoint: &TimerCheckpoint,
+        timer_log: &TimerLog,
+        timer_wheel: &TimerWheel,
+    ) -> std::io::Result<RecoveredTimerState> {
+        let recovered_log_len = self.recover_timer_log_len(timer_checkpoint, timer_log)?;
+        let recovered_read_time_ms = self.recover_read_time_ms(timer_checkpoint.last_read_time_ms());
+        let recovered_queue_offset = self.recover_queue_offset(timer_checkpoint.last_timer_queue_offset());
+        self.repair_timer_wheel(timer_wheel, recovered_log_len)?;
+        self.persist_recovered_state(
+            timer_checkpoint,
+            timer_log,
+            timer_wheel,
+            recovered_read_time_ms,
+            recovered_queue_offset,
+            recovered_log_len,
+        )?;
+        Ok(RecoveredTimerState {
+            read_time_ms: recovered_read_time_ms,
+            queue_offset: recovered_queue_offset,
+        })
+    }
+
+    fn recover_timer_log_len(&self, timer_checkpoint: &TimerCheckpoint, timer_log: &TimerLog) -> std::io::Result<i64> {
+        let current_len = timer_log.len()? as i64;
+        let checkpoint_len = timer_checkpoint.last_timer_log_flush_pos().clamp(0, current_len);
+        let recovered_len = checkpoint_len - checkpoint_len.rem_euclid(TimerLogRecord::SIZE as i64);
+        let aligned_current_len = current_len - current_len.rem_euclid(TimerLogRecord::SIZE as i64);
+        let target_len = recovered_len.min(aligned_current_len);
+        if target_len != current_len {
+            warn!(
+                "revise timer log from {} to {} based on checkpoint flush position {}",
+                current_len, target_len, checkpoint_len
+            );
+            timer_log.truncate(target_len as u64)?;
+        }
+        Ok(target_len)
+    }
+
+    fn recover_read_time_ms(&self, checkpoint_read_time_ms: i64) -> i64 {
+        let now_floor = self.floor_time_ms(current_millis() as i64);
+        let ttl_floor = now_floor.saturating_sub(self.timer_wheel_window_ms());
+        let base = if checkpoint_read_time_ms <= 0 {
+            now_floor
+        } else {
+            self.floor_time_ms(checkpoint_read_time_ms)
+        };
+        base.max(ttl_floor)
+    }
+
+    fn recover_queue_offset(&self, checkpoint_queue_offset: i64) -> i64 {
+        let Some(message_store) = self.default_message_store.as_ref() else {
+            return checkpoint_queue_offset.max(0);
+        };
+        let consume_queue = message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0);
+        let Some(consume_queue) = consume_queue else {
+            return checkpoint_queue_offset.max(0);
+        };
+        let min_offset = consume_queue.get_min_offset_in_queue();
+        let max_offset = consume_queue.get_max_offset_in_queue();
+        if checkpoint_queue_offset < min_offset {
+            warn!(
+                "revise timer queue offset from {} to consume queue min {}",
+                checkpoint_queue_offset, min_offset
+            );
+            min_offset
+        } else if checkpoint_queue_offset > max_offset {
+            warn!(
+                "revise timer queue offset from {} to consume queue max {}",
+                checkpoint_queue_offset, max_offset
+            );
+            max_offset
+        } else {
+            checkpoint_queue_offset
+        }
+    }
+
+    fn repair_timer_wheel(&self, timer_wheel: &TimerWheel, recovered_log_len: i64) -> std::io::Result<()> {
+        timer_wheel.revise_slots(|slot| {
+            if slot.num <= 0 {
+                return Slot::new_with_num_magic(0, 0, 0, 0, 0);
+            }
+            let invalid = slot.first_pos < 0
+                || slot.last_pos < 0
+                || slot.first_pos >= recovered_log_len
+                || slot.last_pos >= recovered_log_len
+                || slot.first_pos > slot.last_pos
+                || slot.first_pos.rem_euclid(TimerLogRecord::SIZE as i64) != 0
+                || slot.last_pos.rem_euclid(TimerLogRecord::SIZE as i64) != 0;
+            if invalid {
+                warn!(
+                    "clear invalid timer wheel slot time={} first={} last={} num={} against log len {}",
+                    slot.time_ms, slot.first_pos, slot.last_pos, slot.num, recovered_log_len
+                );
+                Slot::new_with_num_magic(0, 0, 0, 0, 0)
+            } else {
+                slot
+            }
+        })
+    }
+
+    fn persist_recovered_state(
+        &self,
+        timer_checkpoint: &TimerCheckpoint,
+        timer_log: &TimerLog,
+        timer_wheel: &TimerWheel,
+        recovered_read_time_ms: i64,
+        recovered_queue_offset: i64,
+        recovered_log_len: i64,
+    ) -> std::io::Result<()> {
+        timer_checkpoint.set_last_read_time_ms(recovered_read_time_ms);
+        timer_checkpoint.set_last_timer_queue_offset(recovered_queue_offset);
+        timer_checkpoint.set_master_timer_queue_offset(recovered_queue_offset);
+        timer_checkpoint.set_last_timer_log_flush_pos(recovered_log_len);
+        timer_log.flush()?;
+        timer_wheel.flush()?;
+        timer_checkpoint.flush()
     }
 
     pub async fn process_once(&self) -> usize {
@@ -699,6 +833,10 @@ impl TimerMessageStore {
     fn precision_ms(&self) -> i64 {
         self.message_store_config.timer_precision_ms.max(1) as i64
     }
+
+    fn timer_wheel_window_ms(&self) -> i64 {
+        self.precision_ms() * (TIMER_WHEEL_TTL_DAY as i64 * DAY_SECS as i64)
+    }
 }
 
 fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
@@ -809,14 +947,17 @@ mod tests {
         assert!(Path::new(get_timer_log_path(root_dir.as_str()).as_str()).exists());
         assert!(Path::new(get_timer_wheel_path(root_dir.as_str()).as_str()).exists());
 
-        timer_message_store.curr_read_time_ms.store(12_345, Ordering::Relaxed);
+        let read_time_ms = timer_message_store.floor_time_ms(current_millis() as i64);
+        timer_message_store
+            .curr_read_time_ms
+            .store(read_time_ms, Ordering::Relaxed);
         timer_message_store.curr_queue_offset.store(9, Ordering::Relaxed);
         timer_message_store.sync_last_read_time_ms();
         timer_message_store.shutdown();
 
         let reloaded_store = TimerMessageStore::new_with_config(None, config);
         assert!(reloaded_store.load());
-        assert_eq!(reloaded_store.curr_read_time_ms.load(Ordering::Relaxed), 12_345);
+        assert_eq!(reloaded_store.curr_read_time_ms.load(Ordering::Relaxed), read_time_ms);
         assert_eq!(reloaded_store.curr_queue_offset.load(Ordering::Relaxed), 9);
     }
 
@@ -830,22 +971,97 @@ mod tests {
         let timer_message_store = TimerMessageStore::new_with_config(None, config.clone());
         assert!(timer_message_store.load());
 
-        let log_offset = timer_message_store.append_timer_log(b"phase2").unwrap();
+        let record = TimerLogRecord {
+            deliver_time_ms,
+            commit_log_offset: 11,
+            size: 12,
+            queue_offset: 13,
+            prev_pos: EMPTY_TIMER_LOG_POS,
+            magic: MAGIC_DEFAULT,
+        };
+        let log_offset = timer_message_store.append_timer_log(&record.encode()).unwrap();
         timer_message_store
-            .put_timer_wheel_slot(
-                deliver_time_ms,
-                log_offset as i64,
-                (log_offset + 5) as i64,
-                1,
-                MAGIC_DEFAULT,
-            )
+            .put_timer_wheel_slot(deliver_time_ms, log_offset as i64, log_offset as i64, 1, MAGIC_DEFAULT)
             .unwrap();
         timer_message_store.shutdown();
 
         let reloaded_store = TimerMessageStore::new_with_config(None, config);
         assert!(reloaded_store.load());
-        assert_eq!(reloaded_store.read_timer_log(log_offset, 6).unwrap(), b"phase2");
+        assert_eq!(
+            reloaded_store.read_timer_log(log_offset, TimerLogRecord::SIZE).unwrap(),
+            record.encode()
+        );
         assert_eq!(reloaded_store.get_timer_wheel_slot(deliver_time_ms).unwrap().num, 1);
+    }
+
+    #[test]
+    fn load_truncates_timer_log_tail_and_clears_invalid_wheel_slot() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root(root_dir.as_str());
+        let valid_time_ms = 10_000;
+        let invalid_time_ms = 20_000;
+
+        let timer_message_store = TimerMessageStore::new_with_config(None, config.clone());
+        assert!(timer_message_store.load());
+        let first_record = TimerLogRecord {
+            deliver_time_ms: valid_time_ms,
+            commit_log_offset: 1,
+            size: 2,
+            queue_offset: 3,
+            prev_pos: EMPTY_TIMER_LOG_POS,
+            magic: MAGIC_DEFAULT,
+        };
+        let second_record = TimerLogRecord {
+            deliver_time_ms: valid_time_ms,
+            commit_log_offset: 4,
+            size: 5,
+            queue_offset: 6,
+            prev_pos: 0,
+            magic: MAGIC_DEFAULT,
+        };
+        let first_offset = timer_message_store.append_timer_log(&first_record.encode()).unwrap();
+        let second_offset = timer_message_store.append_timer_log(&second_record.encode()).unwrap();
+        timer_message_store
+            .put_timer_wheel_slot(
+                valid_time_ms,
+                first_offset as i64,
+                second_offset as i64,
+                2,
+                MAGIC_DEFAULT,
+            )
+            .unwrap();
+        timer_message_store.sync_last_read_time_ms();
+        timer_message_store.shutdown();
+
+        let timer_log = TimerLog::new(get_timer_log_path(root_dir.as_str()), config.mapped_file_size_timer_log);
+        assert!(timer_log.load().unwrap());
+        let tail_offset = timer_log.append(&first_record.encode()).unwrap();
+        let timer_wheel = TimerWheel::new(
+            get_timer_wheel_path(root_dir.as_str()),
+            TIMER_WHEEL_TTL_DAY as usize * DAY_SECS as usize,
+            config.timer_precision_ms,
+        );
+        timer_wheel.load().unwrap();
+        timer_wheel
+            .put_slot(
+                invalid_time_ms,
+                tail_offset as i64,
+                tail_offset as i64,
+                1,
+                MAGIC_DEFAULT,
+            )
+            .unwrap();
+        timer_wheel.flush().unwrap();
+
+        let reloaded_store = TimerMessageStore::new_with_config(None, config);
+        assert!(reloaded_store.load());
+        assert_eq!(
+            reloaded_store.timer_log.lock().as_ref().unwrap().len().unwrap(),
+            (TimerLogRecord::SIZE * 2) as u64
+        );
+        assert_eq!(reloaded_store.get_timer_wheel_slot(valid_time_ms).unwrap().num, 2);
+        assert!(reloaded_store.get_timer_wheel_slot(invalid_time_ms).is_none());
     }
 
     #[tokio::test]
@@ -903,5 +1119,70 @@ mod tests {
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn restart_recovers_indexed_due_timer_message_from_persisted_wheel() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        let deliver_ms = current_millis().saturating_sub(2_000);
+        let put_result = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await;
+        assert!(put_result.is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        assert_eq!(timer_message_store.process_once().await, 1);
+        assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 0);
+        store.mut_from_ref().shutdown().await;
+
+        let (reloaded_store, reloaded_timer_message_store, reloaded_topic) = build_store_with_timer(root_dir.as_str());
+        assert_eq!(reloaded_topic, real_topic);
+        assert!(reloaded_store.mut_from_ref().load().await);
+        reloaded_timer_message_store.set_should_running_dequeue(true);
+
+        let delivered = reloaded_timer_message_store.process_once().await;
+        reloaded_store.mut_from_ref().reput_once().await;
+
+        assert_eq!(delivered, 1);
+        assert_eq!(
+            reloaded_timer_message_store.curr_queue_offset.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(reloaded_store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn load_revises_checkpoint_queue_offset_to_timer_queue_max() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        let deliver_ms = current_millis() + 60_000;
+        let put_result = store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_ms))
+            .await;
+        assert!(put_result.is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 1);
+        store.mut_from_ref().shutdown().await;
+
+        let checkpoint = TimerCheckpoint::new(get_timer_check_path(root_dir.as_str())).unwrap();
+        checkpoint.set_last_timer_queue_offset(99);
+        checkpoint.set_master_timer_queue_offset(99);
+        checkpoint.flush().unwrap();
+
+        let (reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer(root_dir.as_str());
+        assert!(reloaded_store.mut_from_ref().load().await);
+        assert_eq!(
+            reloaded_timer_message_store.curr_queue_offset.load(Ordering::Relaxed),
+            1
+        );
     }
 }

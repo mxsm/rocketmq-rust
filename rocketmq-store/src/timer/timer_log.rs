@@ -86,6 +86,21 @@ impl TimerLog {
         Ok(self.len()? == 0)
     }
 
+    pub fn truncate(&self, length: u64) -> std::io::Result<()> {
+        let _guard = self.io_lock.lock();
+        ensure_dir_ok(self.dir_path.to_string_lossy().as_ref());
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(self.active_file_path())?;
+        file.set_len(length)?;
+        file.sync_data()?;
+        self.next_offset.store(length, Ordering::Release);
+        Ok(())
+    }
+
     pub fn flush(&self) -> std::io::Result<()> {
         let _guard = self.io_lock.lock();
         if !self.active_file_path().exists() {
@@ -139,5 +154,21 @@ mod tests {
         assert_eq!(offset, 0);
         assert_eq!(reloaded.read_at(0, 9).unwrap(), b"timer-log");
         assert_eq!(reloaded.len().unwrap(), 9);
+    }
+
+    #[test]
+    fn truncate_discards_unflushed_tail() {
+        let temp_dir = tempdir().unwrap();
+        let timer_log = TimerLog::new(temp_dir.path().join("timerlog"), 1024);
+        assert!(timer_log.load().unwrap());
+
+        timer_log.append(b"first").unwrap();
+        timer_log.append(b"tail").unwrap();
+        timer_log.truncate(5).unwrap();
+
+        let reloaded = TimerLog::new(temp_dir.path().join("timerlog"), 1024);
+        assert!(reloaded.load().unwrap());
+        assert_eq!(reloaded.len().unwrap(), 5);
+        assert_eq!(reloaded.read_at(0, 5).unwrap(), b"first");
     }
 }
