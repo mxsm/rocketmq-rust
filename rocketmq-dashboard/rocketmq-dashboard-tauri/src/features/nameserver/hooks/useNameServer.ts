@@ -3,7 +3,10 @@ import { NameServerService } from '../../../services/nameserver.service';
 import type {
     NameServerConfigSnapshot,
     NameServerHomePageInfo,
+    NameServerStatusItem,
 } from '../types/nameserver.types';
+
+const NAMESERVER_REFRESH_INTERVAL_MS = 5_000;
 
 const toErrorMessage = (error: unknown) => {
     if (error instanceof Error) {
@@ -15,6 +18,19 @@ const toErrorMessage = (error: unknown) => {
     }
 
     return 'NameServer operation failed';
+};
+
+const buildServerStatuses = (
+    snapshot: NameServerConfigSnapshot,
+    previousServers: NameServerStatusItem[] = [],
+): NameServerStatusItem[] => {
+    const previousAliveByAddress = new Map(previousServers.map((server) => [server.address, server.isAlive]));
+
+    return snapshot.namesrvAddrList.map((address) => ({
+        address,
+        isCurrent: snapshot.currentNamesrv === address,
+        isAlive: previousAliveByAddress.get(address) ?? false,
+    }));
 };
 
 export const useNameServer = () => {
@@ -40,26 +56,32 @@ export const useNameServer = () => {
     useEffect(() => {
         let isMounted = true;
 
-        loadHomePage()
-            .then((homePage) => {
-                if (isMounted) {
-                    setData(homePage);
-                }
-            })
-            .catch((error) => {
+        const loadInitialState = async () => {
+            try {
+                await loadHomePage();
+            } catch (error) {
                 console.error('Failed to load NameServer home page', error);
                 if (isMounted) {
                     setLoadError(toErrorMessage(error));
                 }
-            })
-            .finally(() => {
+            } finally {
                 if (isMounted) {
                     setIsLoading(false);
                 }
+            }
+        };
+
+        void loadInitialState();
+
+        const intervalId = window.setInterval(() => {
+            void loadHomePage().catch((error) => {
+                console.error('Failed to refresh NameServer home page', error);
             });
+        }, NAMESERVER_REFRESH_INTERVAL_MS);
 
         return () => {
             isMounted = false;
+            window.clearInterval(intervalId);
         };
     }, []);
 
@@ -116,12 +138,13 @@ export const useNameServer = () => {
     };
 
     const applySnapshot = (snapshot: NameServerConfigSnapshot) => {
-        setData({
+        setData((previous) => ({
             currentNamesrv: snapshot.currentNamesrv,
             namesrvAddrList: snapshot.namesrvAddrList,
             useVIPChannel: snapshot.useVIPChannel,
             useTLS: snapshot.useTLS,
-        });
+            servers: buildServerStatuses(snapshot, previous?.servers),
+        }));
     };
 
     const updateVipChannel = async (enabled: boolean) => {

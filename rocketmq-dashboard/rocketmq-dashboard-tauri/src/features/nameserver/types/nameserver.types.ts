@@ -5,7 +5,15 @@ export interface NameServerConfigSnapshot {
     useTLS: boolean;
 }
 
-export interface NameServerHomePageInfo extends NameServerConfigSnapshot {}
+export interface NameServerStatusItem {
+    address: string;
+    isCurrent: boolean;
+    isAlive: boolean;
+}
+
+export interface NameServerHomePageInfo extends NameServerConfigSnapshot {
+    servers: NameServerStatusItem[];
+}
 
 export interface NameServerMutationResult {
     message: string;

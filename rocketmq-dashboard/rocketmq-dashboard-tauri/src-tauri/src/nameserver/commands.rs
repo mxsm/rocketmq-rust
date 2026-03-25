@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::nameserver::NameServerManager;
-use rocketmq_dashboard_common::NameServerHomePageInfo;
+use crate::nameserver::types::NameServerHomePageView;
 use rocketmq_dashboard_common::NameServerMutationResult;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_name_server_home_page(
+pub async fn get_name_server_home_page(
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerHomePageInfo, String> {
-    nameserver_manager.home_page_info().map_err(|error| {
+) -> Result<NameServerHomePageView, String> {
+    nameserver_manager.home_page_info().await.map_err(|error| {
         log::error!("Failed to load NameServer home page: {}", error);
         error.to_string()
     })

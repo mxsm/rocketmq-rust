@@ -8,6 +8,70 @@ import { Button } from '../components/ui/LegacyButton';
 import { Input } from '../components/ui/LegacyInput';
 import { Toggle } from '../components/ui/LegacyToggle';
 
+const NAMESERVER_TABLE_GRID_STYLE: React.CSSProperties = {
+    gridTemplateColumns: 'minmax(0, 1fr) 176px 240px 176px',
+};
+const HEARTBEAT_WAVE_PATHS = [
+    'M4 20 C10 20, 12 9, 18 9 S26 28, 33 20 S42 8, 50 15 S58 28, 66 20 S76 10, 84 16 S94 20, 108 20',
+    'M4 20 C10 20, 12 13, 18 13 S26 24, 33 20 S42 12, 50 17 S58 24, 66 20 S76 13, 84 17 S94 20, 108 20',
+    'M4 20 C10 20, 12 7, 18 7 S26 31, 33 20 S42 6, 50 14 S58 31, 66 20 S76 8, 84 15 S94 20, 108 20',
+];
+const OFFLINE_WAVE_PATH = 'M4 20 L108 20';
+
+const NameServerHeartbeatWave = ({ isAlive }: { isAlive: boolean }) => (
+    <div
+        className={`relative flex h-12 w-36 items-center justify-center overflow-hidden rounded-full px-4 ${
+            isAlive
+                ? 'bg-emerald-50/90 ring-1 ring-emerald-100 dark:bg-emerald-950/30 dark:ring-emerald-900/40'
+                : 'bg-gray-100/90 ring-1 ring-gray-200 dark:bg-gray-800/70 dark:ring-gray-700/70'
+        }`}
+    >
+        <div
+            className={`absolute inset-x-4 h-px ${
+                isAlive ? 'bg-emerald-200/80 dark:bg-emerald-800/50' : 'bg-gray-300 dark:bg-gray-600'
+            }`}
+        />
+        <svg viewBox="0 0 112 40" className="relative z-10 h-9 w-full overflow-visible">
+            <motion.path
+                d={isAlive ? HEARTBEAT_WAVE_PATHS[0] : OFFLINE_WAVE_PATH}
+                fill="none"
+                stroke={isAlive ? 'rgba(16, 185, 129, 0.95)' : 'rgba(107, 114, 128, 0.9)'}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                animate={
+                    isAlive
+                        ? {
+                              d: HEARTBEAT_WAVE_PATHS,
+                              opacity: [0.75, 1, 0.82, 1],
+                              pathLength: [0.92, 1, 0.95, 1],
+                          }
+                        : {
+                              opacity: [0.45, 0.7, 0.45],
+                          }
+                }
+                transition={{
+                    duration: isAlive ? 1.6 : 2.4,
+                    repeat: Infinity,
+                    ease: 'easeInOut',
+                }}
+            />
+            {isAlive ? (
+                <motion.circle
+                    cx="104"
+                    cy="20"
+                    r="2.6"
+                    fill="rgba(16, 185, 129, 1)"
+                    animate={{ opacity: [0.45, 1, 0.45], scale: [0.9, 1.15, 0.9] }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                />
+            ) : (
+                <circle cx="104" cy="20" r="2.2" fill="rgba(107, 114, 128, 0.8)" />
+            )}
+        </svg>
+    </div>
+);
+
 export const NameServerView = () => {
     const {
         data,
@@ -26,6 +90,11 @@ export const NameServerView = () => {
 
     const nameServers = data?.namesrvAddrList ?? [];
     const currentNameServer = data?.currentNamesrv ?? null;
+    const servers = data?.servers ?? nameServers.map((address) => ({
+        address,
+        isCurrent: address === currentNameServer,
+        isAlive: false,
+    }));
     const isBusy = pendingAction !== null;
 
     const handleAsyncAction = async (action: () => Promise<string | undefined>) => {
@@ -86,10 +155,14 @@ export const NameServerView = () => {
 
                     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900 shadow-sm">
                         <div className="min-w-full">
-                            <div className="bg-gray-100 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-800 px-6 py-3 flex items-center text-xs font-medium text-gray-900 dark:text-gray-200 uppercase tracking-wider">
-                                <div className="flex-1">Address</div>
-                                <div className="w-32 text-center">Status</div>
-                                <div className="w-32 text-right">Actions</div>
+                            <div
+                                className="grid items-center gap-x-10 bg-gray-100 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-800 px-10 py-4 text-[11px] font-medium text-gray-900 dark:text-gray-200 uppercase tracking-[0.18em]"
+                                style={NAMESERVER_TABLE_GRID_STYLE}
+                            >
+                                <div className="min-w-0 whitespace-nowrap">Address</div>
+                                <div className="text-center whitespace-nowrap">Status</div>
+                                <div className="text-center whitespace-nowrap">Pulse</div>
+                                <div className="text-right whitespace-nowrap">Actions</div>
                             </div>
 
                             {isLoading && !data ? (
@@ -112,8 +185,8 @@ export const NameServerView = () => {
                                     }}
                                 >
                                     <AnimatePresence mode="popLayout">
-                                        {nameServers.map((address) => {
-                                            const isCurrent = address === currentNameServer;
+                                        {servers.map((server) => {
+                                            const { address, isCurrent, isAlive } = server;
                                             const isSwitching = pendingAction === `switch:${address}`;
                                             const isDeleting = pendingAction === `delete:${address}`;
 
@@ -128,9 +201,10 @@ export const NameServerView = () => {
                                                     exit={{ opacity: 0, height: 0, marginBottom: 0, transition: { duration: 0.2 } }}
                                                     whileHover={{ scale: 1.002 }}
                                                     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                                                    className={`flex items-center px-6 py-4 transition-colors relative group hover:bg-gray-50 dark:hover:bg-gray-800/50 ${
+                                                    className={`grid items-center gap-x-10 px-10 py-5 transition-colors relative group hover:bg-gray-50 dark:hover:bg-gray-800/50 ${
                                                         isCurrent ? 'bg-gray-100 dark:bg-gray-800' : 'bg-white dark:bg-gray-900'
                                                     }`}
+                                                    style={NAMESERVER_TABLE_GRID_STYLE}
                                                 >
                                                     {isCurrent && (
                                                         <motion.div
@@ -139,18 +213,18 @@ export const NameServerView = () => {
                                                         />
                                                     )}
 
-                                                    <div className="flex-1 font-mono text-sm text-gray-700 dark:text-gray-300 flex items-center">
+                                                    <div className="flex-1 min-w-0 font-mono text-sm text-gray-700 dark:text-gray-300 flex items-center">
                                                         <Server
-                                                            className={`w-4 h-4 mr-3 ${
+                                                            className={`w-4 h-4 mr-3 shrink-0 ${
                                                                 isCurrent ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'
                                                             }`}
                                                         />
-                                                        {address}
+                                                        <span className="truncate">{address}</span>
                                                     </div>
 
-                                                    <div className="w-32 flex justify-center">
+                                                    <div className="flex justify-center px-2">
                                                         {isCurrent ? (
-                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 border border-green-200 dark:border-green-800 shadow-sm">
+                                                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 border border-green-200 dark:border-green-800 shadow-sm">
                                                                 <motion.span
                                                                     animate={{ scale: [1, 1.2, 1], opacity: [1, 0.5, 1] }}
                                                                     transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
@@ -159,13 +233,17 @@ export const NameServerView = () => {
                                                                 Active
                                                             </span>
                                                         ) : (
-                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
+                                                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
                                                                 Standby
                                                             </span>
                                                         )}
                                                     </div>
 
-                                                    <div className="w-32 flex justify-end items-center space-x-2">
+                                                    <div className="flex justify-center px-2">
+                                                        <NameServerHeartbeatWave isAlive={isAlive} />
+                                                    </div>
+
+                                                    <div className="flex justify-end items-center space-x-3 px-2">
                                                         {!isCurrent && (
                                                             <motion.button
                                                                 whileHover={{ scale: 1.05 }}
