@@ -132,6 +132,7 @@ use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatch
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
@@ -3324,6 +3325,25 @@ impl MQClientAPIImpl {
             }
         }
         Ok(Some(config_map))
+    }
+
+    pub async fn probe_name_server(&self, name_server: &CheetahString, timeout_millis: Duration) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetNamesrvConfig,
+            GetNamesrvConfigRequestHeader::for_probe(),
+        );
+        let response = self
+            .remoting_client
+            .invoke_request(Some(name_server), request, timeout_millis.as_millis() as u64)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     pub async fn get_controller_metadata(

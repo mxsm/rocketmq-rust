@@ -459,6 +459,8 @@ pub trait MQAdminExt: Send {
         name_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>;
 
+    async fn probe_name_server(&self, name_server: CheetahString) -> rocketmq_error::RocketMQResult<()>;
+
     async fn query_consume_queue(
         &self,
         broker_addr: CheetahString,

@@ -1565,6 +1565,15 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .unwrap_or_default())
     }
 
+    async fn probe_name_server(&self, name_server: CheetahString) -> rocketmq_error::RocketMQResult<()> {
+        self.client_instance
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+            .get_mq_client_api_impl()
+            .probe_name_server(&name_server, self.timeout_millis)
+            .await
+    }
+
     async fn resume_check_half_message(
         &self,
         topic: CheetahString,

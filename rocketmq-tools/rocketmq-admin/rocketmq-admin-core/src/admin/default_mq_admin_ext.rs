@@ -775,6 +775,10 @@ impl MQAdminExt for DefaultMQAdminExt {
         self.default_mqadmin_ext_impl.get_name_server_config(name_servers).await
     }
 
+    async fn probe_name_server(&self, name_server: CheetahString) -> rocketmq_error::RocketMQResult<()> {
+        self.default_mqadmin_ext_impl.probe_name_server(name_server).await
+    }
+
     async fn resume_check_half_message(
         &self,
         topic: CheetahString,

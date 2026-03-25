@@ -54,7 +54,9 @@ impl NameServerProbe for DefaultNameServerProbe {
                 Duration::from_millis(NAMESERVER_PROBE_TIMEOUT_MILLIS),
             );
             admin.client_config_mut().set_namesrv_addr(CheetahString::from(address));
-            admin.client_config_mut().set_vip_channel_enabled(snapshot.use_vip_channel);
+            admin
+                .client_config_mut()
+                .set_vip_channel_enabled(snapshot.use_vip_channel);
             admin.client_config_mut().set_use_tls(snapshot.use_tls);
 
             let started = match admin.start().await {
@@ -70,7 +72,7 @@ impl NameServerProbe for DefaultNameServerProbe {
             }
 
             let probe_result = admin
-                .get_name_server_config(vec![CheetahString::from(address)])
+                .probe_name_server(CheetahString::from(address))
                 .await
                 .map(|_| true)
                 .unwrap_or_else(|error| {
@@ -179,14 +181,14 @@ mod tests {
     use crate::nameserver::db::SqliteNameServerStore;
     use crate::nameserver::runtime::NameServerRuntimeState;
     use crate::nameserver::types::NameServerHomePageView;
-    use rocketmq_dashboard_common::NameServerConfigStore;
     use rocketmq_dashboard_common::NameServerConfigSnapshot;
+    use rocketmq_dashboard_common::NameServerConfigStore;
     use std::collections::HashMap;
     use std::env;
-    use std::future::Future;
     use std::fs;
-    use std::pin::Pin;
+    use std::future::Future;
     use std::path::PathBuf;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::Mutex;
     use tokio::runtime::Builder;
@@ -339,10 +341,7 @@ mod tests {
                 .iter()
                 .map(|server| (server.address.as_str(), server.is_current, server.is_alive))
                 .collect::<Vec<_>>(),
-            vec![
-                ("127.0.0.1:9876", true, true),
-                ("127.0.0.2:9876", false, false),
-            ]
+            vec![("127.0.0.1:9876", true, true), ("127.0.0.2:9876", false, false),]
         );
     }
 

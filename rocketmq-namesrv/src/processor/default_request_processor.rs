@@ -30,6 +30,7 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
@@ -581,16 +582,14 @@ impl DefaultRequestProcessor {
         )
     }
 
-    fn get_config(&mut self, _request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    fn get_config(&mut self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        if is_probe_only_namesrv_config_request(request) {
+            return Ok(create_namesrv_config_success_response(None));
+        }
+
         let config = self.name_server_runtime_inner.name_server_config();
         let result = match config.get_all_configs_format_string() {
-            Ok(content) => {
-                let response = RemotingCommand::create_response_command_with_code_remark(
-                    RemotingSysResponseCode::Success,
-                    CheetahString::empty(),
-                );
-                response.set_body(content.into_bytes())
-            }
+            Ok(content) => create_namesrv_config_success_response(Some(content.into_bytes())),
             Err(e) => RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 format!("UnsupportedEncodingException {e}"),
@@ -684,8 +683,36 @@ fn validate_blacklist_config_exist(
     false
 }
 
+fn is_probe_only_namesrv_config_request(request: &RemotingCommand) -> bool {
+    let Some(_) = request.ext_fields() else {
+        return false;
+    };
+
+    request
+        .decode_command_custom_header_fast::<GetNamesrvConfigRequestHeader>()
+        .map(|header| header.probe_only.unwrap_or(false))
+        .unwrap_or_else(|error| {
+            warn!("Failed to decode GetNamesrvConfigRequestHeader: {:?}", error);
+            false
+        })
+}
+
+fn create_namesrv_config_success_response(body: Option<Vec<u8>>) -> RemotingCommand {
+    let response = RemotingCommand::create_response_command_with_code_remark(
+        RemotingSysResponseCode::Success,
+        CheetahString::empty(),
+    );
+
+    match body {
+        Some(body) => response.set_body(body),
+        None => response,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 
     use super::*;
@@ -813,5 +840,33 @@ mod tests {
         };
         let result = check_sum_crc32(&request, &request_header);
         assert!(result);
+    }
+
+    #[test]
+    fn get_namesrv_config_defaults_to_full_response_without_probe_header() {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+        assert!(!is_probe_only_namesrv_config_request(&request));
+
+        let response = create_namesrv_config_success_response(Some(b"name=value".to_vec()));
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(
+            response.body().map(|body| body.as_ref().to_vec()),
+            Some(b"name=value".to_vec())
+        );
+    }
+
+    #[test]
+    fn get_namesrv_config_probe_only_request_skips_body() {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetNamesrvConfig,
+            GetNamesrvConfigRequestHeader::for_probe(),
+        );
+        request.make_custom_header_to_net();
+
+        assert!(is_probe_only_namesrv_config_request(&request));
+
+        let response = create_namesrv_config_success_response(None);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert!(response.body().is_none());
     }
 }
