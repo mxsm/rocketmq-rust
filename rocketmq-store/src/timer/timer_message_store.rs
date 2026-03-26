@@ -1696,7 +1696,10 @@ mod tests {
         let snapshot = TimerCheckpointSnapshot::new(12_000, 34, 56, 78, data_version.clone());
 
         assert!(timer_message_store.sync_checkpoint_from_master(&snapshot).unwrap());
-        assert_eq!(timer_message_store.curr_read_time_ms.load(Ordering::Relaxed), local_read_time);
+        assert_eq!(
+            timer_message_store.curr_read_time_ms.load(Ordering::Relaxed),
+            local_read_time
+        );
 
         let checkpoint_guard = timer_message_store.timer_checkpoint.lock();
         let checkpoint = checkpoint_guard.as_ref().expect("checkpoint should exist");
@@ -1738,8 +1741,17 @@ mod tests {
         let expected_slot_time = timer_message_store.ceil_time_ms(deliver_time_ms as i64);
 
         assert_eq!(indexed, 1);
-        assert_eq!(timer_message_store.curr_read_time_ms.load(Ordering::Relaxed), local_read_time);
-        assert_eq!(timer_message_store.get_timer_wheel_slot(expected_slot_time).unwrap().num, 1);
+        assert_eq!(
+            timer_message_store.curr_read_time_ms.load(Ordering::Relaxed),
+            local_read_time
+        );
+        assert_eq!(
+            timer_message_store
+                .get_timer_wheel_slot(expected_slot_time)
+                .unwrap()
+                .num,
+            1
+        );
         assert!(timer_message_store.get_timer_wheel_slot(master_read_time_ms).is_none());
     }
 
