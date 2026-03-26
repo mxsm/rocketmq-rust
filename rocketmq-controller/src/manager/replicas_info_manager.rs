@@ -679,6 +679,21 @@ impl ReplicasInfoManager {
         result
     }
 
+    /// Get all broker IDs that belong to a broker set.
+    pub fn broker_ids(&self, broker_name: &str) -> HashSet<u64> {
+        self.replica_info_table
+            .get(broker_name)
+            .map(|broker_replica_info| broker_replica_info.get_all_broker())
+            .unwrap_or_default()
+    }
+
+    /// Get the cluster name for a broker set.
+    pub fn cluster_name(&self, broker_name: &str) -> Option<String> {
+        self.replica_info_table
+            .get(broker_name)
+            .map(|broker_replica_info| broker_replica_info.cluster_name().to_string())
+    }
+
     /// Clean broker data
     pub fn clean_broker_data(
         &self,

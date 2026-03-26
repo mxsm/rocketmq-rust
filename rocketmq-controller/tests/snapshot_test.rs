@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Snapshot functionality tests for OpenRaft implementation
+//! Snapshot functionality tests for the OpenRaft controller state machine.
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
+use openraft::RaftSnapshotBuilder;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::openraft::StateMachine;
@@ -23,18 +25,18 @@ use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::Node;
 use rocketmq_rust::ArcMut;
 
-#[tokio::test]
-async fn test_snapshot_creation() {
-    // Create a test configuration
-    let config = ArcMut::new(
+fn test_config(port: u16) -> ArcMut<ControllerConfig> {
+    ArcMut::new(
         ControllerConfig::default()
-            .with_node_info(1, "127.0.0.1:39876".parse().unwrap())
+            .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid socket addr"))
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),
-    );
+    )
+}
 
-    // Create and initialize node
-    let node = RaftNodeManager::new(config).await.unwrap();
+#[tokio::test]
+async fn test_snapshot_creation() {
+    let node = RaftNodeManager::new(test_config(39876)).await.unwrap();
 
     let mut nodes = BTreeMap::new();
     nodes.insert(
@@ -46,66 +48,75 @@ async fn test_snapshot_creation() {
     );
 
     node.initialize_cluster(nodes).await.unwrap();
-
-    // Wait for leader election
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Write some data
-    let request = ControllerRequest::RegisterBroker {
+    node.client_write(ControllerRequest::ApplyBrokerId {
         cluster_name: "test-cluster".to_string(),
-        broker_addr: "127.0.0.1:10911".to_string(),
         broker_name: "broker-a".to_string(),
-        broker_id: 0,
-        epoch: 0,
-        max_offset: 0,
-        election_priority: 0,
-    };
+        broker_address: "127.0.0.1:10911".to_string(),
+        applied_broker_id: 1,
+        register_check_code: "check-code".to_string(),
+    })
+    .await
+    .unwrap();
 
-    node.client_write(request).await.unwrap();
+    node.client_write(ControllerRequest::RegisterBroker {
+        cluster_name: "test-cluster".to_string(),
+        broker_name: "broker-a".to_string(),
+        broker_address: "127.0.0.1:10911".to_string(),
+        broker_id: 1,
+        alive_broker_ids: HashSet::from([1]),
+    })
+    .await
+    .unwrap();
 
-    // Trigger snapshot (would normally happen automatically)
-    // For now just verify state machine has the data
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    let next_broker_id = node
+        .store()
+        .state_machine
+        .replicas_info_manager()
+        .get_next_broker_id("test-cluster", "broker-a")
+        .response()
+        .and_then(|header| header.next_broker_id)
+        .expect("next broker id");
+    assert_eq!(next_broker_id, 2);
 }
 
 #[tokio::test]
 async fn test_state_machine_snapshot() {
-    use openraft::RaftSnapshotBuilder;
+    let mut state_machine = StateMachine::new(test_config(49876));
 
-    let mut sm = StateMachine::new();
-
-    // Build a snapshot
-    let snapshot_result = sm.build_snapshot().await;
+    let snapshot_result = state_machine.build_snapshot().await;
     assert!(snapshot_result.is_ok(), "Failed to build snapshot");
 
     let snapshot = snapshot_result.unwrap();
-
-    // Verify snapshot metadata
     assert!(!snapshot.snapshot.get_ref().is_empty(), "Snapshot should contain data");
-    println!("Snapshot size: {} bytes", snapshot.snapshot.get_ref().len());
-    println!("Snapshot ID: {}", snapshot.meta.snapshot_id);
 }
 
 #[tokio::test]
 async fn test_snapshot_install() {
     use openraft::storage::RaftStateMachine;
-    use openraft::RaftSnapshotBuilder;
 
-    // Create first state machine with some data
-    let mut sm1 = StateMachine::new();
+    let mut source = StateMachine::new(test_config(59876));
+    let replicas_info_manager = source.replicas_info_manager();
+    let apply_result =
+        replicas_info_manager.apply_broker_id("test-cluster", "broker-a", "127.0.0.1:10911", 1, "check-code");
+    for event in apply_result.events() {
+        replicas_info_manager.apply_event(event.as_ref());
+    }
 
-    // Add some mock data via internal method would go here
-    // For now we just verify the install mechanism works
+    let snapshot = source.build_snapshot().await.unwrap();
 
-    // Build snapshot from sm1
-    let snapshot = sm1.build_snapshot().await.unwrap();
-
-    // Create second state machine
-    let mut sm2 = StateMachine::new();
-
-    // Install snapshot into sm2
-    let result = sm2.install_snapshot(&snapshot.meta, snapshot.snapshot).await;
+    let mut target = StateMachine::new(test_config(60876));
+    let result = target.install_snapshot(&snapshot.meta, snapshot.snapshot).await;
     assert!(result.is_ok(), "Failed to install snapshot");
 
-    println!("Successfully installed snapshot");
+    let next_broker_id = target
+        .replicas_info_manager()
+        .get_next_broker_id("test-cluster", "broker-a")
+        .response()
+        .and_then(|header| header.next_broker_id)
+        .expect("next broker id");
+    assert_eq!(next_broker_id, 2);
 }

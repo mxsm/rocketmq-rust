@@ -197,14 +197,12 @@ async fn test_cluster_client_write() {
     );
 
     // Write data through the leader
-    let request = ControllerRequest::RegisterBroker {
+    let request = ControllerRequest::ApplyBrokerId {
         cluster_name: "test-cluster".to_string(),
-        broker_addr: "127.0.0.1:10911".to_string(),
         broker_name: "broker-a".to_string(),
-        broker_id: 0,
-        epoch: 0,
-        max_offset: 0,
-        election_priority: 0,
+        broker_address: "127.0.0.1:10911".to_string(),
+        applied_broker_id: 1,
+        register_check_code: "broker-a-check-code".to_string(),
     };
 
     // If there are learner nodes, write will timeout because they can't form quorum
@@ -285,14 +283,12 @@ async fn test_cluster_follower_redirect() {
     println!("Testing write to follower (node {})", follower_id);
 
     // Try to write through a follower
-    let request = ControllerRequest::RegisterBroker {
+    let request = ControllerRequest::ApplyBrokerId {
         cluster_name: "test-cluster".to_string(),
-        broker_addr: "127.0.0.1:10912".to_string(),
         broker_name: "broker-b".to_string(),
-        broker_id: 1,
-        epoch: 0,
-        max_offset: 0,
-        election_priority: 0,
+        broker_address: "127.0.0.1:10912".to_string(),
+        applied_broker_id: 2,
+        register_check_code: "broker-b-check-code".to_string(),
     };
 
     let result = follower_node.client_write(request).await;
@@ -343,14 +339,12 @@ async fn test_five_node_cluster() {
     let (_leader_id, leader_node) = leader.unwrap();
 
     for i in 0..5 {
-        let request = ControllerRequest::RegisterBroker {
+        let request = ControllerRequest::ApplyBrokerId {
             cluster_name: "test-cluster".to_string(),
-            broker_addr: format!("127.0.0.1:{}", 10911 + i),
             broker_name: format!("broker-{}", i),
-            broker_id: i,
-            epoch: 0,
-            max_offset: 0,
-            election_priority: 0,
+            broker_address: format!("127.0.0.1:{}", 10911 + i),
+            applied_broker_id: i + 1,
+            register_check_code: format!("broker-{}-check-code", i),
         };
 
         // Add timeout for each write operation

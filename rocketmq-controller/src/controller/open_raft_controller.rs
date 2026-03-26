@@ -20,10 +20,13 @@
 //! - Thread-safe state management
 //! - gRPC server lifecycle management
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::Controller;
 use crate::event::controller_result::ControllerResult as EventControllerResult;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
@@ -31,7 +34,8 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::RaftNodeManager;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
-use crate::DefaultElectPolicy;
+use crate::typ::BrokerLiveInfoSnapshot;
+use crate::typ::ControllerRequest;
 use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
@@ -72,8 +76,6 @@ pub struct OpenRaftController {
     /// Shutdown signal sender for gRPC server
     shutdown_tx: Option<oneshot::Sender<()>>,
 
-    replica_info_manager: Arc<ReplicasInfoManager>,
-
     heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
@@ -89,13 +91,11 @@ impl OpenRaftController {
         config: ArcMut<ControllerConfig>,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
     ) -> Self {
-        let replica_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
         Self {
             config,
             node: None,
             handle: None,
             shutdown_tx: None,
-            replica_info_manager,
             heartbeat_manager,
             lifecycle_listeners: Arc::new(RwLock::new(Vec::new())),
             scheduling: Arc::new(AtomicBool::new(false)),
@@ -116,6 +116,13 @@ impl OpenRaftController {
         Some(RemotingCommand::create_response_command_with_code_remark(
             ResponseCode::ControllerNotLeader,
             "The controller is not in leader state",
+        ))
+    }
+
+    fn not_started_response(&self) -> Option<RemotingCommand> {
+        Some(RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::SystemError,
+            "The controller raft node is not started",
         ))
     }
 
@@ -149,10 +156,64 @@ impl OpenRaftController {
         response
     }
 
-    fn apply_events<T>(&self, result: &EventControllerResult<T>) {
-        for event in result.events() {
-            self.replica_info_manager.apply_event(event.as_ref());
+    fn replicas_info_manager(&self) -> Option<Arc<ReplicasInfoManager>> {
+        self.node
+            .as_ref()
+            .map(|node| node.store().state_machine.replicas_info_manager())
+    }
+
+    fn snapshot_alive_broker_ids(&self, cluster_name: &str, broker_name: &str) -> HashSet<u64> {
+        self.replicas_info_manager()
+            .map(|manager| {
+                manager
+                    .broker_ids(broker_name)
+                    .into_iter()
+                    .filter(|broker_id| {
+                        self.heartbeat_manager
+                            .is_broker_active(cluster_name, broker_name, *broker_id as i64)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn snapshot_live_broker_infos(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        alive_broker_ids: &HashSet<u64>,
+    ) -> HashMap<u64, BrokerLiveInfoSnapshot> {
+        alive_broker_ids
+            .iter()
+            .filter_map(|broker_id| {
+                self.heartbeat_manager
+                    .get_broker_live_info(cluster_name, broker_name, *broker_id as i64)
+                    .map(|live_info| {
+                        (
+                            *broker_id,
+                            BrokerLiveInfoSnapshot {
+                                broker_id: *broker_id,
+                                epoch: live_info.epoch(),
+                                max_offset: live_info.max_offset(),
+                                election_priority: live_info.election_priority(),
+                            },
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    async fn write_request(&self, request: ControllerRequest) -> RocketMQResult<Option<RemotingCommand>> {
+        if !self.is_current_leader() {
+            return Ok(self.not_leader_response());
         }
+
+        let Some(node) = &self.node else {
+            return Ok(self.not_started_response());
+        };
+
+        let response = node.client_write(request).await?;
+        Ok(Some(response.data.into_remoting_command()))
     }
 }
 
@@ -247,42 +308,36 @@ impl Controller for OpenRaftController {
         &self,
         request: &RegisterBrokerToControllerRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        if !self.is_current_leader() {
-            return Ok(self.not_leader_response());
-        }
-
         let cluster_name = request.cluster_name.clone().unwrap_or_default();
         let broker_name = request.broker_name.clone().unwrap_or_default();
         let broker_address = request.broker_address.clone().unwrap_or_default();
         let broker_id = request.broker_id.unwrap_or_default() as u64;
+        let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), broker_name.as_str());
 
-        let result = self.replica_info_manager.register_broker(
-            cluster_name.as_str(),
-            broker_name.as_str(),
-            broker_address.as_str(),
+        self.write_request(ControllerRequest::RegisterBroker {
+            cluster_name: cluster_name.to_string(),
+            broker_name: broker_name.to_string(),
+            broker_address: broker_address.to_string(),
             broker_id,
-            self.heartbeat_manager.as_ref(),
-        );
-        self.apply_events(&result);
-
-        Ok(Some(self.command_from_result(result)))
+            alive_broker_ids,
+        })
+        .await
     }
 
     async fn get_next_broker_id(
         &self,
         request: &GetNextBrokerIdRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        let result = self
-            .replica_info_manager
-            .get_next_broker_id(request.cluster_name.as_str(), request.broker_name.as_str());
+        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+            return Ok(self.not_started_response());
+        };
+
+        let result =
+            replicas_info_manager.get_next_broker_id(request.cluster_name.as_str(), request.broker_name.as_str());
         Ok(Some(self.command_from_result(result)))
     }
 
     async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        if !self.is_current_leader() {
-            return Ok(self.not_leader_response());
-        }
-
         if request.applied_broker_id < 0 {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::ControllerBrokerIdInvalid,
@@ -293,54 +348,59 @@ impl Controller for OpenRaftController {
             )));
         }
 
-        let result = self.replica_info_manager.apply_broker_id(
-            request.cluster_name.as_str(),
-            request.broker_name.as_str(),
-            request.register_check_code.split(';').next().unwrap_or_default(),
-            request.applied_broker_id as u64,
-            request.register_check_code.as_str(),
-        );
-        self.apply_events(&result);
-
-        Ok(Some(self.command_from_result(result)))
+        self.write_request(ControllerRequest::ApplyBrokerId {
+            cluster_name: request.cluster_name.to_string(),
+            broker_name: request.broker_name.to_string(),
+            broker_address: request
+                .register_check_code
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+            applied_broker_id: request.applied_broker_id as u64,
+            register_check_code: request.register_check_code.to_string(),
+        })
+        .await
     }
 
     async fn clean_broker_data(
         &self,
         request: &CleanBrokerDataRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        if !self.is_current_leader() {
-            return Ok(self.not_leader_response());
-        }
-
         let cluster_name = request.cluster_name.clone().unwrap_or_default();
-        let result = self.replica_info_manager.clean_broker_data(
-            cluster_name.as_str(),
-            request.broker_name.as_str(),
-            request.broker_controller_ids_to_clean.as_ref().map(|s| s.as_str()),
-            request.clean_living_broker,
-            self.heartbeat_manager.as_ref(),
-        );
-        self.apply_events(&result);
+        let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), request.broker_name.as_str());
 
-        Ok(Some(self.command_from_result_without_header(result)))
+        self.write_request(ControllerRequest::CleanBrokerData {
+            cluster_name: cluster_name.to_string(),
+            broker_name: request.broker_name.to_string(),
+            broker_controller_ids_to_clean: request
+                .broker_controller_ids_to_clean
+                .as_ref()
+                .map(|ids| ids.to_string()),
+            clean_living_broker: request.clean_living_broker,
+            alive_broker_ids,
+        })
+        .await
     }
 
     async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        if !self.is_current_leader() {
-            return Ok(self.not_leader_response());
-        }
-
-        let elect_policy = DefaultElectPolicy::default_instance();
-        let result = self.replica_info_manager.elect_master(
+        let alive_broker_ids =
+            self.snapshot_alive_broker_ids(request.cluster_name.as_str(), request.broker_name.as_str());
+        let live_broker_infos = self.snapshot_live_broker_infos(
+            request.cluster_name.as_str(),
             request.broker_name.as_str(),
-            (request.broker_id >= 0).then_some(request.broker_id as u64),
-            request.designate_elect,
-            &elect_policy,
+            &alive_broker_ids,
         );
-        self.apply_events(&result);
 
-        Ok(Some(self.command_from_result(result)))
+        self.write_request(ControllerRequest::ElectMaster {
+            cluster_name: request.cluster_name.to_string(),
+            broker_name: request.broker_name.to_string(),
+            broker_id: (request.broker_id >= 0).then_some(request.broker_id as u64),
+            designate_elect: request.designate_elect,
+            alive_broker_ids,
+            live_broker_infos,
+        })
+        .await
     }
 
     async fn alter_sync_state_set(
@@ -348,29 +408,37 @@ impl Controller for OpenRaftController {
         request: &AlterSyncStateSetRequestHeader,
         sync_state_set: SyncStateSet,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        if !self.is_current_leader() {
-            return Ok(self.not_leader_response());
-        }
+        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+            return Ok(self.not_started_response());
+        };
 
+        let cluster_name = replicas_info_manager
+            .cluster_name(request.broker_name.as_str())
+            .unwrap_or_default();
         let new_sync_state_set = sync_state_set
             .get_sync_state_set()
             .map(|state_set| state_set.iter().copied().map(|id| id as u64).collect())
             .unwrap_or_default();
-        let result = self.replica_info_manager.alter_sync_state_set(
-            request.broker_name.as_str(),
-            request.master_broker_id as u64,
-            request.master_epoch,
-            new_sync_state_set,
-            sync_state_set.get_sync_state_set_epoch(),
-            self.heartbeat_manager.as_ref(),
-        );
-        self.apply_events(&result);
+        let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), request.broker_name.as_str());
 
-        Ok(Some(self.command_from_result(result)))
+        self.write_request(ControllerRequest::AlterSyncStateSet {
+            cluster_name,
+            broker_name: request.broker_name.to_string(),
+            master_broker_id: request.master_broker_id as u64,
+            master_epoch: request.master_epoch,
+            new_sync_state_set,
+            sync_state_set_epoch: sync_state_set.get_sync_state_set_epoch(),
+            alive_broker_ids,
+        })
+        .await
     }
 
     async fn get_replica_info(&self, request: &GetReplicaInfoRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        let result = self.replica_info_manager.get_replica_info(&request.broker_name);
+        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+            return Ok(self.not_started_response());
+        };
+
+        let result = replicas_info_manager.get_replica_info(&request.broker_name);
         Ok(Some(self.command_from_result(result)))
     }
 
@@ -423,10 +491,12 @@ impl Controller for OpenRaftController {
     }
 
     async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
+        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+            return Ok(self.not_started_response());
+        };
+
         let broker_names_str: Vec<String> = broker_names.iter().map(|s| s.to_string()).collect();
-        let result = self
-            .replica_info_manager
-            .get_sync_state_data(&broker_names_str, self.heartbeat_manager.as_ref());
+        let result = replicas_info_manager.get_sync_state_data(&broker_names_str, self.heartbeat_manager.as_ref());
 
         Ok(Some(self.command_from_result_without_header(result)))
     }

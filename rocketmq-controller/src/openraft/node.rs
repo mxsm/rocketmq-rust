@@ -56,7 +56,7 @@ impl RaftNodeManager {
         let node_id = config.node_id;
 
         // Create storage
-        let store = Arc::new(Store::new());
+        let store = Arc::new(Store::new(config.clone()));
 
         // Create network factory
         let network = NetworkFactory::new();

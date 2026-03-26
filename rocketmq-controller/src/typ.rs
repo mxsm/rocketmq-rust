@@ -12,19 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! OpenRaft type definitions for RocketMQ Controller
-//!
-//! This module defines the core types used by OpenRaft for the controller implementation.
+//! OpenRaft type definitions for RocketMQ Controller.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use bytes::Bytes;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protobuf;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader;
+use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
+use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
-/// Node ID type - represents a unique identifier for a controller node
+/// Node ID type - represents a unique identifier for a controller node.
 pub type NodeId = u64;
 
-/// Node information containing the node ID and RPC address
+/// Node information containing the node ID and RPC address.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Node {
     pub node_id: NodeId,
@@ -49,102 +57,140 @@ impl From<Node> for protobuf::Node {
     }
 }
 
-/// Controller request types - operations that need to be replicated via Raft
+/// Serializable subset of heartbeat state needed for master election.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BrokerLiveInfoSnapshot {
+    pub broker_id: u64,
+    pub epoch: i32,
+    pub max_offset: i64,
+    pub election_priority: Option<i32>,
+}
+
+/// Controller write requests that must be replicated through OpenRaft.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ControllerRequest {
-    /// Register a broker with the controller
-    RegisterBroker {
-        broker_name: String,
-        broker_addr: String,
-        broker_id: u64,
-        cluster_name: String,
-        epoch: i32,
-        max_offset: i64,
-        election_priority: i64,
-    },
-    /// Update broker heartbeat
-    BrokerHeartbeat {
-        broker_name: String,
-        broker_addr: String,
-        broker_id: u64,
-        epoch: i32,
-        max_offset: i64,
-        confirm_offset: i64,
-        heartbeat_timeout_millis: i64,
-    },
-    /// Update controller configuration
-    UpdateConfig { key: String, value: String },
-    /// Create or update topic metadata
-    UpdateTopic {
-        topic_name: String,
-        read_queue_nums: i32,
-        write_queue_nums: i32,
-        perm: i32,
-    },
-    /// Apply for a specific broker ID
     ApplyBrokerId {
         cluster_name: String,
         broker_name: String,
-        broker_addr: String,
+        broker_address: String,
         applied_broker_id: u64,
         register_check_code: String,
+    },
+    RegisterBroker {
+        cluster_name: String,
+        broker_name: String,
+        broker_address: String,
+        broker_id: u64,
+        alive_broker_ids: HashSet<u64>,
+    },
+    AlterSyncStateSet {
+        cluster_name: String,
+        broker_name: String,
+        master_broker_id: u64,
+        master_epoch: i32,
+        new_sync_state_set: HashSet<u64>,
+        sync_state_set_epoch: i32,
+        alive_broker_ids: HashSet<u64>,
+    },
+    ElectMaster {
+        cluster_name: String,
+        broker_name: String,
+        broker_id: Option<u64>,
+        designate_elect: bool,
+        alive_broker_ids: HashSet<u64>,
+        live_broker_infos: HashMap<u64, BrokerLiveInfoSnapshot>,
+    },
+    CleanBrokerData {
+        cluster_name: String,
+        broker_name: String,
+        broker_controller_ids_to_clean: Option<String>,
+        clean_living_broker: bool,
+        alive_broker_ids: HashSet<u64>,
     },
 }
 
 impl std::fmt::Display for ControllerRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RegisterBroker { broker_name, .. } => {
-                write!(f, "RegisterBroker({})", broker_name)
-            }
-            Self::BrokerHeartbeat { broker_name, .. } => {
-                write!(f, "BrokerHeartbeat({})", broker_name)
-            }
-            Self::UpdateConfig { key, .. } => write!(f, "UpdateConfig({})", key),
-            Self::UpdateTopic { topic_name, .. } => write!(f, "UpdateTopic({})", topic_name),
             Self::ApplyBrokerId {
                 broker_name,
                 applied_broker_id,
                 ..
             } => write!(f, "ApplyBrokerId({}, id={})", broker_name, applied_broker_id),
+            Self::RegisterBroker {
+                broker_name, broker_id, ..
+            } => write!(f, "RegisterBroker({}, id={})", broker_name, broker_id),
+            Self::AlterSyncStateSet { broker_name, .. } => write!(f, "AlterSyncStateSet({})", broker_name),
+            Self::ElectMaster {
+                broker_name, broker_id, ..
+            } => write!(f, "ElectMaster({}, broker_id={:?})", broker_name, broker_id),
+            Self::CleanBrokerData { broker_name, .. } => write!(f, "CleanBrokerData({})", broker_name),
         }
     }
 }
 
-/// Controller response types
+/// Serializable response header variants produced by the controller state machine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ControllerResponse {
-    /// Response for broker registration
-    RegisterBroker {
-        success: bool,
-        error: Option<String>,
-        master_addr: Option<String>,
-        master_epoch: Option<i32>,
-        sync_state_set_epoch: Option<i32>,
-    },
-    /// Response for broker heartbeat
-    BrokerHeartbeat {
-        success: bool,
-        error: Option<String>,
-        is_master: bool,
-        master_addr: Option<String>,
-        master_epoch: Option<i32>,
-        sync_state_set_epoch: Option<i32>,
-    },
-    /// Response for broker ID application
-    ApplyBrokerId {
-        success: bool,
-        error: Option<String>,
-        cluster_name: String,
-        broker_name: String,
-    },
-    /// Generic success response
-    Success,
-    /// Generic error response
-    Error(String),
+pub enum ControllerResponseHeader {
+    ApplyBrokerId(ApplyBrokerIdResponseHeader),
+    RegisterBroker(RegisterBrokerToControllerResponseHeader),
+    AlterSyncStateSet(AlterSyncStateSetResponseHeader),
+    ElectMaster(ElectMasterResponseHeader),
 }
 
-// Declare OpenRaft types for RocketMQ Controller
+/// Serializable response returned by the replicated state machine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControllerResponse {
+    pub response_code: i32,
+    pub remark: Option<String>,
+    pub header: Option<ControllerResponseHeader>,
+    pub body: Option<Vec<u8>>,
+}
+
+impl ControllerResponse {
+    pub fn success() -> Self {
+        Self {
+            response_code: ResponseCode::Success.into(),
+            remark: None,
+            header: None,
+            body: None,
+        }
+    }
+
+    pub fn new(
+        response_code: i32,
+        remark: Option<String>,
+        header: Option<ControllerResponseHeader>,
+        body: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            response_code,
+            remark,
+            header,
+            body,
+        }
+    }
+
+    pub fn into_remoting_command(self) -> RemotingCommand {
+        let mut command = RemotingCommand::create_response_command().set_code(self.response_code);
+        if let Some(remark) = self.remark {
+            command = command.set_remark(remark);
+        }
+        if let Some(header) = self.header {
+            command = match header {
+                ControllerResponseHeader::ApplyBrokerId(header) => command.set_command_custom_header(header),
+                ControllerResponseHeader::RegisterBroker(header) => command.set_command_custom_header(header),
+                ControllerResponseHeader::AlterSyncStateSet(header) => command.set_command_custom_header(header),
+                ControllerResponseHeader::ElectMaster(header) => command.set_command_custom_header(header),
+            };
+        }
+        if let Some(body) = self.body {
+            command = command.set_body(Bytes::from(body));
+        }
+        command
+    }
+}
+
 openraft::declare_raft_types!(
     pub TypeConfig:
         D = ControllerRequest,
@@ -153,44 +199,17 @@ openraft::declare_raft_types!(
         SnapshotData = std::io::Cursor<Vec<u8>>,
 );
 
-/// Type alias for the Raft instance
 pub type Raft = openraft::Raft<TypeConfig>;
-
-/// Type alias for Raft configuration
 pub type RaftConfig = openraft::Config;
-
-/// Type alias for log ID (using TypeConfig)
 pub type LogId = openraft::LogId<TypeConfig>;
-
-/// Type alias for log entry
 pub type LogEntry = openraft::Entry<TypeConfig>;
-
-/// Type alias for committed log entry
 pub type CommittedLogEntry = openraft::entry::Entry<TypeConfig>;
-
-/// Type alias for vote (using TypeConfig)
 pub type Vote = openraft::Vote<TypeConfig>;
-
-/// Type alias for Raft metrics
 pub type RaftMetrics = openraft::metrics::RaftMetrics<TypeConfig>;
-
-/// Type alias for client write response
 pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<TypeConfig>;
-
-/// Type alias for append entries request
 pub type AppendEntriesRequest = openraft::raft::AppendEntriesRequest<TypeConfig>;
-
-/// Type alias for append entries response
 pub type AppendEntriesResponse = openraft::raft::AppendEntriesResponse<TypeConfig>;
-
-/// Type alias for vote request
 pub type VoteRequest = openraft::raft::VoteRequest<TypeConfig>;
-
-/// Type alias for vote response
 pub type VoteResponse = openraft::raft::VoteResponse<TypeConfig>;
-
-/// Type alias for install snapshot request
 pub type InstallSnapshotRequest = openraft::raft::InstallSnapshotRequest<TypeConfig>;
-
-/// Type alias for install snapshot response
 pub type InstallSnapshotResponse = openraft::raft::InstallSnapshotResponse<TypeConfig>;

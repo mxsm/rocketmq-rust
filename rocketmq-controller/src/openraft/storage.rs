@@ -17,6 +17,10 @@
 //! This module provides the storage implementation for OpenRaft,
 //! including log storage and state machine.
 
+use rocketmq_rust::ArcMut;
+
+use crate::config::ControllerConfig;
+
 use super::log_store::LogStore;
 use super::state_machine::StateMachine;
 
@@ -32,16 +36,10 @@ pub struct Store {
 
 impl Store {
     /// Create a new store
-    pub fn new() -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         Self {
             log_store: LogStore::new(),
-            state_machine: StateMachine::new(),
+            state_machine: StateMachine::new(config),
         }
-    }
-}
-
-impl Default for Store {
-    fn default() -> Self {
-        Self::new()
     }
 }
