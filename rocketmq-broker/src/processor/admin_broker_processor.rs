@@ -216,8 +216,16 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_all_topic_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::GetTimerCheckPoint => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::GetTimerMetrics => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetTimerCheckPoint => {
+                self.broker_config_request_handler
+                    .get_timer_check_point(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetTimerMetrics => {
+                self.broker_config_request_handler
+                    .get_timer_metrics(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateBrokerConfig => {
                 self.broker_config_request_handler
                     .update_broker_config(channel, ctx, request_code, request)

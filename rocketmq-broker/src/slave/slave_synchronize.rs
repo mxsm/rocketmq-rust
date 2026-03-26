@@ -89,7 +89,46 @@ where
     }
 
     pub async fn sync_timer_check_point(&self) {
-        error!("SlaveSynchronize::sync_timer_check_point is not implemented yet");
+        let (flag, master_addr) = self.check_master_addr();
+        if !flag {
+            return;
+        }
+
+        if let Some(master_addr) = master_addr {
+            let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
+                return;
+            };
+            if timer_message_store.is_should_running_dequeue() {
+                return;
+            }
+
+            match self
+                .broker_runtime_inner
+                .broker_outer_api()
+                .get_timer_check_point(&master_addr)
+                .await
+            {
+                Ok(Some(checkpoint_snapshot)) => {
+                    match timer_message_store.sync_checkpoint_from_master(&checkpoint_snapshot) {
+                        Ok(true) => {
+                            info!("Update slave timer checkpoint from master, {}", master_addr);
+                        }
+                        Ok(false) => {
+                            warn!("Local timer checkpoint is not initialized, {}", master_addr);
+                        }
+                        Err(e) => {
+                            error!("Persist synced timer checkpoint error, {}: {:?}", master_addr, e);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    warn!("GetTimerCheckPoint return null, {}", master_addr);
+                }
+                Err(e) => {
+                    error!("SyncTimerCheckPoint Exception, {}: {:?}", master_addr, e);
+                }
+            }
+        }
     }
 
     async fn sync_topic_config(&self) {
@@ -326,6 +365,36 @@ where
     }
 
     async fn sync_timer_metrics(&self) {
-        error!("SlaveSynchronize::sync_timer_metrics is not implemented yet");
+        let (flag, master_addr) = self.check_master_addr();
+        if !flag {
+            return;
+        }
+
+        if let Some(master_addr) = master_addr {
+            let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
+                return;
+            };
+
+            match self
+                .broker_runtime_inner
+                .broker_outer_api()
+                .get_timer_metrics(&master_addr)
+                .await
+            {
+                Ok(Some(metrics_wrapper)) => {
+                    if timer_message_store.timer_metrics.data_version() != *metrics_wrapper.data_version() {
+                        timer_message_store.timer_metrics.apply_wrapper(metrics_wrapper);
+                        timer_message_store.timer_metrics.persist();
+                    }
+                    info!("Update slave timer metrics from master, {}", master_addr);
+                }
+                Ok(None) => {
+                    warn!("GetTimerMetrics return null, {}", master_addr);
+                }
+                Err(e) => {
+                    error!("SyncTimerMetrics Exception, {}: {:?}", master_addr, e);
+                }
+            }
+        }
     }
 }

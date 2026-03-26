@@ -18,6 +18,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -94,6 +95,58 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let key_value_table = KVTable { table: runtime_info };
         response.set_body_mut_ref(serde_json::to_string(&key_value_table).unwrap());
         Ok(Some(response))
+    }
+
+    pub async fn get_timer_metrics(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        Ok(Some(self.build_timer_metrics_response()))
+    }
+
+    pub async fn get_timer_check_point(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        Ok(Some(self.build_timer_checkpoint_response()))
+    }
+
+    fn build_timer_metrics_response(&self) -> RemotingCommand {
+        let mut response =
+            RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, "Unknown");
+        let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
+            response.set_remark_mut(CheetahString::from_static_str("The timer message store is null"));
+            return response;
+        };
+
+        response.set_body_mut_ref(timer_message_store.timer_metrics_payload());
+        response.set_code_mut(ResponseCode::Success);
+        response.set_remark_option_mut(None::<CheetahString>);
+        response
+    }
+
+    fn build_timer_checkpoint_response(&self) -> RemotingCommand {
+        let mut response =
+            RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, "Unknown");
+        let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() else {
+            response.set_remark_mut(CheetahString::from_static_str("The timer message store is null"));
+            return response;
+        };
+        let Some(checkpoint_body) = timer_message_store.timer_checkpoint_payload() else {
+            response.set_remark_mut(CheetahString::from_static_str("The checkpoint is null"));
+            return response;
+        };
+
+        response.set_body_mut_ref(checkpoint_body);
+        response.set_code_mut(ResponseCode::Success);
+        response.set_remark_option_mut(None::<CheetahString>);
+        response
     }
 
     fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {
@@ -282,5 +335,73 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
     fn is_special_service_running(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::fs;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
+    use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+    use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
+
+    use crate::broker_runtime::BrokerRuntime;
+
+    use super::BrokerConfigRequestHandler;
+
+    #[tokio::test]
+    async fn build_timer_metrics_response_returns_encoded_timer_metrics() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+
+        let timer_message_store = TimerMessageStore::new_empty();
+        timer_message_store
+            .timer_metrics
+            .add_timing_count(&CheetahString::from_static_str("TimerTopicA"), 2);
+        runtime.inner_for_test().set_timer_message_store(timer_message_store);
+
+        let handler = BrokerConfigRequestHandler::new(runtime.inner_for_test().clone());
+        let response = handler.build_timer_metrics_response();
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = response.body().expect("timer metrics response body should exist");
+        let wrapper: TimerMetricsSerializeWrapper = serde_json::from_slice(body.as_ref()).unwrap();
+        assert_eq!(wrapper.timing_count_snapshot().get("TimerTopicA"), Some(&2));
+    }
+
+    #[tokio::test]
+    async fn build_timer_checkpoint_response_returns_encoded_checkpoint_snapshot() {
+        let temp_dir = env::temp_dir().join(format!("rmq-rust-timer-checkpoint-{}", current_millis()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            timer_wheel_enable: true,
+            store_path_root_dir: temp_dir.to_string_lossy().to_string().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config.clone());
+
+        let timer_message_store = TimerMessageStore::new_with_config(None, message_store_config);
+        assert!(timer_message_store.load());
+        runtime.inner_for_test().set_timer_message_store(timer_message_store);
+
+        let handler = BrokerConfigRequestHandler::new(runtime.inner_for_test().clone());
+        let response = handler.build_timer_checkpoint_response();
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = response.body().expect("timer checkpoint response body should exist");
+        let snapshot = TimerCheckpointSnapshot::decode(body.as_ref()).unwrap();
+        assert!(snapshot.last_read_time_ms() > 0);
+        assert_eq!(snapshot.master_timer_queue_offset(), 0);
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

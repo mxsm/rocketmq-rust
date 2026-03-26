@@ -52,8 +52,10 @@ use crate::store_path_config_helper::get_timer_metrics_path;
 use crate::store_path_config_helper::get_timer_wheel_path;
 use crate::timer::slot::Slot;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
+use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 use crate::timer::timer_log::TimerLog;
 use crate::timer::timer_metrics::TimerMetrics;
+use crate::timer::timer_metrics::TimerMetricsSerializeWrapper;
 use crate::timer::timer_wheel::TimerWheel;
 
 pub const TIMER_TOPIC: &str = concat!("rmq_sys_", "wheel_timer");
@@ -399,6 +401,39 @@ impl TimerMessageStore {
 
     pub fn get_dequeue_tps(&self) -> f32 {
         self.dequeue_tps_counter.get_tps()
+    }
+
+    pub fn is_should_running_dequeue(&self) -> bool {
+        self.should_running_dequeue.load(Ordering::Relaxed)
+    }
+
+    pub fn timer_metrics_wrapper(&self) -> TimerMetricsSerializeWrapper {
+        self.timer_metrics.to_wrapper()
+    }
+
+    pub fn timer_metrics_payload(&self) -> Vec<u8> {
+        self.timer_metrics.encode().into_bytes()
+    }
+
+    pub fn timer_checkpoint_payload(&self) -> Option<Vec<u8>> {
+        self.timer_checkpoint
+            .lock()
+            .as_ref()
+            .map(|timer_checkpoint| timer_checkpoint.snapshot().encode())
+    }
+
+    pub fn sync_checkpoint_from_master(&self, snapshot: &TimerCheckpointSnapshot) -> std::io::Result<bool> {
+        let checkpoint_guard = self.timer_checkpoint.lock();
+        let Some(timer_checkpoint) = checkpoint_guard.as_ref() else {
+            return Ok(false);
+        };
+        timer_checkpoint.sync_from_master_snapshot(snapshot);
+        let caught_up = self.curr_queue_offset.load(Ordering::Relaxed) >= snapshot.master_timer_queue_offset();
+        if caught_up {
+            timer_checkpoint.set_last_read_time_ms(snapshot.last_read_time_ms());
+        }
+        timer_checkpoint.flush()?;
+        Ok(true)
     }
 
     pub fn new(default_message_store: Option<ArcMut<LocalFileMessageStore>>) -> Self {
@@ -1382,6 +1417,7 @@ mod tests {
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::MessageDecoder::message_properties_to_string;
+    use rocketmq_remoting::protocol::DataVersion;
     use tempfile::tempdir;
 
     use super::*;
@@ -1644,6 +1680,67 @@ mod tests {
         );
         assert_eq!(reloaded_store.get_timer_wheel_slot(valid_time_ms).unwrap().num, 2);
         assert!(reloaded_store.get_timer_wheel_slot(invalid_time_ms).is_none());
+    }
+
+    #[test]
+    fn sync_checkpoint_from_master_keeps_local_read_cursor_until_caught_up() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root(root_dir.as_str());
+        let timer_message_store = TimerMessageStore::new_with_config(None, config);
+        assert!(timer_message_store.load());
+        let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
+
+        let mut data_version = DataVersion::new();
+        data_version.next_version_with(88);
+        let snapshot = TimerCheckpointSnapshot::new(12_000, 34, 56, 78, data_version.clone());
+
+        assert!(timer_message_store.sync_checkpoint_from_master(&snapshot).unwrap());
+        assert_eq!(timer_message_store.curr_read_time_ms.load(Ordering::Relaxed), local_read_time);
+
+        let checkpoint_guard = timer_message_store.timer_checkpoint.lock();
+        let checkpoint = checkpoint_guard.as_ref().expect("checkpoint should exist");
+        assert_eq!(checkpoint.last_read_time_ms(), local_read_time);
+        assert_eq!(checkpoint.master_timer_queue_offset(), 78);
+        assert_eq!(checkpoint.data_version(), data_version);
+
+        drop(checkpoint_guard);
+        let reloaded_checkpoint = TimerCheckpoint::new(get_timer_check_path(root_dir.as_str())).unwrap();
+        assert_eq!(reloaded_checkpoint.last_read_time_ms(), local_read_time);
+        assert_eq!(reloaded_checkpoint.master_timer_queue_offset(), 78);
+        assert_eq!(reloaded_checkpoint.data_version(), data_version);
+    }
+
+    #[tokio::test]
+    async fn sync_checkpoint_from_master_does_not_rebucket_pending_timer_messages() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
+        let deliver_time_ms = (local_read_time as u64).saturating_add(60_000);
+        let master_read_time_ms = local_read_time + 120_000;
+
+        let mut data_version = DataVersion::new();
+        data_version.next_version_with(99);
+        let snapshot = TimerCheckpointSnapshot::new(master_read_time_ms, 0, 0, 10, data_version);
+
+        assert!(timer_message_store.sync_checkpoint_from_master(&snapshot).unwrap());
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, deliver_time_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+
+        let indexed = timer_message_store.process_once().await;
+        let expected_slot_time = timer_message_store.ceil_time_ms(deliver_time_ms as i64);
+
+        assert_eq!(indexed, 1);
+        assert_eq!(timer_message_store.curr_read_time_ms.load(Ordering::Relaxed), local_read_time);
+        assert_eq!(timer_message_store.get_timer_wheel_slot(expected_slot_time).unwrap().num, 1);
+        assert!(timer_message_store.get_timer_wheel_slot(master_read_time_ms).is_none());
     }
 
     #[tokio::test]

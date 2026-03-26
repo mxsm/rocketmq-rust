@@ -38,7 +38,7 @@ struct Metric {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TimerMetricsSerializeWrapper {
+pub struct TimerMetricsSerializeWrapper {
     timing_count: HashMap<String, Metric>,
     #[serde(default)]
     timing_distribution: HashMap<i32, Metric>,
@@ -135,6 +135,26 @@ impl TimerMetrics {
         *self.config_path.get_mut() = config_path;
     }
 
+    pub fn data_version(&self) -> DataVersion {
+        self.data_version.lock().clone()
+    }
+
+    pub fn to_wrapper(&self) -> TimerMetricsSerializeWrapper {
+        TimerMetricsSerializeWrapper {
+            timing_count: self.timing_count.read().clone(),
+            timing_distribution: self.timing_distribution.read().clone(),
+            timer_dist: self.timer_dist.read().clone(),
+            data_version: self.data_version(),
+        }
+    }
+
+    pub fn apply_wrapper(&self, wrapper: TimerMetricsSerializeWrapper) {
+        *self.timing_count.write() = wrapper.timing_count;
+        *self.timing_distribution.write() = wrapper.timing_distribution;
+        *self.timer_dist.write() = wrapper.timer_dist;
+        *self.data_version.lock() = wrapper.data_version;
+    }
+
     pub fn get_timing_count(&self, key: &CheetahString) -> i64 {
         self.timing_count
             .read()
@@ -210,5 +230,29 @@ impl TimerMetrics {
     pub fn set_timer_dist_list(&self, timer_dist: Vec<i32>) {
         *self.timer_dist.write() = timer_dist;
         self.data_version.lock().next_version();
+    }
+}
+
+impl TimerMetricsSerializeWrapper {
+    pub fn data_version(&self) -> &DataVersion {
+        &self.data_version
+    }
+
+    pub fn timing_count_snapshot(&self) -> HashMap<String, i64> {
+        self.timing_count
+            .iter()
+            .filter_map(|(topic, metric)| (metric.count > 0).then_some((topic.clone(), metric.count)))
+            .collect()
+    }
+
+    pub fn timing_distribution_snapshot(&self) -> HashMap<i32, i64> {
+        self.timing_distribution
+            .iter()
+            .filter_map(|(period, metric)| (metric.count > 0).then_some((*period, metric.count)))
+            .collect()
+    }
+
+    pub fn timer_dist(&self) -> &[i32] {
+        &self.timer_dist
     }
 }

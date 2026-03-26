@@ -295,6 +295,11 @@ impl BrokerRuntime {
         self.inner.message_store_config()
     }
 
+    #[cfg(test)]
+    pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<LocalFileMessageStore>> {
+        &mut self.inner
+    }
+
     pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
         self.inner.topic_config_manager().select_topic_config(topic)
     }

@@ -106,6 +106,8 @@ use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
+use rocketmq_store::timer::timer_metrics::TimerMetricsSerializeWrapper;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -983,6 +985,48 @@ impl BrokerOuterAPI {
         } else {
             Err(RocketMQError::BrokerOperationFailed {
                 operation: "get_message_request_mode",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
+        }
+    }
+
+    pub async fn get_timer_metrics(
+        &self,
+        addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<TimerMetricsSerializeWrapper>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetTimerMetrics);
+        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                return Ok(Some(serde_json::from_slice(body.as_ref())?));
+            }
+            Ok(None)
+        } else {
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_timer_metrics",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
+        }
+    }
+
+    pub async fn get_timer_check_point(
+        &self,
+        addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<TimerCheckpointSnapshot>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetTimerCheckPoint);
+        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                return Ok(Some(TimerCheckpointSnapshot::decode(body.as_ref())?));
+            }
+            Ok(None)
+        } else {
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_timer_check_point",
                 code: response.code(),
                 message: response.remark().map_or("".to_string(), |s| s.to_string()),
                 broker_addr: Some(addr.to_string()),
