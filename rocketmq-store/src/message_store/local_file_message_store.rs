@@ -715,7 +715,9 @@ impl MessageStore for LocalFileMessageStore {
         if !self.message_store_config.enable_dleger_commit_log && !self.message_store_config.duplication_enable {
             if self.message_store_config.enable_controller_mode {
                 let mut auto_switch_ha_service = GeneralHAService::AutoSwitchHAService(ArcMut::new(
-                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService,
+                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
+                        self.message_store_arc.clone().unwrap(),
+                    ),
                 ));
                 let _ = auto_switch_ha_service.init();
                 self.ha_service = Some(auto_switch_ha_service);

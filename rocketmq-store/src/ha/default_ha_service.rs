@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
+use rocketmq_remoting::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
+use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
@@ -31,6 +33,7 @@ use tokio::time::sleep;
 use tracing::error;
 use tracing::info;
 
+use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::ha::default_ha_client::DefaultHAClient;
 use crate::ha::default_ha_connection::DefaultHAConnection;
@@ -80,6 +83,17 @@ impl DefaultHAService {
         self.default_message_store.as_ref()
     }
 
+    pub(crate) fn ensure_ha_client(&mut self) -> HAResult<bool> {
+        if self.ha_client.is_some() {
+            return Ok(false);
+        }
+
+        let client = DefaultHAClient::new(self.default_message_store.clone())
+            .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
+        self.ha_client = Some(GeneralHAClient::new_with_default_ha_client(client));
+        Ok(true)
+    }
+
     pub async fn notify_transfer_some(&self, offset: i64) {
         let mut value = self.push2_slave_max_offset.load(Ordering::Relaxed);
 
@@ -113,13 +127,7 @@ impl DefaultHAService {
         this.group_transfer_service = Some(group_transfer_service);
 
         if config.broker_role == BrokerRole::Slave {
-            let default_message_store = this.default_message_store.clone();
-            let client = DefaultHAClient::new(default_message_store)
-                .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
-
-            let ha_client = GeneralHAClient::new_with_default_ha_client(client);
-
-            this.ha_client = Some(ha_client);
+            this.ensure_ha_client()?;
         }
 
         let state_notification_service =
@@ -245,8 +253,8 @@ impl HAService for DefaultHAService {
         }
     }
 
-    fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
-        todo!()
+    fn in_sync_replicas_nums(&self, _master_put_where: i64) -> i32 {
+        1 + self.connection_count.load(Ordering::Relaxed) as i32
     }
 
     fn get_connection_count(&self) -> &AtomicU32 {
@@ -287,7 +295,44 @@ impl HAService for DefaultHAService {
     }
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
-        todo!()
+        let mut runtime_info = HARuntimeInfo {
+            master: self.default_message_store.message_store_config_ref().broker_role != BrokerRole::Slave,
+            master_commit_log_max_offset: master_put_where.max(0) as u64,
+            in_sync_slave_nums: (self.in_sync_replicas_nums(master_put_where) - 1).max(0),
+            ha_connection_info: Vec::new(),
+            ha_client_runtime_info: HAClientRuntimeInfo::default(),
+        };
+
+        if let Ok(connections) = self.connections.try_lock() {
+            runtime_info.ha_connection_info = connections
+                .values()
+                .map(|connection| {
+                    let slave_ack_offset = connection.get_slave_ack_offset();
+                    HAConnectionRuntimeInfo {
+                        addr: connection.remote_address(),
+                        slave_ack_offset: slave_ack_offset.max(0) as u64,
+                        diff: master_put_where.saturating_sub(slave_ack_offset),
+                        in_sync: slave_ack_offset >= master_put_where,
+                        transferred_byte_in_second: connection.get_transferred_byte_in_second().max(0) as u64,
+                        transfer_from_where: connection.get_transfer_from_where().max(0) as u64,
+                    }
+                })
+                .collect();
+        }
+
+        if let Some(ha_client) = &self.ha_client {
+            runtime_info.ha_client_runtime_info = HAClientRuntimeInfo {
+                master_addr: ha_client.get_ha_master_address(),
+                transferred_byte_in_second: ha_client.get_transferred_byte_in_second().max(0) as u64,
+                max_offset: self.default_message_store.get_max_phy_offset().max(0) as u64,
+                last_read_timestamp: ha_client.get_last_read_timestamp().max(0) as u64,
+                last_write_timestamp: ha_client.get_last_write_timestamp().max(0) as u64,
+                master_flush_offset: self.default_message_store.get_master_flushed_offset().max(0) as u64,
+                is_activated: ha_client.get_current_state().is_active(),
+            };
+        }
+
+        runtime_info
     }
 
     fn get_wait_notify_object(&self) -> &Notify {

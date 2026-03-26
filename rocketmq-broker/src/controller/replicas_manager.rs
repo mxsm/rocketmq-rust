@@ -13,18 +13,34 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::info;
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrokerReplicaRole {
     Master,
     Slave,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterState {
+    Initial,
+    CreateTempMetadataFileDone,
+    CreateMetadataFileDone,
+    Registered,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +54,21 @@ pub struct RoleChangeOutcome {
     pub sync_state_set: HashSet<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct BrokerMetadataRecord {
+    cluster_name: String,
+    broker_name: String,
+    broker_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TempBrokerMetadataRecord {
+    cluster_name: String,
+    broker_name: String,
+    broker_id: u64,
+    register_check_code: String,
+}
+
 pub struct ReplicasManager {
     broker_controller_id: u64,
     broker_address: CheetahString,
@@ -48,12 +79,23 @@ pub struct ReplicasManager {
     master_epoch: i32,
     sync_state_set_epoch: i32,
     sync_state_set: HashSet<i64>,
+    metadata_path: PathBuf,
+    temp_metadata_path: PathBuf,
+    metadata: Option<BrokerMetadataRecord>,
+    temp_metadata: Option<TempBrokerMetadataRecord>,
+    register_state: RegisterState,
     started: bool,
 }
 
 impl ReplicasManager {
-    pub fn new(config: &BrokerConfig, broker_address: CheetahString) -> Self {
-        Self {
+    pub fn new(
+        config: &BrokerConfig,
+        message_store_config: &MessageStoreConfig,
+        broker_address: CheetahString,
+    ) -> Self {
+        let metadata_path = metadata_path_from_config(message_store_config);
+        let temp_metadata_path = temp_metadata_path_from_metadata_path(&metadata_path);
+        let mut manager = Self {
             broker_controller_id: config.broker_identity.broker_id,
             broker_address,
             controller_addresses: parse_controller_addresses(&config.controller_addr),
@@ -63,23 +105,30 @@ impl ReplicasManager {
             master_epoch: 0,
             sync_state_set_epoch: 0,
             sync_state_set: HashSet::new(),
+            metadata_path,
+            temp_metadata_path,
+            metadata: None,
+            temp_metadata: None,
+            register_state: RegisterState::Initial,
             started: false,
-        }
+        };
+        manager.recover_registration_state();
+        manager
     }
 
     pub fn start(&mut self) {
         self.started = true;
         info!(
-            "ReplicasManager started, broker_controller_id={}, controller_addresses={:?}",
-            self.broker_controller_id, self.controller_addresses
+            "ReplicasManager started, broker_controller_id={}, register_state={:?}, controller_addresses={:?}",
+            self.broker_controller_id, self.register_state, self.controller_addresses
         );
     }
 
     pub fn shutdown(&mut self) {
         self.started = false;
         info!(
-            "ReplicasManager shutdown, broker_controller_id={}",
-            self.broker_controller_id
+            "ReplicasManager shutdown, broker_controller_id={}, register_state={:?}",
+            self.broker_controller_id, self.register_state
         );
     }
 
@@ -96,6 +145,10 @@ impl ReplicasManager {
 
     pub fn broker_address(&self) -> &CheetahString {
         &self.broker_address
+    }
+
+    pub fn register_state(&self) -> RegisterState {
+        self.register_state
     }
 
     pub fn controller_addresses(&self) -> &[CheetahString] {
@@ -144,6 +197,74 @@ impl ReplicasManager {
 
     pub fn sync_state_set(&self) -> &HashSet<i64> {
         &self.sync_state_set
+    }
+
+    pub fn needs_broker_id_application(&self) -> bool {
+        self.metadata.is_none()
+    }
+
+    pub fn pending_registration(&self) -> Option<(u64, CheetahString)> {
+        self.temp_metadata.as_ref().map(|metadata| {
+            (
+                metadata.broker_id,
+                CheetahString::from(metadata.register_check_code.clone()),
+            )
+        })
+    }
+
+    pub fn validate_registration_state(&self, config: &BrokerConfig) -> RocketMQResult<()> {
+        validate_metadata_record(self.metadata.as_ref(), config, "broker metadata")?;
+        validate_temp_metadata_record(self.temp_metadata.as_ref(), config)?;
+        Ok(())
+    }
+
+    pub fn create_temp_metadata(&mut self, config: &BrokerConfig, broker_id: u64) -> RocketMQResult<()> {
+        let temp_metadata = TempBrokerMetadataRecord {
+            cluster_name: config.broker_identity.broker_cluster_name.to_string(),
+            broker_name: config.broker_identity.broker_name.to_string(),
+            broker_id,
+            register_check_code: format!("{};{}", self.broker_address, current_millis()),
+        };
+        write_metadata_file(&self.temp_metadata_path, &temp_metadata)?;
+        self.temp_metadata = Some(temp_metadata);
+        self.broker_controller_id = broker_id;
+        self.register_state = RegisterState::CreateTempMetadataFileDone;
+        Ok(())
+    }
+
+    pub fn clear_temp_metadata(&mut self) -> RocketMQResult<()> {
+        delete_metadata_file(&self.temp_metadata_path)?;
+        self.temp_metadata = None;
+        self.register_state = if self.metadata.is_some() {
+            RegisterState::CreateMetadataFileDone
+        } else {
+            RegisterState::Initial
+        };
+        Ok(())
+    }
+
+    pub fn commit_temp_metadata(&mut self, config: &BrokerConfig) -> RocketMQResult<u64> {
+        let Some(temp_metadata) = self.temp_metadata.as_ref() else {
+            return Err(RocketMQError::illegal_argument(
+                "commit_temp_metadata called without temp metadata",
+            ));
+        };
+
+        let metadata = BrokerMetadataRecord {
+            cluster_name: config.broker_identity.broker_cluster_name.to_string(),
+            broker_name: config.broker_identity.broker_name.to_string(),
+            broker_id: temp_metadata.broker_id,
+        };
+        write_metadata_file(&self.metadata_path, &metadata)?;
+        self.metadata = Some(metadata);
+        self.broker_controller_id = temp_metadata.broker_id;
+        self.clear_temp_metadata()?;
+        self.register_state = RegisterState::CreateMetadataFileDone;
+        Ok(self.broker_controller_id)
+    }
+
+    pub fn mark_registered(&mut self) {
+        self.register_state = RegisterState::Registered;
     }
 
     pub fn change_broker_role(
@@ -222,6 +343,97 @@ impl ReplicasManager {
             sync_state_set: self.sync_state_set.clone(),
         }
     }
+
+    fn recover_registration_state(&mut self) {
+        self.metadata = match read_metadata_file::<BrokerMetadataRecord>(&self.metadata_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                warn!(
+                    "Failed to read broker metadata from {}: {}",
+                    self.metadata_path.display(),
+                    error
+                );
+                None
+            }
+        };
+        self.temp_metadata = match read_metadata_file::<TempBrokerMetadataRecord>(&self.temp_metadata_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                warn!(
+                    "Failed to read temp broker metadata from {}: {}",
+                    self.temp_metadata_path.display(),
+                    error
+                );
+                None
+            }
+        };
+
+        if let Some(metadata) = self.metadata.as_ref() {
+            self.broker_controller_id = metadata.broker_id;
+            self.register_state = RegisterState::CreateMetadataFileDone;
+            return;
+        }
+        if let Some(metadata) = self.temp_metadata.as_ref() {
+            self.broker_controller_id = metadata.broker_id;
+            self.register_state = RegisterState::CreateTempMetadataFileDone;
+            return;
+        }
+        self.register_state = RegisterState::Initial;
+    }
+}
+
+fn validate_metadata_record(
+    metadata: Option<&BrokerMetadataRecord>,
+    config: &BrokerConfig,
+    label: &str,
+) -> RocketMQResult<()> {
+    if let Some(metadata) = metadata {
+        if metadata.cluster_name != config.broker_identity.broker_cluster_name.as_str() {
+            return Err(RocketMQError::illegal_argument(format!(
+                "{} cluster mismatch: persisted={}, config={}",
+                label, metadata.cluster_name, config.broker_identity.broker_cluster_name
+            )));
+        }
+        if metadata.broker_name != config.broker_identity.broker_name.as_str() {
+            return Err(RocketMQError::illegal_argument(format!(
+                "{} broker name mismatch: persisted={}, config={}",
+                label, metadata.broker_name, config.broker_identity.broker_name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_temp_metadata_record(
+    metadata: Option<&TempBrokerMetadataRecord>,
+    config: &BrokerConfig,
+) -> RocketMQResult<()> {
+    if let Some(metadata) = metadata {
+        if metadata.cluster_name != config.broker_identity.broker_cluster_name.as_str() {
+            return Err(RocketMQError::illegal_argument(format!(
+                "temp broker metadata cluster mismatch: persisted={}, config={}",
+                metadata.cluster_name, config.broker_identity.broker_cluster_name
+            )));
+        }
+        if metadata.broker_name != config.broker_identity.broker_name.as_str() {
+            return Err(RocketMQError::illegal_argument(format!(
+                "temp broker metadata broker name mismatch: persisted={}, config={}",
+                metadata.broker_name, config.broker_identity.broker_name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn metadata_path_from_config(message_store_config: &MessageStoreConfig) -> PathBuf {
+    if let Some(path) = message_store_config.store_path_broker_identity.as_ref() {
+        return PathBuf::from(path.as_str());
+    }
+    PathBuf::from(message_store_config.store_path_root_dir.as_str()).join("brokerIdentity.json")
+}
+
+fn temp_metadata_path_from_metadata_path(metadata_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}-temp", metadata_path.display()))
 }
 
 fn parse_controller_addresses(controller_addr: &CheetahString) -> Vec<CheetahString> {
@@ -237,9 +449,59 @@ fn parse_controller_addresses(controller_addr: &CheetahString) -> Vec<CheetahStr
         .collect()
 }
 
+fn read_metadata_file<T>(path: &Path) -> RocketMQResult<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    match fs::read_to_string(path) {
+        Ok(content) if content.trim().is_empty() => Ok(None),
+        Ok(content) => serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|error| RocketMQError::illegal_argument(format!("decode metadata failed: {}", error))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(RocketMQError::illegal_argument(format!(
+            "read metadata file failed: {}",
+            error
+        ))),
+    }
+}
+
+fn write_metadata_file<T>(path: &Path, value: &T) -> RocketMQResult<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            RocketMQError::illegal_argument(format!(
+                "create metadata directory failed for {}: {}",
+                parent.display(),
+                error
+            ))
+        })?;
+    }
+    let content = serde_json::to_string(value)
+        .map_err(|error| RocketMQError::illegal_argument(format!("encode metadata failed: {}", error)))?;
+    fs::write(path, content).map_err(|error| {
+        RocketMQError::illegal_argument(format!("write metadata file failed for {}: {}", path.display(), error))
+    })?;
+    Ok(())
+}
+
+fn delete_metadata_file(path: &Path) -> RocketMQResult<()> {
+    match fs::remove_file(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(RocketMQError::illegal_argument(format!(
+            "delete metadata file failed for {}: {}",
+            path.display(),
+            error
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use rocketmq_common::common::broker::broker_config::BrokerIdentity;
+    use std::env;
 
     use super::*;
 
@@ -248,17 +510,22 @@ mod tests {
             controller_addr: controller_addr.into(),
             ..BrokerConfig::default()
         };
-        config.broker_identity = BrokerIdentity {
-            broker_id,
-            ..config.broker_identity
-        };
+        config.broker_identity.broker_id = broker_id;
+        config
+    }
+
+    fn message_store_config_with_identity_path(suffix: &str) -> MessageStoreConfig {
+        let mut config = MessageStoreConfig::default();
+        let path = env::temp_dir().join(format!("rocketmq-rust-controller-mode-{}-{}", suffix, current_millis()));
+        config.store_path_broker_identity = Some(path.to_string_lossy().into_owned().into());
         config
     }
 
     #[test]
     fn new_manager_parses_controller_addresses() {
         let config = broker_config_with_controller_addr("127.0.0.1:9878;127.0.0.2:9878;", 2);
-        let manager = ReplicasManager::new(&config, "127.0.0.1:10911".into());
+        let message_store_config = message_store_config_with_identity_path("parse");
+        let manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
 
         assert_eq!(manager.broker_controller_id(), 2);
         assert_eq!(
@@ -271,9 +538,34 @@ mod tests {
     }
 
     #[test]
+    fn create_and_commit_temp_metadata_round_trip() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 7);
+        let message_store_config = message_store_config_with_identity_path("metadata");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        manager
+            .create_temp_metadata(&config, 9)
+            .expect("temp metadata should be created");
+        assert_eq!(manager.register_state(), RegisterState::CreateTempMetadataFileDone);
+        assert_eq!(manager.pending_registration().map(|(broker_id, _)| broker_id), Some(9));
+
+        manager
+            .commit_temp_metadata(&config)
+            .expect("metadata should be committed");
+        assert_eq!(manager.register_state(), RegisterState::CreateMetadataFileDone);
+        assert_eq!(manager.broker_controller_id(), 9);
+        assert!(manager.pending_registration().is_none());
+
+        let recovered = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+        assert_eq!(recovered.broker_controller_id(), 9);
+        assert_eq!(recovered.register_state(), RegisterState::CreateMetadataFileDone);
+    }
+
+    #[test]
     fn change_broker_role_promotes_local_broker_to_master() {
         let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
-        let mut manager = ReplicasManager::new(&config, "127.0.0.1:10911".into());
+        let message_store_config = message_store_config_with_identity_path("master");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         let sync_state_set = HashSet::from([2_i64, 3_i64]);
 
         let outcome = manager
@@ -291,7 +583,8 @@ mod tests {
     #[test]
     fn change_broker_role_demotes_local_broker_to_slave() {
         let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
-        let mut manager = ReplicasManager::new(&config, "127.0.0.1:10911".into());
+        let message_store_config = message_store_config_with_identity_path("slave");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         let sync_state_set = HashSet::from([1_i64, 2_i64]);
 
         let outcome = manager
@@ -315,7 +608,8 @@ mod tests {
     #[test]
     fn change_broker_role_ignores_stale_epoch() {
         let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
-        let mut manager = ReplicasManager::new(&config, "127.0.0.1:10911".into());
+        let message_store_config = message_store_config_with_identity_path("stale");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         let sync_state_set = HashSet::from([2_i64]);
 
         manager
@@ -341,7 +635,8 @@ mod tests {
     #[test]
     fn heartbeat_targets_prefer_known_leader() {
         let config = broker_config_with_controller_addr("127.0.0.1:9878;127.0.0.2:9878", 2);
-        let mut manager = ReplicasManager::new(&config, "127.0.0.1:10911".into());
+        let message_store_config = message_store_config_with_identity_path("heartbeat");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
         manager.set_controller_leader_address("127.0.0.2:9878".into());
 
         let targets = manager.heartbeat_targets();

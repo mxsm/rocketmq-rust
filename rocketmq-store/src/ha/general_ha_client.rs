@@ -31,7 +31,7 @@ impl GeneralHAClient {
     }
 
     pub fn new_with_auto_switch_ha_client(auto_switch_ha_client: AutoSwitchHAClient) -> Self {
-        GeneralHAClient::AutoSwitchHaClient(ArcMut::new(AutoSwitchHAClient))
+        GeneralHAClient::AutoSwitchHaClient(ArcMut::new(auto_switch_ha_client))
     }
     // Additional methods to interact with the HA services can be added here
 }
@@ -60,7 +60,14 @@ impl HAClient for GeneralHAClient {
     }
 
     async fn wakeup(&self) {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => {
+                client.wakeup().await;
+            }
+            GeneralHAClient::AutoSwitchHaClient(client) => {
+                client.wakeup().await;
+            }
+        }
     }
 
     async fn update_master_address(&self, new_address: &str) {
@@ -86,34 +93,62 @@ impl HAClient for GeneralHAClient {
     }
 
     fn get_master_address(&self) -> String {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_master_address(client.as_ref()),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.get_master_address(),
+        }
     }
 
     fn get_ha_master_address(&self) -> String {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_ha_master_address(client.as_ref()),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.get_ha_master_address(),
+        }
     }
 
     fn get_last_read_timestamp(&self) -> i64 {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_last_read_timestamp(client.as_ref()),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.get_last_read_timestamp(),
+        }
     }
 
     fn get_last_write_timestamp(&self) -> i64 {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_last_write_timestamp(client.as_ref()),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.get_last_write_timestamp(),
+        }
     }
 
     fn get_current_state(&self) -> HAConnectionState {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_current_state(client.as_ref()),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.get_current_state(),
+        }
     }
 
     fn change_current_state(&self, ha_connection_state: HAConnectionState) {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => client.change_current_state(ha_connection_state),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.change_current_state(ha_connection_state),
+        }
     }
 
     async fn close_master(&self) {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => {
+                client.close_master().await;
+            }
+            GeneralHAClient::AutoSwitchHaClient(client) => {
+                client.close_master().await;
+            }
+        }
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
-        todo!()
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => HAClient::get_transferred_byte_in_second(client.as_ref()),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.get_transferred_byte_in_second(),
+        }
     }
 }

@@ -146,7 +146,8 @@ impl GroupTransferServiceInner {
                     continue;
                 }
                 if all_ack_in_sync_state_set && self.ha_service.is_auto_switch_enabled() {
-                    unimplemented!("Auto-switching is not implemented yet");
+                    transfer_ok =
+                        self.ha_service.in_sync_replicas_nums(request.get_next_offset()) >= request.get_ack_nums();
                 } else {
                     let mut ack_nums = 1;
                     for connection in self.ha_service.get_connection_list().await {

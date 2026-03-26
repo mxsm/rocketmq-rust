@@ -46,9 +46,7 @@ impl GeneralHAService {
         let ha_service = self.clone();
         match self {
             GeneralHAService::DefaultHAService(service) => DefaultHAService::init(service, ha_service),
-            GeneralHAService::AutoSwitchHAService(service) => {
-                unimplemented!("AutoSwitchHAService init is not implemented yet")
-            }
+            GeneralHAService::AutoSwitchHAService(service) => AutoSwitchHAService::init(service, ha_service),
         }
     }
 

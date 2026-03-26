@@ -422,6 +422,14 @@ mod defaults {
         10 * 1000
     }
 
+    pub const fn sync_broker_metadata_period() -> u64 {
+        5 * 1000
+    }
+
+    pub const fn sync_controller_metadata_period() -> u64 {
+        10 * 1000
+    }
+
     pub const fn broker_election_priority() -> i32 {
         i32::MAX
     }
@@ -544,6 +552,12 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::controller_addr")]
     pub controller_addr: CheetahString,
+
+    #[serde(default = "defaults::sync_broker_metadata_period")]
+    pub sync_broker_metadata_period: u64,
+
+    #[serde(default = "defaults::sync_controller_metadata_period")]
+    pub sync_controller_metadata_period: u64,
 
     #[serde(default = "defaults::region_id")]
     pub region_id: CheetahString,
@@ -891,6 +905,8 @@ impl Default for BrokerConfig {
             msg_trace_topic_name: CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC),
             enable_controller_mode: false,
             controller_addr: CheetahString::new(),
+            sync_broker_metadata_period: 5_000,
+            sync_controller_metadata_period: 10_000,
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
@@ -1082,6 +1098,14 @@ impl BrokerConfig {
             self.enable_controller_mode.to_string().into(),
         );
         properties.insert("controllerAddr".into(), self.controller_addr.clone());
+        properties.insert(
+            "syncBrokerMetadataPeriod".into(),
+            self.sync_broker_metadata_period.to_string().into(),
+        );
+        properties.insert(
+            "syncControllerMetadataPeriod".into(),
+            self.sync_controller_metadata_period.to_string().into(),
+        );
         properties.insert("regionId".into(), self.region_id.clone());
         properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());
         properties.insert("traceOn".into(), self.trace_on.to_string().into());

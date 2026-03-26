@@ -462,7 +462,7 @@ impl HAClient for DefaultHAClient {
     }
 
     async fn wakeup(&self) {
-        todo!()
+        self.inner.change_current_state(HAConnectionState::Ready).await;
     }
 
     /// Update master address
@@ -483,35 +483,52 @@ impl HAClient for DefaultHAClient {
     }
 
     fn get_master_address(&self) -> String {
-        todo!()
+        self.inner
+            .master_address
+            .try_lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_default()
     }
 
     fn get_ha_master_address(&self) -> String {
-        todo!()
+        self.inner
+            .master_ha_address
+            .try_lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_default()
     }
 
     fn get_last_read_timestamp(&self) -> i64 {
-        todo!()
+        self.inner.last_read_timestamp.load(Ordering::SeqCst) as i64
     }
 
     fn get_last_write_timestamp(&self) -> i64 {
-        todo!()
+        self.inner.last_write_timestamp.load(Ordering::SeqCst) as i64
     }
 
     fn get_current_state(&self) -> HAConnectionState {
-        todo!()
+        self.inner
+            .current_state
+            .try_read()
+            .map(|state| *state)
+            .unwrap_or(HAConnectionState::Ready)
     }
 
     fn change_current_state(&self, ha_connection_state: HAConnectionState) {
-        todo!()
+        if let Ok(mut state) = self.inner.current_state.try_write() {
+            *state = ha_connection_state;
+        }
     }
 
     async fn close_master(&self) {
-        todo!()
+        let mut inner = self.inner.clone();
+        inner.close_master().await;
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
-        todo!()
+        self.inner.flow_monitor.get_transferred_byte_in_second()
     }
 }
 
