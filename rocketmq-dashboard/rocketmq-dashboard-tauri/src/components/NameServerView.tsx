@@ -154,7 +154,7 @@ export const NameServerView = () => {
                     </div>
 
                     <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900 shadow-sm">
-                        <div className="min-w-full">
+                        <div className="min-w-full px-4">
                             <div
                                 className="grid items-center gap-x-10 bg-gray-100 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-800 px-10 py-4 text-[11px] font-medium text-gray-900 dark:text-gray-200 uppercase tracking-[0.18em]"
                                 style={NAMESERVER_TABLE_GRID_STYLE}
@@ -224,7 +224,7 @@ export const NameServerView = () => {
 
                                                     <div className="flex justify-center px-2">
                                                         {isCurrent ? (
-                                                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 border border-green-200 dark:border-green-800 shadow-sm">
+                                                            <span className="inline-flex items-center px-4 py-1.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400 border border-green-200 dark:border-green-800 shadow-sm">
                                                                 <motion.span
                                                                     animate={{ scale: [1, 1.2, 1], opacity: [1, 0.5, 1] }}
                                                                     transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
@@ -233,7 +233,7 @@ export const NameServerView = () => {
                                                                 Active
                                                             </span>
                                                         ) : (
-                                                            <span className="inline-flex items-center px-3.5 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
+                                                            <span className="inline-flex items-center px-4 py-1.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
                                                                 Standby
                                                             </span>
                                                         )}
