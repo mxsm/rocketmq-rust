@@ -39,7 +39,7 @@ serde          = { workspace = true }
 
 uuid   = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-cron   = "0.15"
+cron   = "0.16"
 
 
 [dev-dependencies]
