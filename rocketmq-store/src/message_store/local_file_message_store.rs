@@ -132,6 +132,7 @@ pub struct LocalFileMessageStore {
 
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
     master_flushed_offset: Arc<AtomicI64>,
+    alive_replica_num_in_group: Arc<AtomicI32>,
     index_service: IndexService,
     allocate_mapped_file_service: Arc<AllocateMappedFileService>,
     consume_queue_store: ConsumeQueueStore,
@@ -219,6 +220,7 @@ impl LocalFileMessageStore {
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
+            alive_replica_num_in_group: Arc::new(AtomicI32::new(1)),
             index_service,
             allocate_mapped_file_service: Arc::new(AllocateMappedFileService::new()),
             consume_queue_store,
@@ -1481,7 +1483,12 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn update_master_address(&self, new_addr: &CheetahString) {
-        todo!()
+        if let Some(ha_service) = self.ha_service.as_ref().cloned() {
+            let new_addr = new_addr.clone();
+            tokio::spawn(async move {
+                ha_service.update_master_address(new_addr.as_str()).await;
+            });
+        }
     }
 
     fn slave_fall_behind_much(&self) -> i64 {
@@ -1751,19 +1758,22 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_alive_replica_num_in_group(&self, alive_replica_nums: i32) {
-        todo!()
+        self.alive_replica_num_in_group
+            .store(alive_replica_nums.max(1), Ordering::SeqCst);
     }
 
     fn get_alive_replica_num_in_group(&self) -> i32 {
-        todo!()
+        self.alive_replica_num_in_group.load(Ordering::SeqCst)
     }
 
     fn wakeup_ha_client(&self) {
-        todo!()
+        if let Some(ha_service) = self.ha_service.as_ref() {
+            ha_service.get_wait_notify_object().notify_waiters();
+        }
     }
 
     fn get_master_flushed_offset(&self) -> i64 {
-        todo!()
+        self.master_flushed_offset.load(Ordering::SeqCst)
     }
 
     fn get_broker_init_max_offset(&self) -> i64 {
@@ -1771,7 +1781,8 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_master_flushed_offset(&self, master_flushed_offset: i64) {
-        todo!()
+        self.master_flushed_offset
+            .store(master_flushed_offset, Ordering::SeqCst);
     }
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64) {

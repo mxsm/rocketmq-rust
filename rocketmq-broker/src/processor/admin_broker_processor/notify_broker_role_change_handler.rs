@@ -23,6 +23,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
@@ -38,7 +39,7 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
 
     pub async fn notify_broker_role_changed(
         &mut self,
-        _channel: Channel,
+        channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
@@ -54,23 +55,33 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
             request_header.as_ref().expect("null")
         );
 
-        if let Some(replicas_mangesr) = self.broker_runtime_inner.replicas_manager_mut() {
-            if let Ok(request_header) = request_header {
-                match replicas_mangesr
-                    .change_broker_role(
-                        request_header.master_broker_id,
-                        request_header.master_address,
-                        request_header.master_epoch,
-                        request_header.sync_state_set_epoch,
-                        sync_state_set_info.get_sync_state_set(),
-                    )
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        panic!("Failed to call method change_broker_role: {}", e);
-                    }
-                }
+        if self.broker_runtime_inner.replicas_manager().is_none() {
+            warn!("Ignore notifyBrokerRoleChanged because controller mode is not initialized");
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "controller mode is not initialized",
+            )));
+        }
+
+        if let Ok(request_header) = request_header {
+            let sync_state_set = sync_state_set_info.get_sync_state_set().cloned().unwrap_or_default();
+            let controller_leader_address = channel.remote_address().to_string().into();
+
+            if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
+                self.broker_runtime_inner.clone(),
+                Some(controller_leader_address),
+                request_header.master_broker_id,
+                request_header.master_address,
+                request_header.master_epoch,
+                request_header.sync_state_set_epoch,
+                sync_state_set,
+            )
+            .await
+            {
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    error.to_string(),
+                )));
             }
         }
 

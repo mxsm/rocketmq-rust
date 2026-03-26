@@ -409,6 +409,22 @@ mod defaults {
     pub fn broker_heartbeat_interval() -> u64 {
         1000
     }
+
+    pub fn controller_addr() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub const fn send_heartbeat_timeout_millis() -> u64 {
+        1000
+    }
+
+    pub const fn controller_heartbeat_timeout_mills() -> i64 {
+        10 * 1000
+    }
+
+    pub const fn broker_election_priority() -> i32 {
+        i32::MAX
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -526,6 +542,9 @@ pub struct BrokerConfig {
     #[serde(default)]
     pub enable_controller_mode: bool,
 
+    #[serde(default = "defaults::controller_addr")]
+    pub controller_addr: CheetahString,
+
     #[serde(default = "defaults::region_id")]
     pub region_id: CheetahString,
 
@@ -602,6 +621,9 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::register_name_server_period")]
     pub register_name_server_period: u64,
+
+    #[serde(default = "defaults::send_heartbeat_timeout_millis")]
+    pub send_heartbeat_timeout_millis: u64,
 
     #[serde(default)]
     pub skip_pre_online: bool,
@@ -813,6 +835,12 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::broker_heartbeat_interval")]
     pub broker_heartbeat_interval: u64,
 
+    #[serde(default = "defaults::controller_heartbeat_timeout_mills")]
+    pub controller_heartbeat_timeout_mills: i64,
+
+    #[serde(default = "defaults::broker_election_priority")]
+    pub broker_election_priority: i32,
+
     /// Enable fast channel event processing by maintaining channel-to-group mapping
     ///
     /// When enabled, channel close events use O(1) lookup instead of O(n) traversal
@@ -862,6 +890,7 @@ impl Default for BrokerConfig {
             trace_topic_enable: false,
             msg_trace_topic_name: CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC),
             enable_controller_mode: false,
+            controller_addr: CheetahString::new(),
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
@@ -892,6 +921,7 @@ impl Default for BrokerConfig {
             flush_consumer_offset_interval: 1000 * 5,
             force_register: true,
             register_name_server_period: 1000 * 30,
+            send_heartbeat_timeout_millis: 1000,
             skip_pre_online: false,
             namesrv_addr: NAMESRV_ADDR.clone().map(|addr| addr.into()),
             fetch_name_srv_addr_by_dns_lookup: false,
@@ -960,6 +990,8 @@ impl Default for BrokerConfig {
             transaction_op_batch_interval: 3_000,
             compatible_with_old_name_srv: true,
             broker_heartbeat_interval: 1000,
+            controller_heartbeat_timeout_mills: 10_000,
+            broker_election_priority: i32::MAX,
             recall_message_enable: true,
             allow_recall_when_broker_not_writeable: false,
             enable_fast_channel_event_process: false,
@@ -1049,6 +1081,7 @@ impl BrokerConfig {
             "enableControllerMode".into(),
             self.enable_controller_mode.to_string().into(),
         );
+        properties.insert("controllerAddr".into(), self.controller_addr.clone());
         properties.insert("regionId".into(), self.region_id.clone());
         properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());
         properties.insert("traceOn".into(), self.trace_on.to_string().into());
@@ -1115,6 +1148,10 @@ impl BrokerConfig {
         properties.insert(
             "registerNameServerPeriod".into(),
             self.register_name_server_period.to_string().into(),
+        );
+        properties.insert(
+            "sendHeartbeatTimeoutMillis".into(),
+            self.send_heartbeat_timeout_millis.to_string().into(),
         );
         properties.insert("skipPreOnline".into(), self.skip_pre_online.to_string().into());
         properties.insert("namesrvAddr".into(), self.namesrv_addr.clone().unwrap_or_default());
@@ -1188,6 +1225,18 @@ impl BrokerConfig {
         properties.insert(
             "validateSystemTopicWhenUpdateTopic".into(),
             self.validate_system_topic_when_update_topic.to_string().into(),
+        );
+        properties.insert(
+            "brokerHeartbeatInterval".into(),
+            self.broker_heartbeat_interval.to_string().into(),
+        );
+        properties.insert(
+            "controllerHeartBeatTimeoutMills".into(),
+            self.controller_heartbeat_timeout_mills.to_string().into(),
+        );
+        properties.insert(
+            "brokerElectionPriority".into(),
+            self.broker_election_priority.to_string().into(),
         );
         properties.insert(
             "enableMixedMessageType".into(),
