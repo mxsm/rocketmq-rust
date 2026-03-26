@@ -15,6 +15,7 @@ pub mod alter_sync_state_set_request_header;
 pub mod alter_sync_state_set_response_header;
 pub mod apply_broker_id_request_header;
 pub mod apply_broker_id_response_header;
+pub mod clean_broker_data_request_header;
 pub mod elect_master_request_header;
 pub mod get_next_broker_id_request_header;
 pub mod get_next_broker_id_response_header;

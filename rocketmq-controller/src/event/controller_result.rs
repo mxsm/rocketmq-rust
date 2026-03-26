@@ -20,8 +20,17 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 
 use crate::event::event_message::EventMessage;
 
+pub type ControllerEventList = Vec<Arc<dyn EventMessage + Send + Sync>>;
+pub type ControllerResultParts<T> = (
+    ControllerEventList,
+    Option<T>,
+    Option<Bytes>,
+    ResponseCode,
+    Option<CheetahString>,
+);
+
 pub struct ControllerResult<T> {
-    events: Vec<Arc<dyn EventMessage + Send + Sync>>,
+    events: ControllerEventList,
     response: Option<T>,
     body: Option<Bytes>,
     response_code: ResponseCode,
@@ -39,7 +48,7 @@ impl<T> ControllerResult<T> {
         }
     }
 
-    pub fn of(events: Vec<Arc<dyn EventMessage + Send + Sync>>, response: Option<T>) -> Self {
+    pub fn of(events: ControllerEventList, response: Option<T>) -> Self {
         Self {
             events,
             response,
@@ -88,5 +97,9 @@ impl<T> ControllerResult<T> {
 
     pub fn is_success(&self) -> bool {
         self.response_code == ResponseCode::Success
+    }
+
+    pub fn into_parts(self) -> ControllerResultParts<T> {
+        (self.events, self.response, self.body, self.response_code, self.remark)
     }
 }

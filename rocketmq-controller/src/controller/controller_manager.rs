@@ -23,23 +23,114 @@ use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
+use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::metadata::MetadataStore;
 #[cfg(feature = "metrics")]
 use crate::metrics::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use crate::processor::ProcessorManager;
+use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
+use rocketmq_remoting::clients::RemotingClient;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::elect_master_response_body::ElectMasterResponseBody;
+use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_remoting::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+struct BrokerInactiveListener {
+    controller_manager: WeakArcMut<ControllerManager>,
+}
+
+impl BrokerInactiveListener {
+    fn new(controller_manager: WeakArcMut<ControllerManager>) -> Self {
+        Self { controller_manager }
+    }
+}
+
+impl BrokerLifecycleListener for BrokerInactiveListener {
+    fn on_broker_inactive(&self, cluster_name: &str, broker_name: &str, broker_id: i64) {
+        let Some(controller_manager) = self.controller_manager.upgrade() else {
+            return;
+        };
+
+        let cluster_name = CheetahString::from_string(cluster_name.to_owned());
+        let broker_name = CheetahString::from_string(broker_name.to_owned());
+
+        tokio::spawn(async move {
+            if !controller_manager.is_leader() {
+                warn!(
+                    "Broker inactive event ignored on follower controller, cluster={}, broker={}, broker_id={}",
+                    cluster_name, broker_name, broker_id
+                );
+                return;
+            }
+
+            let request =
+                ElectMasterRequestHeader::new(cluster_name.clone(), broker_name.clone(), -1, false, current_millis());
+
+            match controller_manager.controller().elect_master(&request).await {
+                Ok(Some(response)) if response.code() == ResponseCode::Success as i32 => {
+                    info!(
+                        "Triggered controller-side elect-master after broker inactive, cluster={}, broker={}, \
+                         broker_id={}",
+                        cluster_name, broker_name, broker_id
+                    );
+
+                    if controller_manager.controller_config().notify_broker_role_changed {
+                        if let Err(error) = controller_manager.notify_broker_role_changed(response).await {
+                            warn!(
+                                "Failed to notify brokers after role change, cluster={}, broker={}, error={}",
+                                cluster_name, broker_name, error
+                            );
+                        }
+                    }
+                }
+                Ok(Some(response)) => {
+                    warn!(
+                        "Elect-master after broker inactive did not succeed, cluster={}, broker={}, broker_id={}, \
+                         code={}, remark={:?}",
+                        cluster_name,
+                        broker_name,
+                        broker_id,
+                        response.code(),
+                        response.remark()
+                    );
+                }
+                Ok(None) => {
+                    warn!(
+                        "Elect-master after broker inactive returned no response, cluster={}, broker={}, broker_id={}",
+                        cluster_name, broker_name, broker_id
+                    );
+                }
+                Err(error) => {
+                    error!(
+                        "Elect-master after broker inactive failed, cluster={}, broker={}, broker_id={}, error={}",
+                        cluster_name, broker_name, broker_id, error
+                    );
+                }
+            }
+        });
+    }
+}
 
 /// Main controller manager
 ///
@@ -252,8 +343,14 @@ impl ControllerManager {
         }
 
         // Register broker lifecycle listeners
-        // TODO: Implement broker inactive handler and register it
-        // self.heartbeat_manager.lock().await.register_broker_lifecycle_listener(Arc::new(...));
+        {
+            let inactive_listener = Arc::new(BrokerInactiveListener::new(ArcMut::downgrade(&self)));
+            self.heartbeat_manager
+                .register_broker_lifecycle_listener(inactive_listener.clone());
+            self.raft_controller
+                .register_broker_lifecycle_listener(inactive_listener);
+            info!("Broker inactive listener registered");
+        }
 
         // Initialize broker housekeeping service
         {
@@ -619,6 +716,79 @@ impl ControllerManager {
 
     pub fn controller(&self) -> &ArcMut<RaftController> {
         &self.raft_controller
+    }
+
+    async fn notify_broker_role_changed(&self, response: RemotingCommand) -> Result<()> {
+        let response_header = response
+            .decode_command_custom_header::<ElectMasterResponseHeader>()
+            .map_err(|error| {
+                ControllerError::Internal(format!(
+                    "Failed to decode elect-master response header for broker role notify: {:?}",
+                    error
+                ))
+            })?;
+
+        let Some(body) = response.body() else {
+            return Ok(());
+        };
+
+        let response_body = ElectMasterResponseBody::decode(body).map_err(|error| {
+            ControllerError::Internal(format!(
+                "Failed to decode elect-master response body for broker role notify: {}",
+                error
+            ))
+        })?;
+
+        let Some(member_group) = response_body.broker_member_group else {
+            return Ok(());
+        };
+
+        let Some(master_broker_id) = response_header.master_broker_id.and_then(|id| u64::try_from(id).ok()) else {
+            warn!(
+                "Skip broker role notify because master broker id is absent, broker={}",
+                member_group.broker_name
+            );
+            return Ok(());
+        };
+
+        let sync_state_set_epoch = response_header.sync_state_set_epoch.unwrap_or_default();
+        let sync_state_set = SyncStateSet::with_values(response_body.sync_state_set, sync_state_set_epoch)
+            .encode()
+            .map_err(|error| {
+                ControllerError::Internal(format!(
+                    "Failed to encode sync state set for broker role notify: {}",
+                    error
+                ))
+            })?;
+
+        for (broker_id, broker_addr) in member_group.broker_addrs {
+            if !self.heartbeat_manager.is_broker_active(
+                &member_group.cluster,
+                &member_group.broker_name,
+                broker_id as i64,
+            ) {
+                continue;
+            }
+
+            let request_header = NotifyBrokerRoleChangedRequestHeader {
+                master_address: response_header.master_address.clone(),
+                master_epoch: response_header.master_epoch,
+                sync_state_set_epoch: response_header.sync_state_set_epoch,
+                master_broker_id: Some(master_broker_id),
+            };
+            let request = RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
+                .set_body(sync_state_set.clone());
+
+            self.remoting_client
+                .invoke_request_oneway(&broker_addr, request, 3000)
+                .await;
+            info!(
+                "Notified broker role change, target={}, broker_id={}, broker={}",
+                broker_addr, broker_id, member_group.broker_name
+            );
+        }
+
+        Ok(())
     }
 }
 

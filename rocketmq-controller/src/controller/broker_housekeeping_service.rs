@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::ControllerManager;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
@@ -50,16 +51,22 @@ impl ChannelEventListener for BrokerHousekeepingService {
         // nothing to do
     }
 
-    fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
-        unimplemented!("on_channel_close is not implemented yet");
+    fn on_channel_close(&self, _remote_addr: &str, channel: &Channel) {
+        if let Some(controller_manager) = &self.controller_manager {
+            controller_manager.heartbeat_manager().on_broker_channel_close(channel);
+        }
     }
 
-    fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {
-        unimplemented!("on_channel_exception is not implemented yet");
+    fn on_channel_exception(&self, _remote_addr: &str, channel: &Channel) {
+        if let Some(controller_manager) = &self.controller_manager {
+            controller_manager.heartbeat_manager().on_broker_channel_close(channel);
+        }
     }
 
-    fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {
-        unimplemented!("on_channel_idle is not implemented yet");
+    fn on_channel_idle(&self, _remote_addr: &str, channel: &Channel) {
+        if let Some(controller_manager) = &self.controller_manager {
+            controller_manager.heartbeat_manager().on_broker_channel_close(channel);
+        }
     }
 
     fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {

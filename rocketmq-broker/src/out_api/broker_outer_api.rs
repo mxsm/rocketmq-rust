@@ -1233,17 +1233,14 @@ impl BrokerOuterAPI {
             });
         }
 
-        if let Some(body) = response.body() {
-            let next_broker_id = GetNextBrokerIdResponseHeader::decode(body.as_ref())?;
-            Ok(next_broker_id)
-        } else {
-            Err(RocketMQError::BrokerOperationFailed {
+        response
+            .decode_command_custom_header::<GetNextBrokerIdResponseHeader>()
+            .map_err(|e| RocketMQError::BrokerOperationFailed {
                 operation: "get_next_broker_id",
                 code: -1,
-                message: "No next broker id in response".to_string(),
+                message: format!("Failed to decode next broker id response header: {:?}", e),
                 broker_addr: Some(controller_address.to_string()),
             })
-        }
     }
 
     /// Apply broker ID from controller

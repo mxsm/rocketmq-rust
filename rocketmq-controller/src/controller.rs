@@ -119,6 +119,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
@@ -327,8 +328,7 @@ pub trait Controller: Send + Sync {
     /// RemotingCommand indicating success or error
     async fn clean_broker_data(
         &self,
-        cluster_name: CheetahString,
-        broker_name: CheetahString,
+        request: &CleanBrokerDataRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>>;
 
     // ==================== Master Election & ISR Management ====================
@@ -560,8 +560,7 @@ impl Controller for MockController {
 
     async fn clean_broker_data(
         &self,
-        _cluster_name: CheetahString,
-        _broker_name: CheetahString,
+        _request: &CleanBrokerDataRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
         Ok(Some(RemotingCommand::create_response_command()))
     }

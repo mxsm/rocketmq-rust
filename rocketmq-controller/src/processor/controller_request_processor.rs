@@ -97,8 +97,10 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -585,9 +587,26 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_clean_broker_data")
+        let request_header = request
+            .decode_command_custom_header::<CleanBrokerDataRequestHeader>()
+            .map_err(|e| {
+                warn!("Failed to decode CleanBrokerDataRequestHeader: {:?}", e);
+                RocketMQError::request_header_error(format!("Failed to decode CleanBrokerDataRequestHeader: {:?}", e))
+            })?;
+
+        if request_header.broker_name.is_empty() {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "broker_name cannot be empty",
+            )));
+        }
+
+        self.controller_manager
+            .controller()
+            .clean_broker_data(&request_header)
+            .await
     }
 
     /// Handle GET_NEXT_BROKER_ID request
@@ -810,9 +829,33 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_register_broker")
+        let request_header = request
+            .decode_command_custom_header::<RegisterBrokerToControllerRequestHeader>()
+            .map_err(|e| {
+                warn!("Failed to decode RegisterBrokerToControllerRequestHeader: {:?}", e);
+                RocketMQError::request_header_error(format!(
+                    "Failed to decode RegisterBrokerToControllerRequestHeader: {:?}",
+                    e
+                ))
+            })?;
+
+        let broker_name = request_header.broker_name.clone().unwrap_or_default();
+        let cluster_name = request_header.cluster_name.clone().unwrap_or_default();
+        let broker_address = request_header.broker_address.clone().unwrap_or_default();
+
+        if broker_name.is_empty() || cluster_name.is_empty() || broker_address.is_empty() {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "cluster_name, broker_name and broker_address cannot be empty",
+            )));
+        }
+
+        self.controller_manager
+            .controller()
+            .register_broker(&request_header)
+            .await
     }
 
     // ==================== Helper Methods ====================
