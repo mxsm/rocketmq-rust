@@ -23,6 +23,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -488,6 +489,13 @@ pub trait MessageStoreInner: Sync + 'static {
 
     /// Set broker init max offset.
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64);
+
+    /// Synchronize the broker role view cached inside the message store.
+    ///
+    /// Controller mode changes broker role outside the store. Implementations
+    /// that cache `MessageStoreConfig` snapshots should update those copies so
+    /// HA and commitlog logic observe the latest role.
+    fn sync_broker_role(&mut self, broker_role: BrokerRole);
 
     /// Calculate the checksum of a certain range of data.
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8>;

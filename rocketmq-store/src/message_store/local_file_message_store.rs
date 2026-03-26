@@ -1792,6 +1792,11 @@ impl MessageStore for LocalFileMessageStore {
             .store(broker_init_max_offset, Ordering::SeqCst);
     }
 
+    fn sync_broker_role(&mut self, broker_role: BrokerRole) {
+        Arc::make_mut(&mut self.message_store_config).broker_role = broker_role;
+        self.commit_log.sync_broker_role(broker_role);
+    }
+
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {
         todo!()
     }

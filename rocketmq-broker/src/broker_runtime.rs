@@ -57,6 +57,7 @@ use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::ha::ha_service::HAService;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
@@ -2794,22 +2795,36 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .replicas_manager()
             .map(|replicas_manager| replicas_manager.broker_controller_id())
             .unwrap_or(this.broker_config.broker_identity.broker_id);
+        let previous_store_role = this.message_store_config.broker_role;
 
         match role {
             BrokerReplicaRole::Master => {
                 Arc::make_mut(&mut this.message_store_config).broker_role = BrokerRole::SyncMaster;
                 Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = MASTER_ID;
+                this.apply_message_store_role_change(
+                    previous_store_role,
+                    BrokerReplicaRole::Master,
+                    controller_broker_id,
+                    None,
+                    outcome.master_epoch,
+                )
+                .await?;
                 this.change_special_service_status(true).await;
                 if let Some(slave_synchronize) = this.slave_synchronize_mut() {
                     slave_synchronize.set_master_addr(None);
-                }
-                if let Some(message_store) = this.message_store.as_ref() {
-                    message_store.update_ha_master_address("").await;
                 }
             }
             BrokerReplicaRole::Slave => {
                 Arc::make_mut(&mut this.message_store_config).broker_role = BrokerRole::Slave;
                 Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = controller_broker_id;
+                this.apply_message_store_role_change(
+                    previous_store_role,
+                    BrokerReplicaRole::Slave,
+                    controller_broker_id,
+                    outcome.master_address.as_ref(),
+                    outcome.master_epoch,
+                )
+                .await?;
                 this.change_special_service_status(false).await;
                 if let Some(master_address) = outcome.master_address.as_ref() {
                     if let Some(slave_synchronize) = this.slave_synchronize_mut() {
@@ -2826,6 +2841,63 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let this_clone = this.clone();
         this.register_broker_all_inner(this_clone, true, false, this.broker_config.force_register)
             .await;
+        Ok(())
+    }
+
+    async fn apply_message_store_role_change(
+        &mut self,
+        previous_store_role: BrokerRole,
+        target_role: BrokerReplicaRole,
+        controller_broker_id: u64,
+        master_address: Option<&CheetahString>,
+        master_epoch: i32,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let Some(message_store) = self.message_store.as_ref() else {
+            return Ok(());
+        };
+        let Some(ha_service) = message_store.get_ha_service() else {
+            return Ok(());
+        };
+
+        let result = match target_role {
+            BrokerReplicaRole::Master => {
+                if previous_store_role == BrokerRole::SyncMaster {
+                    ha_service.change_to_master_when_last_role_is_master(master_epoch).await
+                } else {
+                    ha_service.change_to_master(master_epoch).await
+                }
+            }
+            BrokerReplicaRole::Slave => {
+                let master_address = master_address.ok_or_else(|| {
+                    rocketmq_error::RocketMQError::illegal_argument(
+                        "controller role change missing master address for store transition",
+                    )
+                })?;
+                let current_master_address = ha_service.get_runtime_info(0).ha_client_runtime_info.master_addr;
+                if previous_store_role == BrokerRole::Slave && current_master_address == master_address.as_str() {
+                    ha_service
+                        .change_to_slave_when_master_not_change(master_address.as_str(), master_epoch)
+                        .await
+                } else {
+                    ha_service
+                        .change_to_slave(master_address.as_str(), master_epoch, Some(controller_broker_id as i64))
+                        .await
+                }
+            }
+        };
+
+        result.map_err(|error| {
+            rocketmq_error::RocketMQError::illegal_argument(format!(
+                "apply controller role change to message store failed: {}",
+                error
+            ))
+        })?;
+        if let Some(message_store) = self.message_store.as_mut() {
+            message_store.sync_broker_role(match target_role {
+                BrokerReplicaRole::Master => BrokerRole::SyncMaster,
+                BrokerReplicaRole::Slave => BrokerRole::Slave,
+            });
+        }
         Ok(())
     }
 
@@ -2983,12 +3055,38 @@ fn need_register(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
 
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::timer::timer_message_store::TimerMessageStore;
 
     use super::*;
+
+    fn new_controller_mode_message_store(
+        root: &Path,
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+    ) -> ArcMut<LocalFileMessageStore> {
+        std::fs::create_dir_all(root).expect("create temp store dir");
+        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            message_store_config,
+            broker_config,
+            topic_table,
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
 
     #[tokio::test]
     async fn timer_message_store_unchecked_returns_configured_store() {
@@ -3005,5 +3103,77 @@ mod tests {
             .as_ref();
 
         assert!(std::ptr::eq(timer_store, configured_store));
+    }
+
+    #[tokio::test]
+    async fn apply_message_store_role_change_promotes_store_to_master() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-master-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig {
+            enable_controller_mode: true,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            enable_controller_mode: true,
+            broker_role: BrokerRole::Slave,
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config.clone(), message_store_config.clone());
+        let mut store = new_controller_mode_message_store(&temp_root, broker_config, message_store_config);
+        store.init().await.expect("init message store");
+        runtime.inner.message_store = Some(store.clone());
+
+        runtime
+            .inner
+            .apply_message_store_role_change(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 2)
+            .await
+            .expect("promote store to master");
+
+        let ha_service = store.get_ha_service().expect("ha service should exist");
+        let runtime_info = ha_service.get_runtime_info(0);
+        assert!(runtime_info.master);
+        assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "");
+        assert_eq!(store.message_store_config_ref().broker_role, BrokerRole::SyncMaster);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn apply_message_store_role_change_demotes_store_to_slave() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-slave-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig {
+            enable_controller_mode: true,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            enable_controller_mode: true,
+            broker_role: BrokerRole::SyncMaster,
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config.clone(), message_store_config.clone());
+        let mut store = new_controller_mode_message_store(&temp_root, broker_config, message_store_config);
+        store.init().await.expect("init message store");
+        runtime.inner.message_store = Some(store.clone());
+
+        runtime
+            .inner
+            .apply_message_store_role_change(
+                BrokerRole::SyncMaster,
+                BrokerReplicaRole::Slave,
+                7,
+                Some(&CheetahString::from_static_str("127.0.0.1:10911")),
+                3,
+            )
+            .await
+            .expect("demote store to slave");
+
+        let ha_service = store.get_ha_service().expect("ha service should exist");
+        let runtime_info = ha_service.get_runtime_info(0);
+        assert!(!runtime_info.master);
+        assert_eq!(runtime_info.ha_client_runtime_info.master_addr, "127.0.0.1:10911");
+        assert_eq!(store.message_store_config_ref().broker_role, BrokerRole::Slave);
+
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 }

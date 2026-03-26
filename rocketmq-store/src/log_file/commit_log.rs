@@ -1607,6 +1607,10 @@ impl CommitLog {
     pub fn set_local_file_message_store(&mut self, local_file_message_store: ArcMut<LocalFileMessageStore>) {
         self.local_file_message_store = Some(local_file_message_store);
     }
+
+    pub fn sync_broker_role(&mut self, broker_role: BrokerRole) {
+        Arc::make_mut(&mut self.message_store_config).broker_role = broker_role;
+    }
 }
 
 pub fn check_message_and_return_size(
