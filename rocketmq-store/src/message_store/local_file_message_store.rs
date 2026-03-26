@@ -1285,6 +1285,17 @@ impl MessageStore for LocalFileMessageStore {
             self.get_max_phy_offset().to_string(),
         );
 
+        if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+            let (topic_backlog_distribution, timer_backlog_distribution) =
+                timer_message_store.runtime_backlog_metrics();
+            if let Ok(topic_backlog_distribution) = serde_json::to_string(&topic_backlog_distribution) {
+                result.insert("timerTopicBacklogDistribution".to_string(), topic_backlog_distribution);
+            }
+            if let Ok(timer_backlog_distribution) = serde_json::to_string(&timer_backlog_distribution) {
+                result.insert("timerBacklogDistribution".to_string(), timer_backlog_distribution);
+            }
+        }
+
         result
     }
 

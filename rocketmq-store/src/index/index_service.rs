@@ -456,6 +456,8 @@ fn build_key_with_type(topic: &str, key: &str, index_type: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
+    use tempfile::tempdir;
+
     use super::*;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::store::running_flags::RunningFlags;
@@ -473,10 +475,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_index_with_tags() {
-        // This test verifies build_index correctly processes tags from properties_map
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join("store_checkpoint_test_build_index_with_tags");
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir.clone()),
+            ..MessageStoreConfig::default()
+        });
+        let temp_file = temp_dir.path().join("store_checkpoint_test_build_index_with_tags");
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
@@ -511,8 +516,6 @@ mod tests {
             offset_id: None,
         };
 
-        // Build index should handle tags properly without panicking
-        // (actual file creation needs proper directory setup, this tests the logic flow)
         index_service.build_index(&dispatch_request);
 
         // Give async tasks time to complete
@@ -521,9 +524,13 @@ mod tests {
 
     #[test]
     fn test_query_offset_with_type_api() {
-        let message_store_config = Arc::new(MessageStoreConfig::default());
-        let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join("store_checkpoint_test_query_offset_with_type_api");
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir),
+            ..MessageStoreConfig::default()
+        });
+        let temp_file = temp_dir.path().join("store_checkpoint_test_query_offset_with_type_api");
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 

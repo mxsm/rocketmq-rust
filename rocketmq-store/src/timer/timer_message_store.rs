@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
@@ -32,6 +33,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_common::UtilAll::is_it_time_to_do;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
@@ -77,7 +79,7 @@ pub const MAGIC_DELETE: i32 = 1 << 2;
 const EMPTY_TIMER_LOG_POS: i64 = -1;
 const MIN_SCHEDULER_INTERVAL_MS: u64 = 100;
 const MAX_FUTURE_CURSOR_SKEW_SLOTS: i64 = 2;
-const TPS_WINDOW_MS: i64 = 1_000;
+const TPS_WINDOW_MS: i64 = 3_000;
 
 #[derive(Clone, Copy, Debug)]
 struct TimerLogRecord {
@@ -134,6 +136,57 @@ struct RecoveredTimerState {
     queue_offset: i64,
 }
 
+struct BacklogMetricsSnapshot {
+    topic_backlog: HashMap<String, i64>,
+    timer_backlog_distribution: HashMap<i32, i64>,
+    timer_dist: Vec<i32>,
+}
+
+impl BacklogMetricsSnapshot {
+    fn new(timer_dist: Vec<i32>) -> Self {
+        Self {
+            topic_backlog: HashMap::new(),
+            timer_backlog_distribution: HashMap::new(),
+            timer_dist,
+        }
+    }
+
+    fn observe_message(&mut self, message: &MessageExt, now_ms: i64) {
+        let Some(deliver_time_ms) = parse_deliver_time_ms(message) else {
+            return;
+        };
+        self.observe_distribution(deliver_time_ms, now_ms);
+        let delta = if is_delete_timer_message(message) { -1 } else { 1 };
+        let topic = message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            .map(|topic| topic.to_string())
+            .unwrap_or_else(|| message.topic().to_string());
+        *self.topic_backlog.entry(topic).or_default() += delta;
+    }
+
+    fn normalized_topic_backlog(&self) -> HashMap<String, i64> {
+        self.topic_backlog
+            .iter()
+            .filter_map(|(topic, count)| (*count > 0).then_some((topic.clone(), *count)))
+            .collect()
+    }
+
+    fn timer_backlog_distribution(&self) -> HashMap<i32, i64> {
+        self.timer_backlog_distribution
+            .iter()
+            .filter_map(|(period, count)| (*count > 0).then_some((*period, *count)))
+            .collect()
+    }
+
+    fn observe_distribution(&mut self, deliver_time_ms: i64, now_ms: i64) {
+        let remaining_ms = deliver_time_ms.saturating_sub(now_ms).max(0);
+        let remaining_secs = ((remaining_ms + 999) / 1000) as i32;
+        if let Some(period) = self.timer_dist.iter().copied().find(|period| remaining_secs <= *period) {
+            *self.timer_backlog_distribution.entry(period).or_default() += 1;
+        }
+    }
+}
+
 #[derive(Default)]
 struct TpsCounter {
     state: Mutex<TpsCounterState>,
@@ -168,7 +221,7 @@ impl TpsCounter {
         let now_ms = current_millis() as i64;
         let mut state = self.state.lock();
         Self::evict_expired(&mut state, now_ms);
-        state.total as f32
+        state.total as f32 * 1000.0 / TPS_WINDOW_MS as f32
     }
 
     fn evict_expired(state: &mut TpsCounterState, now_ms: i64) {
@@ -248,6 +301,11 @@ impl TimerMessageStore {
         *self.timer_log.lock() = Some(timer_log);
         *self.timer_wheel.lock() = Some(timer_wheel);
         let _ = self.timer_metrics.load();
+        self.refresh_timer_backlog_distribution();
+        if self.should_check_and_revise_metrics() {
+            self.check_and_revise_metrics();
+            self.timer_metrics.persist();
+        }
         true
     }
 
@@ -323,6 +381,16 @@ impl TimerMessageStore {
             .as_ref()
             .map(|timer_wheel| timer_wheel.get_all_num(self.curr_read_time_ms.load(Ordering::Relaxed)))
             .unwrap_or_default()
+    }
+
+    pub fn runtime_backlog_metrics(&self) -> (HashMap<String, i64>, HashMap<i32, i64>) {
+        let backlog_metrics = self.collect_backlog_metrics();
+        self.timer_metrics
+            .replace_timing_distribution_snapshot(backlog_metrics.timer_backlog_distribution());
+        (
+            backlog_metrics.normalized_topic_backlog(),
+            backlog_metrics.timer_backlog_distribution(),
+        )
     }
 
     pub fn get_enqueue_tps(&self) -> f32 {
@@ -501,8 +569,145 @@ impl TimerMessageStore {
 
         let last_read_time_ms = timer_checkpoint.last_read_time_ms();
         if last_read_time_ms > 0 {
+            let now_floor = self.floor_time_ms(current_millis() as i64);
             self.curr_read_time_ms
-                .store(self.floor_time_ms(last_read_time_ms), Ordering::Relaxed);
+                .store(self.floor_time_ms(last_read_time_ms).min(now_floor), Ordering::Relaxed);
+        }
+    }
+
+    fn should_check_and_revise_metrics(&self) -> bool {
+        if !self.message_store_config.timer_enable_check_metrics
+            || self.message_store_config.timer_metric_small_threshold == 0
+        {
+            return false;
+        }
+
+        let when = self.message_store_config.timer_check_metrics_when.as_str();
+        when.is_empty() || is_it_time_to_do(when)
+    }
+
+    fn refresh_timer_backlog_distribution(&self) {
+        let backlog_metrics = self.collect_backlog_metrics();
+        self.timer_metrics
+            .replace_timing_distribution_snapshot(backlog_metrics.timer_backlog_distribution());
+    }
+
+    fn check_and_revise_metrics(&self) {
+        let threshold = self.message_store_config.timer_metric_small_threshold as i64;
+        if threshold <= 0 {
+            return;
+        }
+
+        let backlog_metrics = self.collect_backlog_metrics();
+        let actual_topic_backlog = backlog_metrics.normalized_topic_backlog();
+        let current_topic_backlog = self.timer_metrics.get_timing_count_snapshot();
+        let mut revised_topic_backlog = current_topic_backlog.clone();
+        let mut candidate_topics = HashSet::new();
+
+        for (topic, count) in &current_topic_backlog {
+            if *count < threshold {
+                candidate_topics.insert(topic.clone());
+            }
+        }
+        for (topic, count) in &actual_topic_backlog {
+            if *count < threshold {
+                candidate_topics.insert(topic.clone());
+            }
+        }
+
+        for topic in candidate_topics {
+            match actual_topic_backlog.get(&topic).copied().unwrap_or_default() {
+                0 => {
+                    revised_topic_backlog.remove(&topic);
+                }
+                count => {
+                    revised_topic_backlog.insert(topic, count);
+                }
+            }
+        }
+
+        if revised_topic_backlog != current_topic_backlog {
+            self.timer_metrics.replace_timing_count_snapshot(revised_topic_backlog);
+        }
+        self.timer_metrics
+            .replace_timing_distribution_snapshot(backlog_metrics.timer_backlog_distribution());
+    }
+
+    fn collect_backlog_metrics(&self) -> BacklogMetricsSnapshot {
+        let now_ms = self.floor_time_ms(current_millis() as i64);
+        let mut backlog_metrics = BacklogMetricsSnapshot::new(self.timer_metrics.timer_dist_list());
+        self.collect_unindexed_timer_queue_backlog(now_ms, &mut backlog_metrics);
+        self.collect_indexed_timer_wheel_backlog(now_ms, &mut backlog_metrics);
+        backlog_metrics
+    }
+
+    fn collect_unindexed_timer_queue_backlog(&self, now_ms: i64, backlog_metrics: &mut BacklogMetricsSnapshot) {
+        let Some(message_store) = self.default_message_store.as_ref() else {
+            return;
+        };
+        let Some(consume_queue) = message_store.find_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+        else {
+            return;
+        };
+
+        let max_offset = consume_queue.get_max_offset_in_queue();
+        let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
+        while queue_offset < max_offset {
+            let Some(cq_unit) = consume_queue.get(queue_offset) else {
+                break;
+            };
+            let Some(message) = message_store.look_message_by_offset_with_size(cq_unit.pos, cq_unit.size) else {
+                warn!(
+                    "skip backlog metrics for timer queue offset {} because commitlog message {}:{} is missing",
+                    queue_offset, cq_unit.pos, cq_unit.size
+                );
+                queue_offset = cq_unit.queue_offset + 1;
+                continue;
+            };
+            backlog_metrics.observe_message(&message, now_ms);
+            queue_offset = cq_unit.queue_offset + 1;
+        }
+    }
+
+    fn collect_indexed_timer_wheel_backlog(&self, now_ms: i64, backlog_metrics: &mut BacklogMetricsSnapshot) {
+        let Some(message_store) = self.default_message_store.as_ref() else {
+            return;
+        };
+        let read_cursor = self.curr_read_time_ms.load(Ordering::Relaxed);
+        let slots = self
+            .timer_wheel
+            .lock()
+            .as_ref()
+            .map(TimerWheel::slots_snapshot)
+            .unwrap_or_default();
+
+        for slot in slots {
+            if slot.num <= 0 || slot.time_ms <= 0 || slot.time_ms < read_cursor {
+                continue;
+            }
+            let entries = match self.load_slot_entries(slot) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!(
+                        "skip backlog metrics for timer slot {} because loading entries failed: {}",
+                        slot.time_ms, err
+                    );
+                    continue;
+                }
+            };
+
+            for entry in entries {
+                let Some(message) =
+                    message_store.look_message_by_offset_with_size(entry.record.commit_log_offset, entry.record.size)
+                else {
+                    warn!(
+                        "skip backlog metrics for timer log position {} because commitlog message {}:{} is missing",
+                        entry.position, entry.record.commit_log_offset, entry.record.size
+                    );
+                    continue;
+                };
+                backlog_metrics.observe_message(&message, now_ms);
+            }
         }
     }
 
@@ -1164,6 +1369,7 @@ fn read_i32(buffer: &[u8]) -> std::io::Result<i32> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -1216,6 +1422,17 @@ mod tests {
             read_uncommitted: true,
             timer_precision_ms,
             timer_roll_window_slot,
+            ..MessageStoreConfig::default()
+        })
+    }
+
+    fn config_with_metrics_check(root_dir: &str, timer_metric_small_threshold: usize) -> Arc<MessageStoreConfig> {
+        Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir.to_owned()),
+            read_uncommitted: true,
+            timer_enable_check_metrics: true,
+            timer_metric_small_threshold,
+            timer_check_metrics_when: "0;1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17;18;19;20;21;22;23".to_string(),
             ..MessageStoreConfig::default()
         })
     }
@@ -1639,6 +1856,27 @@ mod tests {
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 2);
     }
 
+    #[test]
+    fn set_should_running_dequeue_clamps_future_read_cursor_on_resume() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let timer_message_store = TimerMessageStore::new_with_config(None, config_with_root(root_dir.as_str()));
+
+        assert!(timer_message_store.load());
+        let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
+        let future_read_time = now_floor + timer_message_store.precision_ms();
+        {
+            let checkpoint_guard = timer_message_store.timer_checkpoint.lock();
+            let checkpoint = checkpoint_guard.as_ref().unwrap();
+            checkpoint.set_last_read_time_ms(future_read_time);
+            checkpoint.flush().unwrap();
+        }
+
+        timer_message_store.set_should_running_dequeue(true);
+
+        assert_eq!(timer_message_store.curr_read_time_ms.load(Ordering::Relaxed), now_floor);
+    }
+
     #[tokio::test]
     async fn process_once_delete_tombstone_skips_matching_timer_message_delivery() {
         let temp_dir = tempdir().unwrap();
@@ -1958,7 +2196,7 @@ mod tests {
         let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
         assert!(store.mut_from_ref().load().await);
-        let deliver_ms = current_millis() + 1_000;
+        let deliver_ms = current_millis() + 3_000;
         assert!(store
             .mut_from_ref()
             .put_message(build_timer_message(&real_topic, deliver_ms))
@@ -2041,6 +2279,72 @@ mod tests {
 
         assert_eq!(timer_message_store.process_once().await, 2);
         assert!(timer_message_store.get_dequeue_tps() > 0.0);
+    }
+
+    #[tokio::test]
+    async fn get_runtime_info_reports_timer_topic_backlog_distribution() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let (store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
+
+        assert!(store.mut_from_ref().load().await);
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
+            .await
+            .is_ok());
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_timer_message(&real_topic, current_millis() + 120_000))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 2);
+
+        let runtime_info = store.get_runtime_info();
+        let topic_distribution: HashMap<String, i64> =
+            serde_json::from_str(runtime_info.get("timerTopicBacklogDistribution").unwrap()).unwrap();
+        let timer_backlog_distribution: HashMap<String, i64> =
+            serde_json::from_str(runtime_info.get("timerBacklogDistribution").unwrap()).unwrap();
+
+        assert_eq!(topic_distribution.get(real_topic.as_str()).copied(), Some(2));
+        assert_eq!(timer_backlog_distribution.values().sum::<i64>(), 2);
+    }
+
+    #[tokio::test]
+    async fn load_with_metrics_check_enabled_revises_small_topic_metrics() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_metrics_check(root_dir.as_str(), 10);
+        let (store, timer_message_store, real_topic) = build_store_with_timer_and_config(config.clone());
+
+        assert!(store.mut_from_ref().load().await);
+        let deliver_ms = current_millis() + 60_000;
+        let unique_key = "revise-key";
+        let mut timer_message = build_timer_message(&real_topic, deliver_ms);
+        timer_message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str(unique_key),
+        );
+        timer_message.properties_string = message_properties_to_string(timer_message.get_properties());
+        assert!(store.mut_from_ref().put_message(timer_message).await.is_ok());
+        assert!(store
+            .mut_from_ref()
+            .put_message(build_delete_timer_message(&real_topic, unique_key, deliver_ms))
+            .await
+            .is_ok());
+        store.mut_from_ref().reput_once().await;
+        assert_eq!(timer_message_store.process_once().await, 2);
+        assert_eq!(timer_message_store.timer_metrics.get_timing_count(&real_topic), 1);
+        store.mut_from_ref().shutdown().await;
+
+        let (reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer_and_config(config);
+        assert!(reloaded_store.mut_from_ref().load().await);
+
+        assert_eq!(
+            reloaded_timer_message_store.timer_metrics.get_timing_count(&real_topic),
+            0
+        );
     }
 
     #[tokio::test]

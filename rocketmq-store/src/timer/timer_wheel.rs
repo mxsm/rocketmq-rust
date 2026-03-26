@@ -183,6 +183,10 @@ impl TimerWheel {
         all_num
     }
 
+    pub fn slots_snapshot(&self) -> Vec<Slot> {
+        self.slots.lock().clone()
+    }
+
     fn expected_file_len(&self) -> usize {
         self.wheel_len() * Slot::SIZE as usize
     }
