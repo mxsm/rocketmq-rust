@@ -122,6 +122,7 @@ pub mod controller {
     pub use super::super::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader;
     pub use super::super::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
     pub use super::super::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
+    pub use super::super::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
     pub use super::super::header::controller::elect_master_request_header::ElectMasterRequestHeader;
     pub use super::super::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
     pub use super::super::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
