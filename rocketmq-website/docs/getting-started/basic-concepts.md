@@ -33,7 +33,7 @@ A topic is a logical grouping of messages. Producers send messages to topics, an
 
 Topics are partitioned into multiple queues for parallel processing and load distribution.
 
-```
+```text
 Topic: OrderEvents
 ├── Queue 0
 ├── Queue 1
@@ -46,6 +46,7 @@ Topic: OrderEvents
 Producers are applications that send messages to RocketMQ brokers.
 
 **Key Features:**
+
 - Asynchronous sending
 - Transactional messages
 - Retry mechanisms
@@ -64,6 +65,7 @@ producer.send(message).await?;
 Consumers are applications that receive and process messages from RocketMQ brokers.
 
 **Types of Consumers:**
+
 - **Push Consumer**: Messages are pushed to the consumer
 - **Pull Consumer**: Consumer actively pulls messages from the broker
 
@@ -100,7 +102,7 @@ Brokers register with the Name Server on startup, and clients query the Name Ser
 
 In clustering mode, messages are distributed among consumers in a consumer group. Each message is consumed by only one consumer.
 
-```
+```text
 Consumer Group: OrderProcessors
 ├── Consumer A → Queue 0, Queue 1
 ├── Consumer B → Queue 2, Queue 3
@@ -114,7 +116,7 @@ Message M2 (Queue 2) → Consumer B only
 
 In broadcasting mode, each consumer receives all messages in the topic.
 
-```
+```text
 Consumer Group: LogAggregators
 ├── Consumer A → All messages
 ├── Consumer B → All messages
@@ -161,6 +163,7 @@ graph LR
 A consumer group is a logical grouping of consumers that work together to consume messages from a topic.
 
 **Key Properties:**
+
 - All consumers in a group share the same group name
 - Each message is consumed by only one consumer in the group (clustering mode)
 - Load balancing is automatic within the group
