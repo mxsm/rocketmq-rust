@@ -55,6 +55,22 @@ impl GeneralHAConnection {
     pub fn set_auto_switch_ha_connection(&mut self, connection: AutoSwitchHAConnection) {
         self.auto_switch_ha_connection = Some(ArcMut::new(connection));
     }
+
+    pub fn is_auto_switch(&self) -> bool {
+        self.auto_switch_ha_connection.is_some()
+    }
+
+    pub fn set_slave_broker_id(&self, slave_broker_id: Option<i64>) {
+        if let Some(connection) = &self.auto_switch_ha_connection {
+            connection.set_slave_broker_id(slave_broker_id);
+        }
+    }
+
+    pub fn slave_broker_id(&self) -> Option<i64> {
+        self.auto_switch_ha_connection
+            .as_ref()
+            .and_then(|connection| connection.slave_broker_id())
+    }
 }
 
 impl HAConnection for GeneralHAConnection {
