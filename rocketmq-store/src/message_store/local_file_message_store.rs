@@ -1768,6 +1768,13 @@ impl MessageStore for LocalFileMessageStore {
         self.alive_replica_num_in_group.load(Ordering::SeqCst)
     }
 
+    fn sync_controller_sync_state_set(&self, local_broker_id: i64, sync_state_set: &HashSet<i64>) {
+        self.set_alive_replica_num_in_group(sync_state_set.len() as i32);
+        if let Some(ha_service) = self.ha_service.as_ref() {
+            ha_service.sync_controller_sync_state_set(local_broker_id, sync_state_set);
+        }
+    }
+
     fn wakeup_ha_client(&self) {
         if let Some(ha_service) = self.ha_service.as_ref() {
             ha_service.get_wait_notify_object().notify_waiters();

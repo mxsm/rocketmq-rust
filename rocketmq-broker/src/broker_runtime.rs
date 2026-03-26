@@ -2781,13 +2781,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             )?
         };
 
-        if outcome.sync_state_set_changed {
-            if let Some(message_store) = this.message_store.as_ref() {
-                message_store.set_alive_replica_num_in_group(outcome.sync_state_set.len() as i32);
-            }
-        }
-
         let Some(role) = outcome.role else {
+            if let Some(message_store) = this.message_store.as_ref() {
+                let controller_broker_id = this
+                    .replicas_manager()
+                    .map(|replicas_manager| replicas_manager.broker_controller_id())
+                    .unwrap_or(this.broker_config.broker_identity.broker_id);
+                message_store.sync_controller_sync_state_set(controller_broker_id as i64, &outcome.sync_state_set);
+            }
             return Ok(());
         };
 
@@ -2795,6 +2796,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .replicas_manager()
             .map(|replicas_manager| replicas_manager.broker_controller_id())
             .unwrap_or(this.broker_config.broker_identity.broker_id);
+        if let Some(message_store) = this.message_store.as_ref() {
+            message_store.sync_controller_sync_state_set(controller_broker_id as i64, &outcome.sync_state_set);
+        }
         let previous_store_role = this.message_store_config.broker_role;
 
         match role {

@@ -365,6 +365,54 @@ impl CommitLog {
         self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
     }
 
+    fn compute_controller_confirm_offset(&self) -> i64 {
+        let Some(message_store) = self.local_file_message_store.as_ref() else {
+            return self.confirm_offset;
+        };
+
+        if self.message_store_config.broker_role == BrokerRole::Slave || message_store.get_running_flags().is_fenced() {
+            return self.confirm_offset;
+        }
+
+        let max_phy_offset = message_store.get_max_phy_offset();
+        let Some(ha_service) = message_store.get_ha_service() else {
+            return self.confirm_offset;
+        };
+
+        if ha_service.local_sync_state_set_size(max_phy_offset) <= 1
+            || !self.message_store_config.all_ack_in_sync_state_set
+        {
+            return max_phy_offset;
+        }
+
+        if self.confirm_offset >= 0 {
+            return self.confirm_offset;
+        }
+
+        ha_service.compute_confirm_offset(self.confirm_offset, max_phy_offset)
+    }
+
+    fn clamp_controller_recover_confirm_offset(&mut self, min_phy_offset: i64, upper_bound: i64) {
+        let upper_bound = upper_bound.max(min_phy_offset);
+        let confirm_offset = self.get_confirm_offset();
+
+        if confirm_offset < min_phy_offset {
+            error!(
+                "confirmOffset {} is less than minPhyOffset {}, correct confirmOffset to minPhyOffset",
+                confirm_offset, min_phy_offset
+            );
+            self.set_confirm_offset(min_phy_offset);
+        } else if confirm_offset > upper_bound {
+            error!(
+                "confirmOffset {} is larger than recovery upper bound {}, correct confirmOffset to upper bound",
+                confirm_offset, upper_bound
+            );
+            self.set_confirm_offset(upper_bound);
+        } else {
+            self.set_confirm_offset(confirm_offset);
+        }
+    }
+
     /// Handle HA service validation and calculate need_ack_nums
     /// Returns (need_ack_nums, should_continue) where should_continue indicates if processing can
     /// continue
@@ -975,7 +1023,7 @@ impl CommitLog {
         }
         let mut index = index as usize;
 
-        let mut last_valid_msg_phy_offset = self.get_confirm_offset() as u64;
+        let mut last_valid_msg_phy_offset = self.get_confirm_offset().max(0) as u64;
         let do_dispatch = false;
 
         let mut recovery_ctx = RecoveryContext::new(
@@ -1035,7 +1083,10 @@ impl CommitLog {
         }
 
         if broker_config.enable_controller_mode {
-            unimplemented!("Controller mode not yet supported");
+            self.clamp_controller_recover_confirm_offset(
+                message_store.get_min_phy_offset(),
+                last_valid_msg_phy_offset as i64,
+            );
         } else {
             self.set_confirm_offset(last_valid_msg_phy_offset as i64);
         }
@@ -1084,7 +1135,7 @@ impl CommitLog {
             let mut mapped_file_offset = 0u64;
             //When recovering, the maximum value obtained when getting get_confirm_offset is
             // the file size of the latest file plus the value resolved from the file name.
-            let mut last_valid_msg_phy_offset = self.get_confirm_offset() as u64;
+            let mut last_valid_msg_phy_offset = self.get_confirm_offset().max(0) as u64;
             // normal recover doesn't require dispatching
             let do_dispatch = false;
             let mut current_pos = 0usize;
@@ -1140,7 +1191,7 @@ impl CommitLog {
             }
             process_offset += mapped_file_offset;
             if broker_config.enable_controller_mode {
-                unimplemented!();
+                self.clamp_controller_recover_confirm_offset(message_store.get_min_phy_offset(), process_offset as i64);
             } else {
                 self.set_confirm_offset(last_valid_msg_phy_offset as i64);
             }
@@ -1185,13 +1236,38 @@ impl CommitLog {
     //Fetch and compute the newest confirmOffset.
     pub fn get_confirm_offset(&self) -> i64 {
         if self.broker_config.enable_controller_mode {
-            unimplemented!()
+            return self.compute_controller_confirm_offset();
         } else if self.broker_config.duplication_enable {
             return self.confirm_offset;
         }
         let ms = self.local_file_message_store.as_ref().unwrap();
         if ms.is_sync_disk_flush() {
             self.get_flushed_where()
+        } else {
+            self.get_max_offset()
+        }
+    }
+
+    pub fn get_confirm_offset_directly(&self) -> i64 {
+        if self.broker_config.enable_controller_mode {
+            let Some(message_store) = self.local_file_message_store.as_ref() else {
+                return self.confirm_offset;
+            };
+
+            if self.message_store_config.broker_role != BrokerRole::Slave
+                && !message_store.get_running_flags().is_fenced()
+            {
+                let max_phy_offset = message_store.get_max_phy_offset();
+                if let Some(ha_service) = message_store.get_ha_service() {
+                    if ha_service.local_sync_state_set_size(max_phy_offset) <= 1 {
+                        return max_phy_offset;
+                    }
+                }
+            }
+
+            self.confirm_offset
+        } else if self.broker_config.duplication_enable {
+            self.confirm_offset
         } else {
             self.get_max_offset()
         }
@@ -1316,8 +1392,10 @@ impl CommitLog {
         let process_offset = last_valid_msg_phy_offset;
 
         if broker_config.enable_controller_mode {
-            error!("TODO: finishCommitLogDispatch: {}", last_confirm_valid_msg_phy_offset);
-            unimplemented!("Controller mode not yet supported");
+            self.clamp_controller_recover_confirm_offset(
+                message_store.get_min_phy_offset(),
+                last_confirm_valid_msg_phy_offset as i64,
+            );
         } else {
             self.set_confirm_offset(last_valid_msg_phy_offset as i64);
         }
@@ -1439,8 +1517,10 @@ impl CommitLog {
 
             process_offset += mapped_file_offset;
             if broker_config.enable_controller_mode {
-                error!("TODO: finishCommitLogDispatch:{}", last_confirm_valid_msg_phy_offset);
-                unimplemented!();
+                self.clamp_controller_recover_confirm_offset(
+                    message_store.get_min_phy_offset(),
+                    last_confirm_valid_msg_phy_offset as i64,
+                );
             } else {
                 self.set_confirm_offset(last_valid_msg_phy_offset as i64);
             }
@@ -1905,5 +1985,116 @@ impl Swappable for CommitLog {
 
     fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::base::message_store::MessageStore;
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::TimeUtils::current_millis;
+
+    fn new_test_message_store(
+        root: &Path,
+        broker_role: BrokerRole,
+        all_ack_in_sync_state_set: bool,
+    ) -> ArcMut<LocalFileMessageStore> {
+        std::fs::create_dir_all(root).expect("create temp store dir");
+        let broker_config = Arc::new(BrokerConfig {
+            enable_controller_mode: true,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            enable_controller_mode: true,
+            broker_role,
+            all_ack_in_sync_state_set,
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            message_store_config,
+            broker_config,
+            topic_table,
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
+
+    #[tokio::test]
+    async fn controller_mode_confirm_offset_prefers_max_offset_when_all_ack_is_disabled() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-confirm-offset-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+        store.set_confirm_offset(1);
+
+        assert_eq!(store.get_confirm_offset(), 4);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn controller_mode_confirm_offset_keeps_uninitialized_value_when_sync_state_set_exceeds_connections() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-commitlog-confirm-offset-missing-connection-{}",
+            current_millis()
+        ));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, true);
+        store.init().await.expect("init message store");
+        store.set_alive_replica_num_in_group(3);
+
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+        store.get_commit_log_mut().confirm_offset = -1;
+
+        assert_eq!(store.get_confirm_offset(), -1);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn controller_mode_recovery_clamp_persists_confirm_offset() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-recovery-clamp-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, true);
+        store.init().await.expect("init message store");
+        store.set_alive_replica_num_in_group(2);
+
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4, 5, 6, 7, 8], 0, 8)
+            .await
+            .expect("append data");
+
+        store.set_confirm_offset(8);
+
+        store.get_commit_log_mut().clamp_controller_recover_confirm_offset(0, 6);
+
+        assert_eq!(store.get_commit_log().confirm_offset, 6);
+        assert_eq!(store.get_confirm_offset(), 6);
+
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 }

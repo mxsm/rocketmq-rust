@@ -475,6 +475,9 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Get the number of alive replicas in group.
     fn get_alive_replica_num_in_group(&self) -> i32;
 
+    /// Synchronize controller-owned replica membership into the message store and HA service.
+    fn sync_controller_sync_state_set(&self, local_broker_id: i64, sync_state_set: &HashSet<i64>);
+
     /// Wake up AutoRecoverHAClient to start HA connection.
     fn wakeup_ha_client(&self);
 

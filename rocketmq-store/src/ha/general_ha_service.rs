@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
@@ -53,6 +54,30 @@ impl GeneralHAService {
     #[inline]
     pub fn is_auto_switch_enabled(&self) -> bool {
         matches!(self, GeneralHAService::AutoSwitchHAService(_))
+    }
+
+    pub fn local_sync_state_set_size(&self, master_put_where: i64) -> usize {
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.in_sync_replicas_nums(master_put_where).max(1) as usize
+            }
+            GeneralHAService::AutoSwitchHAService(service) => service.local_sync_state_set_size(master_put_where),
+        }
+    }
+
+    pub fn compute_confirm_offset(&self, current_confirm_offset: i64, max_phy_offset: i64) -> i64 {
+        match self {
+            GeneralHAService::DefaultHAService(_) => current_confirm_offset,
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.compute_confirm_offset(current_confirm_offset, max_phy_offset)
+            }
+        }
+    }
+
+    pub fn sync_controller_sync_state_set(&self, local_broker_id: i64, sync_state_set: &HashSet<i64>) {
+        if let GeneralHAService::AutoSwitchHAService(service) = self {
+            service.sync_controller_sync_state_set(local_broker_id, sync_state_set);
+        }
     }
 }
 
