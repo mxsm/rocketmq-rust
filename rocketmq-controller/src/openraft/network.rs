@@ -70,12 +70,14 @@ impl Default for NetworkFactory {
 impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
     type Network = GrpcNetworkClient;
 
-    async fn new_client(&mut self, target: NodeId, _node: &Node) -> Self::Network {
-        let peer_addrs = self.peer_addrs.read().await;
-        let target_addr = peer_addrs
-            .get(&target)
-            .cloned()
-            .unwrap_or_else(|| format!("unknown-{}", target));
+    async fn new_client(&mut self, target: NodeId, node: &Node) -> Self::Network {
+        let target_addr = {
+            let mut peer_addrs = self.peer_addrs.write().await;
+            peer_addrs
+                .entry(target)
+                .or_insert_with(|| node.rpc_addr.clone())
+                .clone()
+        };
 
         debug!("Creating gRPC network connection to node {} at {}", target, target_addr);
 

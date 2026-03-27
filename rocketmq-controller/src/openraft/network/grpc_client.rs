@@ -38,6 +38,7 @@ use tracing::error;
 
 use crate::protobuf::openraft::open_raft_service_client::OpenRaftServiceClient;
 use crate::protobuf::openraft::OpenRaftAppendRequest;
+use crate::protobuf::openraft::OpenRaftVote as ProtoVote;
 use crate::protobuf::openraft::OpenRaftVoteRequest as ProtoVoteRequest;
 use crate::typ::NodeId;
 use crate::typ::TypeConfig;
@@ -105,6 +106,21 @@ impl GrpcNetworkClient {
     }
 }
 
+fn decode_vote(vote: ProtoVote) -> Vote<TypeConfig> {
+    if vote.committed {
+        Vote::new_committed(vote.term, crate::typ::NodeId::from(vote.node_id))
+    } else {
+        Vote::new(vote.term, crate::typ::NodeId::from(vote.node_id))
+    }
+}
+
+fn decode_log_id(log_id: crate::protobuf::openraft::OpenRaftLogId) -> crate::typ::LogId {
+    crate::typ::LogId {
+        leader_id: crate::typ::Vote::new(log_id.term, log_id.node_id).leader_id,
+        index: log_id.index,
+    }
+}
+
 impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
     async fn append_entries(
         &mut self,
@@ -119,6 +135,28 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         );
 
         // Convert to protobuf request
+        let entries = req
+            .entries
+            .iter()
+            .map(|entry| {
+                serde_json::to_vec(&entry.payload)
+                    .map(|payload| crate::protobuf::openraft::OpenRaftLogEntry {
+                        log_id: Some(crate::protobuf::openraft::OpenRaftLogId {
+                            term: entry.log_id.leader_id.term,
+                            node_id: entry.log_id.leader_id.node_id,
+                            index: entry.log_id.index,
+                        }),
+                        payload,
+                    })
+                    .map_err(|e| {
+                        RPCError::Network(NetworkError::new(&std::io::Error::other(format!(
+                            "Failed to serialize append entry payload: {}",
+                            e
+                        ))))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let proto_req = OpenRaftAppendRequest {
             vote: Some(crate::protobuf::openraft::OpenRaftVote {
                 term: req.vote.leader_id().term,
@@ -126,22 +164,14 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
                 committed: req.vote.committed,
             }),
             prev_log_id: req.prev_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                leader_id: id.leader_id.node_id,
+                term: id.leader_id.term,
+                node_id: id.leader_id.node_id,
                 index: id.index,
             }),
-            entries: req
-                .entries
-                .iter()
-                .map(|e| crate::protobuf::openraft::OpenRaftLogEntry {
-                    log_id: Some(crate::protobuf::openraft::OpenRaftLogId {
-                        leader_id: e.log_id.leader_id.node_id,
-                        index: e.log_id.index,
-                    }),
-                    payload: serde_json::to_vec(&e.payload).unwrap_or_default(),
-                })
-                .collect(),
+            entries,
             leader_commit: req.leader_commit.map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                leader_id: id.leader_id.node_id,
+                term: id.leader_id.term,
+                node_id: id.leader_id.node_id,
                 index: id.index,
             }),
         };
@@ -154,8 +184,13 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
 
         let proto_resp = response.into_inner();
 
-        // Convert protobuf response back to OpenRaft types
-        if proto_resp.success {
+        if let Some(higher_vote) = proto_resp.higher_vote {
+            Ok(AppendEntriesResponse::HigherVote(decode_vote(higher_vote)))
+        } else if let Some(partial_success) = proto_resp.partial_success {
+            Ok(AppendEntriesResponse::PartialSuccess(Some(decode_log_id(
+                partial_success,
+            ))))
+        } else if proto_resp.success {
             Ok(AppendEntriesResponse::Success)
         } else {
             Ok(AppendEntriesResponse::Conflict)
@@ -199,7 +234,8 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
                     .meta
                     .last_log_id
                     .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                        leader_id: id.leader_id.node_id,
+                        term: id.leader_id.term,
+                        node_id: id.leader_id.node_id,
                         index: id.index,
                     }),
                 snapshot_id: snapshot.meta.snapshot_id.clone(),
@@ -221,10 +257,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         let proto_resp = response.into_inner();
 
         // Parse vote from response
-        let vote = proto_resp
-            .vote
-            .map(|v| Vote::new(v.term, crate::typ::NodeId::from(v.node_id)))
-            .unwrap_or_else(|| Vote::new(0, 0));
+        let vote = proto_resp.vote.map(decode_vote).unwrap_or_else(|| Vote::new(0, 0));
 
         Ok(SnapshotResponse { vote })
     }
@@ -246,7 +279,8 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
                 committed: req.vote.is_committed(),
             }),
             last_log_id: req.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                leader_id: id.leader_id.node_id,
+                term: id.leader_id.term,
+                node_id: id.leader_id.node_id,
                 index: id.index,
             }),
         };
@@ -260,10 +294,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         let proto_resp = response.into_inner();
 
         // Parse vote from response
-        let vote = proto_resp
-            .vote
-            .map(|v| Vote::new(v.term, crate::typ::NodeId::from(v.node_id)))
-            .unwrap_or_else(|| Vote::new(0, 0));
+        let vote = proto_resp.vote.map(decode_vote).unwrap_or_else(|| Vote::new(0, 0));
 
         Ok(VoteResponse {
             vote,

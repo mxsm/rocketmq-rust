@@ -16,8 +16,9 @@ service OpenRaftService {
 
 // LogId represents a unique log entry identifier
 message OpenRaftLogId {
-  uint64 leader_id = 1;
-  uint64 index = 2;
+  uint64 term = 1;
+  uint64 node_id = 2;
+  uint64 index = 3;
 }
 
 // Vote information
@@ -52,6 +53,8 @@ message OpenRaftAppendResponse {
   OpenRaftVote vote = 1;
   bool success = 2;
   optional OpenRaftLogId conflict = 3;
+  optional OpenRaftLogId partial_success = 4;
+  optional OpenRaftVote higher_vote = 5;
 }
 
 // Vote request

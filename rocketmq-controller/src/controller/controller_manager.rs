@@ -718,6 +718,18 @@ impl ControllerManager {
         &self.raft_controller
     }
 
+    pub fn set_raft_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
+        self.raft_controller.set_runtime_tick_enabled(enabled)
+    }
+
+    pub fn set_raft_runtime_heartbeat_enabled(&self, enabled: bool) -> Result<()> {
+        self.raft_controller.set_runtime_heartbeat_enabled(enabled)
+    }
+
+    pub fn set_raft_runtime_elect_enabled(&self, enabled: bool) -> Result<()> {
+        self.raft_controller.set_runtime_elect_enabled(enabled)
+    }
+
     async fn notify_broker_role_changed(&self, response: RemotingCommand) -> Result<()> {
         let response_header = response
             .decode_command_custom_header::<ElectMasterResponseHeader>()

@@ -76,6 +76,7 @@ impl RaftNodeManager {
             election_timeout_max: config.election_timeout_ms * 2,
             max_in_snapshot_log_to_keep: 1000,
             snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(5000),
+            allow_log_reversion: Some(true),
             ..Default::default()
         };
 
@@ -141,6 +142,28 @@ impl RaftNodeManager {
             .map_err(|e| ControllerError::Internal(format!("Failed to change membership: {}", e)))?;
 
         info!("Cluster membership changed successfully");
+        Ok(())
+    }
+
+    /// Allow a specific follower/learner to reset replication progress once when log
+    /// reversion is detected during bootstrap or recovery.
+    pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {
+        self.raft
+            .trigger()
+            .allow_next_revert(&node_id, allow)
+            .await
+            .map_err(|e| {
+                ControllerError::Internal(format!(
+                    "Failed to send allow-next-revert request for node {}: {}",
+                    node_id, e
+                ))
+            })?
+            .map_err(|e| {
+                ControllerError::Internal(format!(
+                    "Failed to apply allow-next-revert request for node {}: {}",
+                    node_id, e
+                ))
+            })?;
         Ok(())
     }
 

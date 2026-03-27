@@ -25,8 +25,10 @@ use tracing::error;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftService;
 use crate::protobuf::openraft::OpenRaftAppendRequest;
 use crate::protobuf::openraft::OpenRaftAppendResponse;
+use crate::protobuf::openraft::OpenRaftLogId as ProtoLogId;
 use crate::protobuf::openraft::OpenRaftSnapshotRequest;
 use crate::protobuf::openraft::OpenRaftSnapshotResponse;
+use crate::protobuf::openraft::OpenRaftVote;
 use crate::protobuf::openraft::OpenRaftVoteRequest;
 use crate::protobuf::openraft::OpenRaftVoteResponse;
 use crate::typ::Raft;
@@ -44,6 +46,30 @@ impl GrpcRaftService {
     }
 }
 
+fn decode_vote(vote: OpenRaftVote) -> crate::typ::Vote {
+    if vote.committed {
+        crate::typ::Vote::new_committed(vote.term, vote.node_id)
+    } else {
+        crate::typ::Vote::new(vote.term, vote.node_id)
+    }
+}
+
+fn encode_vote(vote: crate::typ::Vote) -> OpenRaftVote {
+    OpenRaftVote {
+        term: vote.leader_id.term,
+        node_id: vote.leader_id.node_id,
+        committed: vote.committed,
+    }
+}
+
+fn encode_log_id(log_id: crate::typ::LogId) -> ProtoLogId {
+    ProtoLogId {
+        term: log_id.leader_id.term,
+        node_id: log_id.leader_id.node_id,
+        index: log_id.index,
+    }
+}
+
 #[tonic::async_trait]
 impl OpenRaftService for GrpcRaftService {
     async fn append_entries(
@@ -55,32 +81,37 @@ impl OpenRaftService for GrpcRaftService {
 
         // Convert protobuf to OpenRaft types
         let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
-
-        let raft_vote = openraft::Vote::new(vote.term, vote.node_id);
+        let raft_vote = decode_vote(vote);
 
         let prev_log_id = req.prev_log_id.map(|id| crate::typ::LogId {
-            leader_id: crate::typ::Vote::new(id.leader_id, id.leader_id).leader_id,
+            leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
             index: id.index,
         });
+        let response_conflict_log_id = prev_log_id;
 
-        let entries: Vec<_> = req
+        let entries = req
             .entries
             .into_iter()
-            .filter_map(|e| {
-                let log_id = e.log_id?;
-                let payload: crate::typ::ControllerRequest = serde_json::from_slice(&e.payload).ok()?;
-                Some(openraft::Entry {
+            .map(|entry| {
+                let log_id = entry
+                    .log_id
+                    .ok_or_else(|| Status::invalid_argument("Missing append entry log id"))?;
+                let payload: openraft::EntryPayload<crate::typ::TypeConfig> = serde_json::from_slice(&entry.payload)
+                    .map_err(|e| {
+                        Status::invalid_argument(format!("Failed to deserialize append entry payload: {}", e))
+                    })?;
+                Ok(openraft::Entry {
                     log_id: crate::typ::LogId {
-                        leader_id: crate::typ::Vote::new(log_id.leader_id, log_id.leader_id).leader_id,
+                        leader_id: crate::typ::Vote::new(log_id.term, log_id.node_id).leader_id,
                         index: log_id.index,
                     },
-                    payload: openraft::EntryPayload::Normal(payload),
+                    payload,
                 })
             })
-            .collect();
+            .collect::<Result<Vec<_>, Status>>()?;
 
         let leader_commit = req.leader_commit.map(|id| crate::typ::LogId {
-            leader_id: crate::typ::Vote::new(id.leader_id, id.leader_id).leader_id,
+            leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
             index: id.index,
         });
 
@@ -93,18 +124,36 @@ impl OpenRaftService for GrpcRaftService {
 
         // Call Raft
         match self.raft.append_entries(append_req).await {
-            Ok(resp) => {
-                let success = matches!(resp, openraft::raft::AppendEntriesResponse::Success);
-                Ok(Response::new(OpenRaftAppendResponse {
-                    vote: Some(crate::protobuf::openraft::OpenRaftVote {
-                        term: raft_vote.leader_id.term,
-                        node_id: raft_vote.leader_id.node_id,
-                        committed: raft_vote.committed,
-                    }),
-                    success,
+            Ok(resp) => Ok(Response::new(match resp {
+                openraft::raft::AppendEntriesResponse::Success => OpenRaftAppendResponse {
+                    vote: Some(encode_vote(raft_vote)),
+                    success: true,
                     conflict: None,
-                }))
-            }
+                    partial_success: None,
+                    higher_vote: None,
+                },
+                openraft::raft::AppendEntriesResponse::PartialSuccess(log_id) => OpenRaftAppendResponse {
+                    vote: Some(encode_vote(raft_vote)),
+                    success: false,
+                    conflict: None,
+                    partial_success: log_id.map(encode_log_id),
+                    higher_vote: None,
+                },
+                openraft::raft::AppendEntriesResponse::Conflict => OpenRaftAppendResponse {
+                    vote: Some(encode_vote(raft_vote)),
+                    success: false,
+                    conflict: response_conflict_log_id.map(encode_log_id),
+                    partial_success: None,
+                    higher_vote: None,
+                },
+                openraft::raft::AppendEntriesResponse::HigherVote(vote) => OpenRaftAppendResponse {
+                    vote: Some(encode_vote(vote)),
+                    success: false,
+                    conflict: None,
+                    partial_success: None,
+                    higher_vote: Some(encode_vote(vote)),
+                },
+            })),
             Err(e) => {
                 error!("AppendEntries failed: {}", e);
                 Err(Status::internal(format!("Raft error: {}", e)))
@@ -117,11 +166,10 @@ impl OpenRaftService for GrpcRaftService {
         debug!("Received vote request");
 
         let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
-
-        let raft_vote = openraft::Vote::new(vote.term, vote.node_id);
+        let raft_vote = decode_vote(vote);
 
         let last_log_id = req.last_log_id.map(|id| crate::typ::LogId {
-            leader_id: crate::typ::Vote::new(id.leader_id, id.leader_id).leader_id,
+            leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
             index: id.index,
         });
 
@@ -139,7 +187,8 @@ impl OpenRaftService for GrpcRaftService {
                 }),
                 vote_granted: resp.vote_granted,
                 last_log_id: resp.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                    leader_id: id.leader_id.node_id,
+                    term: id.leader_id.term,
+                    node_id: id.leader_id.node_id,
                     index: id.index,
                 }),
             })),
@@ -169,7 +218,7 @@ impl OpenRaftService for GrpcRaftService {
             // Extract vote and meta from first chunk
             if vote.is_none() {
                 if let Some(v) = chunk.vote {
-                    vote = Some(openraft::Vote::new(v.term, v.node_id));
+                    vote = Some(decode_vote(v));
                 }
             }
 
@@ -182,7 +231,7 @@ impl OpenRaftService for GrpcRaftService {
 
                     snapshot_meta = Some(openraft::SnapshotMeta {
                         last_log_id: meta.last_log_id.map(|id| crate::typ::LogId {
-                            leader_id: crate::typ::Vote::new(id.leader_id, id.leader_id).leader_id,
+                            leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
                             index: id.index,
                         }),
                         last_membership,

@@ -3192,6 +3192,7 @@ fn need_register(change_list: &[bool]) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -3341,14 +3342,14 @@ mod tests {
             },
         ];
 
-        let leader_manager = new_test_controller_manager(
+        let bootstrap_manager = new_test_controller_manager(
             controller_peers[0].clone(),
             controller_peers.clone(),
             raft_peers.clone(),
             root,
         )
         .await;
-        let mut managers = vec![leader_manager.clone()];
+        let mut managers = vec![bootstrap_manager.clone()];
 
         sleep(Duration::from_secs(1)).await;
 
@@ -3360,7 +3361,7 @@ mod tests {
                 rpc_addr: raft_peers[0].addr.to_string(),
             },
         );
-        leader_manager
+        bootstrap_manager
             .raft()
             .initialize_cluster(initial_cluster)
             .await
@@ -3368,19 +3369,19 @@ mod tests {
 
         wait_until(
             Duration::from_secs(10),
-            || leader_manager.is_leader(),
+            || bootstrap_manager.is_leader(),
             "controller node 1 to become leader",
         )
         .await;
 
         wait_until(
             Duration::from_secs(10),
-            || leader_manager.raft().has_committed_log().unwrap_or(false),
+            || bootstrap_manager.raft().has_committed_log().unwrap_or(false),
             "controller leader to commit its first log entry",
         )
         .await;
 
-        leader_manager
+        bootstrap_manager
             .controller()
             .apply_broker_id(&ApplyBrokerIdRequestHeader {
                 cluster_name: CheetahString::from_static_str("bootstrap-cluster"),
@@ -3392,19 +3393,85 @@ mod tests {
             .expect("commit bootstrap controller write")
             .expect("bootstrap controller write response");
 
-        sleep(Duration::from_secs(1)).await;
-
-        for controller_peer in controller_peers.iter().skip(1) {
+        for (controller_peer, raft_peer) in controller_peers.iter().zip(raft_peers.iter()).skip(1) {
             managers.push(
                 new_test_controller_manager(
                     controller_peer.clone(),
                     controller_peers.clone(),
-                    raft_peers.clone(),
+                    vec![raft_peer.clone()],
                     root,
                 )
                 .await,
             );
+            let learner_manager = managers.last().expect("new learner controller manager");
+            learner_manager
+                .set_raft_runtime_heartbeat_enabled(false)
+                .expect("disable learner heartbeat during bootstrap");
+            learner_manager
+                .set_raft_runtime_elect_enabled(false)
+                .expect("disable learner election during bootstrap");
+            learner_manager
+                .set_raft_runtime_tick_enabled(false)
+                .expect("disable learner tick during bootstrap");
+            sleep(Duration::from_millis(300)).await;
+            bootstrap_manager
+                .raft()
+                .add_learner(
+                    controller_peer.id,
+                    Node {
+                        node_id: controller_peer.id,
+                        rpc_addr: raft_peer.addr.to_string(),
+                    },
+                    true,
+                )
+                .await
+                .expect("add controller learner");
         }
+
+        let expected_voters = controller_peers.iter().map(|peer| peer.id).collect::<BTreeSet<_>>();
+        match tokio::time::timeout(
+            Duration::from_secs(20),
+            bootstrap_manager.raft().change_membership(expected_voters, false),
+        )
+        .await
+        {
+            Ok(result) => result.expect("promote controller learners to voters"),
+            Err(_) => {
+                panic!(
+                    "Timed out promoting controller learners; states={:?}",
+                    managers
+                        .iter()
+                        .map(|manager| (manager.is_leader(), manager.raft().has_committed_log().unwrap_or(false)))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                managers.iter().filter(|manager| manager.is_leader()).count() == 1
+                    && managers
+                        .iter()
+                        .all(|manager| manager.raft().has_committed_log().unwrap_or(false))
+            },
+            "controller cluster to replicate voter membership and elect a single leader",
+        )
+        .await;
+
+        for manager in managers.iter().skip(1) {
+            manager
+                .set_raft_runtime_tick_enabled(true)
+                .expect("re-enable learner tick after bootstrap");
+            manager
+                .set_raft_runtime_heartbeat_enabled(true)
+                .expect("re-enable learner heartbeat after bootstrap");
+            manager
+                .set_raft_runtime_elect_enabled(true)
+                .expect("re-enable learner election after bootstrap");
+        }
+
+        sleep(Duration::from_secs(1)).await;
 
         wait_until(
             Duration::from_secs(15),

@@ -248,6 +248,41 @@ impl OpenRaftController {
         node.change_membership(members, retain).await
     }
 
+    pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.allow_next_revert(node_id, allow).await
+    }
+
+    pub fn set_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.raft().runtime_config().tick(enabled);
+        Ok(())
+    }
+
+    pub fn set_runtime_heartbeat_enabled(&self, enabled: bool) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.raft().runtime_config().heartbeat(enabled);
+        Ok(())
+    }
+
+    pub fn set_runtime_elect_enabled(&self, enabled: bool) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.raft().runtime_config().elect(enabled);
+        Ok(())
+    }
+
     pub fn has_committed_log(&self) -> Result<bool> {
         let node = self
             .node

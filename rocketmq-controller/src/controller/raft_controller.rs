@@ -91,6 +91,42 @@ impl RaftController {
         }
     }
 
+    pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.allow_next_revert(node_id, allow).await,
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Replication reset is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
+    pub fn set_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.set_runtime_tick_enabled(enabled),
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Runtime tick control is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
+    pub fn set_runtime_heartbeat_enabled(&self, enabled: bool) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.set_runtime_heartbeat_enabled(enabled),
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Runtime heartbeat control is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
+    pub fn set_runtime_elect_enabled(&self, enabled: bool) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.set_runtime_elect_enabled(enabled),
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Runtime election control is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
     pub fn has_committed_log(&self) -> Result<bool> {
         match self {
             Self::OpenRaft(controller) => controller.has_committed_log(),
