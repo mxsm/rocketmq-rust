@@ -80,6 +80,9 @@ use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequestHoldService;
 use crate::controller::replicas_manager::BrokerReplicaRole;
+use crate::controller::replicas_manager::ControllerBrokerIdAction;
+use crate::controller::replicas_manager::ControllerRegisterFollowup;
+use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
@@ -2404,7 +2407,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     replicas_manager.mark_registered();
                 }
                 let sync_state_set = sync_state_set.unwrap_or_default();
-                if register_header.master_broker_id.is_some() && register_header.master_epoch.is_some() {
+                let register_followup = this
+                    .replicas_manager()
+                    .map(|replicas_manager| {
+                        replicas_manager.register_followup(
+                            register_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
+                            register_header.master_epoch,
+                        )
+                    })
+                    .unwrap_or(ControllerRegisterFollowup::HeartbeatThenQueryReplicaInfo);
+                if register_followup == ControllerRegisterFollowup::ApplyRoleChange {
                     if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
                         this.clone(),
                         Some(controller_leader.clone()),
@@ -2440,18 +2452,30 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .get_replica_info(&controller_leader, broker_name.clone())
             .await
         {
-            if BrokerRuntimeInner::apply_controller_replica_info(
-                this.clone(),
-                controller_leader.clone(),
-                replica_info_header
-                    .master_broker_id
-                    .and_then(|id| u64::try_from(id).ok()),
-                replica_info_header.master_address.map(CheetahString::from_string),
-                replica_info_header.master_epoch,
-                Some(sync_state_set.get_sync_state_set_epoch()),
-                sync_state_set.get_sync_state_set().cloned().unwrap_or_default(),
-            )
-            .await
+            let replica_followup = this
+                .replicas_manager()
+                .map(|replicas_manager| {
+                    replicas_manager.replica_info_followup(
+                        replica_info_header
+                            .master_broker_id
+                            .and_then(|id| u64::try_from(id).ok()),
+                        replica_info_header.master_epoch,
+                    )
+                })
+                .unwrap_or(ControllerReplicaInfoFollowup::ElectMaster);
+            if replica_followup == ControllerReplicaInfoFollowup::ApplyRoleChange
+                && BrokerRuntimeInner::apply_controller_replica_info(
+                    this.clone(),
+                    controller_leader.clone(),
+                    replica_info_header
+                        .master_broker_id
+                        .and_then(|id| u64::try_from(id).ok()),
+                    replica_info_header.master_address.map(CheetahString::from_string),
+                    replica_info_header.master_epoch,
+                    Some(sync_state_set.get_sync_state_set_epoch()),
+                    sync_state_set.get_sync_state_set().cloned().unwrap_or_default(),
+                )
+                .await
             {
                 return;
             }
@@ -2544,42 +2568,43 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         mut this: ArcMut<Self>,
         controller_leader: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<u64> {
-        if let Some(replicas_manager) = this.replicas_manager() {
-            if !replicas_manager.needs_broker_id_application() {
-                return Ok(replicas_manager.broker_controller_id());
-            }
-        }
-
         let cluster_name = this.broker_config.broker_identity.broker_cluster_name.clone();
         let broker_name = this.broker_config.broker_identity.broker_name.clone();
         let broker_config = this.broker_config.clone();
-
-        let (broker_id, register_check_code) = if let Some((broker_id, register_check_code)) = this
+        let next_broker_id = if this
             .replicas_manager()
-            .and_then(|replicas_manager| replicas_manager.pending_registration())
+            .is_some_and(|replicas_manager| replicas_manager.needs_broker_id_application())
+            && this
+                .replicas_manager()
+                .is_some_and(|replicas_manager| replicas_manager.pending_registration().is_none())
         {
-            (broker_id, register_check_code)
-        } else {
             let next_broker_id_response = this
                 .broker_outer_api
                 .get_next_broker_id(cluster_name.clone(), broker_name.clone(), controller_leader)
                 .await?;
-            let next_broker_id = next_broker_id_response.next_broker_id.ok_or_else(|| {
+            Some(next_broker_id_response.next_broker_id.ok_or_else(|| {
                 rocketmq_error::RocketMQError::illegal_argument(
                     "controller get_next_broker_id returned empty next_broker_id",
                 )
-            })?;
-            let replicas_manager = this.replicas_manager_mut().ok_or_else(|| {
+            })?)
+        } else {
+            None
+        };
+        let action = this
+            .replicas_manager_mut()
+            .ok_or_else(|| {
                 rocketmq_error::RocketMQError::illegal_argument(
                     "replicas manager missing while preparing controller broker id",
                 )
-            })?;
-            replicas_manager.create_temp_metadata(&broker_config, next_broker_id)?;
-            replicas_manager.pending_registration().ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "replicas manager did not retain temp registration metadata",
-                )
             })?
+            .prepare_controller_broker_id_action(&broker_config, next_broker_id)?;
+
+        let (broker_id, register_check_code) = match action {
+            ControllerBrokerIdAction::UseCurrent(broker_id) => return Ok(broker_id),
+            ControllerBrokerIdAction::ApplyBrokerId {
+                broker_id,
+                register_check_code,
+            } => (broker_id, register_check_code),
         };
 
         if let Err(error) = this
@@ -2604,7 +2629,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 "replicas manager missing while committing controller broker id",
             )
         })?;
-        replicas_manager.commit_temp_metadata(&broker_config)
+        replicas_manager.complete_controller_broker_id_application(&broker_config)
     }
 
     async fn discover_controller_leader(this: &ArcMut<Self>) -> Option<CheetahString> {

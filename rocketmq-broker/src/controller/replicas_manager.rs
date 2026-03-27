@@ -59,6 +59,27 @@ pub struct RoleChangeOutcome {
     pub should_register_to_namesrv: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControllerBrokerIdAction {
+    UseCurrent(u64),
+    ApplyBrokerId {
+        broker_id: u64,
+        register_check_code: CheetahString,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerRegisterFollowup {
+    ApplyRoleChange,
+    HeartbeatThenQueryReplicaInfo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerReplicaInfoFollowup {
+    ApplyRoleChange,
+    ElectMaster,
+}
+
 impl RoleChangeOutcome {
     pub fn target_broker_role(&self) -> Option<BrokerRole> {
         match self.role {
@@ -294,6 +315,65 @@ impl ReplicasManager {
 
     pub fn mark_registered(&mut self) {
         self.register_state = RegisterState::Registered;
+    }
+
+    pub fn prepare_controller_broker_id_action(
+        &mut self,
+        config: &BrokerConfig,
+        next_broker_id: Option<u64>,
+    ) -> RocketMQResult<ControllerBrokerIdAction> {
+        if !self.needs_broker_id_application() {
+            return Ok(ControllerBrokerIdAction::UseCurrent(self.broker_controller_id));
+        }
+
+        if self.pending_registration().is_none() {
+            let next_broker_id = next_broker_id.ok_or_else(|| {
+                RocketMQError::illegal_argument(
+                    "controller broker id preparation requires next broker id when no pending registration exists",
+                )
+            })?;
+            self.create_temp_metadata(config, next_broker_id)?;
+        }
+
+        let (broker_id, register_check_code) = self.pending_registration().ok_or_else(|| {
+            RocketMQError::illegal_argument("replicas manager did not retain pending controller registration metadata")
+        })?;
+        Ok(ControllerBrokerIdAction::ApplyBrokerId {
+            broker_id,
+            register_check_code,
+        })
+    }
+
+    pub fn complete_controller_broker_id_application(&mut self, config: &BrokerConfig) -> RocketMQResult<u64> {
+        if self.temp_metadata.is_some() {
+            self.commit_temp_metadata(config)
+        } else {
+            Ok(self.broker_controller_id)
+        }
+    }
+
+    pub fn register_followup(
+        &self,
+        master_broker_id: Option<u64>,
+        master_epoch: Option<i32>,
+    ) -> ControllerRegisterFollowup {
+        if master_broker_id.is_some() && master_epoch.is_some() {
+            ControllerRegisterFollowup::ApplyRoleChange
+        } else {
+            ControllerRegisterFollowup::HeartbeatThenQueryReplicaInfo
+        }
+    }
+
+    pub fn replica_info_followup(
+        &self,
+        master_broker_id: Option<u64>,
+        master_epoch: Option<i32>,
+    ) -> ControllerReplicaInfoFollowup {
+        if master_broker_id.is_some() && master_epoch.is_some() {
+            ControllerReplicaInfoFollowup::ApplyRoleChange
+        } else {
+            ControllerReplicaInfoFollowup::ElectMaster
+        }
     }
 
     pub fn change_broker_role(
@@ -730,6 +810,70 @@ mod tests {
                 CheetahString::from("127.0.0.2:9878"),
                 CheetahString::from("127.0.0.1:9878"),
             ]
+        );
+    }
+
+    #[test]
+    fn prepare_controller_broker_id_action_reuses_pending_and_existing_metadata() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 7);
+        let message_store_config = message_store_config_with_identity_path("broker-id-action");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        let action = manager
+            .prepare_controller_broker_id_action(&config, Some(11))
+            .expect("prepare controller broker id action");
+        let (pending_broker_id, pending_check_code) =
+            manager.pending_registration().expect("pending controller registration");
+        assert_eq!(
+            action,
+            ControllerBrokerIdAction::ApplyBrokerId {
+                broker_id: 11,
+                register_check_code: pending_check_code.clone(),
+            }
+        );
+        assert_eq!(pending_broker_id, 11);
+
+        let reused_action = manager
+            .prepare_controller_broker_id_action(&config, None)
+            .expect("reuse pending registration");
+        assert_eq!(
+            reused_action,
+            ControllerBrokerIdAction::ApplyBrokerId {
+                broker_id: 11,
+                register_check_code: pending_check_code,
+            }
+        );
+
+        manager
+            .complete_controller_broker_id_application(&config)
+            .expect("commit controller broker id");
+        let existing_action = manager
+            .prepare_controller_broker_id_action(&config, None)
+            .expect("reuse committed broker id");
+        assert_eq!(existing_action, ControllerBrokerIdAction::UseCurrent(11));
+    }
+
+    #[test]
+    fn controller_bootstrap_followups_are_derived_by_replicas_manager() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 7);
+        let message_store_config = message_store_config_with_identity_path("bootstrap-followup");
+        let manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        assert_eq!(
+            manager.register_followup(None, None),
+            ControllerRegisterFollowup::HeartbeatThenQueryReplicaInfo
+        );
+        assert_eq!(
+            manager.register_followup(Some(7), Some(3)),
+            ControllerRegisterFollowup::ApplyRoleChange
+        );
+        assert_eq!(
+            manager.replica_info_followup(None, None),
+            ControllerReplicaInfoFollowup::ElectMaster
+        );
+        assert_eq!(
+            manager.replica_info_followup(Some(9), Some(4)),
+            ControllerReplicaInfoFollowup::ApplyRoleChange
         );
     }
 }
