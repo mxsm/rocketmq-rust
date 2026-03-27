@@ -25,6 +25,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
 #[cfg(not(feature = "simd"))]
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::EnvUtils::EnvUtils;
@@ -50,9 +51,9 @@ static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::ne
 
 static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
     EnvUtils::get_property(REMOTING_VERSION_KEY)
-        .unwrap_or(String::from("0"))
+        .unwrap_or_else(|| (CURRENT_VERSION as i32).to_string())
         .parse::<i32>()
-        .unwrap_or(0)
+        .unwrap_or(CURRENT_VERSION as i32)
 });
 
 pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> = std::sync::LazyLock::new(|| {

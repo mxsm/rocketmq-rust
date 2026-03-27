@@ -3561,6 +3561,7 @@ dependencies = [
  "rocketmq-controller",
  "rocketmq-error",
  "rocketmq-filter",
+ "rocketmq-namesrv",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",

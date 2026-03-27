@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -52,6 +53,9 @@ pub struct RoleChangeOutcome {
     pub master_epoch: i32,
     pub sync_state_set_epoch: i32,
     pub sync_state_set: HashSet<i64>,
+    pub local_broker_id: u64,
+    pub should_start_special_service: bool,
+    pub should_register_to_namesrv: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -269,12 +273,17 @@ impl ReplicasManager {
 
     pub fn change_broker_role(
         &mut self,
+        controller_leader_address: Option<CheetahString>,
         new_master_broker_id: Option<u64>,
         new_master_address: Option<CheetahString>,
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: Option<&HashSet<i64>>,
     ) -> RocketMQResult<RoleChangeOutcome> {
+        if let Some(controller_leader_address) = controller_leader_address {
+            self.set_controller_leader_address(controller_leader_address);
+        }
+
         let Some(new_master_epoch) = new_master_epoch else {
             return Err(RocketMQError::illegal_argument(
                 "notify broker role change missing master epoch",
@@ -333,6 +342,7 @@ impl ReplicasManager {
     }
 
     fn outcome(&self, role: Option<BrokerReplicaRole>, sync_state_set_changed: bool) -> RoleChangeOutcome {
+        let should_start_special_service = self.master_broker_id == Some(self.broker_controller_id);
         RoleChangeOutcome {
             role,
             sync_state_set_changed,
@@ -341,6 +351,13 @@ impl ReplicasManager {
             master_epoch: self.master_epoch,
             sync_state_set_epoch: self.sync_state_set_epoch,
             sync_state_set: self.sync_state_set.clone(),
+            local_broker_id: if should_start_special_service {
+                MASTER_ID
+            } else {
+                self.broker_controller_id
+            },
+            should_start_special_service,
+            should_register_to_namesrv: role.is_some(),
         }
     }
 
@@ -569,7 +586,14 @@ mod tests {
         let sync_state_set = HashSet::from([2_i64, 3_i64]);
 
         let outcome = manager
-            .change_broker_role(Some(2), None, Some(3), Some(4), Some(&sync_state_set))
+            .change_broker_role(
+                Some("127.0.0.2:9878".into()),
+                Some(2),
+                None,
+                Some(3),
+                Some(4),
+                Some(&sync_state_set),
+            )
             .expect("role change should succeed");
 
         assert_eq!(outcome.role, Some(BrokerReplicaRole::Master));
@@ -578,6 +602,13 @@ mod tests {
         assert_eq!(outcome.master_epoch, 3);
         assert_eq!(outcome.sync_state_set_epoch, 4);
         assert_eq!(outcome.sync_state_set, sync_state_set);
+        assert_eq!(outcome.local_broker_id, MASTER_ID);
+        assert!(outcome.should_start_special_service);
+        assert!(outcome.should_register_to_namesrv);
+        assert_eq!(
+            manager.controller_leader_address(),
+            Some(&CheetahString::from("127.0.0.2:9878"))
+        );
     }
 
     #[test]
@@ -589,6 +620,7 @@ mod tests {
 
         let outcome = manager
             .change_broker_role(
+                Some("127.0.0.3:9878".into()),
                 Some(1),
                 Some("127.0.0.9:10911".into()),
                 Some(5),
@@ -603,6 +635,13 @@ mod tests {
         assert_eq!(outcome.master_epoch, 5);
         assert_eq!(outcome.sync_state_set_epoch, 6);
         assert_eq!(outcome.sync_state_set, sync_state_set);
+        assert_eq!(outcome.local_broker_id, 2);
+        assert!(!outcome.should_start_special_service);
+        assert!(outcome.should_register_to_namesrv);
+        assert_eq!(
+            manager.controller_leader_address(),
+            Some(&CheetahString::from("127.0.0.3:9878"))
+        );
     }
 
     #[test]
@@ -613,11 +652,12 @@ mod tests {
         let sync_state_set = HashSet::from([2_i64]);
 
         manager
-            .change_broker_role(Some(2), None, Some(3), Some(3), Some(&sync_state_set))
+            .change_broker_role(None, Some(2), None, Some(3), Some(3), Some(&sync_state_set))
             .expect("initial role change should succeed");
 
         let stale = manager
             .change_broker_role(
+                Some("127.0.0.4:9878".into()),
                 Some(1),
                 Some("127.0.0.9:10911".into()),
                 Some(2),
@@ -630,6 +670,13 @@ mod tests {
         assert_eq!(stale.master_broker_id, Some(2));
         assert_eq!(stale.master_address, Some(CheetahString::from("127.0.0.1:10911")));
         assert_eq!(stale.master_epoch, 3);
+        assert_eq!(stale.local_broker_id, MASTER_ID);
+        assert!(stale.should_start_special_service);
+        assert!(!stale.should_register_to_namesrv);
+        assert_eq!(
+            manager.controller_leader_address(),
+            Some(&CheetahString::from("127.0.0.4:9878"))
+        );
     }
 
     #[test]

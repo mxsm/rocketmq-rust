@@ -83,6 +83,7 @@ opentelemetry_sdk = { workspace = true }
 [dev-dependencies]
 criterion            = { version = "0.8", features = ["html_reports"] }
 rocketmq-controller  = { path = "../rocketmq-controller" }
+rocketmq-namesrv     = { path = "../rocketmq-namesrv" }
 
 [[bin]]
 name = "rocketmq-broker-rust"

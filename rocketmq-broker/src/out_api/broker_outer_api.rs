@@ -210,7 +210,10 @@ impl BrokerOuterAPI {
         _broker_identity: BrokerIdentity,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Vec<RegisterBrokerResult> {
-        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
+        let mut name_server_address_list = self.remoting_client.get_available_name_srv_list();
+        if name_server_address_list.is_empty() {
+            name_server_address_list = self.remoting_client.get_name_server_address_list().to_vec();
+        }
         let mut register_broker_result_list = Vec::new();
         if !name_server_address_list.is_empty() {
             let mut request_header = RegisterBrokerRequestHeader {

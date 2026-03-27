@@ -1125,6 +1125,9 @@ impl BrokerRuntime {
         }
 
         self.inner.broker_outer_api.start().await;
+        if self.inner.broker_config.namesrv_addr.is_some() {
+            self.update_namesrv_addr().await;
+        }
         self.start_basic_service().await;
 
         if self.inner.broker_config.enable_controller_mode {
@@ -2904,10 +2907,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     "controller mode role change received before replicas manager initialization",
                 )
             })?;
-            if let Some(controller_leader_address) = controller_leader_address {
-                replicas_manager.set_controller_leader_address(controller_leader_address);
-            }
             replicas_manager.change_broker_role(
+                controller_leader_address,
                 new_master_broker_id,
                 new_master_address,
                 new_master_epoch,
@@ -2918,53 +2919,47 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
         let Some(role) = outcome.role else {
             if let Some(message_store) = this.message_store.as_ref() {
-                let controller_broker_id = this
-                    .replicas_manager()
-                    .map(|replicas_manager| replicas_manager.broker_controller_id())
-                    .unwrap_or(this.broker_config.broker_identity.broker_id);
-                message_store.sync_controller_sync_state_set(controller_broker_id as i64, &outcome.sync_state_set);
+                message_store.sync_controller_sync_state_set(outcome.local_broker_id as i64, &outcome.sync_state_set);
             }
             return Ok(());
         };
 
-        let controller_broker_id = this
-            .replicas_manager()
-            .map(|replicas_manager| replicas_manager.broker_controller_id())
-            .unwrap_or(this.broker_config.broker_identity.broker_id);
         if let Some(message_store) = this.message_store.as_ref() {
-            message_store.sync_controller_sync_state_set(controller_broker_id as i64, &outcome.sync_state_set);
+            message_store.sync_controller_sync_state_set(outcome.local_broker_id as i64, &outcome.sync_state_set);
         }
         let previous_store_role = this.message_store_config.broker_role;
 
         match role {
             BrokerReplicaRole::Master => {
                 Arc::make_mut(&mut this.message_store_config).broker_role = BrokerRole::SyncMaster;
-                Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = MASTER_ID;
+                Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
                 this.apply_message_store_role_change(
                     previous_store_role,
                     BrokerReplicaRole::Master,
-                    controller_broker_id,
+                    outcome.local_broker_id,
                     None,
                     outcome.master_epoch,
                 )
                 .await?;
-                this.change_special_service_status(true).await;
+                this.change_special_service_status(outcome.should_start_special_service)
+                    .await;
                 if let Some(slave_synchronize) = this.slave_synchronize_mut() {
                     slave_synchronize.set_master_addr(None);
                 }
             }
             BrokerReplicaRole::Slave => {
                 Arc::make_mut(&mut this.message_store_config).broker_role = BrokerRole::Slave;
-                Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = controller_broker_id;
+                Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
                 this.apply_message_store_role_change(
                     previous_store_role,
                     BrokerReplicaRole::Slave,
-                    controller_broker_id,
+                    outcome.local_broker_id,
                     outcome.master_address.as_ref(),
                     outcome.master_epoch,
                 )
                 .await?;
-                this.change_special_service_status(false).await;
+                this.change_special_service_status(outcome.should_start_special_service)
+                    .await;
                 if let Some(master_address) = outcome.master_address.as_ref() {
                     if let Some(slave_synchronize) = this.slave_synchronize_mut() {
                         slave_synchronize.set_master_addr(Some(master_address));
@@ -2977,9 +2972,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
 
         this.is_isolated.store(false, Ordering::Release);
-        let this_clone = this.clone();
-        this.register_broker_all_inner(this_clone, true, false, this.broker_config.force_register)
-            .await;
+        if outcome.should_register_to_namesrv {
+            let this_clone = this.clone();
+            this.register_broker_all_inner(this_clone, true, false, this.broker_config.force_register)
+                .await;
+        }
         Ok(())
     }
 
@@ -3239,6 +3236,8 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::mix_all::MASTER_ID;
+    use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_controller::config::RaftPeer;
@@ -3248,14 +3247,54 @@ mod tests {
     use rocketmq_controller::Controller;
     use rocketmq_controller::ControllerConfig as TestControllerConfig;
     use rocketmq_controller::ControllerManager as TestControllerManager;
+    use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
+    use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
+    use rocketmq_remoting::clients::RemotingClient;
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::RemotingDeserializable;
+    use rocketmq_remoting::remoting::RemotingService;
+    use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+    use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+    use tokio::sync::oneshot;
+    use tokio::task::JoinHandle;
     use tokio::time::sleep;
 
     use super::*;
+
+    struct TestNameServer {
+        addr: CheetahString,
+        shutdown_tx: Option<oneshot::Sender<()>>,
+        handle: Option<JoinHandle<()>>,
+    }
+
+    impl TestNameServer {
+        fn addr(&self) -> CheetahString {
+            self.addr.clone()
+        }
+
+        async fn shutdown(&mut self) {
+            if let Some(shutdown_tx) = self.shutdown_tx.take() {
+                let _ = shutdown_tx.send(());
+            }
+            if let Some(handle) = self.handle.take() {
+                match tokio::time::timeout(Duration::from_secs(15), handle).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => panic!("namesrv task should not panic: {error}"),
+                    Err(_) => panic!("timed out waiting for namesrv shutdown"),
+                }
+            }
+        }
+    }
 
     fn new_controller_mode_message_store(
         root: &Path,
@@ -3288,6 +3327,115 @@ mod tests {
 
     fn controller_cluster_root(prefix: &str) -> PathBuf {
         std::env::temp_dir().join(format!("rocketmq-rust-{prefix}-{}", current_millis()))
+    }
+
+    async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
+        let namesrv_root = root.join(format!("namesrv-{port}"));
+        std::fs::create_dir_all(&namesrv_root).expect("create namesrv test root");
+        let namesrv_config = NamesrvConfig {
+            rocketmq_home: root.to_string_lossy().into_owned(),
+            kv_config_path: namesrv_root.join("kvConfig.json").to_string_lossy().into_owned(),
+            config_store_path: namesrv_root.join("namesrv.properties").to_string_lossy().into_owned(),
+            use_route_info_manager_v2: true,
+            ..NamesrvConfig::default()
+        };
+        let server_config = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: port as u32,
+        };
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            NameServerBuilder::new()
+                .set_name_server_config(namesrv_config)
+                .set_server_config(server_config)
+                .build()
+                .boot_with_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("boot namesrv");
+        });
+
+        wait_until(
+            Duration::from_secs(10),
+            || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok(),
+            "namesrv to listen on its remoting port",
+        )
+        .await;
+
+        TestNameServer {
+            addr: CheetahString::from_string(format!("127.0.0.1:{port}")),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        }
+    }
+
+    async fn configure_namesrv(runtime: &mut BrokerRuntime, namesrv_addr: &CheetahString) {
+        Arc::make_mut(&mut runtime.inner.broker_config).namesrv_addr = Some(namesrv_addr.clone());
+        runtime
+            .inner
+            .broker_outer_api
+            .update_name_server_address_list(namesrv_addr.clone())
+            .await;
+    }
+
+    async fn sync_namesrv_member_group(
+        namesrv_addr: &CheetahString,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+    ) -> BrokerMemberGroup {
+        let mut client = ArcMut::new(RocketmqDefaultClient::new(
+            Arc::new(TokioClientConfig::default()),
+            DefaultRemotingRequestProcessor,
+        ));
+        let weak_client = ArcMut::downgrade(&client);
+        client.start(weak_client).await;
+        let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
+        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
+        let mut response = client
+            .invoke_request(Some(namesrv_addr), request, 3000)
+            .await
+            .expect("query broker member group from namesrv");
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::Success,
+            "namesrv should accept GetBrokerMemberGroup requests"
+        );
+        let response_body = GetBrokerMemberGroupResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetBrokerMemberGroup response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode GetBrokerMemberGroup response body");
+        client.shutdown();
+        response_body
+            .broker_member_group
+            .expect("namesrv should return broker member group body")
+    }
+
+    async fn wait_for_namesrv_member_group<F>(
+        namesrv_addr: &CheetahString,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+        timeout: Duration,
+        context: &str,
+        mut predicate: F,
+    ) -> BrokerMemberGroup
+    where
+        F: FnMut(&BrokerMemberGroup) -> bool,
+    {
+        let start = std::time::Instant::now();
+        loop {
+            let member_group = sync_namesrv_member_group(namesrv_addr, cluster_name, broker_name).await;
+            if predicate(&member_group) {
+                return member_group;
+            }
+            if start.elapsed() >= timeout {
+                panic!("Timed out waiting for {context}, last member group: {:?}", member_group);
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
     }
 
     async fn wait_until<F>(timeout: Duration, mut predicate: F, context: &str)
@@ -4275,6 +4423,305 @@ mod tests {
         for controller in &controllers {
             controller.shutdown().await.expect("shutdown controller manager");
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn three_controller_two_broker_controller_mode_failover_reregisters_namesrv_and_updates_store_ha() {
+        let port_seed = (current_millis() % 1000) as u16;
+        let base_port = 45000 + port_seed * 10;
+        let root = controller_cluster_root("controller-mode-namesrv-ha");
+        let mut namesrv = start_namesrv(base_port + 90, &root).await;
+        let namesrv_addr = namesrv.addr();
+
+        let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
+        let controller_addrs = controller_addr_list(&controller_peers);
+        let controller_leader_manager = controllers
+            .iter()
+            .find(|manager| manager.is_leader())
+            .expect("controller cluster should elect a leader")
+            .clone();
+
+        let mut broker_a = new_controller_mode_runtime(
+            &root,
+            "controller-mode-broker",
+            base_port + 21,
+            base_port + 22,
+            controller_addrs.clone(),
+        );
+        let mut broker_b = new_controller_mode_runtime(
+            &root,
+            "controller-mode-broker",
+            base_port + 31,
+            base_port + 32,
+            controller_addrs.clone(),
+        );
+        configure_namesrv(&mut broker_a, &namesrv_addr).await;
+        configure_namesrv(&mut broker_b, &namesrv_addr).await;
+
+        initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+        initialize_controller_mode_broker(&mut broker_b, "broker B").await;
+        broker_a.start().await;
+        broker_b.start().await;
+        bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
+        broker_a.inner.send_heartbeat().await;
+        let broker_a_controller_id = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist after bootstrap")
+            .broker_controller_id();
+        wait_until(
+            Duration::from_secs(5),
+            || {
+                controller_leader_manager.heartbeat_manager().is_broker_active(
+                    "controller-test-cluster",
+                    "controller-mode-broker",
+                    broker_a_controller_id as i64,
+                )
+            },
+            "controller leader to mark broker A active before broker B bootstrap",
+        )
+        .await;
+        bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
+
+        wait_until(
+            Duration::from_secs(10),
+            || {
+                let manager_a = broker_a.inner.replicas_manager();
+                let manager_b = broker_b.inner.replicas_manager();
+                match (manager_a, manager_b) {
+                    (Some(manager_a), Some(manager_b)) => {
+                        manager_a.register_state() == RegisterState::Registered
+                            && manager_b.register_state() == RegisterState::Registered
+                            && manager_a.master_broker_id().is_some()
+                            && manager_b.master_broker_id().is_some()
+                    }
+                    _ => false,
+                }
+            },
+            "brokers to finish controller bootstrap with namesrv enabled",
+        )
+        .await;
+
+        let manager_a = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist");
+        let manager_b = broker_b
+            .inner
+            .replicas_manager()
+            .expect("broker B replicas manager should exist");
+        let initial_master_id = manager_a
+            .master_broker_id()
+            .expect("controller should elect an initial master");
+        let broker_a_controller_id = manager_a.broker_controller_id();
+        let broker_b_controller_id = manager_b.broker_controller_id();
+        let broker_a_is_master = broker_a_controller_id == initial_master_id;
+        let initial_master_addr = if broker_a_is_master {
+            broker_a.inner.get_broker_addr().clone()
+        } else {
+            broker_b.inner.get_broker_addr().clone()
+        };
+        let initial_slave_addr = if broker_a_is_master {
+            broker_b.inner.get_broker_addr().clone()
+        } else {
+            broker_a.inner.get_broker_addr().clone()
+        };
+        let initial_slave_controller_id = if broker_a_is_master {
+            broker_b_controller_id
+        } else {
+            broker_a_controller_id
+        };
+        let broker_cluster_name = broker_a.inner.broker_config.broker_identity.broker_cluster_name.clone();
+        let broker_name = broker_a.inner.broker_config.broker_identity.broker_name.clone();
+
+        let initial_member_group = wait_for_namesrv_member_group(
+            &namesrv_addr,
+            &broker_cluster_name,
+            &broker_name,
+            Duration::from_secs(15),
+            "namesrv to reflect initial master/slave registration",
+            |member_group| {
+                member_group.broker_addrs.len() == 2
+                    && member_group.broker_addrs.get(&MASTER_ID) == Some(&initial_master_addr)
+                    && member_group.broker_addrs.get(&initial_slave_controller_id) == Some(&initial_slave_addr)
+            },
+        )
+        .await;
+        assert_eq!(initial_member_group.broker_addrs.len(), 2);
+
+        let old_master_controller_id = initial_master_id;
+        let surviving_controller_id = if broker_a_is_master {
+            broker_b_controller_id
+        } else {
+            broker_a_controller_id
+        };
+        let surviving_broker_addr = if broker_a_is_master {
+            broker_b.inner.get_broker_addr().clone()
+        } else {
+            broker_a.inner.get_broker_addr().clone()
+        };
+
+        if broker_a_is_master {
+            broker_a.shutdown().await;
+            broker_b.inner.send_heartbeat().await;
+        } else {
+            broker_b.shutdown().await;
+            broker_a.inner.send_heartbeat().await;
+        }
+
+        let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
+        let surviving_store = surviving_broker
+            .inner
+            .message_store
+            .as_ref()
+            .expect("surviving broker message store should exist")
+            .clone();
+
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                let Some(manager) = surviving_broker.inner.replicas_manager() else {
+                    return false;
+                };
+                let Some(ha_service) = surviving_store.get_ha_service() else {
+                    return false;
+                };
+                let ha_runtime_info = ha_service.get_runtime_info(0);
+                manager.master_broker_id() == Some(surviving_controller_id)
+                    && manager.master_epoch() > 0
+                    && manager.sync_state_set() == &HashSet::from([surviving_controller_id as i64])
+                    && surviving_store.get_alive_replica_num_in_group() == 1
+                    && ha_runtime_info.master
+                    && ha_runtime_info.in_sync_slave_nums == 0
+                    && ha_runtime_info.ha_client_runtime_info.master_addr.is_empty()
+                    && surviving_broker.inner.message_store_config.broker_role == BrokerRole::SyncMaster
+            },
+            "surviving broker store/HA view to converge after controller failover",
+        )
+        .await;
+
+        let member_group_after_failover = wait_for_namesrv_member_group(
+            &namesrv_addr,
+            &broker_cluster_name,
+            &broker_name,
+            Duration::from_secs(15),
+            "namesrv to re-register the promoted master without stale slave entry",
+            |member_group| {
+                member_group.broker_addrs.len() == 1
+                    && member_group.broker_addrs.get(&MASTER_ID) == Some(&surviving_broker_addr)
+                    && !member_group.broker_addrs.contains_key(&surviving_controller_id)
+            },
+        )
+        .await;
+        assert_eq!(
+            member_group_after_failover.broker_addrs,
+            std::collections::HashMap::from([(MASTER_ID, surviving_broker_addr.clone())]),
+            "namesrv should only retain the promoted master after old master shutdown",
+        );
+
+        let rejoining_store_key = if broker_a_is_master {
+            format!("broker-{}", base_port + 21)
+        } else {
+            format!("broker-{}", base_port + 31)
+        };
+        let mut rejoining_broker = new_controller_mode_runtime_with_store_key(
+            &root,
+            &rejoining_store_key,
+            "controller-mode-broker",
+            base_port + 41,
+            base_port + 42,
+            controller_addrs,
+        );
+        configure_namesrv(&mut rejoining_broker, &namesrv_addr).await;
+        initialize_controller_mode_broker(&mut rejoining_broker, "rejoining broker").await;
+        rejoining_broker.start().await;
+        let current_leader_manager = controllers
+            .iter()
+            .find(|manager| manager.is_leader())
+            .expect("controller cluster should keep a leader")
+            .clone();
+        bootstrap_broker_against_controller(&mut rejoining_broker, &current_leader_manager).await;
+        rejoining_broker.inner.send_heartbeat().await;
+
+        let rejoining_store = rejoining_broker
+            .inner
+            .message_store
+            .as_ref()
+            .expect("rejoining broker message store should exist")
+            .clone();
+        let rejoining_addr = rejoining_broker.inner.get_broker_addr().clone();
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                let Some(rejoining_manager) = rejoining_broker.inner.replicas_manager() else {
+                    return false;
+                };
+                let Some(surviving_manager) = surviving_broker.inner.replicas_manager() else {
+                    return false;
+                };
+                let Some(surviving_ha_service) = surviving_store.get_ha_service() else {
+                    return false;
+                };
+                let Some(rejoining_ha_service) = rejoining_store.get_ha_service() else {
+                    return false;
+                };
+                let surviving_runtime_info = surviving_ha_service.get_runtime_info(0);
+                let rejoining_runtime_info = rejoining_ha_service.get_runtime_info(0);
+                rejoining_manager.register_state() == RegisterState::Registered
+                    && rejoining_manager.broker_controller_id() == old_master_controller_id
+                    && rejoining_manager.master_broker_id() == Some(surviving_controller_id)
+                    && surviving_manager.sync_state_set() == rejoining_manager.sync_state_set()
+                    && surviving_store.get_alive_replica_num_in_group()
+                        == surviving_manager.sync_state_set().len().max(1) as i32
+                    && rejoining_store.get_alive_replica_num_in_group()
+                        == rejoining_manager.sync_state_set().len().max(1) as i32
+                    && surviving_runtime_info.master
+                    && surviving_runtime_info.in_sync_slave_nums
+                        == (surviving_manager.sync_state_set().len().max(1) as i32 - 1).max(0)
+                    && !rejoining_runtime_info.master
+                    && rejoining_runtime_info.ha_client_runtime_info.master_addr == surviving_broker_addr.as_str()
+                    && rejoining_broker.inner.message_store_config.broker_role == BrokerRole::Slave
+            },
+            "rejoining broker namesrv/store/HA view to converge as slave",
+        )
+        .await;
+
+        let member_group_after_rejoin = wait_for_namesrv_member_group(
+            &namesrv_addr,
+            &broker_cluster_name,
+            &broker_name,
+            Duration::from_secs(15),
+            "namesrv to re-register the returning slave under its controller broker id",
+            |member_group| {
+                member_group.broker_addrs.len() == 2
+                    && member_group.broker_addrs.get(&MASTER_ID) == Some(&surviving_broker_addr)
+                    && member_group.broker_addrs.get(&old_master_controller_id) == Some(&rejoining_addr)
+                    && !member_group.broker_addrs.contains_key(&surviving_controller_id)
+            },
+        )
+        .await;
+        assert_eq!(
+            member_group_after_rejoin.broker_addrs.get(&MASTER_ID),
+            Some(&surviving_broker_addr),
+            "namesrv should advertise the promoted broker as master after rejoin",
+        );
+        assert_eq!(
+            member_group_after_rejoin.broker_addrs.get(&old_master_controller_id),
+            Some(&rejoining_addr),
+            "namesrv should advertise the returning broker under its controller-assigned slave id",
+        );
+
+        rejoining_broker.shutdown().await;
+        if broker_a_is_master {
+            broker_b.shutdown().await;
+        } else {
+            broker_a.shutdown().await;
+        }
+        for controller in &controllers {
+            let _ = controller.shutdown().await;
+        }
+        namesrv.shutdown().await;
         let _ = std::fs::remove_dir_all(root);
     }
 

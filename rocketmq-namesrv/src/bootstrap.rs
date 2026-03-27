@@ -16,6 +16,7 @@
 //!
 //! Provides the core runtime infrastructure for RocketMQ NameServer.
 
+use std::future::Future;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -170,28 +171,42 @@ impl NameServerBootstrap {
     /// 2. Server startup
     /// 3. Graceful shutdown on signal
     #[instrument(skip(self), name = "nameserver_boot")]
-    pub async fn boot(mut self) -> RocketMQResult<()> {
+    pub async fn boot(self) -> RocketMQResult<()> {
+        self.boot_with_shutdown(wait_for_signal()).await
+    }
+
+    /// Boot the NameServer and stop when the provided shutdown future resolves.
+    ///
+    /// This keeps the default `boot()` behavior unchanged while giving tests and
+    /// embedding callers a deterministic shutdown path.
+    #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown")]
+    pub async fn boot_with_shutdown<F>(mut self, shutdown_signal: F) -> RocketMQResult<()>
+    where
+        F: Future<Output = ()> + Send,
+    {
         info!("Booting RocketMQ NameServer (Rust)...");
 
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
 
-        tokio::join!(self.name_server_runtime.start(), wait_for_signal_inner(shutdown_tx));
+        tokio::join!(
+            self.name_server_runtime.start(),
+            relay_shutdown_signal(shutdown_tx, shutdown_signal)
+        );
 
         info!("NameServer shutdown completed");
         Ok(())
     }
 }
 
-/// Wait for system shutdown signal (SIGINT, SIGTERM)
 #[inline]
-async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
-    tokio::select! {
-        _ = wait_for_signal() => {
-            info!("Shutdown signal received, broadcasting to all components...");
-        }
-    }
+async fn relay_shutdown_signal<F>(shutdown_tx: broadcast::Sender<()>, shutdown_signal: F)
+where
+    F: Future<Output = ()>,
+{
+    shutdown_signal.await;
+    info!("Shutdown signal received, broadcasting to all components...");
     // Broadcast shutdown to all listeners
     if let Err(e) = shutdown_tx.send(()) {
         error!("Failed to broadcast shutdown signal: {}", e);
