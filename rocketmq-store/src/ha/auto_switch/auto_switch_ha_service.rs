@@ -83,16 +83,13 @@ impl AutoSwitchHAService {
     async fn clear_master_target(&self) {
         self.delegate.set_ha_client_reported_broker_id(None);
         if let Some(client) = self.delegate.get_ha_client() {
-            client.close_master().await;
-            client.update_master_address("").await;
-            client.update_ha_master_address("").await;
+            client.clear_controller_master_target().await;
         }
     }
 
     async fn update_master_target(&self, new_master_addr: &str) {
         if let Some(client) = self.delegate.get_ha_client() {
-            client.update_master_address(new_master_addr).await;
-            client.update_ha_master_address(new_master_addr).await;
+            client.sync_controller_master_target(new_master_addr).await;
             client.wakeup().await;
         }
     }

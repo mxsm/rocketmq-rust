@@ -40,6 +40,31 @@ impl GeneralHAClient {
             GeneralHAClient::AutoSwitchHaClient(client) => client.set_reported_broker_id(broker_id),
         }
     }
+
+    pub async fn sync_controller_master_target(&self, new_address: &str) {
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => {
+                client.update_master_address(new_address).await;
+                client.update_ha_master_address(new_address).await;
+            }
+            GeneralHAClient::AutoSwitchHaClient(client) => {
+                client.sync_controller_master_target(new_address).await;
+            }
+        }
+    }
+
+    pub async fn clear_controller_master_target(&self) {
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => {
+                client.close_master().await;
+                client.update_master_address("").await;
+                client.update_ha_master_address("").await;
+            }
+            GeneralHAClient::AutoSwitchHaClient(client) => {
+                client.clear_controller_master_target().await;
+            }
+        }
+    }
 }
 
 impl HAClient for GeneralHAClient {

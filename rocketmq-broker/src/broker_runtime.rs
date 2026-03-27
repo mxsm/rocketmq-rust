@@ -39,7 +39,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
@@ -83,6 +82,7 @@ use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::controller::replicas_manager::ControllerBrokerIdAction;
 use crate::controller::replicas_manager::ControllerRegisterFollowup;
 use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
+use crate::controller::replicas_manager::ControllerReplicaSyncFollowup;
 use crate::controller::replicas_manager::ReplicasManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
@@ -2439,10 +2439,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
         }
 
-        if let Err(error) = this
-            .send_heartbeat_to_controller_leader(&controller_leader, controller_broker_id as i64)
-            .await
-        {
+        if let Err(error) = this.send_heartbeat_to_controller_leader(&controller_leader).await {
             warn!("Send bootstrap heartbeat to controller failed: {}", error);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -2684,7 +2681,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             Ok((leader, response_header, sync_state_set_body)) => {
                 let sync_state_set_epoch = sync_state_set_body.get_sync_state_set_epoch();
                 let sync_state_set = sync_state_set_body.get_sync_state_set().cloned().unwrap_or_default();
-                if response_header.master_broker_id.is_some() && response_header.master_epoch.is_some() {
+                let sync_followup = this
+                    .replicas_manager()
+                    .map(|replicas_manager| {
+                        replicas_manager.replica_sync_followup(
+                            response_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
+                            response_header.master_epoch,
+                        )
+                    })
+                    .unwrap_or(ControllerReplicaSyncFollowup::Bootstrap);
+                if sync_followup == ControllerReplicaSyncFollowup::ApplyRoleChange {
                     if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
                         this,
                         Some(leader),
@@ -2703,7 +2709,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 }
             }
             Err(rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. })
-                if code == ResponseCode::ControllerBrokerMetadataNotExist.to_i32() =>
+                if this
+                    .replicas_manager()
+                    .map(|replicas_manager| {
+                        replicas_manager.replica_sync_error_followup(Some(code))
+                            == ControllerReplicaSyncFollowup::Bootstrap
+                    })
+                    .unwrap_or(true) =>
             {
                 BrokerRuntimeInner::bootstrap_controller_mode(this).await;
             }
@@ -3162,7 +3174,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let Some(replicas_manager) = self.replicas_manager() else {
             return;
         };
-        let controller_targets = replicas_manager.heartbeat_targets();
+        let heartbeat_state = replicas_manager.controller_heartbeat_state();
+        let controller_targets = heartbeat_state.controller_targets;
         if controller_targets.is_empty() {
             warn!(
                 "Skip controller heartbeat because no controller address is configured, broker={}",
@@ -3174,8 +3187,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let cluster_name = self.broker_config.broker_identity.broker_cluster_name.clone();
         let broker_addr = self.get_broker_addr().clone();
         let broker_name = self.broker_config.broker_identity.broker_name.clone();
-        let broker_id = replicas_manager.broker_controller_id() as i64;
-        let epoch = (replicas_manager.master_epoch() > 0).then_some(replicas_manager.master_epoch());
+        let broker_id = heartbeat_state.broker_id;
+        let epoch = heartbeat_state.epoch;
         let max_offset = self
             .message_store
             .as_ref()
@@ -3207,18 +3220,15 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     async fn send_heartbeat_to_controller_leader(
         &self,
         controller_leader: &CheetahString,
-        broker_id: i64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let epoch = (self
+        let heartbeat_state = self
             .replicas_manager()
-            .map(|replicas_manager| replicas_manager.master_epoch())
-            .unwrap_or_default()
-            > 0)
-        .then(|| {
-            self.replicas_manager()
-                .map(|replicas_manager| replicas_manager.master_epoch())
-                .unwrap_or_default()
-        });
+            .map(|replicas_manager| replicas_manager.controller_heartbeat_state())
+            .ok_or_else(|| {
+                rocketmq_error::RocketMQError::illegal_argument(
+                    "replicas manager missing while sending controller leader heartbeat",
+                )
+            })?;
         let max_offset = self
             .message_store
             .as_ref()
@@ -3234,9 +3244,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 self.broker_config.broker_identity.broker_cluster_name.clone(),
                 self.get_broker_addr().clone(),
                 self.broker_config.broker_identity.broker_name.clone(),
-                broker_id,
+                heartbeat_state.broker_id,
                 self.broker_config.send_heartbeat_timeout_millis,
-                epoch,
+                heartbeat_state.epoch,
                 max_offset,
                 confirm_offset,
                 Some(self.broker_config.controller_heartbeat_timeout_mills),
@@ -3816,7 +3826,7 @@ mod tests {
 
         runtime
             .inner
-            .send_heartbeat_to_controller_leader(&controller_leader, controller_broker_id as i64)
+            .send_heartbeat_to_controller_leader(&controller_leader)
             .await
             .expect("send bootstrap heartbeat to controller");
         sleep(Duration::from_millis(300)).await;

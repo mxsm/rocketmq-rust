@@ -80,6 +80,19 @@ pub enum ControllerReplicaInfoFollowup {
     ElectMaster,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerReplicaSyncFollowup {
+    ApplyRoleChange,
+    Bootstrap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControllerHeartbeatState {
+    pub controller_targets: Vec<CheetahString>,
+    pub broker_id: i64,
+    pub epoch: Option<i32>,
+}
+
 impl RoleChangeOutcome {
     pub fn target_broker_role(&self) -> Option<BrokerRole> {
         match self.role {
@@ -249,6 +262,14 @@ impl ReplicasManager {
         &self.sync_state_set
     }
 
+    pub fn controller_heartbeat_state(&self) -> ControllerHeartbeatState {
+        ControllerHeartbeatState {
+            controller_targets: self.heartbeat_targets(),
+            broker_id: self.broker_controller_id as i64,
+            epoch: (self.master_epoch > 0).then_some(self.master_epoch),
+        }
+    }
+
     pub fn needs_broker_id_application(&self) -> bool {
         self.metadata.is_none()
     }
@@ -373,6 +394,29 @@ impl ReplicasManager {
             ControllerReplicaInfoFollowup::ApplyRoleChange
         } else {
             ControllerReplicaInfoFollowup::ElectMaster
+        }
+    }
+
+    pub fn replica_sync_followup(
+        &self,
+        master_broker_id: Option<u64>,
+        master_epoch: Option<i32>,
+    ) -> ControllerReplicaSyncFollowup {
+        if master_broker_id.is_some() && master_epoch.is_some() {
+            ControllerReplicaSyncFollowup::ApplyRoleChange
+        } else {
+            ControllerReplicaSyncFollowup::Bootstrap
+        }
+    }
+
+    pub fn replica_sync_error_followup(&self, response_code: Option<i32>) -> ControllerReplicaSyncFollowup {
+        if matches!(
+            response_code,
+            Some(code) if code == rocketmq_remoting::code::response_code::ResponseCode::ControllerBrokerMetadataNotExist.to_i32()
+        ) {
+            ControllerReplicaSyncFollowup::Bootstrap
+        } else {
+            ControllerReplicaSyncFollowup::ApplyRoleChange
         }
     }
 
@@ -814,6 +858,40 @@ mod tests {
     }
 
     #[test]
+    fn controller_heartbeat_state_is_derived_by_replicas_manager() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878;127.0.0.2:9878", 2);
+        let message_store_config = message_store_config_with_identity_path("heartbeat-state");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        let initial_state = manager.controller_heartbeat_state();
+        assert_eq!(initial_state.broker_id, 2);
+        assert_eq!(initial_state.epoch, None);
+        assert_eq!(
+            initial_state.controller_targets,
+            vec![
+                CheetahString::from("127.0.0.1:9878"),
+                CheetahString::from("127.0.0.2:9878"),
+            ]
+        );
+
+        manager.set_controller_leader_address("127.0.0.2:9878".into());
+        manager
+            .change_broker_role(None, Some(2), None, Some(5), Some(6), Some(&HashSet::from([2_i64])))
+            .expect("promote to master");
+
+        let next_state = manager.controller_heartbeat_state();
+        assert_eq!(next_state.broker_id, 2);
+        assert_eq!(next_state.epoch, Some(5));
+        assert_eq!(
+            next_state.controller_targets,
+            vec![
+                CheetahString::from("127.0.0.2:9878"),
+                CheetahString::from("127.0.0.1:9878"),
+            ]
+        );
+    }
+
+    #[test]
     fn prepare_controller_broker_id_action_reuses_pending_and_existing_metadata() {
         let config = broker_config_with_controller_addr("127.0.0.1:9878", 7);
         let message_store_config = message_store_config_with_identity_path("broker-id-action");
@@ -874,6 +952,34 @@ mod tests {
         assert_eq!(
             manager.replica_info_followup(Some(9), Some(4)),
             ControllerReplicaInfoFollowup::ApplyRoleChange
+        );
+    }
+
+    #[test]
+    fn controller_periodic_sync_followups_are_derived_by_replicas_manager() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 7);
+        let message_store_config = message_store_config_with_identity_path("sync-followup");
+        let manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        assert_eq!(
+            manager.replica_sync_followup(Some(7), Some(3)),
+            ControllerReplicaSyncFollowup::ApplyRoleChange
+        );
+        assert_eq!(
+            manager.replica_sync_followup(None, None),
+            ControllerReplicaSyncFollowup::Bootstrap
+        );
+        assert_eq!(
+            manager.replica_sync_error_followup(Some(
+                rocketmq_remoting::code::response_code::ResponseCode::ControllerBrokerMetadataNotExist.to_i32()
+            )),
+            ControllerReplicaSyncFollowup::Bootstrap
+        );
+        assert_eq!(
+            manager.replica_sync_error_followup(Some(
+                rocketmq_remoting::code::response_code::ResponseCode::SystemError.to_i32()
+            )),
+            ControllerReplicaSyncFollowup::ApplyRoleChange
         );
     }
 }
