@@ -46,7 +46,11 @@ dist
 _asset_bundler_cache
 _site
 
-.claude
+.claude/*
+!.claude/CLAUDE.md
+!.claude/rules/
+.claude/rules/*
+!.claude/rules/*.md
 .codex
 
 # Tauri
