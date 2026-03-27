@@ -100,6 +100,12 @@ impl DefaultHAService {
         Ok(true)
     }
 
+    pub(crate) fn set_ha_client_reported_broker_id(&self, broker_id: Option<i64>) {
+        if let Some(client) = &self.ha_client {
+            client.set_reported_broker_id(broker_id);
+        }
+    }
+
     pub(crate) fn set_auto_switch_service(&mut self, auto_switch_service: WeakArcMut<AutoSwitchHAService>) {
         self.auto_switch_service = Some(auto_switch_service);
     }

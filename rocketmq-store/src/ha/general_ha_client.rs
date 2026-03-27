@@ -33,7 +33,12 @@ impl GeneralHAClient {
     pub fn new_with_auto_switch_ha_client(auto_switch_ha_client: AutoSwitchHAClient) -> Self {
         GeneralHAClient::AutoSwitchHaClient(ArcMut::new(auto_switch_ha_client))
     }
-    // Additional methods to interact with the HA services can be added here
+
+    pub fn set_reported_broker_id(&self, broker_id: Option<i64>) {
+        if let GeneralHAClient::DefaultHaClient(client) = self {
+            client.set_reported_broker_id(broker_id);
+        }
+    }
 }
 
 impl HAClient for GeneralHAClient {

@@ -77,6 +77,7 @@ impl AutoSwitchHAService {
     }
 
     async fn clear_master_target(&self) {
+        self.delegate.set_ha_client_reported_broker_id(None);
         if let Some(client) = self.delegate.get_ha_client() {
             client.close_master().await;
             client.update_master_address("").await;
@@ -99,6 +100,8 @@ impl AutoSwitchHAService {
 
     pub fn set_local_broker_id(&self, local_broker_id: i64) {
         self.local_broker_id.store(local_broker_id, Ordering::SeqCst);
+        self.delegate
+            .set_ha_client_reported_broker_id((local_broker_id >= 0).then_some(local_broker_id));
 
         if self.is_master.load(Ordering::SeqCst) && local_broker_id >= 0 {
             let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
@@ -390,7 +393,8 @@ impl HAService for AutoSwitchHAService {
         slave_id: Option<i64>,
     ) -> HAResult<bool> {
         self.is_master.store(false, Ordering::SeqCst);
-        let _ = (new_master_epoch, slave_id);
+        let _ = new_master_epoch;
+        self.delegate.set_ha_client_reported_broker_id(slave_id);
         self.update_master_target(new_master_addr).await;
         Ok(true)
     }

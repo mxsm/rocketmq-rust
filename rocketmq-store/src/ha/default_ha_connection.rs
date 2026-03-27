@@ -48,6 +48,7 @@ use tracing::warn;
 
 use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::ha::default_ha_client::CONTROLLER_REPORT_HEADER_SIZE;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::general_ha_connection::GeneralHAConnection;
@@ -160,7 +161,14 @@ impl HAConnection for DefaultHAConnection {
 
         // Create and start read service
         let read_service = ReadSocketService::new(
-            FramedRead::new(reader, OffsetDecoder),
+            FramedRead::new(
+                reader,
+                OffsetDecoder::new(if self.message_store_config.enable_controller_mode {
+                    CONTROLLER_REPORT_HEADER_SIZE
+                } else {
+                    REPORT_HEADER_SIZE
+                }),
+            ),
             self.client_address.clone(),
             ArcMut::clone(&self.ha_service),
             Arc::clone(&self.current_state),
@@ -273,37 +281,53 @@ const REPORT_HEADER_SIZE: usize = 8;
 const SELECT_TIMEOUT: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
-pub(in crate::ha) struct OffsetFrame(pub i64);
+pub(in crate::ha) struct OffsetFrame {
+    pub offset: i64,
+    pub broker_id: Option<i64>,
+}
 
-pub(in crate::ha) struct OffsetDecoder;
+pub(in crate::ha) struct OffsetDecoder {
+    frame_size: usize,
+}
+
+impl OffsetDecoder {
+    pub const fn new(frame_size: usize) -> Self {
+        Self { frame_size }
+    }
+}
 
 impl Decoder for OffsetDecoder {
     type Item = OffsetFrame;
     type Error = std::io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.len() < REPORT_HEADER_SIZE {
+        if src.len() < self.frame_size {
             return Ok(None); // not enough data yet
         }
 
         // ensure we work on 8-byte alignment
-        let aligned_size = src.len() - (src.len() % REPORT_HEADER_SIZE);
-        if aligned_size < 8 {
+        let aligned_size = src.len() - (src.len() % self.frame_size);
+        if aligned_size < self.frame_size {
             return Ok(None);
         }
 
-        // We have at least 8 bytes, safe to read
-        // Parse the first 8 bytes as big-endian i64
-        // SAFETY: We just checked src.len() >= 8
         let offset_bytes: [u8; 8] = src[..REPORT_HEADER_SIZE]
             .try_into()
             .expect("Slice with incorrect length");
         let offset = i64::from_be_bytes(offset_bytes);
+        let broker_id = if self.frame_size >= CONTROLLER_REPORT_HEADER_SIZE {
+            Some(i64::from_be_bytes(
+                src[REPORT_HEADER_SIZE..CONTROLLER_REPORT_HEADER_SIZE]
+                    .try_into()
+                    .expect("Slice with incorrect length"),
+            ))
+        } else {
+            None
+        };
 
-        // Advance the buffer by the size of the consumed frame (8 bytes)
-        src.advance(REPORT_HEADER_SIZE);
+        src.advance(self.frame_size);
 
-        Ok(Some(OffsetFrame(offset)))
+        Ok(Some(OffsetFrame { offset, broker_id }))
     }
 }
 
@@ -371,7 +395,7 @@ impl ReadSocketService {
                     info!("Stream closed by peer");
                     break;
                 }
-                Some(Ok(OffsetFrame(offset))) => {
+                Some(Ok(OffsetFrame { offset, broker_id })) => {
                     self.last_read_timestamp.store(current_millis(), Ordering::Relaxed);
                     self.slave_ack_offset.store(offset, Ordering::Relaxed);
 
@@ -380,6 +404,9 @@ impl ReadSocketService {
                         info!("slave[{}] request offset {}", self.client_address, offset);
                     }
                     if let Some(connection) = self.connection.upgrade() {
+                        if let Some(broker_id) = broker_id.filter(|broker_id| *broker_id >= 0) {
+                            connection.set_slave_broker_id(Some(broker_id));
+                        }
                         self.ha_service.handle_connection_ack(connection.as_ref(), offset);
                     }
                     self.ha_service.notify_transfer_some(offset).await;
@@ -746,5 +773,42 @@ impl WriteSocketService {
 
     fn get_service_name(&self) -> String {
         format!("WriteSocketService[{}]", self.client_address)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::BufMut;
+
+    use super::*;
+
+    #[test]
+    fn offset_decoder_reads_default_offset_frame() {
+        let mut src = BytesMut::with_capacity(REPORT_HEADER_SIZE);
+        src.put_i64(128);
+        let mut decoder = OffsetDecoder::new(REPORT_HEADER_SIZE);
+
+        let frame = decoder.decode(&mut src).expect("decode offset frame").expect("frame");
+
+        assert_eq!(frame.offset, 128);
+        assert_eq!(frame.broker_id, None);
+        assert!(src.is_empty());
+    }
+
+    #[test]
+    fn offset_decoder_reads_controller_offset_frame_with_broker_id() {
+        let mut src = BytesMut::with_capacity(CONTROLLER_REPORT_HEADER_SIZE);
+        src.put_i64(256);
+        src.put_i64(9);
+        let mut decoder = OffsetDecoder::new(CONTROLLER_REPORT_HEADER_SIZE);
+
+        let frame = decoder
+            .decode(&mut src)
+            .expect("decode controller offset frame")
+            .expect("frame");
+
+        assert_eq!(frame.offset, 256);
+        assert_eq!(frame.broker_id, Some(9));
+        assert!(src.is_empty());
     }
 }

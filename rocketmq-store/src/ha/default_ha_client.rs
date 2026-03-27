@@ -55,6 +55,7 @@ use crate::message_store::local_file_message_store::LocalFileMessageStore;
 /// │                  Report Header                │
 /// └───────────────────────────────────────────────┘
 pub const REPORT_HEADER_SIZE: usize = 8;
+pub const CONTROLLER_REPORT_HEADER_SIZE: usize = 16;
 
 /// Maximum read buffer size (4MB)
 const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024 * 4;
@@ -90,6 +91,7 @@ struct Inner {
 
     /// Current reported offset
     current_reported_offset: Arc<AtomicI64>,
+    reported_broker_id: Arc<AtomicI64>,
 
     /// Dispatch position in read buffer
     dispatch_position: AtomicUsize,
@@ -221,6 +223,7 @@ impl DefaultHAClient {
                 last_read_timestamp: Arc::new(AtomicU64::new(now)),
                 last_write_timestamp: Arc::new(AtomicU64::new(now)),
                 current_reported_offset: Arc::new(AtomicI64::new(0)),
+                reported_broker_id: Arc::new(AtomicI64::new(-1)),
                 dispatch_position: AtomicUsize::new(0),
                 byte_buffer_read: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
                 byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(READ_MAX_BUFFER_SIZE))),
@@ -289,6 +292,12 @@ impl DefaultHAClient {
     pub fn get_transferred_byte_in_second(&self) -> u64 {
         self.inner.flow_monitor.get_transferred_byte_in_second() as u64
     }
+
+    pub fn set_reported_broker_id(&self, broker_id: Option<i64>) {
+        self.inner
+            .reported_broker_id
+            .store(broker_id.unwrap_or(-1), Ordering::SeqCst);
+    }
 }
 
 impl HAClient for DefaultHAClient {
@@ -356,16 +365,21 @@ impl HAClient for DefaultHAClient {
                                     .default_message_store
                                     .message_store_config_ref()
                                     .ha_send_heartbeat_interval,
+                                enable_controller_mode: client
+                                    .default_message_store
+                                    .message_store_config_ref()
+                                    .enable_controller_mode,
                             };
 
                             let mut writer_client = WriterTask {
                                 wr: framed_wr,
                                 last_write_timestamp: client.last_write_timestamp.clone(),
                                 current_reported_offset_ref: client.current_reported_offset.clone(),
+                                reported_broker_id_ref: client.reported_broker_id.clone(),
                                 cfg,
                                 offset_rx,
                                 kick_rx,
-                                report_offset: BytesMut::with_capacity(REPORT_HEADER_SIZE),
+                                report_offset: BytesMut::with_capacity(CONTROLLER_REPORT_HEADER_SIZE),
                             };
                             let writer_handle = tokio::spawn(async move {
                                 tokio::select! {
@@ -633,12 +647,14 @@ impl ReaderTask {
 #[derive(Clone, Copy)]
 struct WriterCfg {
     heartbeat_interval_ms: u64,
+    enable_controller_mode: bool,
 }
 
 struct WriterTask {
     wr: FramedWrite<OwnedWriteHalf, BytesCodec>,
     last_write_timestamp: Arc<AtomicU64>,
     current_reported_offset_ref: Arc<AtomicI64>,
+    reported_broker_id_ref: Arc<AtomicI64>,
     cfg: WriterCfg,
     offset_rx: tokio::sync::mpsc::UnboundedReceiver<i64>,
     kick_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
@@ -670,12 +686,30 @@ impl WriterTask {
     }
 
     async fn send_offset(&mut self, max_off: i64) -> anyhow::Result<()> {
-        self.report_offset.clear();
-        self.report_offset.put_i64(max_off);
-        let bytes = self.report_offset.split().freeze();
+        let broker_id = self.reported_broker_id_ref.load(Ordering::Relaxed);
+        let bytes = Self::encode_offset_report(
+            &mut self.report_offset,
+            max_off,
+            self.cfg.enable_controller_mode,
+            broker_id,
+        );
         self.wr.send(bytes).await?;
         self.last_write_timestamp.store(current_millis(), Ordering::Release);
         Ok(())
+    }
+
+    fn encode_offset_report(
+        report_offset: &mut BytesMut,
+        max_off: i64,
+        enable_controller_mode: bool,
+        reported_broker_id: i64,
+    ) -> bytes::Bytes {
+        report_offset.clear();
+        report_offset.put_i64(max_off);
+        if enable_controller_mode {
+            report_offset.put_i64(reported_broker_id);
+        }
+        report_offset.split().freeze()
     }
 }
 
@@ -688,4 +722,26 @@ pub enum HAClientError {
     Connection(String),
     #[error("Service error: {0}")]
     Service(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writer_task_encodes_controller_report_with_broker_id() {
+        let encoded = WriterTask::encode_offset_report(
+            &mut BytesMut::with_capacity(CONTROLLER_REPORT_HEADER_SIZE),
+            128,
+            true,
+            9,
+        );
+
+        assert_eq!(encoded.len(), CONTROLLER_REPORT_HEADER_SIZE);
+        assert_eq!(i64::from_be_bytes(encoded[0..8].try_into().expect("offset bytes")), 128);
+        assert_eq!(
+            i64::from_be_bytes(encoded[8..16].try_into().expect("broker id bytes")),
+            9
+        );
+    }
 }
