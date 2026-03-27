@@ -379,6 +379,9 @@ impl ReadSocketService {
                         self.slave_request_offset.store(offset, Ordering::Release);
                         info!("slave[{}] request offset {}", self.client_address, offset);
                     }
+                    if let Some(connection) = self.connection.upgrade() {
+                        self.ha_service.handle_connection_ack(connection.as_ref(), offset);
+                    }
                     self.ha_service.notify_transfer_some(offset).await;
                 }
                 Some(Err(e)) => {
@@ -675,6 +678,9 @@ impl WriteSocketService {
 
             self.send_data(this_offset, select_result.get_bytes(), size).await?;
         } else {
+            if let Some(connection) = self.connection.upgrade() {
+                self.ha_service.handle_connection_caught_up(connection.as_ref());
+            }
             //self.ha_service.wait_for_running(100).await;
         }
 

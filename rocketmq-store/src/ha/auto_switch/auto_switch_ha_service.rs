@@ -32,6 +32,7 @@ use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_client::HAClient;
+use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -70,6 +71,7 @@ impl AutoSwitchHAService {
     pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
         let mut delegate = this.delegate.clone();
         DefaultHAService::init(&mut delegate, general_ha_service)?;
+        delegate.set_auto_switch_service(ArcMut::downgrade(this));
         delegate.ensure_ha_client()?;
         Ok(())
     }
@@ -220,6 +222,71 @@ impl AutoSwitchHAService {
             .clone()
             .mut_from_ref()
             .set_confirm_offset(confirm_offset);
+    }
+
+    pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
+        let Some(slave_broker_id) = Self::slave_broker_id(connection) else {
+            return;
+        };
+
+        self.update_connection_last_caught_up_time(slave_broker_id, current_millis());
+        let slave_ack_offset = connection.get_slave_ack_offset();
+        if slave_ack_offset >= 0 {
+            self.handle_connection_ack(connection, slave_ack_offset);
+        }
+    }
+
+    pub(crate) fn handle_connection_ack(&self, connection: &GeneralHAConnection, slave_ack_offset: i64) {
+        let Some(slave_broker_id) = Self::slave_broker_id(connection) else {
+            return;
+        };
+
+        self.update_connection_last_caught_up_time(slave_broker_id, current_millis());
+        let _ = self.maybe_expand_in_sync_state_set(slave_broker_id, slave_ack_offset);
+        self.update_confirm_offset_when_slave_ack(slave_broker_id);
+    }
+
+    pub(crate) fn handle_connection_caught_up(&self, connection: &GeneralHAConnection) {
+        let Some(slave_broker_id) = Self::slave_broker_id(connection) else {
+            return;
+        };
+
+        self.update_connection_last_caught_up_time(slave_broker_id, current_millis());
+    }
+
+    pub(crate) fn handle_connection_removed(&self, connection: &GeneralHAConnection) {
+        if self.message_store.is_shutdown() {
+            return;
+        }
+
+        let Some(slave_broker_id) = Self::slave_broker_id(connection) else {
+            return;
+        };
+
+        let removed_from_sync_state_set = {
+            let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
+            let removed_from_sync_state_set = tracker.local_sync_state_set.remove(&slave_broker_id);
+            tracker.remote_sync_state_set.remove(&slave_broker_id);
+            tracker.connection_caught_up_time_table.remove(&slave_broker_id);
+            removed_from_sync_state_set
+        };
+
+        if removed_from_sync_state_set {
+            let max_phy_offset = self.message_store.get_max_phy_offset();
+            let current_confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
+            let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
+            self.message_store
+                .clone()
+                .mut_from_ref()
+                .set_confirm_offset(confirm_offset);
+        }
+    }
+
+    fn slave_broker_id(connection: &GeneralHAConnection) -> Option<i64> {
+        connection
+            .is_auto_switch()
+            .then(|| connection.slave_broker_id())
+            .flatten()
     }
 
     fn tracked_sync_state_set_size(&self) -> Option<usize> {
