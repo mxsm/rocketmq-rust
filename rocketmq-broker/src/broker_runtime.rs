@@ -2928,11 +2928,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             message_store.sync_controller_sync_state_set(outcome.local_broker_id as i64, &outcome.sync_state_set);
         }
         let previous_store_role = this.message_store_config.broker_role;
+        if let Some(target_broker_role) = outcome.target_broker_role() {
+            Arc::make_mut(&mut this.message_store_config).broker_role = target_broker_role;
+        }
+        Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
 
         match role {
             BrokerReplicaRole::Master => {
-                Arc::make_mut(&mut this.message_store_config).broker_role = BrokerRole::SyncMaster;
-                Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
                 this.apply_message_store_role_change(
                     previous_store_role,
                     BrokerReplicaRole::Master,
@@ -2943,28 +2945,28 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 .await?;
                 this.change_special_service_status(outcome.should_start_special_service)
                     .await;
-                if let Some(slave_synchronize) = this.slave_synchronize_mut() {
-                    slave_synchronize.set_master_addr(None);
+                if outcome.should_clear_slave_master_address() {
+                    if let Some(slave_synchronize) = this.slave_synchronize_mut() {
+                        slave_synchronize.set_master_addr(None);
+                    }
                 }
             }
             BrokerReplicaRole::Slave => {
-                Arc::make_mut(&mut this.message_store_config).broker_role = BrokerRole::Slave;
-                Arc::make_mut(&mut this.broker_config).broker_identity.broker_id = outcome.local_broker_id;
                 this.apply_message_store_role_change(
                     previous_store_role,
                     BrokerReplicaRole::Slave,
                     outcome.local_broker_id,
-                    outcome.master_address.as_ref(),
+                    outcome.slave_master_address(),
                     outcome.master_epoch,
                 )
                 .await?;
                 this.change_special_service_status(outcome.should_start_special_service)
                     .await;
-                if let Some(master_address) = outcome.master_address.as_ref() {
+                if let Some(master_address) = outcome.slave_master_address() {
                     if let Some(slave_synchronize) = this.slave_synchronize_mut() {
                         slave_synchronize.set_master_addr(Some(master_address));
                     }
-                    if this.message_store.is_some() {
+                    if outcome.should_sync_master_online() && this.message_store.is_some() {
                         this.on_master_on_line(Some(master_address.clone()), None).await;
                     }
                 }

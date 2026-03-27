@@ -851,23 +851,21 @@ impl ControllerManager {
         Ok(())
     }
 
-    fn should_notify_broker_role_change(&self, cache_key: NotifyCacheKey, cache_state: NotifyCacheState) -> bool {
-        let mut notify_cache = self.notify_cache.write();
-        match notify_cache.get(&cache_key) {
+    fn can_notify_broker_role_change(&self, cache_key: &NotifyCacheKey, cache_state: &NotifyCacheState) -> bool {
+        let notify_cache = self.notify_cache.read();
+        !matches!(
+            notify_cache.get(cache_key),
             Some(previous)
                 if previous.master_epoch > cache_state.master_epoch
                     || (previous.master_epoch == cache_state.master_epoch
                         && previous.sync_state_set_epoch >= cache_state.sync_state_set_epoch
                         && previous.master_broker_id == cache_state.master_broker_id
-                        && previous.master_address == cache_state.master_address) =>
-            {
-                false
-            }
-            _ => {
-                notify_cache.insert(cache_key, cache_state);
-                true
-            }
-        }
+                        && previous.master_address == cache_state.master_address)
+        )
+    }
+
+    fn record_notified_broker_role_change(&self, cache_key: NotifyCacheKey, cache_state: NotifyCacheState) {
+        self.notify_cache.write().insert(cache_key, cache_state);
     }
 
     async fn notify_broker_role_changed(&self, response: RemotingCommand) -> Result<()> {
@@ -930,31 +928,51 @@ impl ControllerManager {
                 sync_state_set_epoch: response_header.sync_state_set_epoch,
                 master_broker_id: Some(master_broker_id),
             };
-            if !self.should_notify_broker_role_change(
-                NotifyCacheKey {
-                    cluster_name: member_group.cluster.to_string(),
-                    broker_name: member_group.broker_name.to_string(),
-                    broker_id,
-                },
-                NotifyCacheState {
-                    master_broker_id,
-                    master_epoch,
-                    sync_state_set_epoch,
-                    master_address: master_address.clone(),
-                },
-            ) {
+            let cache_key = NotifyCacheKey {
+                cluster_name: member_group.cluster.to_string(),
+                broker_name: member_group.broker_name.to_string(),
+                broker_id,
+            };
+            let cache_state = NotifyCacheState {
+                master_broker_id,
+                master_epoch,
+                sync_state_set_epoch,
+                master_address: master_address.clone(),
+            };
+            if !self.can_notify_broker_role_change(&cache_key, &cache_state) {
                 continue;
             }
             let request = RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
                 .set_body(sync_state_set.clone());
-
-            self.remoting_client
-                .invoke_request_oneway(&broker_addr, request, 3000)
-                .await;
-            info!(
-                "Notified broker role change, target={}, broker_id={}, broker={}",
-                broker_addr, broker_id, member_group.broker_name
-            );
+            match self
+                .remoting_client
+                .invoke_request(Some(&broker_addr), request, 3000)
+                .await
+            {
+                Ok(response) if response.code() == ResponseCode::Success as i32 => {
+                    self.record_notified_broker_role_change(cache_key, cache_state);
+                    info!(
+                        "Notified broker role change, target={}, broker_id={}, broker={}",
+                        broker_addr, broker_id, member_group.broker_name
+                    );
+                }
+                Ok(response) => {
+                    warn!(
+                        "Broker role notify did not succeed, target={}, broker_id={}, broker={}, code={}, remark={:?}",
+                        broker_addr,
+                        broker_id,
+                        member_group.broker_name,
+                        response.code(),
+                        response.remark()
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        "Failed to notify broker role change, target={}, broker_id={}, broker={}, error={}",
+                        broker_addr, broker_id, member_group.broker_name, error
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -1121,18 +1139,19 @@ mod tests {
             master_address: Some("127.0.0.1:10911".to_string()),
         };
 
-        assert!(manager.should_notify_broker_role_change(key.clone(), first_state.clone()));
-        assert!(!manager.should_notify_broker_role_change(key.clone(), first_state.clone()));
-        assert!(!manager.should_notify_broker_role_change(
-            key.clone(),
-            NotifyCacheState {
+        assert!(manager.can_notify_broker_role_change(&key, &first_state));
+        manager.record_notified_broker_role_change(key.clone(), first_state.clone());
+        assert!(!manager.can_notify_broker_role_change(&key, &first_state));
+        assert!(!manager.can_notify_broker_role_change(
+            &key,
+            &NotifyCacheState {
                 sync_state_set_epoch: 2,
                 ..first_state.clone()
             }
         ));
-        assert!(manager.should_notify_broker_role_change(
-            key.clone(),
-            NotifyCacheState {
+        assert!(manager.can_notify_broker_role_change(
+            &key,
+            &NotifyCacheState {
                 master_epoch: 3,
                 ..first_state.clone()
             }

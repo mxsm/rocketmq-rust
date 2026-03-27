@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
@@ -56,6 +57,30 @@ pub struct RoleChangeOutcome {
     pub local_broker_id: u64,
     pub should_start_special_service: bool,
     pub should_register_to_namesrv: bool,
+}
+
+impl RoleChangeOutcome {
+    pub fn target_broker_role(&self) -> Option<BrokerRole> {
+        match self.role {
+            Some(BrokerReplicaRole::Master) => Some(BrokerRole::SyncMaster),
+            Some(BrokerReplicaRole::Slave) => Some(BrokerRole::Slave),
+            None => None,
+        }
+    }
+
+    pub fn should_clear_slave_master_address(&self) -> bool {
+        matches!(self.role, Some(BrokerReplicaRole::Master))
+    }
+
+    pub fn slave_master_address(&self) -> Option<&CheetahString> {
+        matches!(self.role, Some(BrokerReplicaRole::Slave))
+            .then_some(self.master_address.as_ref())
+            .flatten()
+    }
+
+    pub fn should_sync_master_online(&self) -> bool {
+        self.slave_master_address().is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -605,6 +630,9 @@ mod tests {
         assert_eq!(outcome.local_broker_id, MASTER_ID);
         assert!(outcome.should_start_special_service);
         assert!(outcome.should_register_to_namesrv);
+        assert_eq!(outcome.target_broker_role(), Some(BrokerRole::SyncMaster));
+        assert!(outcome.should_clear_slave_master_address());
+        assert!(!outcome.should_sync_master_online());
         assert_eq!(
             manager.controller_leader_address(),
             Some(&CheetahString::from("127.0.0.2:9878"))
@@ -638,6 +666,12 @@ mod tests {
         assert_eq!(outcome.local_broker_id, 2);
         assert!(!outcome.should_start_special_service);
         assert!(outcome.should_register_to_namesrv);
+        assert_eq!(outcome.target_broker_role(), Some(BrokerRole::Slave));
+        assert_eq!(
+            outcome.slave_master_address(),
+            Some(&CheetahString::from("127.0.0.9:10911"))
+        );
+        assert!(outcome.should_sync_master_online());
         assert_eq!(
             manager.controller_leader_address(),
             Some(&CheetahString::from("127.0.0.3:9878"))
@@ -673,6 +707,9 @@ mod tests {
         assert_eq!(stale.local_broker_id, MASTER_ID);
         assert!(stale.should_start_special_service);
         assert!(!stale.should_register_to_namesrv);
+        assert_eq!(stale.target_broker_role(), None);
+        assert!(!stale.should_clear_slave_master_address());
+        assert!(!stale.should_sync_master_online());
         assert_eq!(
             manager.controller_leader_address(),
             Some(&CheetahString::from("127.0.0.4:9878"))

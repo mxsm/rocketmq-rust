@@ -138,6 +138,8 @@ impl AutoSwitchHAService {
             let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
             self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
             tracker.local_sync_state_set = sync_state_set;
+            tracker.remote_sync_state_set.clear();
+            tracker.connection_caught_up_time_table.clear();
         }
 
         let max_phy_offset = self.message_store.get_max_phy_offset();
@@ -361,6 +363,13 @@ impl AutoSwitchHAService {
 
         candidate_offsets.into_iter().min().unwrap_or(max_phy_offset)
     }
+
+    fn clear_pending_sync_state_tracking(&self) {
+        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
+        self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
+        tracker.remote_sync_state_set.clear();
+        tracker.connection_caught_up_time_table.clear();
+    }
 }
 
 impl HAService for AutoSwitchHAService {
@@ -375,6 +384,7 @@ impl HAService for AutoSwitchHAService {
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
         self.is_master.store(true, Ordering::SeqCst);
         let _ = master_epoch;
+        self.clear_pending_sync_state_tracking();
         let local_broker_id = self.local_broker_id.load(Ordering::SeqCst);
         if local_broker_id >= 0 {
             let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
@@ -398,6 +408,11 @@ impl HAService for AutoSwitchHAService {
     ) -> HAResult<bool> {
         self.is_master.store(false, Ordering::SeqCst);
         let _ = new_master_epoch;
+        if let Some(slave_id) = slave_id {
+            self.set_local_broker_id(slave_id);
+        }
+        self.clear_pending_sync_state_tracking();
+        self.delegate.destroy_connections().await;
         self.delegate.set_ha_client_reported_broker_id(slave_id);
         self.update_master_target(new_master_addr).await;
         Ok(true)
@@ -667,6 +682,72 @@ mod tests {
         assert_eq!(shrunk, HashSet::from([7_i64, 9_i64]));
         assert_eq!(service.get_sync_state_set(), HashSet::from([7_i64, 9_i64, 10_i64]));
         assert!(service.is_synchronizing_sync_state_set());
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn sync_controller_sync_state_set_clears_pending_remote_membership() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-sync-clear-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root);
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
+        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+        service
+            .maybe_expand_in_sync_state_set(9, 4)
+            .expect("slave should be added to sync state set");
+        assert!(service.is_synchronizing_sync_state_set());
+
+        service.sync_controller_sync_state_set(7, &HashSet::from([7_i64, 9_i64]));
+
+        assert_eq!(service.get_local_sync_state_set(), HashSet::from([7_i64, 9_i64]));
+        assert_eq!(service.get_sync_state_set(), HashSet::from([7_i64, 9_i64]));
+        assert!(!service.is_synchronizing_sync_state_set());
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn change_to_slave_clears_pending_remote_membership_and_updates_reported_broker_id() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-change-slave-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root);
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
+        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+        service
+            .maybe_expand_in_sync_state_set(9, 4)
+            .expect("slave should be added to sync state set");
+        assert!(service.is_synchronizing_sync_state_set());
+
+        service
+            .change_to_slave("127.0.0.1:10912", 3, Some(11))
+            .await
+            .expect("change to slave should succeed");
+
+        assert_eq!(service.get_local_sync_state_set(), HashSet::from([7_i64]));
+        assert_eq!(service.get_sync_state_set(), HashSet::from([7_i64]));
+        assert!(!service.is_synchronizing_sync_state_set());
+        assert_eq!(
+            service.get_ha_client().expect("ha client").get_master_address(),
+            "127.0.0.1:10912"
+        );
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
