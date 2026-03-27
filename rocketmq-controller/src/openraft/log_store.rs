@@ -28,18 +28,51 @@ use openraft::storage::RaftLogStorage;
 use openraft::LogState;
 use openraft::OptionalSend;
 use openraft::RaftLogReader;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::RwLock;
 
+use crate::storage::SharedStorageBackend;
 use crate::typ::LogEntry;
 use crate::typ::LogId;
 use crate::typ::TypeConfig;
 use crate::typ::Vote;
 
+const LOG_PREFIX: &str = "openraft/log/";
+const LAST_PURGED_KEY: &str = "openraft/meta/last_purged";
+const COMMITTED_KEY: &str = "openraft/meta/committed";
+const VOTE_KEY: &str = "openraft/meta/vote";
+
+fn storage_error(error: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(error.to_string())
+}
+
+async fn load_json<T: DeserializeOwned>(
+    backend: &SharedStorageBackend,
+    key: &str,
+) -> Result<Option<T>, std::io::Error> {
+    let Some(bytes) = backend.get(key).await.map_err(storage_error)? else {
+        return Ok(None);
+    };
+
+    serde_json::from_slice(&bytes).map(Some).map_err(storage_error)
+}
+
+async fn persist_json<T: Serialize>(
+    backend: &SharedStorageBackend,
+    key: &str,
+    value: &T,
+) -> Result<(), std::io::Error> {
+    let bytes = serde_json::to_vec(value).map_err(storage_error)?;
+    backend.put(key, &bytes).await.map_err(storage_error)?;
+    Ok(())
+}
+
 /// In-memory log store for Raft
 ///
 /// This implementation stores all log entries in memory using DashMap.
 /// For production use, consider implementing persistent storage.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LogStore {
     /// Log entries indexed by log index
     logs: Arc<DashMap<u64, LogEntry>>,
@@ -49,6 +82,7 @@ pub struct LogStore {
     committed: Arc<RwLock<Option<LogId>>>,
     /// Current vote information
     vote: Arc<RwLock<Option<Vote>>>,
+    backend: Option<SharedStorageBackend>,
 }
 
 impl Default for LogStore {
@@ -65,7 +99,46 @@ impl LogStore {
             last_purged_log_id: Arc::new(RwLock::new(None)),
             committed: Arc::new(RwLock::new(None)),
             vote: Arc::new(RwLock::new(None)),
+            backend: None,
         }
+    }
+
+    pub async fn open(backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
+        let store = Self {
+            logs: Arc::new(DashMap::new()),
+            last_purged_log_id: Arc::new(RwLock::new(load_json(&backend, LAST_PURGED_KEY).await?)),
+            committed: Arc::new(RwLock::new(load_json(&backend, COMMITTED_KEY).await?)),
+            vote: Arc::new(RwLock::new(load_json(&backend, VOTE_KEY).await?)),
+            backend: Some(backend.clone()),
+        };
+
+        let mut log_keys = backend.list_keys(LOG_PREFIX).await.map_err(storage_error)?;
+        log_keys.sort_by_key(|key| {
+            key.rsplit('/')
+                .next()
+                .and_then(|index| index.parse::<u64>().ok())
+                .unwrap_or_default()
+        });
+
+        for key in log_keys {
+            let Some(entry) = load_json::<LogEntry>(&backend, &key).await? else {
+                continue;
+            };
+            store.logs.insert(entry.log_id.index, entry);
+        }
+
+        Ok(store)
+    }
+
+    fn log_key(index: u64) -> String {
+        format!("{LOG_PREFIX}{index:020}")
+    }
+
+    async fn sync_backend(&self) -> Result<(), std::io::Error> {
+        if let Some(backend) = &self.backend {
+            backend.sync().await.map_err(storage_error)?;
+        }
+        Ok(())
     }
 
     /// Get the last log ID
@@ -102,6 +175,22 @@ impl LogStore {
         }
         entries
     }
+
+    async fn persist_vote(&self, vote: &Vote) -> Result<(), std::io::Error> {
+        if let Some(backend) = &self.backend {
+            persist_json(backend, VOTE_KEY, vote).await?;
+            self.sync_backend().await?;
+        }
+        Ok(())
+    }
+
+    async fn persist_last_purged(&self, log_id: &LogId) -> Result<(), std::io::Error> {
+        if let Some(backend) = &self.backend {
+            persist_json(backend, LAST_PURGED_KEY, log_id).await?;
+            self.sync_backend().await?;
+        }
+        Ok(())
+    }
 }
 
 impl RaftLogReader<TypeConfig> for LogStore {
@@ -136,6 +225,7 @@ impl RaftLogStorage<TypeConfig> for LogStore {
 
     async fn save_vote(&mut self, vote: &Vote) -> Result<(), std::io::Error> {
         *self.vote.write().await = Some(*vote);
+        self.persist_vote(vote).await?;
         Ok(())
     }
 
@@ -148,9 +238,21 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         I: IntoIterator<Item = LogEntry> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
+        let mut persisted_entries = Vec::new();
         for entry in entries {
             let log_id = entry.log_id;
+            if self.backend.is_some() {
+                let bytes = serde_json::to_vec(&entry).map_err(storage_error)?;
+                persisted_entries.push((Self::log_key(log_id.index), bytes));
+            }
             self.logs.insert(log_id.index, entry);
+        }
+
+        if let Some(backend) = &self.backend {
+            if !persisted_entries.is_empty() {
+                backend.batch_put(persisted_entries).await.map_err(storage_error)?;
+            }
+            self.sync_backend().await?;
         }
         callback.io_completed(Ok(()));
         Ok(())
@@ -171,14 +273,26 @@ impl RaftLogStorage<TypeConfig> for LogStore {
                 })
                 .collect();
 
+            if let Some(backend) = &self.backend {
+                backend
+                    .batch_delete(keys_to_remove.iter().map(|key| Self::log_key(*key)).collect())
+                    .await
+                    .map_err(storage_error)?;
+            }
+
             for key in keys_to_remove {
                 self.logs.remove(&key);
             }
         } else {
             // If log_id is None, remove all logs
+            if let Some(backend) = &self.backend {
+                let keys_to_remove: Vec<String> = self.logs.iter().map(|entry| Self::log_key(*entry.key())).collect();
+                backend.batch_delete(keys_to_remove).await.map_err(storage_error)?;
+            }
             self.logs.clear();
         }
 
+        self.sync_backend().await?;
         Ok(())
     }
 
@@ -196,11 +310,19 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             })
             .collect();
 
+        if let Some(backend) = &self.backend {
+            backend
+                .batch_delete(keys_to_remove.iter().map(|key| Self::log_key(*key)).collect())
+                .await
+                .map_err(storage_error)?;
+        }
+
         for key in keys_to_remove {
             self.logs.remove(&key);
         }
 
         *self.last_purged_log_id.write().await = Some(log_id);
+        self.persist_last_purged(&log_id).await?;
         Ok(())
     }
 }

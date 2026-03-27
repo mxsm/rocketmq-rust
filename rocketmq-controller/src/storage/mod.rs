@@ -24,6 +24,7 @@ pub mod rocksdb_backend;
 pub mod file_backend;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
@@ -89,6 +90,8 @@ pub trait StorageBackend: Send + Sync {
     async fn stats(&self) -> Result<StorageStats>;
 }
 
+pub type SharedStorageBackend = Arc<dyn StorageBackend>;
+
 /// Storage statistics
 #[derive(Debug, Clone, Default)]
 pub struct StorageStats {
@@ -145,18 +148,18 @@ pub trait StorageBackendExt: StorageBackend {
 impl<T: StorageBackend + ?Sized> StorageBackendExt for T {}
 
 /// Create a storage backend based on configuration
-pub async fn create_storage(config: StorageConfig) -> Result<Box<dyn StorageBackend>> {
+pub async fn create_storage(config: StorageConfig) -> Result<SharedStorageBackend> {
     match config {
         #[cfg(feature = "storage-rocksdb")]
         StorageConfig::RocksDB { path } => {
             let backend = rocksdb_backend::RocksDBBackend::new(path).await?;
-            Ok(Box::new(backend))
+            Ok(Arc::new(backend))
         }
 
         #[cfg(feature = "storage-file")]
         StorageConfig::File { path } => {
             let backend = file_backend::FileBackend::new(path).await?;
-            Ok(Box::new(backend))
+            Ok(Arc::new(backend))
         }
 
         StorageConfig::Memory => {
@@ -237,7 +240,7 @@ pub async fn create_storage(config: StorageConfig) -> Result<Box<dyn StorageBack
                 }
             }
 
-            Ok(Box::new(MemoryBackend {
+            Ok(Arc::new(MemoryBackend {
                 data: Arc::new(RwLock::new(HashMap::new())),
             }))
         }

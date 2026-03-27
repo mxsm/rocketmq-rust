@@ -135,6 +135,13 @@ impl RaftController {
             )),
         }
     }
+
+    pub fn scheduling_enabled(&self) -> bool {
+        match self {
+            Self::OpenRaft(controller) => controller.scheduling_enabled(),
+            Self::RaftRs(_) => false,
+        }
+    }
 }
 
 impl Controller for RaftController {

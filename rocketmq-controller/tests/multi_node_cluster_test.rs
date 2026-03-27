@@ -181,6 +181,54 @@ async fn wait_for_learner_readiness(nodes: &[(u64, Arc<RaftNodeManager>)], learn
     panic!("Learner node {learner_id} failed to become ready under leader {leader_id}");
 }
 
+async fn wait_for_failover_leader(
+    nodes: &[(u64, Arc<RaftNodeManager>)],
+    excluded_node_id: u64,
+) -> (u64, Arc<RaftNodeManager>) {
+    for attempt in 1..=80 {
+        let metrics = snapshot_metrics(nodes);
+        let leaders = metrics
+            .iter()
+            .filter(|(node_id, _)| *node_id != excluded_node_id)
+            .filter_map(|(node_id, metrics)| {
+                (metrics.state == ServerState::Leader && metrics.current_leader == Some(*node_id)).then_some(*node_id)
+            })
+            .collect::<Vec<_>>();
+
+        if leaders.len() == 1 {
+            let leader_id = leaders[0];
+            let all_survivors_follow = metrics
+                .iter()
+                .filter(|(node_id, _)| *node_id != excluded_node_id)
+                .all(|(_, metrics)| metrics.current_leader == Some(leader_id));
+
+            if all_survivors_follow {
+                let leader_node = nodes
+                    .iter()
+                    .find(|(node_id, _)| *node_id == leader_id)
+                    .map(|(_, node)| node.clone())
+                    .expect("leader node should be present");
+                return (leader_id, leader_node);
+            }
+        }
+
+        if attempt % 10 == 0 {
+            println!(
+                "Waiting for failover leader excluding node {}, current snapshot: {:?}",
+                excluded_node_id,
+                metrics
+                    .iter()
+                    .map(|(node_id, metrics)| (*node_id, metrics.state, metrics.current_leader))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    panic!("Cluster failed to elect a failover leader after excluding node {excluded_node_id}");
+}
+
 /// Bootstrap a stable multi-voter cluster by delaying follower startup until the
 /// initial leader has a committed write in its current term.
 async fn bootstrap_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<RaftNodeManager>)> {
@@ -542,4 +590,89 @@ async fn test_cluster_metrics() {
     }
 
     println!("All nodes have valid metrics");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
+    const BASE_PORT: u16 = 55000;
+
+    let nodes = bootstrap_cluster(3, BASE_PORT).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let mut old_leader = None;
+    for (node_id, node) in &nodes {
+        if node.is_leader().await.unwrap_or(false) {
+            old_leader = Some((*node_id, node.clone()));
+            break;
+        }
+    }
+    let (old_leader_id, old_leader_node) = old_leader.expect("cluster should elect an initial leader");
+
+    let pre_failover_write = old_leader_node
+        .client_write(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: "broker-before-failover".to_string(),
+            broker_address: "127.0.0.1:10921".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "broker-before-failover-check-code".to_string(),
+        })
+        .await
+        .expect("pre-failover write should succeed");
+    assert_eq!(
+        pre_failover_write.data.response_code,
+        rocketmq_remoting::code::response_code::ResponseCode::Success as i32,
+        "pre-failover controller write should succeed"
+    );
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    old_leader_node.shutdown().await.expect("shutdown old leader");
+
+    let (new_leader_id, new_leader_node) = wait_for_failover_leader(&nodes, old_leader_id).await;
+    assert_ne!(
+        new_leader_id, old_leader_id,
+        "cluster should elect a different leader after shutdown"
+    );
+
+    let post_failover_write = new_leader_node
+        .client_write(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: "broker-after-failover".to_string(),
+            broker_address: "127.0.0.1:10922".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "broker-after-failover-check-code".to_string(),
+        })
+        .await
+        .expect("post-failover write should succeed");
+    assert_eq!(
+        post_failover_write.data.response_code,
+        rocketmq_remoting::code::response_code::ResponseCode::Success as i32,
+        "post-failover controller write should succeed"
+    );
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    for (node_id, node) in nodes.iter().filter(|(node_id, _)| *node_id != old_leader_id) {
+        let metrics = node.raft().metrics().borrow_watched().clone();
+        assert_eq!(
+            metrics.current_leader,
+            Some(new_leader_id),
+            "surviving node {} should follow the new leader",
+            node_id
+        );
+
+        let replicas_info_manager = node.store().state_machine.replicas_info_manager();
+        let next_before = replicas_info_manager
+            .get_next_broker_id("test-cluster", "broker-before-failover")
+            .response()
+            .and_then(|header| header.next_broker_id)
+            .expect("pre-failover broker id should remain visible");
+        let next_after = replicas_info_manager
+            .get_next_broker_id("test-cluster", "broker-after-failover")
+            .response()
+            .and_then(|header| header.next_broker_id)
+            .expect("post-failover broker id should replicate");
+
+        assert_eq!(next_before, 2, "node {} should retain pre-failover state", node_id);
+        assert_eq!(next_after, 2, "node {} should apply post-failover state", node_id);
+    }
 }

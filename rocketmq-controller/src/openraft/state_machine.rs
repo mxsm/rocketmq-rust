@@ -24,8 +24,11 @@ use openraft::storage::Snapshot;
 use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
+use openraft::SnapshotMeta;
 use openraft::StoredMembership;
 use rocketmq_rust::ArcMut;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::config::ControllerConfig;
@@ -33,6 +36,7 @@ use crate::elect::elect_policy::ElectPolicy;
 use crate::event::controller_result::ControllerResult;
 use crate::helper::broker_valid_predicate::BrokerValidPredicate;
 use crate::manager::replicas_info_manager::ReplicasInfoManager;
+use crate::storage::SharedStorageBackend;
 use crate::typ::BrokerLiveInfoSnapshot;
 use crate::typ::ControllerRequest;
 use crate::typ::ControllerResponse;
@@ -124,6 +128,37 @@ fn compare_live_info(left: &BrokerLiveInfoSnapshot, right: &BrokerLiveInfoSnapsh
     }
 }
 
+const SNAPSHOT_META_KEY: &str = "openraft/state_machine/current_snapshot_meta";
+const SNAPSHOT_DATA_KEY: &str = "openraft/state_machine/current_snapshot_data";
+const REPLICAS_INFO_MANAGER_STATE_KEY: &str = "openraft/state_machine/replicas_info_manager";
+const LAST_APPLIED_KEY: &str = "openraft/state_machine/last_applied";
+const LAST_MEMBERSHIP_KEY: &str = "openraft/state_machine/last_membership";
+
+fn storage_error(error: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(error.to_string())
+}
+
+async fn load_json<T: DeserializeOwned>(
+    backend: &SharedStorageBackend,
+    key: &str,
+) -> Result<Option<T>, std::io::Error> {
+    let Some(bytes) = backend.get(key).await.map_err(storage_error)? else {
+        return Ok(None);
+    };
+
+    serde_json::from_slice(&bytes).map(Some).map_err(storage_error)
+}
+
+async fn persist_json<T: Serialize>(
+    backend: &SharedStorageBackend,
+    key: &str,
+    value: &T,
+) -> Result<(), std::io::Error> {
+    let bytes = serde_json::to_vec(value).map_err(storage_error)?;
+    backend.put(key, &bytes).await.map_err(storage_error)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SnapshotData {
     pub replicas_info_manager_state: Vec<u8>,
@@ -131,11 +166,26 @@ pub struct SnapshotData {
     pub last_membership: Option<StoredMembership<TypeConfig>>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PersistedSnapshotMeta {
+    last_log_id: Option<LogId>,
+    last_membership: StoredMembership<TypeConfig>,
+    snapshot_id: String,
+}
+
+#[derive(Clone)]
+struct CurrentSnapshot {
+    meta: SnapshotMeta<TypeConfig>,
+    data: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct StateMachine {
     replicas_info_manager: Arc<ReplicasInfoManager>,
     last_applied: Arc<RwLock<Option<LogId>>>,
     last_membership: Arc<RwLock<StoredMembership<TypeConfig>>>,
+    current_snapshot: Arc<RwLock<Option<CurrentSnapshot>>>,
+    backend: Option<SharedStorageBackend>,
 }
 
 impl StateMachine {
@@ -144,7 +194,48 @@ impl StateMachine {
             replicas_info_manager: Arc::new(ReplicasInfoManager::new(config)),
             last_applied: Arc::new(RwLock::new(None)),
             last_membership: Arc::new(RwLock::new(StoredMembership::default())),
+            current_snapshot: Arc::new(RwLock::new(None)),
+            backend: None,
         }
+    }
+
+    pub async fn open(config: ArcMut<ControllerConfig>, backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
+        let state_machine = Self {
+            replicas_info_manager: Arc::new(ReplicasInfoManager::new(config)),
+            last_applied: Arc::new(RwLock::new(load_json(&backend, LAST_APPLIED_KEY).await?)),
+            last_membership: Arc::new(RwLock::new(
+                load_json(&backend, LAST_MEMBERSHIP_KEY).await?.unwrap_or_default(),
+            )),
+            current_snapshot: Arc::new(RwLock::new(None)),
+            backend: Some(backend.clone()),
+        };
+
+        if let Some(state) = backend
+            .get(REPLICAS_INFO_MANAGER_STATE_KEY)
+            .await
+            .map_err(storage_error)?
+        {
+            state_machine
+                .replicas_info_manager
+                .deserialize_from(&state)
+                .map_err(storage_error)?;
+        }
+
+        if let (Some(meta), Some(data)) = (
+            load_json::<PersistedSnapshotMeta>(&backend, SNAPSHOT_META_KEY).await?,
+            backend.get(SNAPSHOT_DATA_KEY).await.map_err(storage_error)?,
+        ) {
+            *state_machine.current_snapshot.write().await = Some(CurrentSnapshot {
+                meta: SnapshotMeta {
+                    last_log_id: meta.last_log_id,
+                    last_membership: meta.last_membership,
+                    snapshot_id: meta.snapshot_id,
+                },
+                data,
+            });
+        }
+
+        Ok(state_machine)
     }
 
     pub fn replicas_info_manager(&self) -> Arc<ReplicasInfoManager> {
@@ -301,6 +392,53 @@ impl StateMachine {
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         *self.last_applied.write().await = data.last_applied;
         *self.last_membership.write().await = data.last_membership.unwrap_or_default();
+        self.persist_state().await?;
+        Ok(())
+    }
+
+    async fn persist_state(&self) -> Result<(), std::io::Error> {
+        let Some(backend) = &self.backend else {
+            return Ok(());
+        };
+
+        let replicas_info_manager_state = self.replicas_info_manager.serialize().map_err(storage_error)?;
+        let last_applied = *self.last_applied.read().await;
+        let last_membership = self.last_membership.read().await.clone();
+
+        backend
+            .batch_put(vec![
+                (REPLICAS_INFO_MANAGER_STATE_KEY.to_string(), replicas_info_manager_state),
+                (
+                    LAST_APPLIED_KEY.to_string(),
+                    serde_json::to_vec(&last_applied).map_err(storage_error)?,
+                ),
+                (
+                    LAST_MEMBERSHIP_KEY.to_string(),
+                    serde_json::to_vec(&last_membership).map_err(storage_error)?,
+                ),
+            ])
+            .await
+            .map_err(storage_error)?;
+        backend.sync().await.map_err(storage_error)?;
+        Ok(())
+    }
+
+    async fn persist_snapshot(&self, snapshot: &CurrentSnapshot) -> Result<(), std::io::Error> {
+        let Some(backend) = &self.backend else {
+            return Ok(());
+        };
+
+        let persisted_meta = PersistedSnapshotMeta {
+            last_log_id: snapshot.meta.last_log_id,
+            last_membership: snapshot.meta.last_membership.clone(),
+            snapshot_id: snapshot.meta.snapshot_id.clone(),
+        };
+        persist_json(backend, SNAPSHOT_META_KEY, &persisted_meta).await?;
+        backend
+            .put(SNAPSHOT_DATA_KEY, &snapshot.data)
+            .await
+            .map_err(storage_error)?;
+        backend.sync().await.map_err(storage_error)?;
         Ok(())
     }
 }
@@ -312,13 +450,19 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
         let last_membership = data.last_membership.clone().unwrap_or_default();
         let snapshot_data = serde_json::to_vec(&data)
             .map_err(|error| std::io::Error::other(format!("Failed to serialize snapshot: {}", error)))?;
-
-        Ok(Snapshot {
+        let current_snapshot = CurrentSnapshot {
             meta: openraft::SnapshotMeta {
                 last_log_id: last_applied,
                 last_membership,
                 snapshot_id: format!("snapshot-{}", last_applied.map_or(0, |log_id| log_id.index)),
             },
+            data: snapshot_data.clone(),
+        };
+        *self.current_snapshot.write().await = Some(current_snapshot.clone());
+        self.persist_snapshot(&current_snapshot).await?;
+
+        Ok(Snapshot {
+            meta: current_snapshot.meta,
             snapshot: std::io::Cursor::new(snapshot_data),
         })
     }
@@ -343,6 +487,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         use futures::StreamExt;
 
         futures::pin_mut!(entries);
+        let mut responses = Vec::new();
 
         while let Some(entry_result) = entries.next().await {
             let (entry, responder) = entry_result?;
@@ -359,6 +504,12 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
                 }
             };
 
+            responses.push((responder, response));
+        }
+
+        self.persist_state().await?;
+
+        for (responder, response) in responses {
             if let Some(tx) = responder {
                 tx.send(response);
             }
@@ -388,12 +539,21 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         })?;
 
         self.install_snapshot_data(snapshot_data).await?;
+        let current_snapshot = CurrentSnapshot {
+            meta: meta.clone(),
+            data: snapshot.into_inner(),
+        };
+        *self.current_snapshot.write().await = Some(current_snapshot.clone());
+        self.persist_snapshot(&current_snapshot).await?;
         tracing::info!("Installed snapshot at {:?}", meta.last_log_id);
         Ok(())
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TypeConfig>>, std::io::Error> {
-        Ok(None)
+        Ok(self.current_snapshot.read().await.clone().map(|snapshot| Snapshot {
+            meta: snapshot.meta,
+            snapshot: std::io::Cursor::new(snapshot.data),
+        }))
     }
 }
 

@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::raft_controller::RaftController;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
@@ -30,6 +32,8 @@ use crate::metrics::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use crate::processor::ProcessorManager;
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::TimeUtils::current_millis;
@@ -52,9 +56,25 @@ use rocketmq_remoting::request_processor::default_request_processor::DefaultRemo
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NotifyCacheKey {
+    cluster_name: String,
+    broker_name: String,
+    broker_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NotifyCacheState {
+    master_broker_id: u64,
+    master_epoch: i32,
+    sync_state_set_epoch: i32,
+    master_address: Option<String>,
+}
 
 struct BrokerInactiveListener {
     controller_manager: WeakArcMut<ControllerManager>,
@@ -208,6 +228,8 @@ pub struct ControllerManager {
     initialized: Arc<AtomicBool>,
 
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
+    leadership_watch_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    notify_cache: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
 }
 
 impl ControllerManager {
@@ -298,6 +320,8 @@ impl ControllerManager {
             running: Arc::new(AtomicBool::new(false)),
             initialized: Arc::new(AtomicBool::new(false)),
             broker_housekeeping_service: None,
+            leadership_watch_task: Arc::new(Mutex::new(None)),
+            notify_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -527,6 +551,8 @@ impl ControllerManager {
             info!("Remoting client started");
         }
 
+        self.start_leadership_watch_loop();
+
         // Metrics are already running if enabled
         #[cfg(feature = "metrics")]
         info!("Metrics manager is already running (singleton)");
@@ -563,6 +589,13 @@ impl ControllerManager {
         }
 
         info!("Shutting down controller manager...");
+
+        if let Some(handle) = self.leadership_watch_task.lock().take() {
+            handle.abort();
+        }
+        if let Err(error) = self.apply_leadership_state(false).await {
+            warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
+        }
 
         // Shutdown processor first to stop accepting requests
         // Errors are logged but don't stop the shutdown process
@@ -718,6 +751,10 @@ impl ControllerManager {
         &self.raft_controller
     }
 
+    fn scheduling_enabled(&self) -> bool {
+        self.raft_controller.scheduling_enabled()
+    }
+
     pub fn set_raft_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
         self.raft_controller.set_runtime_tick_enabled(enabled)
     }
@@ -728,6 +765,82 @@ impl ControllerManager {
 
     pub fn set_raft_runtime_elect_enabled(&self, enabled: bool) -> Result<()> {
         self.raft_controller.set_runtime_elect_enabled(enabled)
+    }
+
+    fn start_leadership_watch_loop(self: &ArcMut<Self>) {
+        if self.leadership_watch_task.lock().is_some() {
+            return;
+        }
+
+        let weak_manager = ArcMut::downgrade(self);
+        let interval = Duration::from_millis(self.config.heartbeat_interval_ms.max(100));
+        let handle = tokio::spawn(async move {
+            let mut was_leader = false;
+            let mut ticker = tokio::time::interval(interval);
+
+            loop {
+                ticker.tick().await;
+
+                let Some(manager) = weak_manager.upgrade() else {
+                    break;
+                };
+
+                if !manager.is_running() {
+                    break;
+                }
+
+                let is_leader = manager.is_leader();
+                if is_leader == was_leader {
+                    continue;
+                }
+
+                if let Err(error) = manager.apply_leadership_state(is_leader).await {
+                    warn!("Failed to apply leadership state transition: {}", error);
+                } else {
+                    was_leader = is_leader;
+                }
+            }
+        });
+
+        *self.leadership_watch_task.lock() = Some(handle);
+    }
+
+    async fn apply_leadership_state(&self, is_leader: bool) -> Result<()> {
+        if is_leader {
+            self.raft_controller.start_scheduling().await.map_err(|error| {
+                ControllerError::Internal(format!("Failed to start controller scheduling: {}", error))
+            })?;
+            info!("Leader-only scheduling enabled on controller {}", self.config.node_id);
+        } else {
+            self.raft_controller.stop_scheduling().await.map_err(|error| {
+                ControllerError::Internal(format!("Failed to stop controller scheduling: {}", error))
+            })?;
+            self.notify_cache.write().clear();
+            info!(
+                "Leader-only scheduling disabled and notify cache cleared on controller {}",
+                self.config.node_id
+            );
+        }
+        Ok(())
+    }
+
+    fn should_notify_broker_role_change(&self, cache_key: NotifyCacheKey, cache_state: NotifyCacheState) -> bool {
+        let mut notify_cache = self.notify_cache.write();
+        match notify_cache.get(&cache_key) {
+            Some(previous)
+                if previous.master_epoch > cache_state.master_epoch
+                    || (previous.master_epoch == cache_state.master_epoch
+                        && previous.sync_state_set_epoch >= cache_state.sync_state_set_epoch
+                        && previous.master_broker_id == cache_state.master_broker_id
+                        && previous.master_address == cache_state.master_address) =>
+            {
+                false
+            }
+            _ => {
+                notify_cache.insert(cache_key, cache_state);
+                true
+            }
+        }
     }
 
     async fn notify_broker_role_changed(&self, response: RemotingCommand) -> Result<()> {
@@ -764,6 +877,8 @@ impl ControllerManager {
         };
 
         let sync_state_set_epoch = response_header.sync_state_set_epoch.unwrap_or_default();
+        let master_epoch = response_header.master_epoch.unwrap_or_default();
+        let master_address = response_header.master_address.clone().map(|value| value.to_string());
         let sync_state_set = SyncStateSet::with_values(response_body.sync_state_set, sync_state_set_epoch)
             .encode()
             .map_err(|error| {
@@ -788,6 +903,21 @@ impl ControllerManager {
                 sync_state_set_epoch: response_header.sync_state_set_epoch,
                 master_broker_id: Some(master_broker_id),
             };
+            if !self.should_notify_broker_role_change(
+                NotifyCacheKey {
+                    cluster_name: member_group.cluster.to_string(),
+                    broker_name: member_group.broker_name.to_string(),
+                    broker_id,
+                },
+                NotifyCacheState {
+                    master_broker_id,
+                    master_epoch,
+                    sync_state_set_epoch,
+                    master_address: master_address.clone(),
+                },
+            ) {
+                continue;
+            }
             let request = RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
                 .set_body(sync_state_set.clone());
 
@@ -820,6 +950,8 @@ impl Drop for ControllerManager {
             let processor = self.processor.clone();
             let mut heartbeat_manager = self.heartbeat_manager.clone();
             let metadata = self.metadata.clone();
+            let leadership_watch_task = self.leadership_watch_task.clone();
+            let notify_cache = self.notify_cache.clone();
 
             // Clone remoting_client for emergency shutdown
             let mut remoting_client = self.remoting_client.clone();
@@ -839,6 +971,10 @@ impl Drop for ControllerManager {
                 // Shutdown remoting client
 
                 remoting_client.shutdown();
+                if let Some(handle) = leadership_watch_task.lock().take() {
+                    handle.abort();
+                }
+                notify_cache.write().clear();
 
                 // Note: raft shutdown handled by Drop impl of RaftController
 
@@ -850,9 +986,11 @@ impl Drop for ControllerManager {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::net::SocketAddr;
 
     use super::*;
+    use crate::typ::Node;
 
     #[tokio::test]
     async fn test_manager_lifecycle() {
@@ -928,6 +1066,89 @@ mod tests {
         assert!(!manager.is_running());
 
         // Prevent dropping runtime in async context
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn test_notify_cache_skips_duplicate_and_stale_role_changes() {
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9882".parse::<SocketAddr>().unwrap());
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+
+        let key = NotifyCacheKey {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: "broker-a".to_string(),
+            broker_id: 1,
+        };
+        let first_state = NotifyCacheState {
+            master_broker_id: 1,
+            master_epoch: 2,
+            sync_state_set_epoch: 3,
+            master_address: Some("127.0.0.1:10911".to_string()),
+        };
+
+        assert!(manager.should_notify_broker_role_change(key.clone(), first_state.clone()));
+        assert!(!manager.should_notify_broker_role_change(key.clone(), first_state.clone()));
+        assert!(!manager.should_notify_broker_role_change(
+            key.clone(),
+            NotifyCacheState {
+                sync_state_set_epoch: 2,
+                ..first_state.clone()
+            }
+        ));
+        assert!(manager.should_notify_broker_role_change(
+            key.clone(),
+            NotifyCacheState {
+                master_epoch: 3,
+                ..first_state.clone()
+            }
+        ));
+
+        manager.apply_leadership_state(false).await.expect("stop scheduling");
+        assert!(manager.notify_cache.read().is_empty());
+
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn test_leadership_watch_enables_scheduling_for_openraft_leader() {
+        let port = 9883;
+        let config = ControllerConfig::default()
+            .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
+            .with_heartbeat_interval_ms(100)
+            .with_election_timeout_ms(300);
+
+        let manager = ArcMut::new(ControllerManager::new(config).await.expect("Failed to create manager"));
+        manager.clone().initialize().await.expect("initialize manager");
+        manager.clone().start().await.expect("start manager");
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            1,
+            Node {
+                node_id: 1,
+                rpc_addr: format!("127.0.0.1:{port}"),
+            },
+        );
+        manager
+            .controller()
+            .initialize_cluster(nodes)
+            .await
+            .expect("initialize single-node cluster");
+
+        for _ in 0..30 {
+            if manager.is_leader() && manager.scheduling_enabled() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        assert!(manager.is_leader(), "controller manager should become leader");
+        assert!(
+            manager.scheduling_enabled(),
+            "leadership watcher should enable leader-only scheduling"
+        );
+
+        manager.shutdown().await.expect("shutdown manager");
         std::mem::forget(manager);
     }
 }

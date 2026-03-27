@@ -290,6 +290,10 @@ impl OpenRaftController {
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         Ok(node.has_committed_log())
     }
+
+    pub fn scheduling_enabled(&self) -> bool {
+        self.scheduling.load(Ordering::Acquire)
+    }
 }
 
 impl Controller for OpenRaftController {
