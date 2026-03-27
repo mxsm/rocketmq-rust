@@ -147,8 +147,13 @@ impl HAConnection for DefaultHAConnection {
             .socket_stream
             .take()
             .ok_or_else(|| HAConnectionError::InvalidState("Socket already taken".into()))?;
+        let std_stream = tcp_stream.into_std().map_err(HAConnectionError::Io)?;
+        let retained_std_stream = std_stream.try_clone().map_err(HAConnectionError::Io)?;
+        let retained_stream = TcpStream::from_std(retained_std_stream).map_err(HAConnectionError::Io)?;
+        let split_stream = TcpStream::from_std(std_stream).map_err(HAConnectionError::Io)?;
+        self.socket_stream = Some(retained_stream);
         // let framed = Framed::with_capacity(tcp_stream, BytesCodec::new(), CAPACITY);
-        let (reader, write) = tcp_stream.into_split();
+        let (reader, write) = split_stream.into_split();
 
         // Create shutdown channel
         // Create shutdown channel with bounded capacity
@@ -244,7 +249,9 @@ impl HAConnection for DefaultHAConnection {
     }
 
     fn get_socket(&self) -> &TcpStream {
-        todo!()
+        self.socket_stream
+            .as_ref()
+            .expect("socket stream should remain available after connection start")
     }
 
     async fn get_current_state(&self) -> HAConnectionState {

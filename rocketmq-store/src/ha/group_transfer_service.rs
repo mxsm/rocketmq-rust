@@ -41,6 +41,12 @@ pub struct GroupTransferService {
     service_manager: ServiceManager<GroupTransferServiceInner>,
 }
 
+#[derive(Clone, Copy)]
+struct AckedReplica {
+    slave_broker_id: Option<i64>,
+    slave_ack_offset: i64,
+}
+
 impl GroupTransferService {
     pub fn new(ha_service: GeneralHAService) -> Self {
         let inner = Arc::new(GroupTransferServiceInner::new(ha_service));
@@ -146,6 +152,24 @@ impl GroupTransferServiceInner {
                     continue;
                 }
                 if all_ack_in_sync_state_set && self.ha_service.is_auto_switch_enabled() {
+                    if let Some(sync_state_set) = self.ha_service.sync_state_set() {
+                        let acked_replicas = self
+                            .ha_service
+                            .get_connection_list()
+                            .await
+                            .into_iter()
+                            .map(|connection| AckedReplica {
+                                slave_broker_id: connection.slave_broker_id(),
+                                slave_ack_offset: connection.get_slave_ack_offset(),
+                            })
+                            .collect::<Vec<_>>();
+                        transfer_ok = has_required_sync_state_set_acks(
+                            &sync_state_set,
+                            &acked_replicas,
+                            request.get_next_offset(),
+                        );
+                        continue;
+                    }
                     transfer_ok =
                         self.ha_service.in_sync_replicas_nums(request.get_next_offset()) >= request.get_ack_nums();
                 } else {
@@ -193,5 +217,73 @@ impl ServiceTask for GroupTransferServiceInner {
 
     async fn on_wait_end(&self) {
         self.swap_requests().await;
+    }
+}
+
+fn has_required_sync_state_set_acks(
+    sync_state_set: &std::collections::HashSet<i64>,
+    acked_replicas: &[AckedReplica],
+    next_offset: i64,
+) -> bool {
+    if sync_state_set.len() <= 1 {
+        return true;
+    }
+
+    let mut ack_nums = 1;
+    for replica in acked_replicas {
+        if replica
+            .slave_broker_id
+            .is_some_and(|slave_broker_id| sync_state_set.contains(&slave_broker_id))
+            && replica.slave_ack_offset >= next_offset
+        {
+            ack_nums += 1;
+        }
+        if ack_nums >= sync_state_set.len() {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn sync_state_set_ack_requires_all_members() {
+        let sync_state_set = HashSet::from([7_i64, 9_i64, 10_i64]);
+        let acked_replicas = vec![
+            AckedReplica {
+                slave_broker_id: Some(9),
+                slave_ack_offset: 128,
+            },
+            AckedReplica {
+                slave_broker_id: Some(10),
+                slave_ack_offset: 64,
+            },
+        ];
+
+        assert!(!has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 96));
+        assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 64));
+    }
+
+    #[test]
+    fn sync_state_set_ack_ignores_non_members() {
+        let sync_state_set = HashSet::from([7_i64, 9_i64]);
+        let acked_replicas = vec![
+            AckedReplica {
+                slave_broker_id: Some(11),
+                slave_ack_offset: 256,
+            },
+            AckedReplica {
+                slave_broker_id: Some(9),
+                slave_ack_offset: 256,
+            },
+        ];
+
+        assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
     }
 }

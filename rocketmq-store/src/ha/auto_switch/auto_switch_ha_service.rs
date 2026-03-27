@@ -22,11 +22,13 @@ use std::sync::Mutex;
 
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_remoting::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Notify;
 
 use crate::base::message_store::MessageStore;
+use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
 use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
@@ -72,7 +74,9 @@ impl AutoSwitchHAService {
         let mut delegate = this.delegate.clone();
         DefaultHAService::init(&mut delegate, general_ha_service)?;
         delegate.set_auto_switch_service(ArcMut::downgrade(this));
-        delegate.ensure_ha_client()?;
+        let client = AutoSwitchHAClient::new(this.message_store.clone(), None)
+            .map_err(|error| crate::store_error::HAError::Service(error.to_string()))?;
+        delegate.set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
         Ok(())
     }
 
@@ -453,6 +457,24 @@ impl HAService for AutoSwitchHAService {
         let mut runtime_info = self.delegate.get_runtime_info(master_put_where);
         runtime_info.master = self.is_master.load(Ordering::SeqCst);
         runtime_info.in_sync_slave_nums = (self.local_sync_state_set_size(master_put_where) as i32 - 1).max(0);
+        if runtime_info.master {
+            let current_sync_state_set = self.get_local_sync_state_set();
+            runtime_info.ha_connection_info = self
+                .delegate
+                .try_snapshot_connections(master_put_where)
+                .into_iter()
+                .map(|connection| HAConnectionRuntimeInfo {
+                    addr: connection.addr,
+                    slave_ack_offset: connection.slave_ack_offset.max(0) as u64,
+                    diff: connection.diff,
+                    in_sync: connection
+                        .slave_broker_id
+                        .is_some_and(|slave_broker_id| current_sync_state_set.contains(&slave_broker_id)),
+                    transferred_byte_in_second: connection.transferred_byte_in_second.max(0) as u64,
+                    transfer_from_where: connection.transfer_from_where.max(0) as u64,
+                })
+                .collect();
+        }
         runtime_info
     }
 

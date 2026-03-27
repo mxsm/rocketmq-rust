@@ -1857,6 +1857,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn broker_attached_plugins(&self) -> &[Arc<dyn BrokerAttachedPlugin>] {
+        &self.broker_attached_plugins
+    }
+
+    #[inline]
     pub fn broker_outer_api(&self) -> &BrokerOuterAPI {
         &self.broker_outer_api
     }
@@ -2251,17 +2256,23 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .topic_config_manager()
             .build_serialize_wrapper_with_topic_queue_map(topic_config_table, topic_queue_mapping_info_map);
 
-        if self.broker_config.enable_split_registration
+        let should_register = self.broker_config.enable_split_registration
             || force_register
             || need_register(
-                self.broker_config.broker_identity.broker_cluster_name.clone().as_str(),
-                self.broker_config.broker_ip1.clone().as_str(),
-                self.broker_config.broker_identity.broker_name.clone().as_str(),
-                self.broker_config.broker_identity.broker_id,
-                self.broker_config.register_broker_timeout_mills,
-                self.broker_config.is_in_broker_container,
-            )
-        {
+                &self
+                    .broker_outer_api
+                    .need_register(
+                        self.broker_config.broker_identity.broker_cluster_name.clone(),
+                        self.get_broker_addr().clone(),
+                        self.broker_config.broker_identity.broker_name.clone(),
+                        self.broker_config.broker_identity.broker_id,
+                        &topic_config_wrapper,
+                        self.broker_config.register_broker_timeout_mills as u64,
+                        self.broker_config.is_in_broker_container,
+                    )
+                    .await,
+            );
+        if should_register {
             BrokerRuntimeInner::<MS>::do_register_broker_all(this, check_order_config, oneway, topic_config_wrapper)
                 .await;
         }
@@ -3046,15 +3057,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 }
 
-fn need_register(
-    _cluster_name: &str,
-    _broker_addr: &str,
-    _broker_name: &str,
-    _broker_id: u64,
-    _register_timeout_mills: i32,
-    _in_broker_container: bool,
-) -> bool {
-    unimplemented!()
+fn need_register(change_list: &[bool]) -> bool {
+    change_list.iter().copied().any(|changed| changed)
 }
 
 #[cfg(test)]
@@ -3179,5 +3183,15 @@ mod tests {
         assert_eq!(store.message_store_config_ref().broker_role, BrokerRole::Slave);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn need_register_returns_true_when_any_namesrv_requests_reregister() {
+        assert!(super::need_register(&[false, true, false]));
+    }
+
+    #[test]
+    fn need_register_returns_false_when_all_namesrvs_are_in_sync() {
+        assert!(!super::need_register(&[false, false, false]));
     }
 }

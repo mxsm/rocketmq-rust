@@ -45,6 +45,7 @@ use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_remoting::protocol::body::elect_master_response_body::ElectMasterResponseBody;
@@ -79,6 +80,7 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
@@ -1036,11 +1038,64 @@ impl BrokerOuterAPI {
 
     pub async fn sync_broker_member_group(
         &self,
-        _cluster_name: &CheetahString,
-        _broker_name: &CheetahString,
-        _is_compatible_with_old_name_srv: bool,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+        is_compatible_with_old_name_srv: bool,
     ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
-        unimplemented!()
+        if is_compatible_with_old_name_srv {
+            self.get_broker_member_group_compatible(cluster_name, broker_name).await
+        } else {
+            self.get_broker_member_group(cluster_name, broker_name).await
+        }
+    }
+
+    async fn get_broker_member_group(
+        &self,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+        let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
+        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
+        let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                let response_body = GetBrokerMemberGroupResponseBody::decode(body.as_ref())?;
+                return Ok(Some(
+                    response_body
+                        .broker_member_group
+                        .unwrap_or_else(|| empty_broker_member_group(cluster_name, broker_name)),
+                ));
+            }
+        }
+        Ok(Some(empty_broker_member_group(cluster_name, broker_name)))
+    }
+
+    async fn get_broker_member_group_compatible(
+        &self,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+        let request_header = GetRouteInfoRequestHeader {
+            topic: CheetahString::from_string(format!(
+                "{}{}",
+                TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX,
+                broker_name
+            )),
+            ..Default::default()
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
+        let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                let topic_route_data = TopicRouteData::decode(body.as_ref())?;
+                return Ok(Some(broker_member_group_from_route_data(
+                    cluster_name,
+                    broker_name,
+                    &topic_route_data,
+                )));
+            }
+        }
+        Ok(Some(empty_broker_member_group(cluster_name, broker_name)))
     }
 
     /// Get controller metadata information
@@ -1558,6 +1613,27 @@ fn build_send_message_request(msg: MessageExt, group: CheetahString) -> Remoting
     RemotingCommand::create_request_command(RequestCode::SendMessage, header)
 }
 
+fn empty_broker_member_group(cluster_name: &CheetahString, broker_name: &CheetahString) -> BrokerMemberGroup {
+    BrokerMemberGroup::new(cluster_name.clone(), broker_name.clone())
+}
+
+fn broker_member_group_from_route_data(
+    cluster_name: &CheetahString,
+    broker_name: &CheetahString,
+    topic_route_data: &TopicRouteData,
+) -> BrokerMemberGroup {
+    let mut broker_member_group = empty_broker_member_group(cluster_name, broker_name);
+    for broker_data in &topic_route_data.broker_datas {
+        if broker_data.broker_name() == broker_name && broker_data.cluster() == cluster_name.as_str() {
+            broker_member_group
+                .broker_addrs
+                .extend(broker_data.broker_addrs().clone());
+            break;
+        }
+    }
+    broker_member_group
+}
+
 fn build_send_message_request_header_v2(msg: MessageExt, group: CheetahString) -> SendMessageRequestHeaderV2 {
     let header = SendMessageRequestHeader {
         producer_group: group,
@@ -1649,6 +1725,10 @@ pub fn process_send_response(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+
     use super::*;
 
     #[test]
@@ -1670,5 +1750,49 @@ mod tests {
         let domain = "localhost";
         let addresses = dns_lookup_address_by_domain(domain);
         assert!(addresses.is_empty());
+    }
+
+    #[test]
+    fn broker_member_group_from_route_data_extracts_matching_broker() {
+        let cluster_name = CheetahString::from("cluster-a");
+        let broker_name = CheetahString::from("broker-a");
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(0, CheetahString::from("127.0.0.1:10911"));
+        let topic_route_data = TopicRouteData {
+            broker_datas: vec![BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                broker_addrs.clone(),
+                None,
+            )],
+            ..Default::default()
+        };
+
+        let broker_member_group = broker_member_group_from_route_data(&cluster_name, &broker_name, &topic_route_data);
+
+        assert_eq!(broker_member_group.cluster, cluster_name);
+        assert_eq!(broker_member_group.broker_name, broker_name);
+        assert_eq!(broker_member_group.broker_addrs, broker_addrs);
+    }
+
+    #[test]
+    fn broker_member_group_from_route_data_ignores_non_matching_brokers() {
+        let topic_route_data = TopicRouteData {
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from("other-cluster"),
+                CheetahString::from("other-broker"),
+                HashMap::from([(1, CheetahString::from("127.0.0.1:10912"))]),
+                None,
+            )],
+            ..Default::default()
+        };
+
+        let broker_member_group = broker_member_group_from_route_data(
+            &CheetahString::from("cluster-a"),
+            &CheetahString::from("broker-a"),
+            &topic_route_data,
+        );
+
+        assert!(broker_member_group.broker_addrs.is_empty());
     }
 }

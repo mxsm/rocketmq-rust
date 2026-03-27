@@ -18,11 +18,15 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
+use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::common::remoting_helper::RemotingHelper;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
@@ -30,10 +34,13 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
+use rocketmq_store::store_path_config_helper;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
 
 pub struct BrokerPreOnlineService<MS: MessageStore> {
     service_manager: ServiceManager<BrokerPreOnlineServiceInner<MS>>,
@@ -217,8 +224,139 @@ where
             self.wait_broker_index.fetch_add(1, Ordering::SeqCst);
         }
     }
-    async fn sync_metadata_reverse(&self, _broker_addr: CheetahString) -> bool {
-        unimplemented!("syncMetadataReverse unimplemented")
+    async fn sync_metadata_reverse(&self, broker_addr: CheetahString) -> bool {
+        let mut success = true;
+
+        match self
+            .broker_runtime_inner
+            .broker_outer_api()
+            .get_all_consumer_offset(&broker_addr)
+            .await
+        {
+            Ok(Some(offset_wrapper)) => {
+                let local_version = self
+                    .broker_runtime_inner
+                    .consumer_offset_manager()
+                    .data_version()
+                    .as_ref()
+                    .clone();
+                if should_sync_from_peer(&local_version, Some(offset_wrapper.data_version())) {
+                    let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
+                    consumer_offset_manager
+                        .data_version()
+                        .assign_new_one(offset_wrapper.data_version());
+                    let offset_table = consumer_offset_manager.offset_table();
+                    let mut consumer_offset_table = offset_table.write();
+                    consumer_offset_table.extend(offset_wrapper.offset_table());
+                    drop(consumer_offset_table);
+                    consumer_offset_manager.persist();
+                    info!(
+                        "{}'s consumer offset data version is newer or equal, merged into local broker",
+                        broker_addr
+                    );
+                }
+            }
+            Ok(None) => {
+                warn!("GetAllConsumerOffset return null, {}", broker_addr);
+            }
+            Err(e) => {
+                error!("GetAllConsumerOffset reverse sync failed, {}: {:?}", broker_addr, e);
+                success = false;
+            }
+        }
+
+        match self
+            .broker_runtime_inner
+            .broker_outer_api()
+            .get_delay_offset(&broker_addr)
+            .await
+        {
+            Ok(Some(delay_offset)) => {
+                match SerdeJsonUtils::from_json_str::<DelayOffsetSerializeWrapper>(delay_offset.as_str()) {
+                    Ok(delay_offset_wrapper) => {
+                        let local_version = self.broker_runtime_inner.schedule_message_service().get_data_version();
+                        if should_sync_from_peer(&local_version, delay_offset_wrapper.data_version()) {
+                            let file_name = store_path_config_helper::get_delay_offset_store_path(
+                                self.broker_runtime_inner
+                                    .message_store_config()
+                                    .store_path_root_dir
+                                    .as_str(),
+                            );
+                            match string_to_file(delay_offset.as_str(), file_name.as_str()) {
+                                Ok(_) => {
+                                    if let Err(e) = self
+                                        .broker_runtime_inner
+                                        .schedule_message_service()
+                                        .load_when_sync_delay_offset()
+                                    {
+                                        error!("LoadWhenSyncDelayOffset reverse error, {}: {:?}", broker_addr, e);
+                                        success = false;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Write reverse delay offset file error, {}: {:?}", broker_addr, e);
+                                    success = false;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Decode reverse delay offset failed, {}: {:?}", broker_addr, e);
+                        success = false;
+                    }
+                }
+            }
+            Ok(None) => {
+                warn!("GetDelayOffset return null, {}", broker_addr);
+            }
+            Err(e) => {
+                error!("GetDelayOffset reverse sync failed, {}: {:?}", broker_addr, e);
+                success = false;
+            }
+        }
+
+        if let Some(timer_message_store) = self.broker_runtime_inner.timer_message_store() {
+            match self
+                .broker_runtime_inner
+                .broker_outer_api()
+                .get_timer_check_point(&broker_addr)
+                .await
+            {
+                Ok(Some(checkpoint_snapshot)) => {
+                    let local_snapshot = timer_message_store.timer_checkpoint_snapshot();
+                    if local_snapshot.as_ref().is_none_or(|snapshot| {
+                        should_sync_from_peer(snapshot.data_version(), Some(checkpoint_snapshot.data_version()))
+                    }) {
+                        match timer_message_store.sync_checkpoint_from_master(&checkpoint_snapshot) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                warn!("Local timer checkpoint is not initialized, {}", broker_addr);
+                            }
+                            Err(e) => {
+                                error!("Persist reverse timer checkpoint error, {}: {:?}", broker_addr, e);
+                                success = false;
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    warn!("GetTimerCheckPoint return null, {}", broker_addr);
+                }
+                Err(e) => {
+                    error!("GetTimerCheckPoint reverse sync failed, {}: {:?}", broker_addr, e);
+                    success = false;
+                }
+            }
+        }
+
+        for plugin in self.broker_runtime_inner.broker_attached_plugins() {
+            if let Err(e) = plugin.sync_metadata_reverse(&broker_addr) {
+                error!("Plugin reverse metadata sync failed, {}: {:?}", broker_addr, e);
+                success = false;
+            }
+        }
+
+        success
     }
 
     async fn wait_for_ha_handshake_complete(&self, broker_addr: CheetahString) -> bool {
@@ -288,26 +426,35 @@ where
             message_store.set_master_flushed_offset(broker_sync_info.master_flush_offset);
         }
 
-        match broker_sync_info.master_ha_address {
-            None => {
-                let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
-                BrokerRuntimeInner::<MS>::start_service(
-                    self.broker_runtime_inner.clone(),
-                    min_broker_id,
-                    broker_member_group.broker_addrs.get(&mix_all::MASTER_ID).cloned(),
-                )
-                .await;
-            }
-            Some(ref value) => {
-                message_store.update_ha_master_address(value).await;
-                message_store.update_master_address(&broker_sync_info.master_address.clone().unwrap());
-            }
-        }
-
-        let ha_handshake_result = self
-            .wait_for_ha_handshake_complete(broker_sync_info.master_ha_address.unwrap())
+        let Some(master_ha_address) = broker_sync_info.master_ha_address.clone() else {
+            let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
+            BrokerRuntimeInner::<MS>::start_service(
+                self.broker_runtime_inner.clone(),
+                min_broker_id,
+                broker_member_group.broker_addrs.get(&mix_all::MASTER_ID).cloned(),
+            )
             .await;
+            return true;
+        };
+        let Some(master_address) = broker_sync_info.master_address.as_ref() else {
+            error!(
+                "retrieve master ha info missing master address, {}",
+                broker_member_group.broker_name
+            );
+            return false;
+        };
+        message_store.update_ha_master_address(&master_ha_address).await;
+        message_store.update_master_address(master_address);
+
+        let ha_handshake_result = self.wait_for_ha_handshake_complete(master_ha_address).await;
         self.future_wait_action(ha_handshake_result, &broker_member_group).await
+    }
+}
+
+fn should_sync_from_peer(local_version: &DataVersion, remote_version: Option<&DataVersion>) -> bool {
+    match remote_version {
+        Some(remote_version) => local_version <= remote_version,
+        None => true,
     }
 }
 
@@ -321,5 +468,47 @@ where
 
     pub async fn shutdown(&mut self) {
         self.service_manager.shutdown().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_remoting::protocol::DataVersion;
+
+    use super::should_sync_from_peer;
+
+    #[test]
+    fn should_sync_from_peer_accepts_newer_version() {
+        let mut local = DataVersion::new();
+        local.set_state_version(1);
+        local.set_timestamp(10);
+        local.set_counter(1);
+
+        let mut remote = DataVersion::new();
+        remote.set_state_version(2);
+        remote.set_timestamp(20);
+        remote.set_counter(2);
+
+        assert!(should_sync_from_peer(&local, Some(&remote)));
+    }
+
+    #[test]
+    fn should_sync_from_peer_rejects_older_version() {
+        let mut local = DataVersion::new();
+        local.set_state_version(2);
+        local.set_timestamp(20);
+        local.set_counter(2);
+
+        let mut remote = DataVersion::new();
+        remote.set_state_version(1);
+        remote.set_timestamp(10);
+        remote.set_counter(1);
+
+        assert!(!should_sync_from_peer(&local, Some(&remote)));
+    }
+
+    #[test]
+    fn should_sync_from_peer_accepts_missing_version() {
+        assert!(should_sync_from_peer(&DataVersion::new(), None));
     }
 }

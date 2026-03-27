@@ -56,6 +56,16 @@ use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
+#[derive(Clone, Debug)]
+pub(crate) struct HAConnectionRuntimeSnapshot {
+    pub addr: String,
+    pub slave_ack_offset: i64,
+    pub diff: i64,
+    pub transferred_byte_in_second: i64,
+    pub transfer_from_where: i64,
+    pub slave_broker_id: Option<i64>,
+}
+
 pub struct DefaultHAService {
     connection_count: Arc<AtomicU32>,
     connections: Arc<Mutex<HashMap<HAConnectionId, ArcMut<GeneralHAConnection>>>>,
@@ -106,6 +116,10 @@ impl DefaultHAService {
         }
     }
 
+    pub(crate) fn set_general_ha_client(&mut self, ha_client: GeneralHAClient) {
+        self.ha_client = Some(ha_client);
+    }
+
     pub(crate) fn set_auto_switch_service(&mut self, auto_switch_service: WeakArcMut<AutoSwitchHAService>) {
         self.auto_switch_service = Some(auto_switch_service);
     }
@@ -150,7 +164,7 @@ impl DefaultHAService {
         let group_transfer_service = GroupTransferService::new(general_ha_service.clone());
         this.group_transfer_service = Some(group_transfer_service);
 
-        if config.broker_role == BrokerRole::Slave {
+        if config.broker_role == BrokerRole::Slave && !is_auto_switch {
             this.ensure_ha_client()?;
         }
 
@@ -194,6 +208,28 @@ impl DefaultHAService {
         for (_, mut connection) in connections.drain() {
             connection.shutdown().await;
         }
+    }
+
+    pub(crate) fn try_snapshot_connections(&self, master_put_where: i64) -> Vec<HAConnectionRuntimeSnapshot> {
+        self.connections
+            .try_lock()
+            .map(|connections| {
+                connections
+                    .values()
+                    .map(|connection| {
+                        let slave_ack_offset = connection.get_slave_ack_offset();
+                        HAConnectionRuntimeSnapshot {
+                            addr: connection.remote_address(),
+                            slave_ack_offset,
+                            diff: master_put_where.saturating_sub(slave_ack_offset),
+                            transferred_byte_in_second: connection.get_transferred_byte_in_second(),
+                            transfer_from_where: connection.get_transfer_from_where(),
+                            slave_broker_id: connection.slave_broker_id(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {
@@ -356,22 +392,18 @@ impl HAService for DefaultHAService {
             ha_client_runtime_info: HAClientRuntimeInfo::default(),
         };
 
-        if let Ok(connections) = self.connections.try_lock() {
-            runtime_info.ha_connection_info = connections
-                .values()
-                .map(|connection| {
-                    let slave_ack_offset = connection.get_slave_ack_offset();
-                    HAConnectionRuntimeInfo {
-                        addr: connection.remote_address(),
-                        slave_ack_offset: slave_ack_offset.max(0) as u64,
-                        diff: master_put_where.saturating_sub(slave_ack_offset),
-                        in_sync: slave_ack_offset >= master_put_where,
-                        transferred_byte_in_second: connection.get_transferred_byte_in_second().max(0) as u64,
-                        transfer_from_where: connection.get_transfer_from_where().max(0) as u64,
-                    }
-                })
-                .collect();
-        }
+        runtime_info.ha_connection_info = self
+            .try_snapshot_connections(master_put_where)
+            .into_iter()
+            .map(|connection| HAConnectionRuntimeInfo {
+                addr: connection.addr,
+                slave_ack_offset: connection.slave_ack_offset.max(0) as u64,
+                diff: connection.diff,
+                in_sync: connection.slave_ack_offset >= master_put_where,
+                transferred_byte_in_second: connection.transferred_byte_in_second.max(0) as u64,
+                transfer_from_where: connection.transfer_from_where.max(0) as u64,
+            })
+            .collect();
 
         if let Some(ha_client) = &self.ha_client {
             runtime_info.ha_client_runtime_info = HAClientRuntimeInfo {

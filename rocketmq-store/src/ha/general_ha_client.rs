@@ -35,8 +35,9 @@ impl GeneralHAClient {
     }
 
     pub fn set_reported_broker_id(&self, broker_id: Option<i64>) {
-        if let GeneralHAClient::DefaultHaClient(client) = self {
-            client.set_reported_broker_id(broker_id);
+        match self {
+            GeneralHAClient::DefaultHaClient(client) => client.set_reported_broker_id(broker_id),
+            GeneralHAClient::AutoSwitchHaClient(client) => client.set_reported_broker_id(broker_id),
         }
     }
 }

@@ -422,6 +422,13 @@ impl TimerMessageStore {
             .map(|timer_checkpoint| timer_checkpoint.snapshot().encode())
     }
 
+    pub fn timer_checkpoint_snapshot(&self) -> Option<TimerCheckpointSnapshot> {
+        self.timer_checkpoint
+            .lock()
+            .as_ref()
+            .map(|timer_checkpoint| timer_checkpoint.snapshot())
+    }
+
     pub fn sync_checkpoint_from_master(&self, snapshot: &TimerCheckpointSnapshot) -> std::io::Result<bool> {
         let checkpoint_guard = self.timer_checkpoint.lock();
         let Some(timer_checkpoint) = checkpoint_guard.as_ref() else {

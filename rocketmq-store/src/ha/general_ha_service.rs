@@ -79,6 +79,13 @@ impl GeneralHAService {
             service.sync_controller_sync_state_set(local_broker_id, sync_state_set);
         }
     }
+
+    pub fn sync_state_set(&self) -> Option<HashSet<i64>> {
+        match self {
+            GeneralHAService::DefaultHAService(_) => None,
+            GeneralHAService::AutoSwitchHAService(service) => Some(service.get_sync_state_set()),
+        }
+    }
 }
 
 impl HAService for GeneralHAService {
