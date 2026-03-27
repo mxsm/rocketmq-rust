@@ -63,6 +63,9 @@ impl RaftNodeManager {
 
         // Add peer addresses
         for peer in &config.raft_peers {
+            if peer.id == node_id {
+                continue;
+            }
             network.add_peer(peer.id, peer.addr.to_string()).await;
         }
 
@@ -153,6 +156,13 @@ impl RaftNodeManager {
         use openraft::async_runtime::WatchReceiver;
         let metrics = self.raft.metrics().borrow_watched().clone();
         Ok(metrics.current_leader)
+    }
+
+    /// Check whether the node has applied at least one log entry.
+    pub fn has_committed_log(&self) -> bool {
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = self.raft.metrics().borrow_watched().clone();
+        metrics.last_applied.is_some()
     }
 
     /// Submit a client write request

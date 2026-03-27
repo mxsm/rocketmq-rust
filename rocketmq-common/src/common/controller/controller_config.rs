@@ -198,6 +198,9 @@ pub struct ControllerConfig {
     /// Peer list used for raft bootstrapping
     pub raft_peers: Vec<RaftPeer>,
 
+    /// Controller remoting peer list used for broker-facing leader discovery
+    pub controller_peers: Vec<RaftPeer>,
+
     /// Election timeout (ms) used by Raft
     pub election_timeout_ms: u64,
 
@@ -245,6 +248,7 @@ impl Clone for ControllerConfig {
             node_id: self.node_id,
             listen_addr: self.listen_addr,
             raft_peers: self.raft_peers.clone(),
+            controller_peers: self.controller_peers.clone(),
             election_timeout_ms: self.election_timeout_ms,
             heartbeat_interval_ms: self.heartbeat_interval_ms,
             storage_path: self.storage_path.clone(),
@@ -299,6 +303,7 @@ impl Default for ControllerConfig {
             node_id: 1,
             listen_addr: "127.0.0.1:60109".parse().unwrap(),
             raft_peers: Vec::new(),
+            controller_peers: Vec::new(),
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
             storage_path: String::new(),
@@ -432,6 +437,12 @@ impl ControllerConfig {
         self
     }
 
+    /// Set controller remoting peers used for broker-facing metadata responses.
+    pub fn with_controller_peers(mut self, peers: Vec<RaftPeer>) -> Self {
+        self.controller_peers = peers;
+        self
+    }
+
     /// Set election timeout (ms)
     pub fn with_election_timeout_ms(mut self, ms: u64) -> Self {
         self.election_timeout_ms = ms;
@@ -476,6 +487,47 @@ impl ControllerConfig {
     /// Test config helper
     pub fn test_config() -> Self {
         Self::default().with_node_info(1, "127.0.0.1:60109".parse().unwrap())
+    }
+
+    /// Resolve the Raft RPC address for a node.
+    pub fn raft_addr_for(&self, node_id: u64) -> Option<SocketAddr> {
+        self.raft_peers
+            .iter()
+            .find(|peer| peer.id == node_id)
+            .map(|peer| peer.addr)
+    }
+
+    /// Resolve the local Raft RPC address, falling back to the remoting address for legacy configs.
+    pub fn local_raft_addr(&self) -> SocketAddr {
+        self.raft_addr_for(self.node_id).unwrap_or(self.listen_addr)
+    }
+
+    /// Resolve the broker-facing controller remoting address for a node.
+    pub fn controller_addr_for(&self, node_id: u64) -> Option<SocketAddr> {
+        if node_id == self.node_id {
+            return Some(self.listen_addr);
+        }
+
+        self.controller_peers
+            .iter()
+            .find(|peer| peer.id == node_id)
+            .map(|peer| peer.addr)
+    }
+
+    /// Return the broker-facing controller remoting addresses that should be advertised.
+    pub fn controller_peer_addrs(&self) -> Vec<SocketAddr> {
+        if self.controller_peers.is_empty() {
+            return vec![self.listen_addr];
+        }
+
+        let mut addrs = Vec::with_capacity(self.controller_peers.len() + 1);
+        addrs.push(self.listen_addr);
+        for peer in &self.controller_peers {
+            if !addrs.contains(&peer.addr) {
+                addrs.push(peer.addr);
+            }
+        }
+        addrs
     }
 
     /// Check if a configuration key is in the blacklist
@@ -592,6 +644,13 @@ impl ControllerConfig {
             .map(|peer| format!("{}-{}", peer.id, peer.addr))
             .collect();
         writeln!(result, "raftPeers={}", peers.join(";")).unwrap();
+
+        let controller_peers: Vec<String> = self
+            .controller_peers
+            .iter()
+            .map(|peer| format!("{}-{}", peer.id, peer.addr))
+            .collect();
+        writeln!(result, "controllerPeers={}", controller_peers.join(";")).unwrap();
 
         writeln!(result, "electionTimeoutMs={}", self.election_timeout_ms).unwrap();
         writeln!(result, "heartbeatIntervalMs={}", self.heartbeat_interval_ms).unwrap();
@@ -734,6 +793,11 @@ impl ControllerConfig {
 
                 "raftPeers" => {
                     self.raft_peers = serde_json::from_str::<Vec<RaftPeer>>(value)
+                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "controllerPeers" => {
+                    self.controller_peers = serde_json::from_str::<Vec<RaftPeer>>(value)
                         .map_err(|e| RocketMQError::Internal(e.to_string()))?;
                 }
 

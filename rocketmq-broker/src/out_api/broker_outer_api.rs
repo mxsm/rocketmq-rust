@@ -1157,6 +1157,52 @@ impl BrokerOuterAPI {
         });
     }
 
+    pub async fn send_heartbeat_to_controller_sync(
+        &self,
+        controller_address: &CheetahString,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: i64,
+        timeout_millis: u64,
+        epoch: Option<i32>,
+        max_offset: Option<i64>,
+        confirm_offset: Option<i64>,
+        heartbeat_timeout_millis: Option<i64>,
+        election_priority: Option<i32>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let request_header = BrokerHeartbeatRequestHeader {
+            cluster_name,
+            broker_addr,
+            broker_name,
+            broker_id: Some(broker_id),
+            epoch,
+            max_offset,
+            confirm_offset,
+            heartbeat_timeout_mills: heartbeat_timeout_millis,
+            election_priority,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(RocketMQError::BrokerOperationFailed {
+                operation: "send_heartbeat_to_controller_sync",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("send_heartbeat_to_controller_sync failed".to_string(), |s| {
+                        s.to_string()
+                    }),
+                broker_addr: Some(controller_address.to_string()),
+            }),
+        }
+    }
+
     /// Alter sync state set in controller
     pub async fn alter_sync_state_set(
         &self,

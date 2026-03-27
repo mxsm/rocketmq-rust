@@ -20,6 +20,8 @@
 //! - Thread-safe state management
 //! - gRPC server lifecycle management
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -28,6 +30,8 @@ use std::sync::Arc;
 
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::Controller;
+use crate::error::ControllerError;
+use crate::error::Result;
 use crate::event::controller_result::ControllerResult as EventControllerResult;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
@@ -36,6 +40,8 @@ use crate::openraft::RaftNodeManager;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 use crate::typ::BrokerLiveInfoSnapshot;
 use crate::typ::ControllerRequest;
+use crate::typ::Node;
+use crate::typ::NodeId;
 use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
@@ -50,9 +56,11 @@ use rocketmq_remoting::protocol::header::controller::elect_master_request_header
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::CommandCustomHeader;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_rust::ArcMut;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -215,18 +223,54 @@ impl OpenRaftController {
         let response = node.client_write(request).await?;
         Ok(Some(response.data.into_remoting_command()))
     }
+
+    pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.initialize_cluster(nodes).await
+    }
+
+    pub async fn add_learner(&self, node_id: NodeId, node_info: Node, blocking: bool) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.add_learner(node_id, node_info, blocking).await
+    }
+
+    pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.change_membership(members, retain).await
+    }
+
+    pub fn has_committed_log(&self) -> Result<bool> {
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        Ok(node.has_committed_log())
+    }
 }
 
 impl Controller for OpenRaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
-        info!("Starting OpenRaft controller on {}", self.config.listen_addr);
+        let raft_addr = self.config.local_raft_addr();
+        info!(
+            "Starting OpenRaft controller, remoting_addr={}, raft_addr={}",
+            self.config.listen_addr, raft_addr
+        );
 
         let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
         let service = GrpcRaftService::new(node.raft());
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let addr = self.config.listen_addr;
+        let addr = raft_addr;
         let node_id = self.config.node_id;
 
         let handle = tokio::spawn(async move {
@@ -314,14 +358,62 @@ impl Controller for OpenRaftController {
         let broker_id = request.broker_id.unwrap_or_default() as u64;
         let alive_broker_ids = self.snapshot_alive_broker_ids(cluster_name.as_str(), broker_name.as_str());
 
-        self.write_request(ControllerRequest::RegisterBroker {
-            cluster_name: cluster_name.to_string(),
-            broker_name: broker_name.to_string(),
-            broker_address: broker_address.to_string(),
-            broker_id,
-            alive_broker_ids,
-        })
-        .await
+        let response = self
+            .write_request(ControllerRequest::RegisterBroker {
+                cluster_name: cluster_name.to_string(),
+                broker_name: broker_name.to_string(),
+                broker_address: broker_address.to_string(),
+                broker_id,
+                alive_broker_ids,
+            })
+            .await?;
+        let Some(response) = response else {
+            return Ok(None);
+        };
+
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Ok(Some(response));
+        }
+
+        let Some(replicas_info_manager) = self.replicas_info_manager() else {
+            return Ok(Some(response));
+        };
+        let replica_info = replicas_info_manager.get_replica_info(broker_name.as_str());
+        let mut register_header = RegisterBrokerToControllerResponseHeader {
+            cluster_name: Some(cluster_name.clone()),
+            broker_name: Some(broker_name.clone()),
+            master_broker_id: None,
+            master_address: None,
+            master_epoch: None,
+            sync_state_set_epoch: None,
+        };
+
+        if let Some(replica_header) = replica_info.response() {
+            if let Some(master_broker_id) = replica_header.master_broker_id {
+                if self.heartbeat_manager.is_broker_active(
+                    cluster_name.as_str(),
+                    broker_name.as_str(),
+                    master_broker_id,
+                ) {
+                    register_header.master_broker_id = Some(master_broker_id);
+                    register_header.master_address =
+                        replica_header.master_address.clone().map(CheetahString::from_string);
+                    register_header.master_epoch = replica_header.master_epoch;
+                }
+            }
+        }
+
+        let mut command = RemotingCommand::create_response_command()
+            .set_code(ResponseCode::Success)
+            .set_command_custom_header(register_header.clone());
+        if let Some(body) = replica_info.body().cloned() {
+            if let Ok(sync_state_set) = SyncStateSet::decode(body.as_ref()) {
+                register_header.sync_state_set_epoch = Some(sync_state_set.get_sync_state_set_epoch());
+                command = command.set_command_custom_header(register_header);
+            }
+            command = command.set_body(body);
+        }
+        Ok(Some(command))
     }
 
     async fn get_next_broker_id(
@@ -447,9 +539,9 @@ impl Controller for OpenRaftController {
             let peers: Option<CheetahString> = {
                 let joined = self
                     .config
-                    .raft_peers
+                    .controller_peer_addrs()
                     .iter()
-                    .map(|raft_peer| raft_peer.addr.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<String>>()
                     .join(";");
 
@@ -464,13 +556,8 @@ impl Controller for OpenRaftController {
             };
 
             let controller_leader_address: Option<CheetahString> = controller_leader_id
-                .and_then(|leader_node_id| {
-                    self.config
-                        .raft_peers
-                        .iter()
-                        .find(|raft_peer| raft_peer.id == leader_node_id)
-                })
-                .map(|node_info| CheetahString::from(node_info.addr.to_string()));
+                .and_then(|leader_node_id| self.config.controller_addr_for(leader_node_id))
+                .map(|addr| CheetahString::from(addr.to_string()));
 
             let is_leader = controller_leader_id.map(|id| self.config.node_id == id);
 

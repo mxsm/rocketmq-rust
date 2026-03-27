@@ -267,12 +267,16 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
     fn on_broker_channel_close(&self, channel: &Channel) {
         let mut broker_identity_to_remove = None;
         let mut broker_info_for_notify = None;
+        let mut should_remove = false;
+        let now_millis = current_millis();
 
         // Find the broker with this channel
         for entry in self.broker_live_table.iter() {
             if entry.value().channel() == channel {
                 let identity = entry.key().clone();
                 let live_info = entry.value();
+                let last_update_timestamp = live_info.last_update_timestamp();
+                let timeout_millis = live_info.heartbeat_timeout_millis();
 
                 info!(
                     "Channel inactive, broker {}, addr:{}, id:{}",
@@ -281,25 +285,39 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
                     live_info.broker_id()
                 );
 
-                broker_identity_to_remove = Some(identity.clone());
-                broker_info_for_notify = Some((
-                    identity.cluster_name.to_string(),
-                    live_info.broker_name().to_string(),
-                    live_info.broker_id(),
-                ));
+                if now_millis > last_update_timestamp + timeout_millis {
+                    broker_identity_to_remove = Some(identity.clone());
+                    broker_info_for_notify = Some((
+                        identity.cluster_name.to_string(),
+                        live_info.broker_name().to_string(),
+                        live_info.broker_id(),
+                    ));
+                    should_remove = true;
+                } else {
+                    info!(
+                        "Ignore broker channel close before heartbeat timeout, broker={}, addr={}, id={}, \
+                         remaining={}ms",
+                        live_info.broker_name(),
+                        live_info.broker_addr(),
+                        live_info.broker_id(),
+                        last_update_timestamp + timeout_millis - now_millis
+                    );
+                }
                 break;
             }
         }
 
         // Remove broker and notify listeners
-        if let Some(identity) = broker_identity_to_remove {
-            self.broker_live_table.remove(&identity);
+        if should_remove {
+            if let Some(identity) = broker_identity_to_remove {
+                self.broker_live_table.remove(&identity);
 
-            if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
-                let listeners = Arc::new(self.lifecycle_listeners.clone());
-                tokio::spawn(async move {
-                    Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id).await;
-                });
+                if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
+                    let listeners = Arc::new(self.lifecycle_listeners.clone());
+                    tokio::spawn(async move {
+                        Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id).await;
+                    });
+                }
             }
         }
     }

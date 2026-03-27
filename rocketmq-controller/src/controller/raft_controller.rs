@@ -14,6 +14,8 @@
 
 //! RaftController wrapper for different Raft implementations
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -34,7 +36,11 @@ use rocketmq_rust::ArcMut;
 use crate::controller::open_raft_controller::OpenRaftController;
 use crate::controller::raft_rs_controller::RaftRsController;
 use crate::controller::Controller;
+use crate::error::ControllerError;
+use crate::error::Result;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::typ::Node;
+use crate::typ::NodeId;
 
 /// Unified controller wrapper supporting multiple Raft implementations
 ///
@@ -56,6 +62,42 @@ impl RaftController {
     /// Create a new raft-rs based controller
     pub fn new_raft_rs(runtime: Arc<RocketMQRuntime>) -> Self {
         Self::RaftRs(ArcMut::new(RaftRsController::new(runtime)))
+    }
+
+    pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.initialize_cluster(nodes).await,
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Cluster bootstrap is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
+    pub async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.add_learner(node_id, node, blocking).await,
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Learner bootstrap is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
+    pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
+        match self {
+            Self::OpenRaft(controller) => controller.change_membership(members, retain).await,
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Membership changes are only supported by the OpenRaft controller".to_string(),
+            )),
+        }
+    }
+
+    pub fn has_committed_log(&self) -> Result<bool> {
+        match self {
+            Self::OpenRaft(controller) => controller.has_committed_log(),
+            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
+                "Committed-log inspection is only supported by the OpenRaft controller".to_string(),
+            )),
+        }
     }
 }
 

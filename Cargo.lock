@@ -3558,6 +3558,7 @@ dependencies = [
  "rocketmq-auth",
  "rocketmq-client-rust",
  "rocketmq-common",
+ "rocketmq-controller",
  "rocketmq-error",
  "rocketmq-filter",
  "rocketmq-remoting",
