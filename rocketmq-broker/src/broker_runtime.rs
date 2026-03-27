@@ -1215,6 +1215,9 @@ impl BrokerRuntime {
                     info!("Skip send heartbeat for broker is isolated");
                     return Ok(());
                 }
+                if inner_.broker_config.enable_controller_mode {
+                    BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
+                }
                 inner_.send_heartbeat().await;
                 Ok(())
             },
@@ -2647,18 +2650,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         };
 
         let broker_name = this.broker_config.broker_identity.broker_name.clone();
-        match this
-            .broker_outer_api
-            .get_replica_info(&controller_leader, broker_name)
+        match BrokerRuntimeInner::fetch_controller_replica_info(this.clone(), &controller_leader, broker_name.clone())
             .await
         {
-            Ok((response_header, sync_state_set_body)) => {
+            Ok((leader, response_header, sync_state_set_body)) => {
                 let sync_state_set_epoch = sync_state_set_body.get_sync_state_set_epoch();
                 let sync_state_set = sync_state_set_body.get_sync_state_set().cloned().unwrap_or_default();
                 if response_header.master_broker_id.is_some() && response_header.master_epoch.is_some() {
                     if let Err(error) = BrokerRuntimeInner::apply_controller_role_change(
                         this,
-                        Some(controller_leader),
+                        Some(leader),
                         response_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
                         response_header.master_address.map(CheetahString::from),
                         response_header.master_epoch,
@@ -2680,6 +2681,42 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
             Err(error) => {
                 warn!("Sync controller replica info failed: {}", error);
+            }
+        }
+    }
+
+    async fn fetch_controller_replica_info(
+        this: ArcMut<Self>,
+        controller_leader: &CheetahString,
+        broker_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<(
+        CheetahString,
+        rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader,
+        rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet,
+    )> {
+        match this
+            .broker_outer_api
+            .get_replica_info(controller_leader, broker_name.clone())
+            .await
+        {
+            Ok(result) => Ok((controller_leader.clone(), result.0, result.1)),
+            Err(error) => {
+                let Some(refreshed_controller_leader) =
+                    BrokerRuntimeInner::refresh_controller_leader(this.clone()).await
+                else {
+                    return Err(error);
+                };
+
+                if refreshed_controller_leader == *controller_leader {
+                    return Err(error);
+                }
+
+                this.broker_outer_api
+                    .get_replica_info(&refreshed_controller_leader, broker_name)
+                    .await
+                    .map(|(response_header, sync_state_set)| {
+                        (refreshed_controller_leader, response_header, sync_state_set)
+                    })
             }
         }
     }
@@ -3491,7 +3528,25 @@ mod tests {
         ha_listen_port: u16,
         controller_addrs: CheetahString,
     ) -> BrokerRuntime {
-        let store_root = root.join(format!("broker-{listen_port}"));
+        new_controller_mode_runtime_with_store_key(
+            root,
+            &format!("broker-{listen_port}"),
+            broker_name,
+            listen_port,
+            ha_listen_port,
+            controller_addrs,
+        )
+    }
+
+    fn new_controller_mode_runtime_with_store_key(
+        root: &Path,
+        store_key: &str,
+        broker_name: &str,
+        listen_port: u16,
+        ha_listen_port: u16,
+        controller_addrs: CheetahString,
+    ) -> BrokerRuntime {
+        let store_root = root.join(store_key);
         std::fs::create_dir_all(&store_root).expect("create broker store root");
 
         let broker_config = Arc::new(BrokerConfig {
@@ -3667,6 +3722,45 @@ mod tests {
         .expect("apply controller elect result");
     }
 
+    async fn initialize_controller_mode_broker(runtime: &mut BrokerRuntime, broker_label: &str) {
+        assert!(
+            runtime.initialize_metadata(),
+            "{broker_label} metadata init should succeed"
+        );
+        assert!(
+            runtime.initialize_message_store().await,
+            "{broker_label} message store init should succeed"
+        );
+        runtime.inner.initialize_controller_mode();
+        runtime.register_message_store_hook();
+        assert!(
+            runtime
+                .inner
+                .message_store
+                .as_mut()
+                .expect("controller mode message store")
+                .load()
+                .await,
+            "{broker_label} message store load should succeed"
+        );
+        assert!(
+            runtime
+                .inner
+                .schedule_message_service
+                .as_mut()
+                .expect("controller mode schedule service")
+                .load(),
+            "{broker_label} schedule service load should succeed"
+        );
+        runtime.initialize_remoting_server();
+        runtime.initialize_resources();
+        runtime.initialize_scheduled_tasks().await;
+        runtime.initial_transaction().await;
+        assert!(runtime.initial_acl().await, "{broker_label} acl init should succeed");
+        runtime.initial_rpc_hooks();
+        runtime.initial_request_pipeline();
+    }
+
     #[tokio::test]
     async fn timer_message_store_unchecked_returns_configured_store() {
         let broker_config = Arc::new(BrokerConfig::default());
@@ -3795,72 +3889,8 @@ mod tests {
             controller_addrs,
         );
 
-        assert!(broker_a.initialize_metadata(), "broker A metadata init should succeed");
-        assert!(
-            broker_a.initialize_message_store().await,
-            "broker A message store init should succeed"
-        );
-        broker_a.inner.initialize_controller_mode();
-        broker_a.register_message_store_hook();
-        assert!(
-            broker_a
-                .inner
-                .message_store
-                .as_mut()
-                .expect("broker A message store")
-                .load()
-                .await,
-            "broker A message store load should succeed"
-        );
-        assert!(
-            broker_a
-                .inner
-                .schedule_message_service
-                .as_mut()
-                .expect("broker A schedule service")
-                .load(),
-            "broker A schedule service load should succeed"
-        );
-        broker_a.initialize_remoting_server();
-        broker_a.initialize_resources();
-        broker_a.initialize_scheduled_tasks().await;
-        broker_a.initial_transaction().await;
-        assert!(broker_a.initial_acl().await, "broker A acl init should succeed");
-        broker_a.initial_rpc_hooks();
-        broker_a.initial_request_pipeline();
-        assert!(broker_b.initialize_metadata(), "broker B metadata init should succeed");
-        assert!(
-            broker_b.initialize_message_store().await,
-            "broker B message store init should succeed"
-        );
-        broker_b.inner.initialize_controller_mode();
-        broker_b.register_message_store_hook();
-        assert!(
-            broker_b
-                .inner
-                .message_store
-                .as_mut()
-                .expect("broker B message store")
-                .load()
-                .await,
-            "broker B message store load should succeed"
-        );
-        assert!(
-            broker_b
-                .inner
-                .schedule_message_service
-                .as_mut()
-                .expect("broker B schedule service")
-                .load(),
-            "broker B schedule service load should succeed"
-        );
-        broker_b.initialize_remoting_server();
-        broker_b.initialize_resources();
-        broker_b.initialize_scheduled_tasks().await;
-        broker_b.initial_transaction().await;
-        assert!(broker_b.initial_acl().await, "broker B acl init should succeed");
-        broker_b.initial_rpc_hooks();
-        broker_b.initial_request_pipeline();
+        initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+        initialize_controller_mode_broker(&mut broker_b, "broker B").await;
         broker_a.start().await;
         broker_b.start().await;
         bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
@@ -3999,6 +4029,439 @@ mod tests {
         broker_b.shutdown().await;
         for controller in &controllers {
             controller.shutdown().await.expect("shutdown controller manager");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
+        let port_seed = (current_millis() % 1000) as u16;
+        let base_port = 41000 + port_seed * 10;
+        let root = controller_cluster_root("controller-mode-failover");
+
+        let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
+        let controller_addrs = controller_addr_list(&controller_peers);
+        let controller_leader_manager = controllers
+            .iter()
+            .find(|manager| manager.is_leader())
+            .expect("controller cluster should elect a leader")
+            .clone();
+
+        let mut broker_a = new_controller_mode_runtime(
+            &root,
+            "controller-mode-broker",
+            base_port + 21,
+            base_port + 22,
+            controller_addrs.clone(),
+        );
+        let mut broker_b = new_controller_mode_runtime(
+            &root,
+            "controller-mode-broker",
+            base_port + 31,
+            base_port + 32,
+            controller_addrs.clone(),
+        );
+
+        initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+        initialize_controller_mode_broker(&mut broker_b, "broker B").await;
+        broker_a.start().await;
+        broker_b.start().await;
+        bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
+        broker_a.inner.send_heartbeat().await;
+        let broker_a_controller_id = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist after bootstrap")
+            .broker_controller_id();
+        wait_until(
+            Duration::from_secs(5),
+            || {
+                controller_leader_manager.heartbeat_manager().is_broker_active(
+                    "controller-test-cluster",
+                    "controller-mode-broker",
+                    broker_a_controller_id as i64,
+                )
+            },
+            "controller leader to mark broker A active before broker B bootstrap",
+        )
+        .await;
+        bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
+
+        wait_until(
+            Duration::from_secs(10),
+            || {
+                let manager_a = broker_a.inner.replicas_manager();
+                let manager_b = broker_b.inner.replicas_manager();
+                match (manager_a, manager_b) {
+                    (Some(manager_a), Some(manager_b)) => {
+                        manager_a.register_state() == RegisterState::Registered
+                            && manager_b.register_state() == RegisterState::Registered
+                            && manager_a.master_broker_id().is_some()
+                            && manager_b.master_broker_id().is_some()
+                    }
+                    _ => false,
+                }
+            },
+            "brokers to finish controller bootstrap",
+        )
+        .await;
+
+        let initial_master_id = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist")
+            .master_broker_id()
+            .expect("controller should elect an initial master");
+        let broker_a_is_master = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist")
+            .broker_controller_id()
+            == initial_master_id;
+        let old_master_controller_id = initial_master_id;
+        let surviving_controller_id = if broker_a_is_master {
+            broker_b
+                .inner
+                .replicas_manager()
+                .expect("broker B replicas manager should exist")
+                .broker_controller_id()
+        } else {
+            broker_a
+                .inner
+                .replicas_manager()
+                .expect("broker A replicas manager should exist")
+                .broker_controller_id()
+        };
+
+        if broker_a_is_master {
+            broker_a.shutdown().await;
+            broker_b.inner.send_heartbeat().await;
+        } else {
+            broker_b.shutdown().await;
+            broker_a.inner.send_heartbeat().await;
+        }
+
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
+                surviving_broker.inner.replicas_manager().is_some_and(|manager| {
+                    manager.master_broker_id() == Some(surviving_controller_id)
+                        && manager.master_epoch() > 0
+                        && manager.sync_state_set().contains(&(surviving_controller_id as i64))
+                }) && surviving_broker.inner.message_store_config.broker_role == BrokerRole::SyncMaster
+            },
+            "surviving broker to be promoted to master",
+        )
+        .await;
+
+        let current_controller_leader = if broker_a_is_master {
+            BrokerRuntimeInner::discover_controller_leader(&broker_b.inner)
+                .await
+                .expect("discover controller leader from surviving broker")
+        } else {
+            BrokerRuntimeInner::discover_controller_leader(&broker_a.inner)
+                .await
+                .expect("discover controller leader from surviving broker")
+        };
+        let (replica_header_after_failover, replica_body_after_failover) = if broker_a_is_master {
+            broker_b
+                .inner
+                .broker_outer_api
+                .get_replica_info(
+                    &current_controller_leader,
+                    CheetahString::from_static_str("controller-mode-broker"),
+                )
+                .await
+                .expect("query replica info after failover")
+        } else {
+            broker_a
+                .inner
+                .broker_outer_api
+                .get_replica_info(
+                    &current_controller_leader,
+                    CheetahString::from_static_str("controller-mode-broker"),
+                )
+                .await
+                .expect("query replica info after failover")
+        };
+        assert_eq!(
+            replica_header_after_failover.master_broker_id,
+            Some(surviving_controller_id as i64),
+            "controller should expose the promoted broker as new master"
+        );
+        assert!(
+            replica_body_after_failover
+                .get_sync_state_set()
+                .cloned()
+                .unwrap_or_default()
+                .contains(&(surviving_controller_id as i64)),
+            "controller sync state set should contain the promoted master"
+        );
+
+        let rejoining_store_key = if broker_a_is_master {
+            format!("broker-{}", base_port + 21)
+        } else {
+            format!("broker-{}", base_port + 31)
+        };
+        let mut rejoining_broker = new_controller_mode_runtime_with_store_key(
+            &root,
+            &rejoining_store_key,
+            "controller-mode-broker",
+            base_port + 41,
+            base_port + 42,
+            controller_addrs,
+        );
+        initialize_controller_mode_broker(&mut rejoining_broker, "rejoining broker").await;
+        rejoining_broker.start().await;
+        let current_leader_manager = controllers
+            .iter()
+            .find(|manager| manager.is_leader())
+            .expect("controller cluster should keep a leader")
+            .clone();
+        bootstrap_broker_against_controller(&mut rejoining_broker, &current_leader_manager).await;
+        rejoining_broker.inner.send_heartbeat().await;
+
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                rejoining_broker.inner.replicas_manager().is_some_and(|manager| {
+                    manager.register_state() == RegisterState::Registered
+                        && manager.broker_controller_id() == old_master_controller_id
+                        && manager.master_broker_id() == Some(surviving_controller_id)
+                        && manager.sync_state_set().contains(&(surviving_controller_id as i64))
+                }) && rejoining_broker.inner.message_store_config.broker_role == BrokerRole::Slave
+            },
+            "old master to rejoin as slave",
+        )
+        .await;
+
+        let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
+        let surviving_manager = surviving_broker
+            .inner
+            .replicas_manager()
+            .expect("surviving broker replicas manager should exist");
+        let rejoining_manager = rejoining_broker
+            .inner
+            .replicas_manager()
+            .expect("rejoining broker replicas manager should exist");
+        assert_eq!(
+            surviving_manager.master_broker_id(),
+            Some(surviving_controller_id),
+            "surviving broker should keep master view after rejoin"
+        );
+        assert_eq!(
+            rejoining_manager.master_broker_id(),
+            Some(surviving_controller_id),
+            "rejoining broker should converge on surviving master"
+        );
+        assert_eq!(
+            rejoining_manager.broker_controller_id(),
+            old_master_controller_id,
+            "rejoining broker should reuse persisted controller broker id"
+        );
+        assert_eq!(
+            surviving_manager.sync_state_set(),
+            rejoining_manager.sync_state_set(),
+            "brokers should converge on the same controller sync state set after rejoin"
+        );
+
+        rejoining_broker.shutdown().await;
+        if broker_a_is_master {
+            broker_b.shutdown().await;
+        } else {
+            broker_a.shutdown().await;
+        }
+        for controller in &controllers {
+            controller.shutdown().await.expect("shutdown controller manager");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn three_controller_two_broker_controller_leader_failover_keeps_broker_view_consistent() {
+        let port_seed = (current_millis() % 1000) as u16;
+        let base_port = 43000 + port_seed * 10;
+        let root = controller_cluster_root("controller-leader-failover");
+
+        let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
+        let controller_addrs = controller_addr_list(&controller_peers);
+        let controller_leader_manager = controllers
+            .iter()
+            .find(|manager| manager.is_leader())
+            .expect("controller cluster should elect a leader")
+            .clone();
+
+        let mut broker_a = new_controller_mode_runtime(
+            &root,
+            "controller-mode-broker",
+            base_port + 21,
+            base_port + 22,
+            controller_addrs.clone(),
+        );
+        let mut broker_b = new_controller_mode_runtime(
+            &root,
+            "controller-mode-broker",
+            base_port + 31,
+            base_port + 32,
+            controller_addrs,
+        );
+
+        initialize_controller_mode_broker(&mut broker_a, "broker A").await;
+        initialize_controller_mode_broker(&mut broker_b, "broker B").await;
+        broker_a.start().await;
+        broker_b.start().await;
+        bootstrap_broker_against_controller(&mut broker_a, &controller_leader_manager).await;
+        broker_a.inner.send_heartbeat().await;
+        bootstrap_broker_against_controller(&mut broker_b, &controller_leader_manager).await;
+
+        wait_until(
+            Duration::from_secs(10),
+            || {
+                let manager_a = broker_a.inner.replicas_manager();
+                let manager_b = broker_b.inner.replicas_manager();
+                match (manager_a, manager_b) {
+                    (Some(manager_a), Some(manager_b)) => {
+                        manager_a.register_state() == RegisterState::Registered
+                            && manager_b.register_state() == RegisterState::Registered
+                            && manager_a.master_broker_id().is_some()
+                            && manager_b.master_broker_id().is_some()
+                            && manager_a.controller_leader_address().is_some()
+                            && manager_b.controller_leader_address().is_some()
+                    }
+                    _ => false,
+                }
+            },
+            "brokers to finish controller bootstrap before controller leader failover",
+        )
+        .await;
+
+        let expected_master_broker_id = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist")
+            .master_broker_id()
+            .expect("controller should elect a broker master");
+        let broker_a_controller_leader = broker_a
+            .inner
+            .replicas_manager()
+            .and_then(|manager| manager.controller_leader_address().cloned())
+            .expect("broker A should know controller leader");
+        let broker_b_controller_leader = broker_b
+            .inner
+            .replicas_manager()
+            .and_then(|manager| manager.controller_leader_address().cloned())
+            .expect("broker B should know controller leader");
+        assert_eq!(
+            broker_a_controller_leader, broker_b_controller_leader,
+            "brokers should agree on controller leader before failover"
+        );
+
+        let old_controller_leader = broker_a_controller_leader;
+        let old_controller_leader_manager = controllers
+            .iter()
+            .find(|manager| manager.controller_config().listen_addr.to_string() == old_controller_leader.as_str())
+            .expect("find old controller leader manager")
+            .clone();
+        old_controller_leader_manager
+            .shutdown()
+            .await
+            .expect("shutdown old controller leader");
+
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                controllers.iter().filter(|manager| manager.is_leader()).count() == 1
+                    && controllers.iter().any(|manager| {
+                        manager.is_leader()
+                            && manager.controller_config().listen_addr.to_string() != old_controller_leader.as_str()
+                    })
+            },
+            "remaining controller nodes to elect a new leader",
+        )
+        .await;
+
+        broker_a.inner.send_heartbeat().await;
+        broker_b.inner.send_heartbeat().await;
+
+        wait_until(
+            Duration::from_secs(15),
+            || {
+                let manager_a = broker_a.inner.replicas_manager();
+                let manager_b = broker_b.inner.replicas_manager();
+                match (manager_a, manager_b) {
+                    (Some(manager_a), Some(manager_b)) => {
+                        let leader_a = manager_a.controller_leader_address().cloned();
+                        let leader_b = manager_b.controller_leader_address().cloned();
+                        leader_a.is_some()
+                            && leader_a == leader_b
+                            && leader_a
+                                .as_ref()
+                                .is_some_and(|leader| leader.as_str() != old_controller_leader.as_str())
+                            && manager_a.master_broker_id() == Some(expected_master_broker_id)
+                            && manager_b.master_broker_id() == Some(expected_master_broker_id)
+                    }
+                    _ => false,
+                }
+            },
+            "brokers to refresh controller leader and preserve broker master view",
+        )
+        .await;
+
+        let refreshed_controller_leader = broker_a
+            .inner
+            .replicas_manager()
+            .and_then(|manager| manager.controller_leader_address().cloned())
+            .expect("broker A should refresh controller leader");
+        let (replica_header, replica_body) = broker_a
+            .inner
+            .broker_outer_api
+            .get_replica_info(
+                &refreshed_controller_leader,
+                CheetahString::from_static_str("controller-mode-broker"),
+            )
+            .await
+            .expect("query replica info from new controller leader");
+        assert_eq!(
+            replica_header.master_broker_id,
+            Some(expected_master_broker_id as i64),
+            "controller leader failover should not change broker master ownership"
+        );
+        assert!(
+            replica_body
+                .get_sync_state_set()
+                .cloned()
+                .unwrap_or_default()
+                .contains(&(expected_master_broker_id as i64)),
+            "new controller leader should expose a sync state set containing the elected broker master"
+        );
+
+        let broker_a_manager = broker_a
+            .inner
+            .replicas_manager()
+            .expect("broker A replicas manager should exist");
+        let broker_b_manager = broker_b
+            .inner
+            .replicas_manager()
+            .expect("broker B replicas manager should exist");
+        let broker_a_is_master = broker_a_manager.broker_controller_id() == expected_master_broker_id;
+        let broker_b_is_master = broker_b_manager.broker_controller_id() == expected_master_broker_id;
+        assert_ne!(
+            broker_a_is_master, broker_b_is_master,
+            "controller leader failover should keep exactly one broker master"
+        );
+        if broker_a_is_master {
+            assert_eq!(broker_a.inner.message_store_config.broker_role, BrokerRole::SyncMaster);
+            assert_eq!(broker_b.inner.message_store_config.broker_role, BrokerRole::Slave);
+        } else {
+            assert_eq!(broker_a.inner.message_store_config.broker_role, BrokerRole::Slave);
+            assert_eq!(broker_b.inner.message_store_config.broker_role, BrokerRole::SyncMaster);
+        }
+
+        broker_a.shutdown().await;
+        broker_b.shutdown().await;
+        for controller in &controllers {
+            let _ = controller.shutdown().await;
         }
         let _ = std::fs::remove_dir_all(root);
     }

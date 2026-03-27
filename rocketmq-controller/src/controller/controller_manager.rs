@@ -56,6 +56,7 @@ use rocketmq_remoting::request_processor::default_request_processor::DefaultRemo
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
@@ -213,6 +214,8 @@ pub struct ControllerManager {
 
     /// Remoting server for inbound RPC requests
     remoting_server: Option<RocketMQServer<ControllerRequestProcessor>>,
+    remoting_server_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 
     /// Remoting client for outbound RPC calls
     remoting_client: ArcMut<RocketmqDefaultClient>,
@@ -254,13 +257,19 @@ impl ControllerManager {
 
         info!("Creating controller manager with config: {:?}", config);
 
+        // Initialize heartbeat manager
+        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new(config.clone()));
+
         // Initialize RocketMQ runtime for Raft controller
         //let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
 
-        // Initialize Raft controller for leader election
-        // This MUST succeed before proceeding
-        // Using OpenRaft implementation by default
-        let raft_arc = ArcMut::new(RaftController::new_open_raft(config.clone()));
+        // Initialize Raft controller for leader election.
+        // The controller and request processor must share the same heartbeat manager so that
+        // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
+        let raft_arc = ArcMut::new(RaftController::new_open_raft_with_heartbeat(
+            config.clone(),
+            heartbeat_manager.clone(),
+        ));
 
         // Initialize metadata store
         // This MUST succeed before proceeding
@@ -269,9 +278,6 @@ impl ControllerManager {
                 .await
                 .map_err(|e| ControllerError::Internal(format!("Failed to create metadata store: {}", e)))?,
         );
-
-        // Initialize heartbeat manager
-        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new(config.clone()));
 
         // Initialize processor manager (needs Arc<RaftController>)
         let processor = Arc::new(ProcessorManager::new(
@@ -314,6 +320,8 @@ impl ControllerManager {
             heartbeat_manager,
             processor,
             remoting_server,
+            remoting_server_handle: Arc::new(Mutex::new(None)),
+            remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             remoting_client,
             #[cfg(feature = "metrics")]
             metrics_manager,
@@ -538,9 +546,16 @@ impl ControllerManager {
                 .broker_housekeeping_service
                 .take()
                 .map(|service| service as Arc<dyn ChannelEventListener>);
-            tokio::spawn(async move {
-                server.run(request_processor, broker_housekeeping_service).await;
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            *self.remoting_server_shutdown_tx.lock() = Some(shutdown_tx);
+            let handle = tokio::spawn(async move {
+                server
+                    .run_with_shutdown(request_processor, broker_housekeeping_service, async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await;
             });
+            *self.remoting_server_handle.lock() = Some(handle);
             info!("Remoting server started with ControllerRequestProcessor");
         }
 
@@ -593,6 +608,9 @@ impl ControllerManager {
         if let Some(handle) = self.leadership_watch_task.lock().take() {
             handle.abort();
         }
+        if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
+            let _ = shutdown_tx.send(());
+        }
         if let Err(error) = self.apply_leadership_state(false).await {
             warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
         }
@@ -629,6 +647,15 @@ impl ControllerManager {
             error!("Failed to shutdown Raft: {}", e);
         } else {
             info!("Raft controller shut down");
+        }
+
+        let remoting_server_handle = { self.remoting_server_handle.lock().take() };
+        if let Some(handle) = remoting_server_handle {
+            match tokio::time::timeout(Duration::from_secs(10), handle).await {
+                Ok(Ok(_)) => info!("Remoting server shut down"),
+                Ok(Err(error)) => warn!("Remoting server task exited with error: {}", error),
+                Err(_) => warn!("Timed out waiting for remoting server shutdown"),
+            }
         }
 
         // Metrics manager cleanup is automatic via Drop
@@ -952,6 +979,8 @@ impl Drop for ControllerManager {
             let metadata = self.metadata.clone();
             let leadership_watch_task = self.leadership_watch_task.clone();
             let notify_cache = self.notify_cache.clone();
+            let remoting_server_handle = self.remoting_server_handle.clone();
+            let remoting_server_shutdown_tx = self.remoting_server_shutdown_tx.clone();
 
             // Clone remoting_client for emergency shutdown
             let mut remoting_client = self.remoting_client.clone();
@@ -969,8 +998,14 @@ impl Drop for ControllerManager {
                 let _ = metadata.shutdown().await;
 
                 // Shutdown remoting client
+                if let Some(shutdown_tx) = remoting_server_shutdown_tx.lock().take() {
+                    let _ = shutdown_tx.send(());
+                }
 
                 remoting_client.shutdown();
+                if let Some(handle) = remoting_server_handle.lock().take() {
+                    handle.abort();
+                }
                 if let Some(handle) = leadership_watch_task.lock().take() {
                     handle.abort();
                 }

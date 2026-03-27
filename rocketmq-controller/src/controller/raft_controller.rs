@@ -38,6 +38,7 @@ use crate::controller::raft_rs_controller::RaftRsController;
 use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
+use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::typ::Node;
 use crate::typ::NodeId;
@@ -57,6 +58,17 @@ impl RaftController {
     /// Create a new OpenRaft-based controller
     pub fn new_open_raft(config: ArcMut<ControllerConfig>) -> Self {
         Self::OpenRaft(ArcMut::new(OpenRaftController::new(config)))
+    }
+
+    /// Create a new OpenRaft-based controller that shares a heartbeat manager.
+    pub fn new_open_raft_with_heartbeat(
+        config: ArcMut<ControllerConfig>,
+        heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
+    ) -> Self {
+        Self::OpenRaft(ArcMut::new(OpenRaftController::new_with_heartbeat(
+            config,
+            heartbeat_manager,
+        )))
     }
 
     /// Create a new raft-rs based controller

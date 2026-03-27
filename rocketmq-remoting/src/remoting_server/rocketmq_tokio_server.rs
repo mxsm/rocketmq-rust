@@ -485,6 +485,18 @@ impl<RP> RocketMQServer<RP> {
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
     pub async fn run(&mut self, request_processor: RP, channel_event_listener: Option<Arc<dyn ChannelEventListener>>) {
+        self.run_with_shutdown(request_processor, channel_event_listener, wait_for_signal())
+            .await;
+    }
+
+    pub async fn run_with_shutdown<S>(
+        &mut self,
+        request_processor: RP,
+        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+        shutdown: S,
+    ) where
+        S: Future,
+    {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = TcpListener::bind(&addr).await.unwrap();
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
@@ -492,7 +504,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         run(
             listener,
-            wait_for_signal(),
+            shutdown,
             request_processor,
             Some(notify_conn_disconnect),
             rpc_hooks,

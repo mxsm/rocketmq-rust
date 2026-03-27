@@ -16,6 +16,8 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,13 +25,20 @@ use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::RaftPeer;
+use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::GrpcRaftService;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 use rocketmq_controller::typ::ControllerRequest;
+use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
 use rocketmq_controller::typ::RaftMetrics;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_rust::ArcMut;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::transport::Server;
 
 fn cluster_peers(node_count: u64, base_port: u16) -> Vec<RaftPeer> {
@@ -46,6 +55,337 @@ fn raft_node(node_id: u64, base_port: u16) -> Node {
         node_id,
         rpc_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
     }
+}
+
+struct ManagedNode {
+    node_id: u64,
+    node: Arc<RaftNodeManager>,
+    server_shutdown_tx: Option<oneshot::Sender<()>>,
+    server_handle: Option<JoinHandle<()>>,
+}
+
+impl ManagedNode {
+    fn to_ref(&self) -> (u64, Arc<RaftNodeManager>) {
+        (self.node_id, self.node.clone())
+    }
+
+    fn enable_runtime(&self) {
+        self.node.raft().runtime_config().tick(true);
+        self.node.raft().runtime_config().heartbeat(true);
+        self.node.raft().runtime_config().elect(true);
+    }
+
+    fn disable_runtime(&self) {
+        self.node.raft().runtime_config().tick(false);
+        self.node.raft().runtime_config().heartbeat(false);
+        self.node.raft().runtime_config().elect(false);
+    }
+
+    async fn shutdown(&mut self) {
+        self.node.shutdown().await.expect("shutdown raft node");
+
+        if let Some(tx) = self.server_shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+
+        if let Some(handle) = self.server_handle.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        }
+    }
+}
+
+fn persistent_config(
+    node_id: u64,
+    base_port: u16,
+    all_peers: &[RaftPeer],
+    storage_root: &Path,
+    seed_known_peers: bool,
+) -> ControllerConfig {
+    let peers = if seed_known_peers {
+        all_peers.iter().filter(|peer| peer.id != node_id).cloned().collect()
+    } else {
+        Vec::new()
+    };
+    let storage_path = storage_root.join(format!("node-{node_id}"));
+
+    ControllerConfig::default()
+        .with_node_info(
+            node_id,
+            format!("127.0.0.1:{}", base_port + node_id as u16).parse().unwrap(),
+        )
+        .with_election_timeout_ms(1000)
+        .with_heartbeat_interval_ms(300)
+        .with_raft_peers(peers)
+        .with_storage_backend(StorageBackendType::File)
+        .with_storage_path(storage_path.to_string_lossy().into_owned())
+}
+
+fn managed_refs(nodes: &[ManagedNode]) -> Vec<(u64, Arc<RaftNodeManager>)> {
+    nodes.iter().map(ManagedNode::to_ref).collect()
+}
+
+async fn start_managed_node(config: ControllerConfig, enable_runtime: bool) -> ManagedNode {
+    let node_id = config.node_id;
+    let addr = config.listen_addr;
+    let node = Arc::new(RaftNodeManager::new(ArcMut::new(config)).await.unwrap());
+    let service = GrpcRaftService::new(node.raft());
+    let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
+    let server_handle = tokio::spawn(async move {
+        let result = Server::builder()
+            .add_service(OpenRaftServiceServer::new(service))
+            .serve_with_shutdown(addr, async {
+                let _ = server_shutdown_rx.await;
+            })
+            .await;
+
+        if let Err(error) = result {
+            eprintln!("gRPC server error for node {}: {}", node_id, error);
+        }
+    });
+
+    let managed = ManagedNode {
+        node_id,
+        node,
+        server_shutdown_tx: Some(server_shutdown_tx),
+        server_handle: Some(server_handle),
+    };
+
+    if enable_runtime {
+        managed.enable_runtime();
+    } else {
+        managed.disable_runtime();
+    }
+
+    managed
+}
+
+async fn bootstrap_persistent_cluster(node_count: u64, base_port: u16, storage_root: &Path) -> Vec<ManagedNode> {
+    let all_peers = cluster_peers(node_count, base_port);
+    let mut nodes = vec![
+        start_managed_node(
+            persistent_config(all_peers[0].id, base_port, &all_peers, storage_root, true),
+            true,
+        )
+        .await,
+    ];
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let first_node_id = nodes[0].node_id;
+    let first_node = nodes[0].node.clone();
+
+    let mut single_node_cluster = BTreeMap::new();
+    single_node_cluster.insert(first_node_id, raft_node(first_node_id, base_port));
+
+    println!("Initializing persistent node {} as single-node cluster", first_node_id);
+    first_node.initialize_cluster(single_node_cluster).await.unwrap();
+
+    for attempt in 1..=50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if matches!(first_node.is_leader().await, Ok(true)) && first_node.has_committed_log() {
+            println!(
+                "Persistent node {} became leader with committed bootstrap log after {} attempts",
+                first_node_id, attempt
+            );
+            break;
+        }
+        if attempt == 50 {
+            panic!("Persistent first node failed to become leader after initialization");
+        }
+    }
+
+    commit_bootstrap_write(&first_node).await;
+
+    for peer in all_peers.iter().skip(1) {
+        nodes.push(
+            start_managed_node(
+                persistent_config(peer.id, base_port, &all_peers, storage_root, false),
+                false,
+            )
+            .await,
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        println!("Adding persistent node {} as learner", peer.id);
+        first_node
+            .add_learner(peer.id, raft_node(peer.id, base_port), true)
+            .await
+            .unwrap();
+        let node_refs = managed_refs(&nodes);
+        wait_for_learner_readiness(&node_refs, peer.id, first_node_id).await;
+    }
+
+    let expected_voters = all_peers.iter().map(|peer| peer.id).collect::<BTreeSet<_>>();
+    println!(
+        "Promoting persistent cluster membership to voters: {:?}",
+        expected_voters
+    );
+    first_node
+        .change_membership(expected_voters.clone(), false)
+        .await
+        .unwrap();
+    let node_refs = managed_refs(&nodes);
+    wait_for_stable_voters(&node_refs, &expected_voters).await;
+
+    for node in nodes.iter().skip(1) {
+        node.enable_runtime();
+    }
+
+    nodes
+}
+
+async fn seed_replica_group_state(
+    node: &RaftNodeManager,
+    broker_name: &str,
+    master_address: &str,
+    replica_address: &str,
+) {
+    let apply_master = node
+        .client_write(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: broker_name.to_string(),
+            broker_address: master_address.to_string(),
+            applied_broker_id: 1,
+            register_check_code: format!("{broker_name}-master-check-code"),
+        })
+        .await
+        .expect("apply master broker id");
+    assert_eq!(apply_master.data.response_code, ResponseCode::Success as i32);
+
+    let apply_replica = node
+        .client_write(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: broker_name.to_string(),
+            broker_address: replica_address.to_string(),
+            applied_broker_id: 2,
+            register_check_code: format!("{broker_name}-replica-check-code"),
+        })
+        .await
+        .expect("apply replica broker id");
+    assert_eq!(apply_replica.data.response_code, ResponseCode::Success as i32);
+
+    let alive_broker_ids = HashSet::from([1_u64, 2_u64]);
+    let register_master = node
+        .client_write(ControllerRequest::RegisterBroker {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: broker_name.to_string(),
+            broker_address: master_address.to_string(),
+            broker_id: 1,
+            alive_broker_ids: alive_broker_ids.clone(),
+        })
+        .await
+        .expect("register master broker");
+    assert_eq!(register_master.data.response_code, ResponseCode::Success as i32);
+
+    let register_replica = node
+        .client_write(ControllerRequest::RegisterBroker {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: broker_name.to_string(),
+            broker_address: replica_address.to_string(),
+            broker_id: 2,
+            alive_broker_ids: alive_broker_ids.clone(),
+        })
+        .await
+        .expect("register replica broker");
+    assert_eq!(register_replica.data.response_code, ResponseCode::Success as i32);
+
+    let elect_master = node
+        .client_write(ControllerRequest::ElectMaster {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: broker_name.to_string(),
+            broker_id: Some(1),
+            designate_elect: false,
+            alive_broker_ids: alive_broker_ids.clone(),
+            live_broker_infos: Default::default(),
+        })
+        .await
+        .expect("elect master");
+    assert_eq!(elect_master.data.response_code, ResponseCode::Success as i32);
+
+    let elect_header = match elect_master.data.header {
+        Some(ControllerResponseHeader::ElectMaster(header)) => header,
+        _ => panic!("elect master should return elect-master response header"),
+    };
+
+    let alter_sync_state_set = node
+        .client_write(ControllerRequest::AlterSyncStateSet {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: broker_name.to_string(),
+            master_broker_id: 1,
+            master_epoch: elect_header.master_epoch.expect("master epoch"),
+            new_sync_state_set: HashSet::from([1_u64, 2_u64]),
+            sync_state_set_epoch: elect_header.sync_state_set_epoch.expect("sync state set epoch"),
+            alive_broker_ids,
+        })
+        .await
+        .expect("alter sync state set");
+    assert_eq!(alter_sync_state_set.data.response_code, ResponseCode::Success as i32);
+}
+
+fn assert_replica_group_state(node: &RaftNodeManager, broker_name: &str, master_address: &str) {
+    let replicas_info_manager = node.store().state_machine.replicas_info_manager();
+    assert_eq!(
+        replicas_info_manager.cluster_name(broker_name).as_deref(),
+        Some("test-cluster")
+    );
+    assert_eq!(
+        replicas_info_manager.broker_ids(broker_name),
+        HashSet::from([1_u64, 2_u64])
+    );
+
+    let replica_info = replicas_info_manager.get_replica_info(broker_name);
+    assert!(replica_info.is_success(), "replica group state should exist");
+    let header = replica_info.response().expect("replica info response");
+    assert_eq!(header.master_broker_id, Some(1));
+    assert_eq!(header.master_address.as_deref(), Some(master_address));
+    assert_eq!(header.master_epoch, Some(1));
+
+    let sync_state_set = SyncStateSet::decode(replica_info.body().expect("sync state set body")).expect("decode body");
+    assert_eq!(
+        sync_state_set.get_sync_state_set().cloned().unwrap_or_default(),
+        HashSet::from([1_i64, 2_i64])
+    );
+}
+
+async fn wait_for_applied_broker_id(node: &RaftNodeManager, broker_name: &str, expected_next_id: u64) {
+    for _ in 0..50 {
+        let next_broker_id = node
+            .store()
+            .state_machine
+            .replicas_info_manager()
+            .get_next_broker_id("test-cluster", broker_name)
+            .response()
+            .and_then(|header| header.next_broker_id);
+
+        if next_broker_id == Some(expected_next_id) {
+            return;
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    panic!(
+        "broker {} did not reach expected next broker id {}",
+        broker_name, expected_next_id
+    );
+}
+
+async fn find_leader_node(nodes: &[ManagedNode]) -> Arc<RaftNodeManager> {
+    for node in nodes {
+        if node.node.is_leader().await.unwrap_or(false) {
+            return node.node.clone();
+        }
+    }
+
+    panic!("cluster should have a leader");
+}
+
+async fn find_leader_index(nodes: &[ManagedNode]) -> usize {
+    for (index, node) in nodes.iter().enumerate() {
+        if node.node.is_leader().await.unwrap_or(false) {
+            return index;
+        }
+    }
+
+    panic!("cluster should have a leader");
 }
 
 fn membership_voters(metrics: &RaftMetrics) -> BTreeSet<u64> {
@@ -674,5 +1014,131 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
 
         assert_eq!(next_before, 2, "node {} should retain pre-failover state", node_id);
         assert_eq!(next_after, 2, "node {} should apply post-failover state", node_id);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_three_node_cluster_persistent_restart_recovers_controller_state() {
+    const BASE_PORT: u16 = 58000;
+
+    let storage_root = tempfile::tempdir().expect("create persistent multi-node storage root");
+    let mut nodes = bootstrap_persistent_cluster(3, BASE_PORT, storage_root.path()).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let leader_node = find_leader_node(&nodes).await;
+
+    seed_replica_group_state(
+        &leader_node,
+        "persistent-broker-set",
+        "127.0.0.1:10931",
+        "127.0.0.1:10932",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    for node in &nodes {
+        assert_replica_group_state(&node.node, "persistent-broker-set", "127.0.0.1:10931");
+    }
+
+    for node in &mut nodes {
+        node.shutdown().await;
+    }
+
+    let all_peers = cluster_peers(3, BASE_PORT);
+    let mut restarted_nodes = Vec::new();
+    for peer in &all_peers {
+        restarted_nodes.push(
+            start_managed_node(
+                persistent_config(peer.id, BASE_PORT, &all_peers, storage_root.path(), true),
+                true,
+            )
+            .await,
+        );
+    }
+
+    let expected_voters = BTreeSet::from([1_u64, 2_u64, 3_u64]);
+    let restarted_refs = managed_refs(&restarted_nodes);
+    wait_for_stable_voters(&restarted_refs, &expected_voters).await;
+
+    for node in &restarted_nodes {
+        assert_replica_group_state(&node.node, "persistent-broker-set", "127.0.0.1:10931");
+    }
+
+    let restarted_leader = find_leader_node(&restarted_nodes).await;
+    let post_restart_write = restarted_leader
+        .client_write(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: "persistent-post-restart".to_string(),
+            broker_address: "127.0.0.1:10933".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "persistent-post-restart-check-code".to_string(),
+        })
+        .await
+        .expect("post-restart write should succeed");
+    assert_eq!(post_restart_write.data.response_code, ResponseCode::Success as i32);
+
+    for node in &restarted_nodes {
+        wait_for_applied_broker_id(&node.node, "persistent-post-restart", 2).await;
+    }
+
+    for node in &mut restarted_nodes {
+        node.shutdown().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_persistent_follower_restart_rejoins_and_catches_up() {
+    const BASE_PORT: u16 = 57000;
+
+    let storage_root = tempfile::tempdir().expect("create node rejoin storage root");
+    let all_peers = cluster_peers(3, BASE_PORT);
+    let mut nodes = bootstrap_persistent_cluster(3, BASE_PORT, storage_root.path()).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let leader_index = find_leader_index(&nodes).await;
+    let leader_node = nodes[leader_index].node.clone();
+    seed_replica_group_state(
+        &leader_node,
+        "rejoin-seeded-broker",
+        "127.0.0.1:10941",
+        "127.0.0.1:10942",
+    )
+    .await;
+
+    let follower_index = nodes
+        .iter()
+        .position(|node| node.node_id != nodes[leader_index].node_id)
+        .expect("persistent cluster should have a follower");
+    let follower_id = nodes[follower_index].node_id;
+    nodes[follower_index].shutdown().await;
+
+    let gap_write = leader_node
+        .client_write(ControllerRequest::ApplyBrokerId {
+            cluster_name: "test-cluster".to_string(),
+            broker_name: "rejoin-gap-broker".to_string(),
+            broker_address: "127.0.0.1:10943".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "rejoin-gap-broker-check-code".to_string(),
+        })
+        .await
+        .expect("leader should accept writes while follower is down");
+    assert_eq!(gap_write.data.response_code, ResponseCode::Success as i32);
+
+    let restarted_follower = start_managed_node(
+        persistent_config(follower_id, BASE_PORT, &all_peers, storage_root.path(), true),
+        true,
+    )
+    .await;
+    nodes[follower_index] = restarted_follower;
+
+    let node_refs = managed_refs(&nodes);
+    let expected_voters = BTreeSet::from([1_u64, 2_u64, 3_u64]);
+    wait_for_stable_voters(&node_refs, &expected_voters).await;
+
+    assert_replica_group_state(&nodes[follower_index].node, "rejoin-seeded-broker", "127.0.0.1:10941");
+    wait_for_applied_broker_id(&nodes[follower_index].node, "rejoin-gap-broker", 2).await;
+
+    for node in &mut nodes {
+        node.shutdown().await;
     }
 }
