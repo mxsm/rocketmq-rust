@@ -16,6 +16,7 @@
 //!
 //! Manages topic -> broker -> queue data mappings using nested DashMap.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -277,6 +278,37 @@ impl TopicQueueTable {
             })
             .collect()
     }
+
+    /// Collect all topics that contain queue data for a specific broker.
+    pub fn topics_for_broker(&self, broker_name: &str) -> Vec<TopicName> {
+        self.inner
+            .iter()
+            .filter(|entry| entry.value().contains_key(broker_name))
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    /// Collect topics for a broker set, preserving duplicate hits per matching broker.
+    ///
+    /// This matches Java NameServer semantics for `getTopicsByCluster`, where the same
+    /// topic can appear multiple times if multiple brokers in the cluster host it.
+    pub fn topics_for_brokers_with_duplicates(&self, broker_names: &HashSet<BrokerName>) -> Vec<TopicName> {
+        let mut topics = Vec::new();
+
+        for entry in self.inner.iter() {
+            let match_count = entry
+                .value()
+                .iter()
+                .filter(|broker_entry| broker_names.contains(broker_entry.key()))
+                .count();
+
+            for _ in 0..match_count {
+                topics.push(entry.key().clone());
+            }
+        }
+
+        topics
+    }
 }
 
 impl Default for TopicQueueTable {
@@ -287,6 +319,8 @@ impl Default for TopicQueueTable {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use cheetah_string::CheetahString;
     use rocketmq_common::common::TopicSysFlag;
 
@@ -396,6 +430,65 @@ mod tests {
             table.filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_flag(queue_data.topic_sys_flag()));
 
         assert_eq!(topics, vec![CheetahString::from_static_str("unit-topic")]);
+    }
+
+    #[test]
+    fn test_topics_for_broker_returns_matching_topics() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-b"),
+            CheetahString::from_static_str("broker-b"),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-c"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+
+        let topics = table.topics_for_broker("broker-a");
+
+        assert_eq!(topics.len(), 2);
+        assert!(topics.contains(&CheetahString::from_static_str("topic-a")));
+        assert!(topics.contains(&CheetahString::from_static_str("topic-c")));
+    }
+
+    #[test]
+    fn test_topics_for_brokers_with_duplicates_preserves_match_count() {
+        let table = TopicQueueTable::new();
+        let broker_a = CheetahString::from_static_str("broker-a");
+        let broker_b = CheetahString::from_static_str("broker-b");
+
+        table.insert(
+            CheetahString::from_static_str("shared-topic"),
+            broker_a.clone(),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("shared-topic"),
+            broker_b.clone(),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("broker-a-only"),
+            broker_a.clone(),
+            create_test_queue_data(8, 8),
+        );
+
+        let broker_names = HashSet::from([broker_a, broker_b]);
+        let topics = table.topics_for_brokers_with_duplicates(&broker_names);
+
+        assert_eq!(
+            topics.iter().filter(|topic| topic.as_str() == "shared-topic").count(),
+            2
+        );
+        assert!(topics.contains(&CheetahString::from_static_str("broker-a-only")));
     }
 
     #[test]

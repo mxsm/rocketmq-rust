@@ -176,9 +176,8 @@ impl RouteInfoManagerV2 {
         broker_addr_table.remove(broker_name);
         cluster_addr_table.remove_broker(cluster_name, broker_name);
 
-        // Remove broker from all topics
-        let all_topics = topic_queue_table.get_all_topics();
-        for topic in all_topics {
+        // Remove broker from topics that actually contain it
+        for topic in topic_queue_table.topics_for_broker(broker_name) {
             topic_queue_table.remove_broker(topic.as_ref(), broker_name);
         }
 
@@ -763,18 +762,10 @@ impl RouteInfoManagerV2 {
 
     /// Get all topics registered by a specific broker
     fn topic_set_of_broker_name(&self, broker_name: &str) -> std::collections::HashSet<CheetahString> {
-        use std::collections::HashSet;
-
-        let mut topic_set = HashSet::new();
-        for (topic, queues) in self.topic_queue_table.iter_all_with_data() {
-            for queue_data in queues.iter() {
-                if queue_data.broker_name() == broker_name {
-                    topic_set.insert(CheetahString::from_string(topic));
-                    break;
-                }
-            }
-        }
-        topic_set
+        self.topic_queue_table
+            .topics_for_broker(broker_name)
+            .into_iter()
+            .collect()
     }
 
     /// Notify when minimum broker ID has changed (for master election)
@@ -1102,10 +1093,7 @@ impl RouteInfoManagerV2 {
 
     /// Clean up topics associated with a removed broker
     fn cleanup_topics_for_broker(&self, broker_name: &str) -> RouteResult<()> {
-        // Get all topics
-        let all_topics = self.topic_queue_table.get_all_topics();
-
-        for topic in all_topics {
+        for topic in self.topic_queue_table.topics_for_broker(broker_name) {
             // Remove broker from topic
             self.topic_queue_table.remove_broker(topic.as_ref(), broker_name);
         }
@@ -1521,22 +1509,8 @@ impl RouteInfoManagerV2 {
             return Err(RocketMQError::cluster_not_found(cluster_name));
         }
 
-        let all_topics = self.topic_queue_table.get_all_topics();
-        let mut cluster_topics = Vec::new();
-
-        for broker_name in broker_names {
-            for topic in &all_topics {
-                if self
-                    .topic_queue_table
-                    .get(topic.as_str(), broker_name.as_str())
-                    .is_some()
-                {
-                    cluster_topics.push(topic.clone());
-                }
-            }
-        }
-
-        Ok(cluster_topics)
+        let broker_names = broker_names.into_iter().collect::<HashSet<_>>();
+        Ok(self.topic_queue_table.topics_for_brokers_with_duplicates(&broker_names))
     }
 }
 
@@ -1780,10 +1754,8 @@ impl RouteInfoManagerV2 {
 
         let mut wipe_topic_count = 0;
 
-        // Iterate over all topics and directly look up the broker
-        for topic in self.topic_queue_table.get_all_topics() {
+        for topic in self.topic_queue_table.topics_for_broker(&broker_name) {
             if let Some(queue_data) = self.topic_queue_table.get(&topic, &broker_name) {
-                // Remove write permission
                 let perm = queue_data.perm() & !PermName::PERM_WRITE;
                 self.topic_queue_table
                     .update_queue_data_perm(&topic, &broker_name, perm as i32);
@@ -1816,14 +1788,11 @@ impl RouteInfoManagerV2 {
 
         let mut add_topic_count = 0;
 
-        // Iterate over all topics and directly look up the broker
-        for topic in self.topic_queue_table.get_all_topics() {
-            if let Some(_queue_data) = self.topic_queue_table.get(&topic, &broker_name) {
-                let perm = PermName::PERM_READ | PermName::PERM_WRITE;
-                self.topic_queue_table
-                    .update_queue_data_perm(&topic, &broker_name, perm as i32);
-                add_topic_count += 1;
-            }
+        for topic in self.topic_queue_table.topics_for_broker(&broker_name) {
+            let perm = PermName::PERM_READ | PermName::PERM_WRITE;
+            self.topic_queue_table
+                .update_queue_data_perm(&topic, &broker_name, perm as i32);
+            add_topic_count += 1;
         }
 
         Ok(add_topic_count)
