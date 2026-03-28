@@ -66,7 +66,7 @@
     "message": "GitHub"
   },
   "homepage.announcement.title": {
-    "message": "RocketMQ-Rust v0.7.0 is out!"
+    "message": "RocketMQ-Rust v0.8.0 is out!"
   },
   "homepage.announcement.link": {
     "message": "See what's new →"

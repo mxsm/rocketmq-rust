@@ -66,7 +66,7 @@
     "message": "GitHub"
   },
   "homepage.announcement.title": {
-    "message": "RocketMQ-Rust v0.7.0 发布了！"
+    "message": "RocketMQ-Rust v0.8.0 发布了！"
   },
   "homepage.announcement.link": {
     "message": "查看新特性 →"
