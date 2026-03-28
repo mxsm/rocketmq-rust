@@ -16,6 +16,7 @@
 //!
 //! Provides the core runtime infrastructure for RocketMQ NameServer.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
@@ -754,8 +755,342 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
+    pub fn tokio_client_config_mut(&mut self) -> &mut TokioClientConfig {
+        &mut self.tokio_client_config
+    }
+
+    #[inline]
     pub fn server_config(&self) -> &ServerConfig {
         &self.server_config
+    }
+
+    #[inline]
+    pub fn server_config_mut(&mut self) -> &mut ServerConfig {
+        &mut self.server_config
+    }
+
+    pub fn get_all_configs_format_string(&self) -> Result<String, String> {
+        let mut properties = HashMap::new();
+
+        insert_config(&mut properties, "rocketmqHome", &self.name_server_config.rocketmq_home);
+        insert_config(&mut properties, "kvConfigPath", &self.name_server_config.kv_config_path);
+        insert_config(
+            &mut properties,
+            "configStorePath",
+            &self.name_server_config.config_store_path,
+        );
+        insert_config(
+            &mut properties,
+            "productEnvName",
+            &self.name_server_config.product_env_name,
+        );
+        insert_config(&mut properties, "clusterTest", self.name_server_config.cluster_test);
+        insert_config(
+            &mut properties,
+            "orderMessageEnable",
+            self.name_server_config.order_message_enable,
+        );
+        insert_config(
+            &mut properties,
+            "returnOrderTopicConfigToBroker",
+            self.name_server_config.return_order_topic_config_to_broker,
+        );
+        insert_config(
+            &mut properties,
+            "clientRequestThreadPoolNums",
+            self.name_server_config.client_request_thread_pool_nums,
+        );
+        insert_config(
+            &mut properties,
+            "defaultThreadPoolNums",
+            self.name_server_config.default_thread_pool_nums,
+        );
+        insert_config(
+            &mut properties,
+            "clientRequestThreadPoolQueueCapacity",
+            self.name_server_config.client_request_thread_pool_queue_capacity,
+        );
+        insert_config(
+            &mut properties,
+            "defaultThreadPoolQueueCapacity",
+            self.name_server_config.default_thread_pool_queue_capacity,
+        );
+        insert_config(
+            &mut properties,
+            "scanNotActiveBrokerInterval",
+            self.name_server_config.scan_not_active_broker_interval,
+        );
+        insert_config(
+            &mut properties,
+            "unRegisterBrokerQueueCapacity",
+            self.name_server_config.unregister_broker_queue_capacity,
+        );
+        insert_config(
+            &mut properties,
+            "supportActingMaster",
+            self.name_server_config.support_acting_master,
+        );
+        insert_config(
+            &mut properties,
+            "enableAllTopicList",
+            self.name_server_config.enable_all_topic_list,
+        );
+        insert_config(
+            &mut properties,
+            "enableTopicList",
+            self.name_server_config.enable_topic_list,
+        );
+        insert_config(
+            &mut properties,
+            "notifyMinBrokerIdChanged",
+            self.name_server_config.notify_min_broker_id_changed,
+        );
+        insert_config(
+            &mut properties,
+            "enableControllerInNamesrv",
+            self.name_server_config.enable_controller_in_namesrv,
+        );
+        insert_config(
+            &mut properties,
+            "needWaitForService",
+            self.name_server_config.need_wait_for_service,
+        );
+        insert_config(
+            &mut properties,
+            "waitSecondsForService",
+            self.name_server_config.wait_seconds_for_service,
+        );
+        insert_config(
+            &mut properties,
+            "deleteTopicWithBrokerRegistration",
+            self.name_server_config.delete_topic_with_broker_registration,
+        );
+        insert_config(
+            &mut properties,
+            "configBlackList",
+            &self.name_server_config.config_black_list,
+        );
+        insert_config(
+            &mut properties,
+            "useRouteInfoManagerV2",
+            self.name_server_config.use_route_info_manager_v2,
+        );
+
+        insert_config(&mut properties, "listenPort", self.server_config.listen_port);
+        insert_config(&mut properties, "bindAddress", &self.server_config.bind_address);
+
+        insert_config(
+            &mut properties,
+            "clientWorkerThreads",
+            self.tokio_client_config.client_worker_threads,
+        );
+        insert_config(
+            &mut properties,
+            "clientCallbackExecutorThreads",
+            self.tokio_client_config.client_callback_executor_threads,
+        );
+        insert_config(
+            &mut properties,
+            "clientOnewaySemaphoreValue",
+            self.tokio_client_config.client_oneway_semaphore_value,
+        );
+        insert_config(
+            &mut properties,
+            "clientAsyncSemaphoreValue",
+            self.tokio_client_config.client_async_semaphore_value,
+        );
+        insert_config(
+            &mut properties,
+            "connectTimeoutMillis",
+            self.tokio_client_config.connect_timeout_millis,
+        );
+        insert_config(
+            &mut properties,
+            "channelNotActiveInterval",
+            self.tokio_client_config.channel_not_active_interval,
+        );
+        insert_config(
+            &mut properties,
+            "clientChannelMaxIdleTimeSeconds",
+            self.tokio_client_config.client_channel_max_idle_time_seconds,
+        );
+        insert_config(
+            &mut properties,
+            "clientSocketSndBufSize",
+            self.tokio_client_config.client_socket_snd_buf_size,
+        );
+        insert_config(
+            &mut properties,
+            "clientSocketRcvBufSize",
+            self.tokio_client_config.client_socket_rcv_buf_size,
+        );
+        insert_config(
+            &mut properties,
+            "clientPooledByteBufAllocatorEnable",
+            self.tokio_client_config.client_pooled_byte_buf_allocator_enable,
+        );
+        insert_config(
+            &mut properties,
+            "clientCloseSocketIfTimeout",
+            self.tokio_client_config.client_close_socket_if_timeout,
+        );
+        insert_config(
+            &mut properties,
+            "socksProxyConfig",
+            &self.tokio_client_config.socks_proxy_config,
+        );
+        insert_config(
+            &mut properties,
+            "writeBufferHighWaterMark",
+            self.tokio_client_config.write_buffer_high_water_mark,
+        );
+        insert_config(
+            &mut properties,
+            "writeBufferLowWaterMark",
+            self.tokio_client_config.write_buffer_low_water_mark,
+        );
+        insert_config(
+            &mut properties,
+            "disableCallbackExecutor",
+            self.tokio_client_config.disable_callback_executor,
+        );
+        insert_config(
+            &mut properties,
+            "disableNettyWorkerGroup",
+            self.tokio_client_config.disable_netty_worker_group,
+        );
+        insert_config(
+            &mut properties,
+            "maxReconnectIntervalTimeSeconds",
+            self.tokio_client_config.max_reconnect_interval_time_seconds,
+        );
+        insert_config(
+            &mut properties,
+            "enableReconnectForGoAway",
+            self.tokio_client_config.enable_reconnect_for_go_away,
+        );
+        insert_config(
+            &mut properties,
+            "enableTransparentRetry",
+            self.tokio_client_config.enable_transparent_retry,
+        );
+
+        let mut entries = properties
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        Ok(entries
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+
+    pub fn update_runtime_config(&mut self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+        let mut namesrv_updates = HashMap::new();
+
+        for (key, value) in updates {
+            match key.as_str() {
+                "rocketmqHome"
+                | "kvConfigPath"
+                | "configStorePath"
+                | "productEnvName"
+                | "clusterTest"
+                | "orderMessageEnable"
+                | "returnOrderTopicConfigToBroker"
+                | "clientRequestThreadPoolNums"
+                | "defaultThreadPoolNums"
+                | "clientRequestThreadPoolQueueCapacity"
+                | "defaultThreadPoolQueueCapacity"
+                | "scanNotActiveBrokerInterval"
+                | "unRegisterBrokerQueueCapacity"
+                | "supportActingMaster"
+                | "enableAllTopicList"
+                | "enableTopicList"
+                | "notifyMinBrokerIdChanged"
+                | "enableControllerInNamesrv"
+                | "needWaitForService"
+                | "waitSecondsForService"
+                | "deleteTopicWithBrokerRegistration"
+                | "configBlackList"
+                | "useRouteInfoManagerV2" => {
+                    namesrv_updates.insert(key, value);
+                }
+                "listenPort" => {
+                    self.server_config.listen_port = parse_config_value(&key, &value)?;
+                }
+                "bindAddress" => {
+                    self.server_config.bind_address = value.to_string();
+                }
+                "clientWorkerThreads" => {
+                    self.tokio_client_config.client_worker_threads = parse_config_value(&key, &value)?;
+                }
+                "clientCallbackExecutorThreads" => {
+                    self.tokio_client_config.client_callback_executor_threads = parse_config_value(&key, &value)?;
+                }
+                "clientOnewaySemaphoreValue" => {
+                    self.tokio_client_config.client_oneway_semaphore_value = parse_config_value(&key, &value)?;
+                }
+                "clientAsyncSemaphoreValue" => {
+                    self.tokio_client_config.client_async_semaphore_value = parse_config_value(&key, &value)?;
+                }
+                "connectTimeoutMillis" => {
+                    self.tokio_client_config.connect_timeout_millis = parse_config_value(&key, &value)?;
+                }
+                "channelNotActiveInterval" => {
+                    self.tokio_client_config.channel_not_active_interval = parse_config_value(&key, &value)?;
+                }
+                "clientChannelMaxIdleTimeSeconds" => {
+                    self.tokio_client_config.client_channel_max_idle_time_seconds = parse_config_value(&key, &value)?;
+                }
+                "clientSocketSndBufSize" => {
+                    self.tokio_client_config.client_socket_snd_buf_size = parse_config_value(&key, &value)?;
+                }
+                "clientSocketRcvBufSize" => {
+                    self.tokio_client_config.client_socket_rcv_buf_size = parse_config_value(&key, &value)?;
+                }
+                "clientPooledByteBufAllocatorEnable" => {
+                    self.tokio_client_config.client_pooled_byte_buf_allocator_enable =
+                        parse_config_value(&key, &value)?;
+                }
+                "clientCloseSocketIfTimeout" => {
+                    self.tokio_client_config.client_close_socket_if_timeout = parse_config_value(&key, &value)?;
+                }
+                "socksProxyConfig" => {
+                    self.tokio_client_config.socks_proxy_config = value.to_string();
+                }
+                "writeBufferHighWaterMark" => {
+                    self.tokio_client_config.write_buffer_high_water_mark = parse_config_value(&key, &value)?;
+                }
+                "writeBufferLowWaterMark" => {
+                    self.tokio_client_config.write_buffer_low_water_mark = parse_config_value(&key, &value)?;
+                }
+                "disableCallbackExecutor" => {
+                    self.tokio_client_config.disable_callback_executor = parse_config_value(&key, &value)?;
+                }
+                "disableNettyWorkerGroup" => {
+                    self.tokio_client_config.disable_netty_worker_group = parse_config_value(&key, &value)?;
+                }
+                "maxReconnectIntervalTimeSeconds" => {
+                    self.tokio_client_config.max_reconnect_interval_time_seconds = parse_config_value(&key, &value)?;
+                }
+                "enableReconnectForGoAway" => {
+                    self.tokio_client_config.enable_reconnect_for_go_away = parse_config_value(&key, &value)?;
+                }
+                "enableTransparentRetry" => {
+                    self.tokio_client_config.enable_transparent_retry = parse_config_value(&key, &value)?;
+                }
+                _ => {}
+            }
+        }
+
+        if !namesrv_updates.is_empty() {
+            self.name_server_config.update(namesrv_updates)?;
+        }
+
+        Ok(())
     }
 
     // Component accessors (with Option handling)
@@ -802,22 +1137,47 @@ impl NameServerRuntimeInner {
     }
 }
 
+fn insert_config(properties: &mut HashMap<CheetahString, CheetahString>, key: &'static str, value: impl ToString) {
+    properties.insert(
+        CheetahString::from_static_str(key),
+        CheetahString::from_string(value.to_string()),
+    );
+}
+
+fn parse_config_value<T>(key: &str, value: &CheetahString) -> Result<T, String>
+where
+    T: std::str::FromStr,
+{
+    value
+        .as_str()
+        .parse()
+        .map_err(|_| format!("Invalid configuration value for key '{key}'"))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::str;
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::constant::PermName;
+    use rocketmq_common::common::mix_all::string_to_properties;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+    use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::common::TopicSysFlag;
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::ConnectionState;
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::runtime::processor::RequestProcessor;
     use tokio::time::sleep;
 
     use super::*;
+    use crate::processor::default_request_processor::DefaultRequestProcessor;
 
     fn build_bootstrap_with_v2_config(mut namesrv_config: NamesrvConfig) -> NameServerBootstrap {
         namesrv_config.use_route_info_manager_v2 = true;
@@ -831,6 +1191,19 @@ mod tests {
 
     fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
         build_bootstrap_with_v2_config(NamesrvConfig::default())
+    }
+
+    async fn process_with_default_processor(
+        bootstrap: &NameServerBootstrap,
+        harness: &LocalRequestHarness,
+        request: &mut RemotingCommand,
+    ) -> RemotingCommand {
+        let mut processor = DefaultRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
+        processor
+            .process_request(harness.channel(), harness.context(), request)
+            .await
+            .expect("request processing should succeed")
+            .expect("processor should always return a response")
     }
 
     fn topic_config_wrapper(entries: &[(&str, u32, u32)]) -> TopicConfigAndMappingSerializeWrapper {
@@ -1663,5 +2036,138 @@ mod tests {
             .expect_err("controller-in-namesrv mode should fail fast until implemented");
 
         assert!(error.to_string().contains("enableControllerInNamesrv"));
+    }
+
+    #[tokio::test]
+    async fn default_v2_unsupported_request_code_returns_request_code_not_supported() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let mut processor = DefaultRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage);
+
+        let response = processor
+            .process_request_inner(
+                harness.channel(),
+                harness.context(),
+                RequestCode::SendMessage,
+                &mut request,
+            )
+            .expect("request should be handled")
+            .expect("processor should return a response");
+
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some(" request type 10 not supported")
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_get_namesrv_config_returns_aggregated_runtime_properties() {
+        let namesrv_config = NamesrvConfig {
+            client_request_thread_pool_nums: 12,
+            ..NamesrvConfig::default()
+        };
+        let server_config = ServerConfig {
+            listen_port: 19876,
+            bind_address: "127.0.0.2".to_string(),
+        };
+        let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(server_config)
+            .build();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+
+        let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+        let body = response.body().expect("config response should include a body");
+        let body = str::from_utf8(body).expect("config body should be utf-8");
+        let properties = string_to_properties(body).expect("config body should use java properties format");
+        let client_worker_threads = bootstrap
+            .name_server_runtime
+            .inner
+            .tokio_client_config()
+            .client_worker_threads
+            .to_string();
+
+        assert_eq!(properties.get("listenPort").map(|value| value.as_str()), Some("19876"));
+        assert_eq!(
+            properties.get("bindAddress").map(|value| value.as_str()),
+            Some("127.0.0.2")
+        );
+        assert_eq!(
+            properties
+                .get("clientRequestThreadPoolNums")
+                .map(|value| value.as_str()),
+            Some("12")
+        );
+        assert_eq!(
+            properties.get("clientWorkerThreads").map(|value| value.as_str()),
+            Some(client_worker_threads.as_str())
+        );
+        assert_eq!(
+            properties.get("useRouteInfoManagerV2").map(|value| value.as_str()),
+            Some("true")
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_update_namesrv_config_updates_aggregate_known_keys_and_ignores_unknown() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
+            b"listenPort=19876\nbindAddress=127.0.0.2\nclientWorkerThreads=9\nenableTopicList=false\nunknownKey=42"
+                .as_slice(),
+        );
+
+        let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(bootstrap.name_server_runtime.inner.server_config().listen_port, 19876);
+        assert_eq!(
+            bootstrap.name_server_runtime.inner.server_config().bind_address,
+            "127.0.0.2"
+        );
+        assert_eq!(
+            bootstrap
+                .name_server_runtime
+                .inner
+                .tokio_client_config()
+                .client_worker_threads,
+            9
+        );
+        assert!(
+            !bootstrap
+                .name_server_runtime
+                .inner
+                .name_server_config()
+                .enable_topic_list
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_update_namesrv_config_rejects_fixed_blacklist_keys() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig)
+            .set_body(b"rocketmqHome=/tmp/namesrv".as_slice());
+
+        let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Cannot update config in blacklist.")
+        );
+        assert_ne!(
+            bootstrap.name_server_runtime.inner.name_server_config().rocketmq_home,
+            "/tmp/namesrv"
+        );
     }
 }

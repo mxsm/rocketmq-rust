@@ -114,8 +114,9 @@ impl DefaultRequestProcessor {
             RequestCode::GetHasUnitSubUnunitTopicList => self.get_has_unit_sub_un_unit_topic_list(request),
             RequestCode::UpdateNamesrvConfig => self.update_config(request),
             RequestCode::GetNamesrvConfig => self.get_config(request),
-            _ => Ok(RemotingCommand::create_response_command_with_code(
-                RemotingSysResponseCode::SystemError,
+            _ => Ok(RemotingCommand::create_response_command_with_code_remark(
+                RemotingSysResponseCode::RequestCodeNotSupported,
+                format!(" request type {} not supported", request.code()),
             )),
         }?;
         Ok(Some(response))
@@ -553,10 +554,7 @@ impl DefaultRequestProcessor {
             };
             if validate_blacklist_config_exist(
                 &properties,
-                &self
-                    .name_server_runtime_inner
-                    .name_server_config()
-                    .get_config_blacklist(),
+                &build_effective_config_blacklist(self.name_server_runtime_inner.name_server_config()),
             ) {
                 return Ok(
                     RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::NoPermission)
@@ -564,10 +562,7 @@ impl DefaultRequestProcessor {
                 );
             }
 
-            let result = self
-                .name_server_runtime_inner
-                .kvconfig_manager_mut()
-                .update_namesrv_config(properties);
+            let result = self.name_server_runtime_inner.update_runtime_config(properties);
             if let Err(e) = result {
                 return Ok(
                     RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
@@ -587,8 +582,7 @@ impl DefaultRequestProcessor {
             return Ok(create_namesrv_config_success_response(None));
         }
 
-        let config = self.name_server_runtime_inner.name_server_config();
-        let result = match config.get_all_configs_format_string() {
+        let result = match self.name_server_runtime_inner.get_all_configs_format_string() {
             Ok(content) => create_namesrv_config_success_response(Some(content.into_bytes())),
             Err(e) => RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::SystemError,
@@ -681,6 +675,25 @@ fn validate_blacklist_config_exist(
         }
     }
     false
+}
+
+fn build_effective_config_blacklist(
+    config: &rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig,
+) -> Vec<CheetahString> {
+    let mut blacklist = vec![
+        CheetahString::from_static_str("configBlackList"),
+        CheetahString::from_static_str("configStorePath"),
+        CheetahString::from_static_str("kvConfigPath"),
+        CheetahString::from_static_str("rocketmqHome"),
+    ];
+
+    for configured in config.get_config_blacklist() {
+        if !blacklist.iter().any(|item| item == &configured) {
+            blacklist.push(configured);
+        }
+    }
+
+    blacklist
 }
 
 fn is_probe_only_namesrv_config_request(request: &RemotingCommand) -> bool {
