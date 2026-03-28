@@ -156,6 +156,7 @@ pub struct Builder {
 struct NameServerRuntime {
     inner: ArcMut<NameServerRuntimeInner>,
     scheduled_task_manager: ScheduledTaskManager,
+    shutdown_tx: Option<broadcast::Sender<()>>,
     shutdown_rx: Option<broadcast::Receiver<()>>,
     server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
     /// Server task handle for graceful shutdown
@@ -188,6 +189,7 @@ impl NameServerBootstrap {
         info!("Booting RocketMQ NameServer (Rust)...");
 
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        self.name_server_runtime.shutdown_tx = Some(shutdown_tx.clone());
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
 
@@ -416,9 +418,18 @@ impl NameServerRuntime {
             Some(self.inner.broker_housekeeping_service().clone() as Arc<dyn ChannelEventListener>);
 
         // Spawn server task and retain handle for graceful shutdown
+        let mut server_shutdown_rx = self
+            .shutdown_tx
+            .as_ref()
+            .expect("Shutdown channel not initialized")
+            .subscribe();
         let server_handle = tokio::spawn(async move {
             debug!("Server task started");
-            server.run(request_processor, channel_event_listener).await;
+            server
+                .run_with_shutdown(request_processor, channel_event_listener, async move {
+                    let _ = server_shutdown_rx.recv().await;
+                })
+                .await;
             debug!("Server task completed");
         });
         self.server_task_handle = Some(server_handle);
@@ -711,6 +722,7 @@ impl Builder {
                 inner,
                 scheduled_task_manager: ScheduledTaskManager::new(),
                 shutdown_rx: None,
+                shutdown_tx: None,
                 server_inner: None,
                 server_task_handle: None,
                 state: Arc::new(AtomicU8::new(RuntimeState::Created as u8)),
@@ -1169,6 +1181,7 @@ mod tests {
     use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::mix_all::string_to_properties;
     use rocketmq_common::common::mix_all::MASTER_ID;
+    use rocketmq_common::common::mq_version::RocketMqVersion;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::common::TopicSysFlag;
@@ -1176,13 +1189,23 @@ mod tests {
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::ConnectionState;
     use rocketmq_remoting::local::LocalRequestHarness;
+    use rocketmq_remoting::protocol::body::kv_table::KVTable;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+    use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
+    use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
     use tokio::time::sleep;
 
     use super::*;
     use crate::processor::default_request_processor::DefaultRequestProcessor;
+    use crate::processor::ClientRequestProcessor;
 
     fn build_bootstrap_with_v2_config(mut namesrv_config: NamesrvConfig) -> NameServerBootstrap {
         namesrv_config.use_route_info_manager_v2 = true;
@@ -1204,6 +1227,19 @@ mod tests {
         request: &mut RemotingCommand,
     ) -> RemotingCommand {
         let mut processor = DefaultRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
+        processor
+            .process_request(harness.channel(), harness.context(), request)
+            .await
+            .expect("request processing should succeed")
+            .expect("processor should always return a response")
+    }
+
+    async fn process_with_client_processor(
+        bootstrap: &NameServerBootstrap,
+        harness: &LocalRequestHarness,
+        request: &mut RemotingCommand,
+    ) -> RemotingCommand {
+        let mut processor = ClientRequestProcessor::new(bootstrap.name_server_runtime.inner.clone());
         processor
             .process_request(harness.channel(), harness.context(), request)
             .await
@@ -2174,5 +2210,127 @@ mod tests {
             bootstrap.name_server_runtime.inner.name_server_config().rocketmq_home,
             "/tmp/namesrv"
         );
+    }
+
+    #[tokio::test]
+    async fn default_v2_kvconfig_crud_roundtrip_via_default_processor() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let namespace = CheetahString::from_static_str("phase5-namespace");
+        let key = CheetahString::from_static_str("phase5-key");
+        let value = CheetahString::from_static_str("phase5-value");
+
+        let mut put_request = RemotingCommand::create_request_command(
+            RequestCode::PutKvConfig,
+            PutKVConfigRequestHeader::new(namespace.clone(), key.clone(), value.clone()),
+        );
+        put_request.make_custom_header_to_net();
+        let put_response = process_with_default_processor(&bootstrap, &harness, &mut put_request).await;
+        assert_eq!(ResponseCode::from(put_response.code()), ResponseCode::Success);
+
+        let mut get_request = RemotingCommand::create_request_command(
+            RequestCode::GetKvConfig,
+            GetKVConfigRequestHeader::new(namespace.clone(), key.clone()),
+        );
+        get_request.make_custom_header_to_net();
+        let get_response = process_with_default_processor(&bootstrap, &harness, &mut get_request).await;
+        assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
+        let get_header = get_response
+            .read_custom_header_ref::<GetKVConfigResponseHeader>()
+            .expect("get kv config should include a response header");
+        assert_eq!(get_header.value.as_ref(), Some(&value));
+
+        let mut list_request = RemotingCommand::create_request_command(
+            RequestCode::GetKvlistByNamespace,
+            GetKVListByNamespaceRequestHeader::new(namespace.clone()),
+        );
+        list_request.make_custom_header_to_net();
+        let list_response = process_with_default_processor(&bootstrap, &harness, &mut list_request).await;
+        assert_eq!(ResponseCode::from(list_response.code()), ResponseCode::Success);
+        let kv_table = KVTable::decode(list_response.body().expect("list response should include a body")).unwrap();
+        assert_eq!(kv_table.table.get(&key), Some(&value));
+
+        let mut delete_request = RemotingCommand::create_request_command(
+            RequestCode::DeleteKvConfig,
+            DeleteKVConfigRequestHeader::new(namespace.clone(), key.clone()),
+        );
+        delete_request.make_custom_header_to_net();
+        let delete_response = process_with_default_processor(&bootstrap, &harness, &mut delete_request).await;
+        assert_eq!(ResponseCode::from(delete_response.code()), ResponseCode::Success);
+
+        let mut get_after_delete_request = RemotingCommand::create_request_command(
+            RequestCode::GetKvConfig,
+            GetKVConfigRequestHeader::new(namespace, key),
+        );
+        get_after_delete_request.make_custom_header_to_net();
+        let get_after_delete_response =
+            process_with_default_processor(&bootstrap, &harness, &mut get_after_delete_request).await;
+        assert_eq!(
+            ResponseCode::from(get_after_delete_response.code()),
+            ResponseCode::QueryNotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_route_query_via_client_processor_returns_order_config_and_route_contract() {
+        let mut bootstrap = build_bootstrap_with_v2_config(NamesrvConfig {
+            order_message_enable: true,
+            ..NamesrvConfig::default()
+        });
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let primary_broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("route-query-contract-topic");
+        let order_conf = CheetahString::from_static_str("broker-a:4");
+
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &primary_broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[(
+                "route-query-contract-topic",
+                0,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+            )]),
+        )
+        .await;
+
+        bootstrap
+            .name_server_runtime
+            .inner
+            .kvconfig_manager_mut()
+            .put_kv_config(
+                CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
+                topic_name.clone(),
+                order_conf.clone(),
+            )
+            .unwrap();
+
+        let mut route_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic_name.clone(), Some(true)),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        route_request.make_custom_header_to_net();
+
+        let route_response = process_with_client_processor(&bootstrap, &harness, &mut route_request).await;
+        assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+
+        let body = route_response.body().expect("route response should include a body");
+        let topic_route_data = TopicRouteData::decode(body).unwrap();
+        assert_eq!(topic_route_data.order_topic_conf.as_ref(), Some(&order_conf));
+        assert_eq!(topic_route_data.queue_datas.len(), 1);
+        assert_eq!(topic_route_data.broker_datas.len(), 1);
+
+        let broker_data = &topic_route_data.broker_datas[0];
+        assert_eq!(broker_data.broker_name(), &broker_name);
+        assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&primary_broker_addr));
+        assert_eq!(topic_route_data.queue_datas[0].broker_name(), &broker_name);
     }
 }
