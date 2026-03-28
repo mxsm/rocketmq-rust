@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -150,13 +151,21 @@ impl RouteInfoManagerV2 {
         self.un_register_service.mut_from_ref().start();
     }
 
-    /// Find broker info by socket address
+    /// Find broker info by channel identity
     #[inline]
-    fn find_broker_by_socket_addr(
-        broker_live_table: &BrokerLiveTable,
-        channel: &Channel,
-    ) -> Option<Arc<BrokerAddrInfo>> {
+    fn find_broker_by_channel(broker_live_table: &BrokerLiveTable, channel: &Channel) -> Option<Arc<BrokerAddrInfo>> {
         broker_live_table.get_broker_info_by_channel(channel)
+    }
+
+    /// Find broker info and live state by remote socket address.
+    fn find_broker_by_remote_addr(
+        broker_live_table: &BrokerLiveTable,
+        socket_addr: SocketAddr,
+    ) -> Option<(Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>)> {
+        broker_live_table
+            .get_all()
+            .into_iter()
+            .find(|(_, live_info)| live_info.remote_addr == socket_addr)
     }
 
     /// Find broker name by broker address
@@ -202,7 +211,7 @@ impl RouteInfoManagerV2 {
         let mut need_unregister = false;
 
         // Find broker by socket address and setup unregister request
-        if let Some(broker_addr_info) = Self::find_broker_by_socket_addr(&self.broker_live_table, channel) {
+        if let Some(broker_addr_info) = Self::find_broker_by_channel(&self.broker_live_table, channel) {
             need_unregister = self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
         }
 
@@ -216,10 +225,24 @@ impl RouteInfoManagerV2 {
         }
     }
 
+    /// Handle broker disconnection when only the remote socket address is available.
+    pub fn connection_disconnected(&self, socket_addr: SocketAddr) {
+        if let Some((broker_addr_info, live_info)) =
+            Self::find_broker_by_remote_addr(&self.broker_live_table, socket_addr)
+        {
+            if let Some(channel) = live_info.channel.as_ref() {
+                channel.connection_ref().close();
+                self.on_channel_destroy(channel);
+            } else {
+                self.on_channel_destroy_by_addr_info(broker_addr_info);
+            }
+        }
+    }
+
     /// Shutdown the route manager
     pub fn shutdown(&self) {
         info!("Shutting down RouteInfoManager v2");
-        // Cleanup if needed
+        self.un_register_service.shutdown();
     }
 }
 
@@ -721,6 +744,7 @@ impl RouteInfoManagerV2 {
             channel.remote_address(),
             channel.channel_id_owned(),
         )
+        .with_channel(channel.clone())
         .with_timeout(timeout)
         .with_ha_server(ha_server_addr);
 
@@ -1561,12 +1585,17 @@ impl RouteInfoManagerV2 {
         if count > 0 {
             // Submit unregistration requests for each expired broker
             for broker_addr_info in expired_brokers {
-                // Get the live info to retrieve timeout value for logging
                 if let Some(live_info) = self.broker_live_table.get(&broker_addr_info) {
                     warn!(
                         "The broker channel expired, {} {}ms",
                         broker_addr_info, live_info.heartbeat_timeout_millis
                     );
+
+                    if let Some(channel) = live_info.channel.as_ref() {
+                        channel.connection_ref().close();
+                        self.on_channel_destroy(channel);
+                        continue;
+                    }
                 }
 
                 // Trigger channel destroy logic, which will submit to batch unregistration service

@@ -804,14 +804,18 @@ impl NameServerRuntimeInner {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use cheetah_string::CheetahString;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::TopicSysFlag;
+    use rocketmq_remoting::connection::ConnectionState;
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+    use tokio::time::sleep;
 
     use super::*;
 
@@ -840,7 +844,29 @@ mod tests {
         wrapper
     }
 
-    async fn register_test_broker(
+    fn start_unregister_service(bootstrap: &NameServerBootstrap) {
+        bootstrap.name_server_runtime.inner.route_info_manager().start();
+    }
+
+    fn shutdown_unregister_service(bootstrap: &NameServerBootstrap) {
+        bootstrap.name_server_runtime.inner.route_info_manager().shutdown();
+    }
+
+    async fn wait_until<F>(description: &str, mut condition: F)
+    where
+        F: FnMut() -> bool,
+    {
+        for _ in 0..100 {
+            if condition() {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting for {description}");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn register_test_broker_with_harness(
         bootstrap: &NameServerBootstrap,
         cluster_name: &CheetahString,
         broker_name: &CheetahString,
@@ -849,8 +875,10 @@ mod tests {
         zone_name: &CheetahString,
         enable_acting_master: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
+        filter_server_list: Vec<CheetahString>,
+        timeout_millis: Option<i64>,
+        harness: &LocalRequestHarness,
     ) {
-        let harness = LocalRequestHarness::new().await.unwrap();
         let result = bootstrap
             .name_server_runtime
             .inner
@@ -862,14 +890,41 @@ mod tests {
                 broker_id,
                 CheetahString::from_static_str("10.0.0.1:10912"),
                 Some(zone_name.clone()),
-                Some(30_000),
+                timeout_millis,
                 Some(enable_acting_master),
                 topic_config_wrapper,
-                vec![],
+                filter_server_list,
                 harness.channel(),
             );
 
         assert!(result.is_some());
+    }
+
+    async fn register_test_broker(
+        bootstrap: &NameServerBootstrap,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+        broker_addr: &CheetahString,
+        broker_id: u64,
+        zone_name: &CheetahString,
+        enable_acting_master: bool,
+        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
+    ) {
+        let harness = LocalRequestHarness::new().await.unwrap();
+        register_test_broker_with_harness(
+            bootstrap,
+            cluster_name,
+            broker_name,
+            broker_addr,
+            broker_id,
+            zone_name,
+            enable_acting_master,
+            topic_config_wrapper,
+            vec![],
+            Some(30_000),
+            &harness,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1119,6 +1174,463 @@ mod tests {
         assert!(!PermName::is_writeable(queue_data.perm()));
         assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&broker_addr));
         assert!(!broker_data.broker_addrs().contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn default_v2_scan_not_active_broker_cleans_route_views_via_batch_unregister() {
+        let mut bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("scan-cleanup-topic");
+        let harness = LocalRequestHarness::new().await.unwrap();
+
+        start_unregister_service(&bootstrap);
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[("scan-cleanup-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+            vec![CheetahString::from_static_str("fs-a")],
+            Some(10),
+            &harness,
+        )
+        .await;
+
+        sleep(Duration::from_millis(30)).await;
+
+        let expired_count = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager_mut()
+            .scan_not_active_broker();
+        assert_eq!(expired_count, 1);
+
+        wait_until("expired broker cleanup", || {
+            let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
+            let cluster_info = route_manager.get_all_cluster_info();
+
+            route_manager.pickup_topic_route_data(&topic_name).is_none()
+                && route_manager
+                    .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
+                    .is_none()
+                && cluster_info
+                    .cluster_addr_table
+                    .as_ref()
+                    .is_none_or(|clusters| !clusters.contains_key(&cluster_name))
+                && cluster_info
+                    .broker_addr_table
+                    .as_ref()
+                    .is_none_or(|brokers| !brokers.contains_key(&broker_name))
+                && route_manager.get_topics_by_cluster(&cluster_name).topic_list.is_empty()
+        })
+        .await;
+
+        shutdown_unregister_service(&bootstrap);
+    }
+
+    #[tokio::test]
+    async fn default_v2_scan_not_active_broker_closes_expired_connection_before_batch_unregister() {
+        let mut bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let harness = LocalRequestHarness::new().await.unwrap();
+
+        start_unregister_service(&bootstrap);
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[("scan-close-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+            vec![],
+            Some(10),
+            &harness,
+        )
+        .await;
+
+        assert_eq!(harness.channel().connection_ref().state(), ConnectionState::Healthy);
+
+        sleep(Duration::from_millis(30)).await;
+
+        let expired_count = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager_mut()
+            .scan_not_active_broker();
+        assert_eq!(expired_count, 1);
+
+        wait_until("expired broker connection close", || {
+            harness.channel().connection_ref().state() == ConnectionState::Closed
+        })
+        .await;
+
+        shutdown_unregister_service(&bootstrap);
+    }
+
+    #[tokio::test]
+    async fn default_v2_connection_disconnected_by_socket_addr_matches_channel_destroy_cleanup() {
+        let mut bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("socket-disconnect-topic");
+        let harness = LocalRequestHarness::new().await.unwrap();
+
+        start_unregister_service(&bootstrap);
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[("socket-disconnect-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+            vec![CheetahString::from_static_str("fs-a")],
+            Some(30_000),
+            &harness,
+        )
+        .await;
+
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager_mut()
+            .connection_disconnected(harness.remote_address());
+
+        wait_until("socket disconnect cleanup", || {
+            let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
+            let cluster_info = route_manager.get_all_cluster_info();
+
+            harness.channel().connection_ref().state() == ConnectionState::Closed
+                && route_manager.pickup_topic_route_data(&topic_name).is_none()
+                && route_manager
+                    .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
+                    .is_none()
+                && cluster_info
+                    .cluster_addr_table
+                    .as_ref()
+                    .is_none_or(|clusters| !clusters.contains_key(&cluster_name))
+                && cluster_info
+                    .broker_addr_table
+                    .as_ref()
+                    .is_none_or(|brokers| !brokers.contains_key(&broker_name))
+        })
+        .await;
+
+        shutdown_unregister_service(&bootstrap);
+    }
+
+    #[tokio::test]
+    async fn default_v2_duplicate_channel_destroy_submission_is_idempotent_for_acting_master_cleanup() {
+        let namesrv_config = NamesrvConfig {
+            support_acting_master: true,
+            ..NamesrvConfig::default()
+        };
+        let bootstrap = build_bootstrap_with_v2_config(namesrv_config);
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let master_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let slave_addr = CheetahString::from_static_str("10.0.0.2:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("duplicate-unregister-topic");
+        let master_harness = LocalRequestHarness::new().await.unwrap();
+        let slave_harness = LocalRequestHarness::new().await.unwrap();
+
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &master_addr,
+            MASTER_ID,
+            &zone_name,
+            true,
+            topic_config_wrapper(&[(
+                "duplicate-unregister-topic",
+                0,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+            )]),
+            vec![],
+            Some(30_000),
+            &master_harness,
+        )
+        .await;
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &slave_addr,
+            1,
+            &zone_name,
+            true,
+            TopicConfigAndMappingSerializeWrapper::default(),
+            vec![],
+            Some(30_000),
+            &slave_harness,
+        )
+        .await;
+
+        let master_channel = master_harness.channel();
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .on_channel_destroy(&master_channel);
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .on_channel_destroy(&master_channel);
+
+        start_unregister_service(&bootstrap);
+
+        wait_until("duplicate unregister cleanup", || {
+            let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
+            let cluster_info = route_manager.get_all_cluster_info();
+            let Some(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+                return false;
+            };
+            let Some(route_broker_data) = route_data
+                .broker_datas
+                .iter()
+                .find(|broker_data| broker_data.broker_name() == &broker_name)
+            else {
+                return false;
+            };
+            let Some(route_queue_data) = route_data
+                .queue_datas
+                .iter()
+                .find(|queue_data| queue_data.broker_name() == &broker_name)
+            else {
+                return false;
+            };
+            let Some(cluster_broker_data) = cluster_info
+                .broker_addr_table
+                .as_ref()
+                .and_then(|brokers| brokers.get(&broker_name))
+            else {
+                return false;
+            };
+
+            route_manager
+                .query_broker_topic_config(cluster_name.clone(), master_addr.clone())
+                .is_none()
+                && route_manager
+                    .query_broker_topic_config(cluster_name.clone(), slave_addr.clone())
+                    .is_some()
+                && !PermName::is_writeable(route_queue_data.perm())
+                && route_broker_data.broker_addrs().get(&MASTER_ID) == Some(&slave_addr)
+                && !route_broker_data.broker_addrs().contains_key(&1)
+                && cluster_broker_data.broker_addrs().get(&1) == Some(&slave_addr)
+                && !cluster_broker_data.broker_addrs().contains_key(&MASTER_ID)
+        })
+        .await;
+
+        shutdown_unregister_service(&bootstrap);
+    }
+
+    #[tokio::test]
+    async fn default_v2_on_channel_destroy_cleans_removed_broker_and_preserves_survivor() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let removed_broker_name = CheetahString::from_static_str("broker-a");
+        let surviving_broker_name = CheetahString::from_static_str("broker-b");
+        let removed_broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let surviving_broker_addr = CheetahString::from_static_str("10.0.0.2:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("channel-destroy-topic");
+        let removed_harness = LocalRequestHarness::new().await.unwrap();
+        let surviving_harness = LocalRequestHarness::new().await.unwrap();
+
+        start_unregister_service(&bootstrap);
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &removed_broker_name,
+            &removed_broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[("channel-destroy-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+            vec![CheetahString::from_static_str("fs-a")],
+            Some(30_000),
+            &removed_harness,
+        )
+        .await;
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &surviving_broker_name,
+            &surviving_broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[("channel-destroy-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+            vec![CheetahString::from_static_str("fs-b")],
+            Some(30_000),
+            &surviving_harness,
+        )
+        .await;
+
+        let removed_channel = removed_harness.channel();
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .on_channel_destroy(&removed_channel);
+
+        wait_until("channel destroy cleanup", || {
+            let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
+            let cluster_info = route_manager.get_all_cluster_info();
+            let Some(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+                return false;
+            };
+
+            route_manager
+                .query_broker_topic_config(cluster_name.clone(), removed_broker_addr.clone())
+                .is_none()
+                && route_manager
+                    .query_broker_topic_config(cluster_name.clone(), surviving_broker_addr.clone())
+                    .is_some()
+                && route_data
+                    .broker_datas
+                    .iter()
+                    .all(|broker_data| broker_data.broker_name() != &removed_broker_name)
+                && route_data
+                    .broker_datas
+                    .iter()
+                    .any(|broker_data| broker_data.broker_name() == &surviving_broker_name)
+                && !route_data.filter_server_table.contains_key(&removed_broker_addr)
+                && route_data
+                    .filter_server_table
+                    .get(&surviving_broker_addr)
+                    .is_some_and(|servers| servers.len() == 1 && servers[0] == CheetahString::from_static_str("fs-b"))
+                && cluster_info
+                    .cluster_addr_table
+                    .as_ref()
+                    .and_then(|clusters| clusters.get(&cluster_name))
+                    .is_some_and(|brokers| brokers.len() == 1 && brokers.contains(&surviving_broker_name))
+                && cluster_info.broker_addr_table.as_ref().is_some_and(|brokers| {
+                    !brokers.contains_key(&removed_broker_name) && brokers.contains_key(&surviving_broker_name)
+                })
+        })
+        .await;
+
+        shutdown_unregister_service(&bootstrap);
+    }
+
+    #[tokio::test]
+    async fn default_v2_on_channel_destroy_reduces_to_read_only_acting_master() {
+        let namesrv_config = NamesrvConfig {
+            support_acting_master: true,
+            ..NamesrvConfig::default()
+        };
+        let bootstrap = build_bootstrap_with_v2_config(namesrv_config);
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let master_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let slave_addr = CheetahString::from_static_str("10.0.0.2:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("acting-master-cleanup-topic");
+        let master_harness = LocalRequestHarness::new().await.unwrap();
+        let slave_harness = LocalRequestHarness::new().await.unwrap();
+
+        start_unregister_service(&bootstrap);
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &master_addr,
+            MASTER_ID,
+            &zone_name,
+            true,
+            topic_config_wrapper(&[(
+                "acting-master-cleanup-topic",
+                0,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+            )]),
+            vec![],
+            Some(30_000),
+            &master_harness,
+        )
+        .await;
+        register_test_broker_with_harness(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &slave_addr,
+            1,
+            &zone_name,
+            true,
+            TopicConfigAndMappingSerializeWrapper::default(),
+            vec![],
+            Some(30_000),
+            &slave_harness,
+        )
+        .await;
+
+        let master_channel = master_harness.channel();
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .on_channel_destroy(&master_channel);
+
+        wait_until("acting master cleanup", || {
+            let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
+            let cluster_info = route_manager.get_all_cluster_info();
+            let Some(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+                return false;
+            };
+            let Some(route_broker_data) = route_data
+                .broker_datas
+                .iter()
+                .find(|broker_data| broker_data.broker_name() == &broker_name)
+            else {
+                return false;
+            };
+            let Some(route_queue_data) = route_data
+                .queue_datas
+                .iter()
+                .find(|queue_data| queue_data.broker_name() == &broker_name)
+            else {
+                return false;
+            };
+            let Some(cluster_broker_data) = cluster_info
+                .broker_addr_table
+                .as_ref()
+                .and_then(|brokers| brokers.get(&broker_name))
+            else {
+                return false;
+            };
+
+            route_manager
+                .query_broker_topic_config(cluster_name.clone(), master_addr.clone())
+                .is_none()
+                && route_manager
+                    .query_broker_topic_config(cluster_name.clone(), slave_addr.clone())
+                    .is_some()
+                && !PermName::is_writeable(route_queue_data.perm())
+                && route_broker_data.broker_addrs().get(&MASTER_ID) == Some(&slave_addr)
+                && !route_broker_data.broker_addrs().contains_key(&1)
+                && cluster_broker_data.broker_addrs().get(&1) == Some(&slave_addr)
+                && !cluster_broker_data.broker_addrs().contains_key(&MASTER_ID)
+        })
+        .await;
+
+        shutdown_unregister_service(&bootstrap);
     }
 
     #[tokio::test]

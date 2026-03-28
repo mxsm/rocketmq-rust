@@ -106,10 +106,8 @@ impl RouteInfoManagerWrapper {
     pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.connection_disconnected(socket_addr),
-            RouteInfoManagerWrapper::V2(_manager) => {
-                // V2 doesn't support socket_addr directly, needs channel
-                // This method is kept for v1 compatibility
-                // V2 should use on_channel_destroy instead
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager.connection_disconnected(socket_addr);
             }
         }
     }

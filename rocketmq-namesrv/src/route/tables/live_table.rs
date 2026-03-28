@@ -47,6 +47,9 @@ pub struct BrokerLiveInfo {
 
     /// Channel ID for the broker connection
     pub channel_id: ChannelId,
+
+    /// Channel handle retained for lifecycle operations such as explicit close
+    pub channel: Option<Channel>,
 }
 
 impl BrokerLiveInfo {
@@ -63,6 +66,7 @@ impl BrokerLiveInfo {
             ha_server_addr: None,
             remote_addr,
             channel_id,
+            channel: None,
         }
     }
 
@@ -75,6 +79,12 @@ impl BrokerLiveInfo {
     /// Set custom heartbeat timeout
     pub fn with_timeout(mut self, timeout_millis: u64) -> Self {
         self.heartbeat_timeout_millis = timeout_millis;
+        self
+    }
+
+    /// Attach the current broker channel so lifecycle cleanup can explicitly close it.
+    pub fn with_channel(mut self, channel: Channel) -> Self {
+        self.channel = Some(channel);
         self
     }
 
@@ -352,7 +362,10 @@ impl BrokerLiveTable {
             if key_addr == broker_addr {
                 // Create new BrokerLiveInfo with updated timestamp
                 let old_info = entry.value();
-                let new_info = BrokerLiveInfo::new(timestamp, old_info.data_version.clone(), remote_addr, channel_id);
+                let mut new_info =
+                    BrokerLiveInfo::new(timestamp, old_info.data_version.clone(), remote_addr, channel_id);
+                new_info.ha_server_addr = old_info.ha_server_addr.clone();
+                new_info.channel = old_info.channel.clone();
 
                 *entry.value_mut() = Arc::new(new_info);
                 return;
@@ -377,6 +390,7 @@ impl BrokerLiveTable {
                 ha_server_addr: old_info.ha_server_addr.clone(),
                 remote_addr: old_info.remote_addr,
                 channel_id: old_info.channel_id.clone(),
+                channel: old_info.channel.clone(),
             };
             *entry.value_mut() = Arc::new(new_info);
         }
