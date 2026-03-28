@@ -1245,59 +1245,46 @@ impl RouteInfoManagerV2 {
         removed_broker: &HashSet<CheetahString>,
         reduced_broker: &HashSet<CheetahString>,
     ) {
-        let all_topics = self.topic_queue_table.get_all_topics();
-        let mut topics_to_remove = Vec::new();
-
-        for topic in &all_topics {
-            // Remove queue data for completely removed brokers
-            for broker_name in removed_broker {
-                if let Some(removed_qd) = self
-                    .topic_queue_table
-                    .remove_broker(topic.as_str(), broker_name.as_str())
-                {
-                    debug!(
-                        "removeTopicByBrokerName, remove one broker's topic {} {:?}",
-                        topic, removed_qd
-                    );
-                }
-            }
-
-            // Check if topic is now empty
-            if self
+        for (topic, broker_name) in self.topic_queue_table.topic_broker_pairs_for_brokers(removed_broker) {
+            if let Some(removed_qd) = self
                 .topic_queue_table
-                .get_topic_queues_map(topic.as_str())
-                .is_none_or(|map| map.is_empty())
+                .remove_broker(topic.as_str(), broker_name.as_str())
             {
-                topics_to_remove.push(topic.clone());
-                debug!("removeTopicByBrokerName, remove the topic all queue {}", topic);
-                continue;
-            }
-
-            // For reduced brokers with acting master enabled: wipe write permission if no master
-            for broker_name in reduced_broker {
-                if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
-                    if broker_data.enable_acting_master() {
-                        // Check if no master exists (min broker ID > 0)
-                        let no_master_exists = broker_data.broker_addrs().is_empty()
-                            || broker_data.broker_addrs().keys().min().copied().unwrap_or(0) > 0;
-
-                        if no_master_exists {
-                            // Wipe write permission for this broker's queue data
-                            if let Some(queue_data) = self.topic_queue_table.get(topic.as_str(), broker_name.as_str()) {
-                                let mut new_queue_data = (*queue_data).clone();
-                                new_queue_data.perm &= !PermName::PERM_WRITE;
-                                self.topic_queue_table
-                                    .insert(topic.clone(), broker_name.clone(), new_queue_data);
-                            }
-                        }
-                    }
-                }
+                debug!(
+                    "removeTopicByBrokerName, remove one broker's topic {} {:?}",
+                    topic, removed_qd
+                );
             }
         }
 
-        // Remove empty topics
-        for topic in topics_to_remove {
-            self.topic_queue_table.remove_topic(topic.as_str());
+        let removed_topic_count = self.topic_queue_table.cleanup_empty_topics();
+        if removed_topic_count > 0 {
+            debug!(
+                "removeTopicByBrokerName, remove {} topics with no remaining queue data",
+                removed_topic_count
+            );
+        }
+
+        let reduced_brokers_requiring_write_wipe = reduced_broker
+            .iter()
+            .filter_map(|broker_name| {
+                let broker_data = self.broker_addr_table.get(broker_name.as_str())?;
+                let no_master_exists = broker_data.broker_addrs().is_empty()
+                    || broker_data.broker_addrs().keys().min().copied().unwrap_or(0) > 0;
+
+                (broker_data.enable_acting_master() && no_master_exists).then(|| broker_name.clone())
+            })
+            .collect::<HashSet<_>>();
+
+        for (topic, broker_name) in self
+            .topic_queue_table
+            .topic_broker_pairs_for_brokers(&reduced_brokers_requiring_write_wipe)
+        {
+            if let Some(queue_data) = self.topic_queue_table.get(topic.as_str(), broker_name.as_str()) {
+                let perm = queue_data.perm() & !PermName::PERM_WRITE;
+                self.topic_queue_table
+                    .update_queue_data_perm(topic.as_str(), broker_name.as_str(), perm as i32);
+            }
         }
     }
 }
@@ -1754,13 +1741,11 @@ impl RouteInfoManagerV2 {
 
         let mut wipe_topic_count = 0;
 
-        for topic in self.topic_queue_table.topics_for_broker(&broker_name) {
-            if let Some(queue_data) = self.topic_queue_table.get(&topic, &broker_name) {
-                let perm = queue_data.perm() & !PermName::PERM_WRITE;
-                self.topic_queue_table
-                    .update_queue_data_perm(&topic, &broker_name, perm as i32);
-                wipe_topic_count += 1;
-            }
+        for (topic, queue_data) in self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name) {
+            let perm = queue_data.perm() & !PermName::PERM_WRITE;
+            self.topic_queue_table
+                .update_queue_data_perm(&topic, &broker_name, perm as i32);
+            wipe_topic_count += 1;
         }
 
         Ok(wipe_topic_count)
@@ -1788,7 +1773,7 @@ impl RouteInfoManagerV2 {
 
         let mut add_topic_count = 0;
 
-        for topic in self.topic_queue_table.topics_for_broker(&broker_name) {
+        for (topic, _) in self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name) {
             let perm = PermName::PERM_READ | PermName::PERM_WRITE;
             self.topic_queue_table
                 .update_queue_data_perm(&topic, &broker_name, perm as i32);

@@ -49,12 +49,17 @@ pub struct TopicQueueTable {
     /// Outer map: Topic name -> Broker map
     /// Inner map: Broker name -> Queue data
     inner: DashMap<TopicName, DashMap<BrokerName, Arc<QueueData>>>,
+    /// Reverse index: Broker name -> topic set
+    broker_topics: DashMap<BrokerName, HashSet<TopicName>>,
 }
 
 impl TopicQueueTable {
     /// Create a new topic queue table
     pub fn new() -> Self {
-        Self { inner: DashMap::new() }
+        Self {
+            inner: DashMap::new(),
+            broker_topics: DashMap::new(),
+        }
     }
 
     /// Create with estimated capacity
@@ -66,6 +71,7 @@ impl TopicQueueTable {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: DashMap::with_capacity(capacity),
+            broker_topics: DashMap::with_capacity(capacity),
         }
     }
 
@@ -79,10 +85,14 @@ impl TopicQueueTable {
     /// # Returns
     /// Previous queue data if existed
     pub fn insert(&self, topic: TopicName, broker: BrokerName, queue_data: QueueData) -> Option<Arc<QueueData>> {
-        self.inner
+        let index_topic = topic.clone();
+        let previous = self
+            .inner
             .entry(topic)
             .or_default()
-            .insert(broker, Arc::new(queue_data))
+            .insert(broker.clone(), Arc::new(queue_data));
+        self.broker_topics.entry(broker).or_default().insert(index_topic);
+        previous
     }
 
     /// Get queue data for a specific topic-broker pair
@@ -155,9 +165,14 @@ impl TopicQueueTable {
     /// # Returns
     /// Removed queue data if existed
     pub fn remove_broker(&self, topic: &str, broker: &str) -> Option<Arc<QueueData>> {
-        self.inner
+        let removed = self
+            .inner
             .get(topic)
-            .and_then(|brokers| brokers.remove(broker).map(|(_, v)| v))
+            .and_then(|brokers| brokers.remove(broker).map(|(_, v)| v));
+        if removed.is_some() {
+            self.remove_topic_from_broker_index(topic, broker);
+        }
+        removed
     }
 
     /// Remove entire topic
@@ -168,7 +183,14 @@ impl TopicQueueTable {
     /// # Returns
     /// true if topic existed and was removed
     pub fn remove_topic(&self, topic: &str) -> bool {
-        self.inner.remove(topic).is_some()
+        if let Some((_, brokers)) = self.inner.remove(topic) {
+            for broker_entry in brokers.iter() {
+                self.remove_topic_from_broker_index(topic, broker_entry.key().as_str());
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Check if topic exists
@@ -197,6 +219,7 @@ impl TopicQueueTable {
     /// Clear all data
     pub fn clear(&self) {
         self.inner.clear();
+        self.broker_topics.clear();
     }
 
     /// Clean up empty topic entries
@@ -281,11 +304,16 @@ impl TopicQueueTable {
 
     /// Collect all topics that contain queue data for a specific broker.
     pub fn topics_for_broker(&self, broker_name: &str) -> Vec<TopicName> {
-        self.inner
-            .iter()
-            .filter(|entry| entry.value().contains_key(broker_name))
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.broker_topics
+            .get(broker_name)
+            .map(|topics| {
+                topics
+                    .iter()
+                    .filter(|topic| self.get(topic.as_str(), broker_name).is_some())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Collect topics for a broker set, preserving duplicate hits per matching broker.
@@ -295,19 +323,64 @@ impl TopicQueueTable {
     pub fn topics_for_brokers_with_duplicates(&self, broker_names: &HashSet<BrokerName>) -> Vec<TopicName> {
         let mut topics = Vec::new();
 
-        for entry in self.inner.iter() {
-            let match_count = entry
-                .value()
-                .iter()
-                .filter(|broker_entry| broker_names.contains(broker_entry.key()))
-                .count();
-
-            for _ in 0..match_count {
-                topics.push(entry.key().clone());
+        for broker_name in broker_names {
+            if let Some(broker_topics) = self.broker_topics.get(broker_name.as_str()) {
+                for topic in broker_topics.iter() {
+                    if self.get(topic.as_str(), broker_name.as_str()).is_some() {
+                        topics.push(topic.clone());
+                    }
+                }
             }
         }
 
         topics
+    }
+
+    /// Collect exact topic-broker pairs that match a broker set.
+    ///
+    /// This is useful for cleanup paths that only need to touch the queue entries
+    /// belonging to a broker subset, without scanning every broker name for every topic.
+    pub fn topic_broker_pairs_for_brokers(&self, broker_names: &HashSet<BrokerName>) -> Vec<(TopicName, BrokerName)> {
+        let mut pairs = Vec::new();
+
+        for broker_name in broker_names {
+            if let Some(broker_topics) = self.broker_topics.get(broker_name.as_str()) {
+                for topic in broker_topics.iter() {
+                    if self.get(topic.as_str(), broker_name.as_str()).is_some() {
+                        pairs.push((topic.clone(), broker_name.clone()));
+                    }
+                }
+            }
+        }
+
+        pairs
+    }
+
+    /// Collect exact topic-queue pairs for a specific broker.
+    pub fn topic_queue_pairs_for_broker(&self, broker_name: &str) -> Vec<(TopicName, Arc<QueueData>)> {
+        self.broker_topics
+            .get(broker_name)
+            .map(|topics| {
+                topics
+                    .iter()
+                    .filter_map(|topic| {
+                        self.get(topic.as_str(), broker_name)
+                            .map(|queue_data| (topic.clone(), queue_data))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn remove_topic_from_broker_index(&self, topic: &str, broker: &str) {
+        if let Some(mut broker_topics) = self.broker_topics.get_mut(broker) {
+            broker_topics.remove(topic);
+            let is_empty = broker_topics.is_empty();
+            drop(broker_topics);
+            if is_empty {
+                self.broker_topics.remove(broker);
+            }
+        }
     }
 }
 
@@ -489,6 +562,108 @@ mod tests {
             2
         );
         assert!(topics.contains(&CheetahString::from_static_str("broker-a-only")));
+    }
+
+    #[test]
+    fn test_topic_broker_pairs_for_brokers_returns_exact_matches() {
+        let table = TopicQueueTable::new();
+        let broker_a = CheetahString::from_static_str("broker-a");
+        let broker_b = CheetahString::from_static_str("broker-b");
+
+        table.insert(
+            CheetahString::from_static_str("shared-topic"),
+            broker_a.clone(),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("shared-topic"),
+            broker_b.clone(),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("broker-a-only"),
+            broker_a.clone(),
+            create_test_queue_data(8, 8),
+        );
+
+        let broker_names = HashSet::from([broker_a.clone(), broker_b.clone()]);
+        let pairs = table.topic_broker_pairs_for_brokers(&broker_names);
+
+        assert_eq!(pairs.len(), 3);
+        assert!(pairs.contains(&(CheetahString::from_static_str("shared-topic"), broker_a)));
+        assert!(pairs.contains(&(CheetahString::from_static_str("shared-topic"), broker_b)));
+        assert!(pairs.contains(&(
+            CheetahString::from_static_str("broker-a-only"),
+            CheetahString::from_static_str("broker-a"),
+        )));
+    }
+
+    #[test]
+    fn test_topic_queue_pairs_for_broker_returns_exact_matches() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-b"),
+            CheetahString::from_static_str("broker-b"),
+            create_test_queue_data(4, 4),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-c"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(16, 16),
+        );
+
+        let pairs = table.topic_queue_pairs_for_broker("broker-a");
+
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs
+            .iter()
+            .any(|(topic, queue_data)| topic.as_str() == "topic-a" && queue_data.read_queue_nums() == 8));
+        assert!(pairs
+            .iter()
+            .any(|(topic, queue_data)| topic.as_str() == "topic-c" && queue_data.read_queue_nums() == 16));
+    }
+
+    #[test]
+    fn test_remove_topic_updates_broker_topic_view() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+        table.insert(
+            CheetahString::from_static_str("topic-b"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(16, 16),
+        );
+
+        assert!(table.remove_topic("topic-a"));
+
+        let topics = table.topics_for_broker("broker-a");
+        assert_eq!(topics, vec![CheetahString::from_static_str("topic-b")]);
+    }
+
+    #[test]
+    fn test_clear_removes_broker_topic_view() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("topic-a"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data(8, 8),
+        );
+
+        table.clear();
+
+        assert!(table.topics_for_broker("broker-a").is_empty());
+        assert!(table.topic_queue_pairs_for_broker("broker-a").is_empty());
     }
 
     #[test]
