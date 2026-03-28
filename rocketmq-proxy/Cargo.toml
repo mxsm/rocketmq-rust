@@ -63,5 +63,5 @@ tonic-prost-build = "0.14.5"
 
 [dev-dependencies]
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13.0-rc.6"
 sha1 = "0.11"

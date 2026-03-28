@@ -86,6 +86,7 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
+    use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
     use rocketmq_auth::authentication::enums::user_status::UserStatus;

@@ -29,6 +29,7 @@ use rocketmq_error::AuthError;
 ///
 /// Base64-encoded signature
 pub fn cal_signature(content: &[u8], secret_key: &str) -> Result<String, AuthError> {
+    use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
     use sha1::Sha1;

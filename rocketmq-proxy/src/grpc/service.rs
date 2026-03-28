@@ -1965,6 +1965,7 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use futures::StreamExt;
+    use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
     use rocketmq_auth::authentication::enums::user_status::UserStatus;
