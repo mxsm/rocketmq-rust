@@ -71,3 +71,7 @@ harness = false
 [[bench]]
 name    = "async_segmented_lock_bench"
 harness = false
+
+[[bench]]
+name    = "topic_table_hot_path_bench"
+harness = false

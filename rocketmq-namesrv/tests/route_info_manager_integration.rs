@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
@@ -177,12 +178,26 @@ fn default_v2_namesrv_config() -> NamesrvConfig {
 }
 
 fn route_request(topic: &CheetahString) -> RemotingCommand {
+    route_request_with_options(topic, Some(false), RocketMqVersion::V4_9_3 as i32, None)
+}
+
+fn route_request_with_options(
+    topic: &CheetahString,
+    accept_standard_json_only: Option<bool>,
+    version: i32,
+    zone_name: Option<&CheetahString>,
+) -> RemotingCommand {
     let mut request = RemotingCommand::create_request_command(
         RequestCode::GetRouteinfoByTopic,
-        GetRouteInfoRequestHeader::new(topic.clone(), Some(false)),
+        GetRouteInfoRequestHeader::new(topic.clone(), accept_standard_json_only),
     )
-    .set_version(RocketMqVersion::V4_9_3 as i32);
+    .set_version(version);
     request.make_custom_header_to_net();
+    if let Some(zone_name) = zone_name {
+        request
+            .add_ext_field(mix_all::ZONE_MODE, "true")
+            .add_ext_field(mix_all::ZONE_NAME, zone_name.clone());
+    }
     request
 }
 
@@ -192,13 +207,39 @@ fn register_broker_request(
     broker_addr: &CheetahString,
     topic_name: &CheetahString,
 ) -> RemotingCommand {
-    let mut topic_config_wrapper = TopicConfigAndMappingSerializeWrapper::default();
-    topic_config_wrapper
-        .topic_config_serialize_wrapper
-        .topic_config_table
-        .insert(topic_name.clone(), TopicConfig::with_perm(topic_name.clone(), 4, 4, 6));
+    let topics = [topic_name];
+    register_broker_request_with_options(
+        cluster_name,
+        broker_name,
+        broker_addr,
+        MASTER_ID,
+        &topics,
+        None,
+        Vec::new(),
+    )
+}
 
-    let body = RegisterBrokerBody::new(topic_config_wrapper, Vec::new()).encode(false);
+fn register_broker_request_with_options(
+    cluster_name: &CheetahString,
+    broker_name: &CheetahString,
+    broker_addr: &CheetahString,
+    broker_id: u64,
+    topic_names: &[&CheetahString],
+    zone_name: Option<&CheetahString>,
+    filter_server_list: Vec<CheetahString>,
+) -> RemotingCommand {
+    let mut topic_config_wrapper = TopicConfigAndMappingSerializeWrapper::default();
+    for topic_name in topic_names {
+        topic_config_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table
+            .insert(
+                (*topic_name).clone(),
+                TopicConfig::with_perm((*topic_name).clone(), 4, 4, 6),
+            );
+    }
+
+    let body = RegisterBrokerBody::new(topic_config_wrapper, filter_server_list).encode(false);
     let mut request = RemotingCommand::create_request_command(
         RequestCode::RegisterBroker,
         RegisterBrokerRequestHeader::new(
@@ -206,7 +247,7 @@ fn register_broker_request(
             broker_addr.clone(),
             cluster_name.clone(),
             broker_addr.clone(),
-            MASTER_ID,
+            broker_id,
             Some(60_000),
             Some(false),
             false,
@@ -216,6 +257,9 @@ fn register_broker_request(
     .set_version(RocketMqVersion::V5_0_0 as i32)
     .set_body(body);
     request.make_custom_header_to_net();
+    if let Some(zone_name) = zone_name {
+        request.add_ext_field(mix_all::ZONE_NAME, zone_name.clone());
+    }
     request
 }
 
@@ -388,6 +432,213 @@ async fn namesrv_register_query_unregister_route_roundtrip_works_over_remoting()
             code => panic!("expected TopicNotExist after unregister, got {code:?}"),
         }
     }
+
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn namesrv_zone_route_filters_removed_zone_and_keeps_master_down_broker_over_remoting() {
+    let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
+
+    let cluster_name = CheetahString::from_static_str("phase5-zone-cluster");
+    let topic_name = CheetahString::from_static_str("phase5-zone-topic");
+    let requested_zone = CheetahString::from_static_str("zone-a");
+    let zone_a = requested_zone.clone();
+    let zone_b = CheetahString::from_static_str("zone-b");
+    let zone_c = CheetahString::from_static_str("zone-c");
+
+    let broker_a_name = CheetahString::from_static_str("zone-a-master");
+    let broker_a_addr = CheetahString::from_static_str("10.20.0.1:10911");
+    let broker_b_name = CheetahString::from_static_str("zone-b-master");
+    let broker_b_addr = CheetahString::from_static_str("10.20.0.2:10911");
+    let broker_c_name = CheetahString::from_static_str("zone-c-slave-only");
+    let broker_c_addr = CheetahString::from_static_str("10.20.0.3:10911");
+
+    let register_specs = [
+        (
+            &broker_a_name,
+            &broker_a_addr,
+            MASTER_ID,
+            &zone_a,
+            vec![CheetahString::from_static_str("fs-a")],
+        ),
+        (
+            &broker_b_name,
+            &broker_b_addr,
+            MASTER_ID,
+            &zone_b,
+            vec![CheetahString::from_static_str("fs-b")],
+        ),
+        (
+            &broker_c_name,
+            &broker_c_addr,
+            2,
+            &zone_c,
+            vec![CheetahString::from_static_str("fs-c")],
+        ),
+    ];
+
+    for (broker_name, broker_addr, broker_id, zone_name, filter_servers) in register_specs {
+        let response = harness
+            .request(register_broker_request_with_options(
+                &cluster_name,
+                broker_name,
+                broker_addr,
+                broker_id,
+                &[&topic_name],
+                Some(zone_name),
+                filter_servers,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+    }
+
+    let route_response = harness
+        .request(route_request_with_options(
+            &topic_name,
+            Some(false),
+            RocketMqVersion::V4_9_3 as i32,
+            Some(&requested_zone),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+
+    let topic_route_data = TopicRouteData::decode(
+        route_response
+            .body()
+            .expect("zone route response should include a body"),
+    )
+    .unwrap();
+
+    let reserved_broker_names = topic_route_data
+        .broker_datas
+        .iter()
+        .map(|broker| broker.broker_name().clone())
+        .collect::<Vec<_>>();
+    assert!(reserved_broker_names.contains(&broker_a_name));
+    assert!(reserved_broker_names.contains(&broker_c_name));
+    assert!(!reserved_broker_names.contains(&broker_b_name));
+
+    let reserved_queue_names = topic_route_data
+        .queue_datas
+        .iter()
+        .map(|queue| queue.broker_name().clone())
+        .collect::<Vec<_>>();
+    assert!(reserved_queue_names.contains(&broker_a_name));
+    assert!(reserved_queue_names.contains(&broker_c_name));
+    assert!(!reserved_queue_names.contains(&broker_b_name));
+
+    assert_eq!(
+        topic_route_data.filter_server_table.get(&broker_a_addr),
+        Some(&vec![CheetahString::from_static_str("fs-a")])
+    );
+    assert_eq!(
+        topic_route_data.filter_server_table.get(&broker_c_addr),
+        Some(&vec![CheetahString::from_static_str("fs-c")])
+    );
+    assert!(!topic_route_data.filter_server_table.contains_key(&broker_b_addr));
+
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn namesrv_zone_route_accept_standard_json_only_preserves_standard_json_over_remoting() {
+    let harness = NamesrvHarness::start(default_v2_namesrv_config()).await;
+
+    let cluster_name = CheetahString::from_static_str("phase5-standard-json-cluster");
+    let topic_name = CheetahString::from_static_str("phase5-standard-json-topic");
+    let topic_name_2 = CheetahString::from_static_str("phase5-standard-json-topic-2");
+    let requested_zone = CheetahString::from_static_str("zone-a");
+    let broker_name = CheetahString::from_static_str("standard-json-broker");
+    let broker_id_ten_addr = CheetahString::from_static_str("10.30.0.10:10911");
+    let broker_id_two_addr = CheetahString::from_static_str("10.30.0.2:10911");
+    let other_zone_name = CheetahString::from_static_str("standard-json-other-zone");
+    let other_zone_addr = CheetahString::from_static_str("10.30.1.1:10911");
+
+    let register_specs = [
+        (
+            &broker_name,
+            &broker_id_ten_addr,
+            10_u64,
+            vec![CheetahString::from_static_str("fs-10")],
+        ),
+        (
+            &broker_name,
+            &broker_id_two_addr,
+            2_u64,
+            vec![CheetahString::from_static_str("fs-2")],
+        ),
+    ];
+
+    for (current_broker_name, broker_addr, broker_id, filter_servers) in register_specs {
+        let response = harness
+            .request(register_broker_request_with_options(
+                &cluster_name,
+                current_broker_name,
+                broker_addr,
+                broker_id,
+                &[&topic_name, &topic_name_2],
+                Some(&requested_zone),
+                filter_servers,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+    }
+
+    let response = harness
+        .request(register_broker_request_with_options(
+            &cluster_name,
+            &other_zone_name,
+            &other_zone_addr,
+            MASTER_ID,
+            &[&topic_name, &topic_name_2],
+            Some(&CheetahString::from_static_str("zone-b")),
+            vec![CheetahString::from_static_str("fs-b")],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+    let route_response = harness
+        .request(route_request_with_options(
+            &topic_name,
+            Some(true),
+            RocketMqVersion::V4_9_3 as i32,
+            Some(&requested_zone),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+
+    let body = std::str::from_utf8(
+        route_response
+            .body()
+            .expect("standard json route response should include a body"),
+    )
+    .expect("standard json route response should stay valid utf-8");
+    let broker_addrs_index = body
+        .find("\"brokerAddrs\":{\"10\":\"10.30.0.10:10911\"")
+        .expect("standard json should preserve sorted brokerAddrs keys");
+    let broker_addrs_second_index = body
+        .find("\"2\":\"10.30.0.2:10911\"")
+        .unwrap_or_else(|| panic!("standard json should include broker id 2, body={body}"));
+    assert!(broker_addrs_index < broker_addrs_second_index);
+
+    let topic_route_data = TopicRouteData::decode(body.as_bytes()).unwrap();
+    assert_eq!(topic_route_data.broker_datas.len(), 1);
+    assert_eq!(topic_route_data.broker_datas[0].broker_name(), &broker_name);
+    assert_eq!(
+        topic_route_data.broker_datas[0].broker_addrs().get(&10),
+        Some(&broker_id_ten_addr)
+    );
+    assert_eq!(
+        topic_route_data.broker_datas[0].broker_addrs().get(&2),
+        Some(&broker_id_two_addr)
+    );
+    assert!(!body.contains(other_zone_addr.as_str()));
 
     harness.shutdown().await;
 }
