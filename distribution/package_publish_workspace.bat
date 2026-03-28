@@ -9,6 +9,8 @@ set "VERBOSE=0"
 set "ALL_FEATURES=0"
 set "NO_DEFAULT_FEATURES=0"
 set "FEATURES="
+set "RETRY_COUNT=10"
+set "RETRY_DELAY=15"
 set "SUCCESS_COUNT=0"
 set "FAIL_COUNT=0"
 set "SKIP_COUNT=0"
@@ -18,7 +20,7 @@ set "CURRENT_DIR=%cd%"
 for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
 for %%I in ("%SCRIPT_DIR%\..") do set "WORKSPACE_ROOT=%%~fI"
 
-set "PROJECT_COUNT=19"
+set "PROJECT_COUNT=16"
 set "PROJECT_1_NAME=rocketmq-error"
 set "PROJECT_1_PATH=rocketmq-error"
 set "PROJECT_1_ALIASES=rocketmq-error"
@@ -55,27 +57,18 @@ set "PROJECT_11_ALIASES=rocketmq-auth"
 set "PROJECT_12_NAME=rocketmq-client-rust"
 set "PROJECT_12_PATH=rocketmq-client"
 set "PROJECT_12_ALIASES=rocketmq-client,rocketmq-client-rust"
-set "PROJECT_13_NAME=rocketmq-controller"
-set "PROJECT_13_PATH=rocketmq-controller"
-set "PROJECT_13_ALIASES=rocketmq-controller"
-set "PROJECT_14_NAME=rocketmq-namesrv"
-set "PROJECT_14_PATH=rocketmq-namesrv"
-set "PROJECT_14_ALIASES=rocketmq-namesrv"
-set "PROJECT_15_NAME=rocketmq-store"
-set "PROJECT_15_PATH=rocketmq-store"
-set "PROJECT_15_ALIASES=rocketmq-store"
-set "PROJECT_16_NAME=rocketmq-admin-core"
-set "PROJECT_16_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-core"
-set "PROJECT_16_ALIASES=rocketmq-admin-core"
-set "PROJECT_17_NAME=rocketmq-store-inspect"
-set "PROJECT_17_PATH=rocketmq-tools\rocketmq-store-inspect"
-set "PROJECT_17_ALIASES=rocketmq-store-inspect"
-set "PROJECT_18_NAME=rocketmq-broker"
-set "PROJECT_18_PATH=rocketmq-broker"
-set "PROJECT_18_ALIASES=rocketmq-broker"
-set "PROJECT_19_NAME=rocketmq-proxy"
-set "PROJECT_19_PATH=rocketmq-proxy"
-set "PROJECT_19_ALIASES=rocketmq-proxy"
+set "PROJECT_13_NAME=rocketmq-namesrv"
+set "PROJECT_13_PATH=rocketmq-namesrv"
+set "PROJECT_13_ALIASES=rocketmq-namesrv"
+set "PROJECT_14_NAME=rocketmq-store"
+set "PROJECT_14_PATH=rocketmq-store"
+set "PROJECT_14_ALIASES=rocketmq-store"
+set "PROJECT_15_NAME=rocketmq-admin-core"
+set "PROJECT_15_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-core"
+set "PROJECT_15_ALIASES=rocketmq-admin-core"
+set "PROJECT_16_NAME=rocketmq-store-inspect"
+set "PROJECT_16_PATH=rocketmq-tools\rocketmq-store-inspect"
+set "PROJECT_16_ALIASES=rocketmq-store-inspect"
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -97,6 +90,16 @@ if /i "%~1"=="--project" (
     shift
 )
 
+if /i "%~1"=="--retry-count" (
+    set "RETRY_COUNT=%~2"
+    shift
+)
+
+if /i "%~1"=="--retry-delay" (
+    set "RETRY_DELAY=%~2"
+    shift
+)
+
 if /i "%~1"=="--help" (
     echo Usage: package_publish_workspace.bat [OPTIONS]
     echo.
@@ -112,6 +115,8 @@ if /i "%~1"=="--help" (
     echo   --all-features
     echo   --no-default-features
     echo   --features "a,b,c"
+    echo   --retry-count N
+    echo   --retry-delay SECONDS
     echo   --help
     echo.
     echo Package aliases:
@@ -122,6 +127,10 @@ if /i "%~1"=="--help" (
     echo   rocketmq-example
     echo   rocketmq-dashboard\rocketmq-dashboard-gpui
     echo   rocketmq-dashboard\rocketmq-dashboard-tauri\src-tauri
+    echo Default release temporarily excludes:
+    echo   rocketmq-controller
+    echo   rocketmq-broker
+    echo   rocketmq-proxy
     exit /b 0
 )
 
@@ -149,6 +158,7 @@ if %VERBOSE%==1                echo Mode: VERBOSE
 if %ALL_FEATURES%==1           echo Features: ALL FEATURES
 if %NO_DEFAULT_FEATURES%==1    echo Features: NO DEFAULT FEATURES
 if not "%FEATURES%"==""        echo Features: %FEATURES%
+echo Retries: %RETRY_COUNT% ^(delay: %RETRY_DELAY%s^)
 if not "%SPECIFIC_PROJECT%"=="" echo Target: %SPECIFIC_PROJECT%
 echo =====================================================
 echo.
@@ -249,7 +259,10 @@ exit /b 1
 
 :run_package
 set "P=%~1"
-echo [!P!] Running cargo package...
+set /a ATTEMPT=1
+
+:run_package_retry
+echo [!P!] Running cargo package... ^(attempt !ATTEMPT!/!RETRY_COUNT!^)
 
 set "CMD=cargo package"
 if %ALLOW_DIRTY%==1         set "CMD=!CMD! --allow-dirty"
@@ -259,17 +272,27 @@ if %NO_DEFAULT_FEATURES%==1 set "CMD=!CMD! --no-default-features"
 if not "%FEATURES%"==""     set "CMD=!CMD! --features ""%FEATURES%"""
 
 !CMD!
-if !errorlevel! neq 0 (
+if !errorlevel! equ 0 (
+    echo [!P!] Package OK
+    exit /b 0
+)
+
+if !ATTEMPT! geq !RETRY_COUNT! (
     echo [!P!] ERROR: cargo package failed
     exit /b 1
 )
 
-echo [!P!] Package OK
-exit /b 0
+echo [!P!] WARNING: cargo package failed on attempt !ATTEMPT!/!RETRY_COUNT!. Retrying in !RETRY_DELAY!s...
+timeout /t !RETRY_DELAY! /nobreak >nul
+set /a ATTEMPT+=1
+goto run_package_retry
 
 :run_publish
 set "P=%~1"
-echo [!P!] Publishing...
+set /a ATTEMPT=1
+
+:run_publish_retry
+echo [!P!] Publishing... ^(attempt !ATTEMPT!/!RETRY_COUNT!^)
 
 set "CMD=cargo publish"
 if %ALLOW_DIRTY%==1         set "CMD=!CMD! --allow-dirty"
@@ -279,10 +302,17 @@ if %NO_DEFAULT_FEATURES%==1 set "CMD=!CMD! --no-default-features"
 if not "%FEATURES%"==""     set "CMD=!CMD! --features ""%FEATURES%"""
 
 !CMD!
-if !errorlevel! neq 0 (
+if !errorlevel! equ 0 (
+    echo [!P!] Publish OK
+    exit /b 0
+)
+
+if !ATTEMPT! geq !RETRY_COUNT! (
     echo [!P!] ERROR: cargo publish failed
     exit /b 1
 )
 
-echo [!P!] Publish OK
-exit /b 0
+echo [!P!] WARNING: cargo publish failed on attempt !ATTEMPT!/!RETRY_COUNT!. Retrying in !RETRY_DELAY!s...
+timeout /t !RETRY_DELAY! /nobreak >nul
+set /a ATTEMPT+=1
+goto run_publish_retry

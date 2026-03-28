@@ -21,6 +21,8 @@ VERBOSE=false
 ALL_FEATURES=false
 NO_DEFAULT_FEATURES=false
 FEATURES=""
+RETRY_COUNT=10
+RETRY_DELAY=15
 
 # Statistics
 SUCCESS_COUNT=0
@@ -37,6 +39,10 @@ CURRENT_DIR="$(pwd)"
 # - rocketmq-example
 # - rocketmq-dashboard/rocketmq-dashboard-gpui
 # - rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+# Temporarily excluded from default release:
+# - rocketmq-controller
+# - rocketmq-broker
+# - rocketmq-proxy
 PROJECT_SPECS=(
     "rocketmq-error|rocketmq-error|rocketmq-error"
     "rocketmq-macros|rocketmq-macros|rocketmq-macros"
@@ -50,13 +56,10 @@ PROJECT_SPECS=(
     "rocketmq-remoting|rocketmq-remoting|rocketmq-remoting"
     "rocketmq-auth|rocketmq-auth|rocketmq-auth"
     "rocketmq-client-rust|rocketmq-client|rocketmq-client,rocketmq-client-rust"
-    "rocketmq-controller|rocketmq-controller|rocketmq-controller"
     "rocketmq-namesrv|rocketmq-namesrv|rocketmq-namesrv"
     "rocketmq-store|rocketmq-store|rocketmq-store"
     "rocketmq-admin-core|rocketmq-tools/rocketmq-admin/rocketmq-admin-core|rocketmq-admin-core"
     "rocketmq-store-inspect|rocketmq-tools/rocketmq-store-inspect|rocketmq-store-inspect"
-    "rocketmq-broker|rocketmq-broker|rocketmq-broker"
-    "rocketmq-proxy|rocketmq-proxy|rocketmq-proxy"
 )
 
 print_info() {
@@ -110,6 +113,30 @@ matches_project_filter() {
     return 1
 }
 
+run_with_retry() {
+    local project_name="$1"
+    local step_name="$2"
+    shift 2
+
+    local attempt=1
+    local exit_code=0
+
+    while true; do
+        if "$@"; then
+            return 0
+        fi
+
+        exit_code=$?
+        if [ "$attempt" -ge "$RETRY_COUNT" ]; then
+            return "$exit_code"
+        fi
+
+        print_warning "[$project_name] $step_name failed (attempt $attempt/$RETRY_COUNT), retrying in ${RETRY_DELAY}s..."
+        sleep "$RETRY_DELAY"
+        attempt=$((attempt + 1))
+    done
+}
+
 show_usage() {
     cat << EOF
 ========================================
@@ -132,6 +159,8 @@ OPTIONS:
     --all-features         Activate all available features
     --no-default-features  Do not activate default features
     --features FEATURES    Space or comma separated list of features
+    --retry-count N        Retry failed cargo commands up to N times
+    --retry-delay SECONDS  Wait SECONDS between retries
     --help, -h             Show this help message
 
 EXAMPLES:
@@ -159,14 +188,16 @@ EXAMPLES:
     8. Skip packaging, only publish:
        ./$(basename "$0") --skip-package
 
+    9. Retry crates.io propagation during release:
+       ./$(basename "$0") --retry-count 20 --retry-delay 15
+
 PUBLISH ORDER:
     rocketmq-error -> rocketmq-macros -> rocketmq-runtime ->
     rocketmq-dashboard-common -> rocketmq-admin-cli -> rocketmq-rust ->
     rocketmq-admin-tui -> rocketmq-common -> rocketmq-filter ->
     rocketmq-remoting -> rocketmq-auth -> rocketmq-client-rust ->
-    rocketmq-controller -> rocketmq-namesrv -> rocketmq-store ->
-    rocketmq-admin-core -> rocketmq-store-inspect -> rocketmq-broker ->
-    rocketmq-proxy
+    rocketmq-namesrv -> rocketmq-store -> rocketmq-admin-core ->
+    rocketmq-store-inspect
 
 NOTES:
     - Requires cargo login credentials configured
@@ -176,6 +207,10 @@ NOTES:
       rocketmq-example,
       rocketmq-dashboard/rocketmq-dashboard-gpui,
       rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+    - Default release temporarily excludes:
+      rocketmq-controller,
+      rocketmq-broker,
+      rocketmq-proxy
 
 EOF
     exit 0
@@ -213,6 +248,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --features)
             FEATURES="$2"
+            shift 2
+            ;;
+        --retry-count)
+            RETRY_COUNT="$2"
+            shift 2
+            ;;
+        --retry-delay)
+            RETRY_DELAY="$2"
             shift 2
             ;;
         --help|-h)
@@ -257,6 +300,7 @@ fi
 if [ -n "$FEATURES" ]; then
     print_info "Features: $FEATURES"
 fi
+print_info "Retries: $RETRY_COUNT (delay: ${RETRY_DELAY}s)"
 if [ -n "$SPECIFIC_PROJECT" ]; then
     print_info "Target: $SPECIFIC_PROJECT"
 fi
@@ -307,7 +351,7 @@ for SPEC in "${PROJECT_SPECS[@]}"; do
             PACKAGE_ARGS+=("--features" "$FEATURES")
         fi
 
-        if cargo package "${PACKAGE_ARGS[@]}"; then
+        if run_with_retry "$PROJECT_NAME" "cargo package" cargo package "${PACKAGE_ARGS[@]}"; then
             print_success "[$PROJECT_NAME] Package created successfully"
         else
             print_error "[$PROJECT_NAME] cargo package failed"
@@ -336,7 +380,7 @@ for SPEC in "${PROJECT_SPECS[@]}"; do
             PUBLISH_ARGS+=("--features" "$FEATURES")
         fi
 
-        if cargo publish "${PUBLISH_ARGS[@]}"; then
+        if run_with_retry "$PROJECT_NAME" "cargo publish" cargo publish "${PUBLISH_ARGS[@]}"; then
             print_success "[$PROJECT_NAME] Published successfully"
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         else
