@@ -9,8 +9,6 @@ set "VERBOSE=0"
 set "ALL_FEATURES=0"
 set "NO_DEFAULT_FEATURES=0"
 set "FEATURES="
-set "RETRY_COUNT=10"
-set "RETRY_DELAY=15"
 set "SUCCESS_COUNT=0"
 set "FAIL_COUNT=0"
 set "SKIP_COUNT=0"
@@ -90,16 +88,6 @@ if /i "%~1"=="--project" (
     shift
 )
 
-if /i "%~1"=="--retry-count" (
-    set "RETRY_COUNT=%~2"
-    shift
-)
-
-if /i "%~1"=="--retry-delay" (
-    set "RETRY_DELAY=%~2"
-    shift
-)
-
 if /i "%~1"=="--help" (
     echo Usage: package_publish_workspace.bat [OPTIONS]
     echo.
@@ -115,8 +103,6 @@ if /i "%~1"=="--help" (
     echo   --all-features
     echo   --no-default-features
     echo   --features "a,b,c"
-    echo   --retry-count N
-    echo   --retry-delay SECONDS
     echo   --help
     echo.
     echo Package aliases:
@@ -158,7 +144,6 @@ if %VERBOSE%==1                echo Mode: VERBOSE
 if %ALL_FEATURES%==1           echo Features: ALL FEATURES
 if %NO_DEFAULT_FEATURES%==1    echo Features: NO DEFAULT FEATURES
 if not "%FEATURES%"==""        echo Features: %FEATURES%
-echo Retries: %RETRY_COUNT% ^(delay: %RETRY_DELAY%s^)
 if not "%SPECIFIC_PROJECT%"=="" echo Target: %SPECIFIC_PROJECT%
 echo =====================================================
 echo.
@@ -259,10 +244,7 @@ exit /b 1
 
 :run_package
 set "P=%~1"
-set /a ATTEMPT=1
-
-:run_package_retry
-echo [!P!] Running cargo package... ^(attempt !ATTEMPT!/!RETRY_COUNT!^)
+echo [!P!] Running cargo package...
 
 set "CMD=cargo package"
 if %ALLOW_DIRTY%==1         set "CMD=!CMD! --allow-dirty"
@@ -272,27 +254,17 @@ if %NO_DEFAULT_FEATURES%==1 set "CMD=!CMD! --no-default-features"
 if not "%FEATURES%"==""     set "CMD=!CMD! --features ""%FEATURES%"""
 
 !CMD!
-if !errorlevel! equ 0 (
-    echo [!P!] Package OK
-    exit /b 0
-)
-
-if !ATTEMPT! geq !RETRY_COUNT! (
+if !errorlevel! neq 0 (
     echo [!P!] ERROR: cargo package failed
     exit /b 1
 )
 
-echo [!P!] WARNING: cargo package failed on attempt !ATTEMPT!/!RETRY_COUNT!. Retrying in !RETRY_DELAY!s...
-timeout /t !RETRY_DELAY! /nobreak >nul
-set /a ATTEMPT+=1
-goto run_package_retry
+echo [!P!] Package OK
+exit /b 0
 
 :run_publish
 set "P=%~1"
-set /a ATTEMPT=1
-
-:run_publish_retry
-echo [!P!] Publishing... ^(attempt !ATTEMPT!/!RETRY_COUNT!^)
+echo [!P!] Publishing...
 
 set "CMD=cargo publish"
 if %ALLOW_DIRTY%==1         set "CMD=!CMD! --allow-dirty"
@@ -302,17 +274,10 @@ if %NO_DEFAULT_FEATURES%==1 set "CMD=!CMD! --no-default-features"
 if not "%FEATURES%"==""     set "CMD=!CMD! --features ""%FEATURES%"""
 
 !CMD!
-if !errorlevel! equ 0 (
-    echo [!P!] Publish OK
-    exit /b 0
-)
-
-if !ATTEMPT! geq !RETRY_COUNT! (
+if !errorlevel! neq 0 (
     echo [!P!] ERROR: cargo publish failed
     exit /b 1
 )
 
-echo [!P!] WARNING: cargo publish failed on attempt !ATTEMPT!/!RETRY_COUNT!. Retrying in !RETRY_DELAY!s...
-timeout /t !RETRY_DELAY! /nobreak >nul
-set /a ATTEMPT+=1
-goto run_publish_retry
+echo [!P!] Publish OK
+exit /b 0

@@ -21,8 +21,6 @@ VERBOSE=false
 ALL_FEATURES=false
 NO_DEFAULT_FEATURES=false
 FEATURES=""
-RETRY_COUNT=10
-RETRY_DELAY=15
 
 # Statistics
 SUCCESS_COUNT=0
@@ -113,30 +111,6 @@ matches_project_filter() {
     return 1
 }
 
-run_with_retry() {
-    local project_name="$1"
-    local step_name="$2"
-    shift 2
-
-    local attempt=1
-    local exit_code=0
-
-    while true; do
-        if "$@"; then
-            return 0
-        fi
-
-        exit_code=$?
-        if [ "$attempt" -ge "$RETRY_COUNT" ]; then
-            return "$exit_code"
-        fi
-
-        print_warning "[$project_name] $step_name failed (attempt $attempt/$RETRY_COUNT), retrying in ${RETRY_DELAY}s..."
-        sleep "$RETRY_DELAY"
-        attempt=$((attempt + 1))
-    done
-}
-
 show_usage() {
     cat << EOF
 ========================================
@@ -159,8 +133,6 @@ OPTIONS:
     --all-features         Activate all available features
     --no-default-features  Do not activate default features
     --features FEATURES    Space or comma separated list of features
-    --retry-count N        Retry failed cargo commands up to N times
-    --retry-delay SECONDS  Wait SECONDS between retries
     --help, -h             Show this help message
 
 EXAMPLES:
@@ -187,9 +159,6 @@ EXAMPLES:
 
     8. Skip packaging, only publish:
        ./$(basename "$0") --skip-package
-
-    9. Retry crates.io propagation during release:
-       ./$(basename "$0") --retry-count 20 --retry-delay 15
 
 PUBLISH ORDER:
     rocketmq-error -> rocketmq-macros -> rocketmq-runtime ->
@@ -250,14 +219,6 @@ while [[ $# -gt 0 ]]; do
             FEATURES="$2"
             shift 2
             ;;
-        --retry-count)
-            RETRY_COUNT="$2"
-            shift 2
-            ;;
-        --retry-delay)
-            RETRY_DELAY="$2"
-            shift 2
-            ;;
         --help|-h)
             show_usage
             ;;
@@ -300,7 +261,6 @@ fi
 if [ -n "$FEATURES" ]; then
     print_info "Features: $FEATURES"
 fi
-print_info "Retries: $RETRY_COUNT (delay: ${RETRY_DELAY}s)"
 if [ -n "$SPECIFIC_PROJECT" ]; then
     print_info "Target: $SPECIFIC_PROJECT"
 fi
@@ -351,7 +311,7 @@ for SPEC in "${PROJECT_SPECS[@]}"; do
             PACKAGE_ARGS+=("--features" "$FEATURES")
         fi
 
-        if run_with_retry "$PROJECT_NAME" "cargo package" cargo package "${PACKAGE_ARGS[@]}"; then
+        if cargo package "${PACKAGE_ARGS[@]}"; then
             print_success "[$PROJECT_NAME] Package created successfully"
         else
             print_error "[$PROJECT_NAME] cargo package failed"
@@ -380,7 +340,7 @@ for SPEC in "${PROJECT_SPECS[@]}"; do
             PUBLISH_ARGS+=("--features" "$FEATURES")
         fi
 
-        if run_with_retry "$PROJECT_NAME" "cargo publish" cargo publish "${PUBLISH_ARGS[@]}"; then
+        if cargo publish "${PUBLISH_ARGS[@]}"; then
             print_success "[$PROJECT_NAME] Published successfully"
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         else
