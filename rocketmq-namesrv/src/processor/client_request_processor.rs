@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_common::TimeUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -24,6 +25,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
@@ -134,10 +136,91 @@ impl ClientRequestProcessor {
             );
         }
 
-        // Encode and return successful response
-        let content = topic_route_data.encode()?;
+        let content = encode_topic_route_response(
+            &topic_route_data,
+            request.version(),
+            request_header.accept_standard_json_only,
+        )?;
         Ok(Some(
             RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
         ))
+    }
+}
+
+fn encode_topic_route_response(
+    topic_route_data: &TopicRouteData,
+    request_version: i32,
+    accept_standard_json_only: Option<bool>,
+) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    if should_use_standard_json(request_version, accept_standard_json_only) {
+        topic_route_data.encode_standard_json()
+    } else {
+        topic_route_data.encode()
+    }
+}
+
+fn should_use_standard_json(request_version: i32, accept_standard_json_only: Option<bool>) -> bool {
+    request_version >= RocketMqVersion::V4_9_4 as i32 || accept_standard_json_only.unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+
+    use super::*;
+
+    fn sample_topic_route_data() -> TopicRouteData {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(2, CheetahString::from("10.0.0.2:10911"));
+        broker_addrs.insert(10, CheetahString::from("10.0.0.10:10911"));
+
+        TopicRouteData {
+            order_topic_conf: Some(CheetahString::from("order-conf")),
+            queue_datas: vec![QueueData::new(CheetahString::from("broker-a"), 4, 4, 6, 0)],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from("broker-a"),
+                broker_addrs,
+                Some(CheetahString::from("zone-a")),
+            )],
+            filter_server_table: HashMap::new(),
+            topic_queue_mapping_by_broker: None,
+        }
+    }
+
+    #[test]
+    fn uses_standard_json_for_modern_versions() {
+        assert!(should_use_standard_json(RocketMqVersion::V4_9_4 as i32, Some(false)));
+        assert!(should_use_standard_json(RocketMqVersion::V5_0_0 as i32, None));
+    }
+
+    #[test]
+    fn uses_standard_json_for_legacy_versions_when_flag_is_enabled() {
+        assert!(should_use_standard_json(RocketMqVersion::V4_9_3 as i32, Some(true)));
+        assert!(!should_use_standard_json(RocketMqVersion::V4_9_3 as i32, Some(false)));
+        assert!(!should_use_standard_json(RocketMqVersion::V4_9_3 as i32, None));
+    }
+
+    #[test]
+    fn standard_json_branch_uses_standard_encoder() {
+        let topic_route_data = sample_topic_route_data();
+
+        let encoded =
+            encode_topic_route_response(&topic_route_data, RocketMqVersion::V4_9_4 as i32, Some(false)).unwrap();
+
+        assert_eq!(encoded, topic_route_data.encode_standard_json().unwrap());
+    }
+
+    #[test]
+    fn legacy_json_branch_uses_legacy_encoder() {
+        let topic_route_data = sample_topic_route_data();
+
+        let encoded =
+            encode_topic_route_response(&topic_route_data, RocketMqVersion::V4_9_3 as i32, Some(false)).unwrap();
+
+        assert_eq!(encoded, topic_route_data.encode().unwrap());
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
@@ -21,6 +22,7 @@ use serde::Serialize;
 use crate::protocol::route::route_data_view::BrokerData;
 use crate::protocol::route::route_data_view::QueueData;
 use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Eq, PartialEq)]
 pub struct TopicRouteData {
@@ -69,13 +71,120 @@ impl TopicRouteData {
             topic_queue_mapping_by_broker: topic_route_data.topic_queue_mapping_by_broker.clone(),
         }
     }
+
+    /// Encode route data using the Java `acceptStandardJsonOnly` semantics.
+    ///
+    /// The observable difference from the legacy path is deterministic map key ordering,
+    /// which mirrors Java's `MapSortField` behavior for route responses.
+    pub fn encode_standard_json(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+        StandardJsonTopicRouteData::from(self).encode()
+    }
+}
+
+#[derive(Serialize)]
+struct StandardJsonTopicRouteData<'a> {
+    #[serde(rename = "orderTopicConf")]
+    order_topic_conf: Option<&'a CheetahString>,
+    #[serde(rename = "queueDatas")]
+    queue_datas: &'a [QueueData],
+    #[serde(rename = "brokerDatas")]
+    broker_datas: Vec<StandardJsonBrokerData<'a>>,
+    #[serde(rename = "filterServerTable")]
+    filter_server_table: BTreeMap<String, &'a Vec<CheetahString>>,
+    #[serde(rename = "topicQueueMappingInfo")]
+    topic_queue_mapping_by_broker: Option<BTreeMap<String, StandardJsonTopicQueueMappingInfo<'a>>>,
+}
+
+#[derive(Serialize)]
+struct StandardJsonBrokerData<'a> {
+    cluster: &'a str,
+    #[serde(rename = "brokerName")]
+    broker_name: &'a CheetahString,
+    #[serde(rename = "brokerAddrs")]
+    broker_addrs: BTreeMap<String, &'a CheetahString>,
+    #[serde(rename = "zoneName")]
+    zone_name: Option<&'a CheetahString>,
+    #[serde(rename = "enableActingMaster")]
+    enable_acting_master: bool,
+}
+
+#[derive(Serialize)]
+struct StandardJsonTopicQueueMappingInfo<'a> {
+    topic: Option<&'a CheetahString>,
+    scope: Option<&'a CheetahString>,
+    #[serde(rename = "totalQueues")]
+    total_queues: i32,
+    bname: Option<&'a CheetahString>,
+    epoch: i64,
+    dirty: bool,
+    #[serde(rename = "currIdMap")]
+    curr_id_map: Option<BTreeMap<String, i32>>,
+}
+
+impl<'a> From<&'a TopicRouteData> for StandardJsonTopicRouteData<'a> {
+    fn from(value: &'a TopicRouteData) -> Self {
+        Self {
+            order_topic_conf: value.order_topic_conf.as_ref(),
+            queue_datas: &value.queue_datas,
+            broker_datas: value.broker_datas.iter().map(StandardJsonBrokerData::from).collect(),
+            filter_server_table: value
+                .filter_server_table
+                .iter()
+                .map(|(broker_addr, filter_servers)| (broker_addr.to_string(), filter_servers))
+                .collect(),
+            topic_queue_mapping_by_broker: value.topic_queue_mapping_by_broker.as_ref().map(|mapping| {
+                mapping
+                    .iter()
+                    .map(|(broker_name, info)| (broker_name.to_string(), StandardJsonTopicQueueMappingInfo::from(info)))
+                    .collect()
+            }),
+        }
+    }
+}
+
+impl<'a> From<&'a BrokerData> for StandardJsonBrokerData<'a> {
+    fn from(value: &'a BrokerData) -> Self {
+        Self {
+            cluster: value.cluster(),
+            broker_name: value.broker_name(),
+            broker_addrs: value
+                .broker_addrs()
+                .iter()
+                .map(|(broker_id, broker_addr)| (broker_id.to_string(), broker_addr))
+                .collect(),
+            zone_name: value.zone_name(),
+            enable_acting_master: value.enable_acting_master(),
+        }
+    }
+}
+
+impl<'a> From<&'a TopicQueueMappingInfo> for StandardJsonTopicQueueMappingInfo<'a> {
+    fn from(value: &'a TopicQueueMappingInfo) -> Self {
+        Self {
+            topic: value.topic.as_ref(),
+            scope: value.scope.as_ref(),
+            total_queues: value.total_queues,
+            bname: value.bname.as_ref(),
+            epoch: value.epoch,
+            dirty: value.dirty,
+            curr_id_map: value.curr_id_map.as_ref().map(|mapping| {
+                mapping
+                    .iter()
+                    .map(|(queue_id, mapped_id)| (queue_id.to_string(), *mapped_id))
+                    .collect()
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json;
 
     use super::*;
+    use crate::protocol::route::route_data_view::BrokerData;
 
     #[test]
     fn topic_route_data_default_values() {
@@ -126,6 +235,60 @@ mod tests {
         assert!(serialized.contains("\"brokerDatas\":["));
         assert!(serialized.contains("\"filterServerTable\":{\"key\":[\"value\"]}"));
         assert!(serialized.contains("\"topicQueueMappingInfo\":{\"broker\":{"));
+    }
+
+    #[test]
+    fn encode_standard_json_sorts_nested_map_keys() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(10, CheetahString::from("10.0.0.10:10911"));
+        broker_addrs.insert(2, CheetahString::from("10.0.0.2:10911"));
+
+        let mut filter_server_table = HashMap::new();
+        filter_server_table.insert(CheetahString::from("z-broker"), vec![CheetahString::from("fs-z")]);
+        filter_server_table.insert(CheetahString::from("a-broker"), vec![CheetahString::from("fs-a")]);
+
+        let mut curr_id_map = HashMap::new();
+        curr_id_map.insert(8, 80);
+        curr_id_map.insert(1, 10);
+
+        let mut topic_queue_mapping_by_broker = HashMap::new();
+        topic_queue_mapping_by_broker.insert(
+            CheetahString::from("mapping-broker"),
+            TopicQueueMappingInfo {
+                topic: Some(CheetahString::from("TestTopic")),
+                scope: Some(CheetahString::from("scope-a")),
+                total_queues: 8,
+                bname: Some(CheetahString::from("broker-a")),
+                epoch: 3,
+                dirty: false,
+                curr_id_map: Some(curr_id_map),
+            },
+        );
+
+        let topic_route_data = TopicRouteData {
+            order_topic_conf: Some(CheetahString::from("order-conf")),
+            queue_datas: vec![QueueData::new(CheetahString::from("broker-a"), 4, 4, 6, 0)],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from("broker-a"),
+                broker_addrs,
+                Some(CheetahString::from("zone-a")),
+            )],
+            filter_server_table,
+            topic_queue_mapping_by_broker: Some(topic_queue_mapping_by_broker),
+        };
+
+        let encoded = String::from_utf8(topic_route_data.encode_standard_json().unwrap()).unwrap();
+        let broker_addrs_index = encoded.find("\"brokerAddrs\":{\"10\"").unwrap();
+        let broker_addrs_second_index = encoded.find("\"2\":\"10.0.0.2:10911\"").unwrap();
+        let filter_server_index = encoded.find("\"filterServerTable\":{\"a-broker\"").unwrap();
+        let filter_server_second_index = encoded.find("\"z-broker\":[\"fs-z\"]").unwrap();
+        let curr_id_map_index = encoded.find("\"currIdMap\":{\"1\":10").unwrap();
+        let curr_id_map_second_index = encoded.find("\"8\":80").unwrap();
+
+        assert!(broker_addrs_index < broker_addrs_second_index);
+        assert!(filter_server_index < filter_server_second_index);
+        assert!(curr_id_map_index < curr_id_map_second_index);
     }
 
     #[test]

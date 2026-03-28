@@ -1506,25 +1506,23 @@ impl RouteInfoManagerV2 {
 
     /// Get topics for a specific cluster
     pub fn get_topics_by_cluster(&self, cluster_name: &str) -> RouteResult<Vec<TopicName>> {
-        // Get all brokers in the cluster
         let broker_names = self.cluster_addr_table.get_brokers(cluster_name);
 
         if broker_names.is_empty() {
             return Err(RocketMQError::cluster_not_found(cluster_name));
         }
 
-        // Get all topics and filter by brokers in this cluster
         let all_topics = self.topic_queue_table.get_all_topics();
         let mut cluster_topics = Vec::new();
 
-        for topic in all_topics {
-            let topic_queues = self.topic_queue_table.get_topic_queues(topic.as_str());
-
-            // Check if any queue belongs to a broker in this cluster
-            for (broker_name, _) in topic_queues {
-                if broker_names.iter().any(|b| b.as_str() == broker_name.as_str()) {
-                    cluster_topics.push(topic);
-                    break;
+        for broker_name in broker_names {
+            for topic in &all_topics {
+                if self
+                    .topic_queue_table
+                    .get(topic.as_str(), broker_name.as_str())
+                    .is_some()
+                {
+                    cluster_topics.push(topic.clone());
                 }
             }
         }

@@ -281,6 +281,7 @@ impl NameServerRuntime {
     pub async fn initialize(&mut self) -> RocketMQResult<()> {
         // Validate we're in Created state
         self.validate_state(&[RuntimeState::Created], "initialize")?;
+        self.validate_runtime_config()?;
 
         info!("Phase 1/4: Loading configuration...");
         if let Err(e) = self.load_config().await {
@@ -302,6 +303,28 @@ impl NameServerRuntime {
         self.transition_to(RuntimeState::Initialized)?;
 
         info!("Initialization completed successfully");
+        Ok(())
+    }
+
+    fn validate_runtime_config(&self) -> RocketMQResult<()> {
+        let namesrv_config = self.inner.name_server_config();
+
+        if namesrv_config.cluster_test {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "clusterTest",
+                value: namesrv_config.cluster_test.to_string(),
+                reason: "cluster test mode is not implemented in rocketmq-namesrv yet".to_string(),
+            });
+        }
+
+        if namesrv_config.enable_controller_in_namesrv {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "enableControllerInNamesrv",
+                value: namesrv_config.enable_controller_in_namesrv.to_string(),
+                reason: "controller-in-namesrv startup is not implemented in rocketmq-namesrv yet".to_string(),
+            });
+        }
+
         Ok(())
     }
 
@@ -782,14 +805,19 @@ impl NameServerRuntimeInner {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::mix_all::MASTER_ID;
+    use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
+    use rocketmq_common::common::TopicSysFlag;
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 
     use super::*;
 
-    fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
-        let bootstrap = Builder::new().build();
+    fn build_bootstrap_with_v2_config(mut namesrv_config: NamesrvConfig) -> NameServerBootstrap {
+        namesrv_config.use_route_info_manager_v2 = true;
+        let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
         assert!(matches!(
             bootstrap.name_server_runtime.inner.route_info_manager(),
             RouteInfoManagerWrapper::V2(_)
@@ -797,13 +825,30 @@ mod tests {
         bootstrap
     }
 
+    fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
+        build_bootstrap_with_v2_config(NamesrvConfig::default())
+    }
+
+    fn topic_config_wrapper(entries: &[(&str, u32, u32)]) -> TopicConfigAndMappingSerializeWrapper {
+        let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        for (topic_name, topic_sys_flag, perm) in entries {
+            wrapper.topic_config_serialize_wrapper.topic_config_table.insert(
+                CheetahString::from(*topic_name),
+                TopicConfig::with_sys_flag(CheetahString::from(*topic_name), 8, 8, *perm, *topic_sys_flag),
+            );
+        }
+        wrapper
+    }
+
     async fn register_test_broker(
         bootstrap: &NameServerBootstrap,
         cluster_name: &CheetahString,
         broker_name: &CheetahString,
         broker_addr: &CheetahString,
+        broker_id: u64,
         zone_name: &CheetahString,
         enable_acting_master: bool,
+        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
         let harness = LocalRequestHarness::new().await.unwrap();
         let result = bootstrap
@@ -814,12 +859,12 @@ mod tests {
                 cluster_name.clone(),
                 broker_addr.clone(),
                 broker_name.clone(),
-                MASTER_ID,
+                broker_id,
                 CheetahString::from_static_str("10.0.0.1:10912"),
                 Some(zone_name.clone()),
                 Some(30_000),
                 Some(enable_acting_master),
-                TopicConfigAndMappingSerializeWrapper::default(),
+                topic_config_wrapper,
                 vec![],
                 harness.channel(),
             );
@@ -835,7 +880,17 @@ mod tests {
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
 
-        register_test_broker(&bootstrap, &cluster_name, &broker_name, &broker_addr, &zone_name, true).await;
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &zone_name,
+            true,
+            TopicConfigAndMappingSerializeWrapper::default(),
+        )
+        .await;
 
         let topic_list = bootstrap
             .name_server_runtime
@@ -856,7 +911,17 @@ mod tests {
         let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
         let zone_name = CheetahString::from_static_str("zone-a");
 
-        register_test_broker(&bootstrap, &cluster_name, &broker_name, &broker_addr, &zone_name, true).await;
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &zone_name,
+            true,
+            TopicConfigAndMappingSerializeWrapper::default(),
+        )
+        .await;
 
         let cluster_info = bootstrap
             .name_server_runtime
@@ -878,5 +943,213 @@ mod tests {
         assert_eq!(broker_data.zone_name(), Some(&zone_name));
         assert!(broker_data.enable_acting_master());
         assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&broker_addr));
+    }
+
+    #[tokio::test]
+    async fn default_v2_topics_by_cluster_matches_java_duplicate_semantics() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let shared_topic = "shared-topic";
+
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &CheetahString::from_static_str("broker-a"),
+            &CheetahString::from_static_str("10.0.0.1:10911"),
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[(shared_topic, 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &CheetahString::from_static_str("broker-b"),
+            &CheetahString::from_static_str("10.0.0.2:10911"),
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[(shared_topic, 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+
+        let topic_list = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_topics_by_cluster(&cluster_name);
+        let missing_cluster_topics = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_topics_by_cluster(&CheetahString::from_static_str("missing-cluster"));
+
+        assert_eq!(
+            topic_list
+                .topic_list
+                .iter()
+                .filter(|topic| topic.as_str() == shared_topic)
+                .count(),
+            2
+        );
+        assert!(missing_cluster_topics.topic_list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn default_v2_unit_topic_queries_match_java_flag_semantics() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[
+                (
+                    "unit-only",
+                    TopicSysFlag::build_sys_flag(true, false),
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                ),
+                (
+                    "unit-sub-only",
+                    TopicSysFlag::build_sys_flag(false, true),
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                ),
+                (
+                    "unit-and-sub",
+                    TopicSysFlag::build_sys_flag(true, true),
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                ),
+            ]),
+        )
+        .await;
+
+        let unit_topics = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_unit_topics();
+        let unit_sub_topics = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_has_unit_sub_topic_list();
+        let unit_sub_ununit_topics = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_has_unit_sub_un_unit_topic_list();
+
+        assert!(unit_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-only")));
+        assert!(unit_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-and-sub")));
+        assert!(!unit_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-sub-only")));
+
+        assert!(unit_sub_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-sub-only")));
+        assert!(unit_sub_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-and-sub")));
+
+        assert!(unit_sub_ununit_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-sub-only")));
+        assert!(!unit_sub_ununit_topics
+            .topic_list
+            .contains(&CheetahString::from_static_str("unit-and-sub")));
+    }
+
+    #[tokio::test]
+    async fn default_v2_pickup_topic_route_data_promotes_read_only_prime_slave_to_acting_master() {
+        let namesrv_config = NamesrvConfig {
+            support_acting_master: true,
+            ..NamesrvConfig::default()
+        };
+        let bootstrap = build_bootstrap_with_v2_config(namesrv_config);
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("acting-master-topic");
+
+        register_test_broker(
+            &bootstrap,
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            1,
+            &zone_name,
+            true,
+            topic_config_wrapper(&[("acting-master-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+
+        let topic_route_data = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .pickup_topic_route_data(&topic_name)
+            .expect("topic route data should exist");
+        let broker_data = topic_route_data
+            .broker_datas
+            .iter()
+            .find(|broker_data| broker_data.broker_name() == &broker_name)
+            .expect("registered broker should be present in route data");
+        let queue_data = topic_route_data
+            .queue_datas
+            .iter()
+            .find(|queue_data| queue_data.broker_name() == &broker_name)
+            .expect("queue data should exist");
+
+        assert!(!PermName::is_writeable(queue_data.perm()));
+        assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&broker_addr));
+        assert!(!broker_data.broker_addrs().contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn boot_fails_fast_when_cluster_test_mode_is_enabled() {
+        let namesrv_config = NamesrvConfig {
+            cluster_test: true,
+            ..NamesrvConfig::default()
+        };
+        let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
+
+        let error = bootstrap
+            .boot_with_shutdown(async {})
+            .await
+            .expect_err("cluster test mode should fail fast until implemented");
+
+        assert!(error.to_string().contains("clusterTest"));
+    }
+
+    #[tokio::test]
+    async fn boot_fails_fast_when_controller_in_namesrv_is_enabled() {
+        let namesrv_config = NamesrvConfig {
+            enable_controller_in_namesrv: true,
+            ..NamesrvConfig::default()
+        };
+        let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
+
+        let error = bootstrap
+            .boot_with_shutdown(async {})
+            .await
+            .expect_err("controller-in-namesrv mode should fail fast until implemented");
+
+        assert!(error.to_string().contains("enableControllerInNamesrv"));
     }
 }
