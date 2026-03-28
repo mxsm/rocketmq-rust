@@ -1,71 +1,71 @@
 ---
 sidebar_position: 2
-title: Message Model
+title: 消息模型
 ---
-# Message Model
+# 消息模型
 
-Understanding RocketMQ's message model is crucial for designing effective messaging applications.
+理解 RocketMQ 的消息模型，是设计高质量消息应用的关键。
 
-## Message Structure
+## 消息结构
 
-### Basic Message
+### 基础消息
 
-A message in RocketMQ consists of:
+RocketMQ 中的一条消息通常包含以下字段：
 
 ```rust
 pub struct Message {
-    // Topic name
+    // Topic 名称
     topic: String,
 
-    // Message body (byte array)
+    // 消息体（字节数组）
     body: Vec<u8>,
 
-    // Optional tags for filtering
+    // 可选标签，用于过滤
     tags: Option<String>,
 
-    // Optional keys for indexing
+    // 可选键，用于索引
     keys: Option<String>,
 
-    // Optional properties
+    // 可选属性
     properties: HashMap<String, String>,
 }
 ```
 
-### Message Example
+### 消息示例
 
 ```rust
 use rocketmq::model::Message;
 
-// Create a basic message
+// 创建基础消息
 let mut message = Message::new(
     "OrderEvents".to_string(),
     b"{\"order_id\": \"12345\", \"amount\": 99.99}".to_vec(),
 );
 
-// Add tag for filtering
+// 添加过滤标签
 message.set_tags("order_created");
 
-// Add key for indexing
+// 添加索引 Key
 message.set_keys("order_12345");
 
-// Add custom properties
+// 添加自定义属性
 message.put_property("region", "us-west");
 message.put_property("priority", "high");
 ```
 
-## Topics and Queues
+## Topics 与 Queues
 
 ### Topic
 
-A topic is a logical channel for categorizing messages:
+Topic 是消息的逻辑通道，用于分类消息：
 
-- **Hierarchical naming**: e.g., `orders`, `payments`, `logs`
-- **Multi-tenant**: Different applications use different topics
-- **Logical isolation**: Messages in different topics are completely separate
+- **层次化命名**：如 `orders`、`payments`、`logs`
+- **多租户隔离**：不同应用可使用不同 Topic
+- **逻辑隔离**：不同 Topic 的消息互不影响
 
 ### Queue
 
-Topics are divided into multiple queues for parallel processing:
+Topic 会被拆分成多个 Queue，以支持并行处理：
 
 ```text
 Topic: OrderEvents (4 queues)
@@ -79,31 +79,31 @@ Topic: OrderEvents (4 queues)
 └───────────────────────────────────────┘
 ```
 
-**Purpose of Multiple Queues:**
+**多队列的价值：**
 
-- Parallel processing by multiple consumers
-- Load distribution
-- Improved throughput
+- 多消费者并行消费
+- 负载分摊
+- 提升吞吐
 
-## Message Types
+## 消息类型
 
-### Normal Messages
+### 普通消息
 
-Regular messages with no special delivery guarantees:
+无特殊语义的常规消息：
 
 ```rust
 let message = Message::new("NormalTopic".to_string(), body);
 producer.send(message).await?;
 ```
 
-### Ordered Messages
+### 顺序消息
 
-Messages that must be consumed in order within a queue:
+同一队列内按顺序消费的消息：
 
 ```rust
-// Use message queue selector to route related messages to the same queue
+// 使用队列选择器，将相关消息路由到同一队列
 let selector = |queue_list: &[MessageQueue], message: &Message, arg: &str| {
-    let hash = compute_hash(arg); // e.g., order_id
+    let hash = compute_hash(arg); // 例如 order_id
     let index = (hash % queue_list.len() as u64) as usize;
     &queue_list[index]
 };
@@ -111,18 +111,18 @@ let selector = |queue_list: &[MessageQueue], message: &Message, arg: &str| {
 producer.send_with_selector(message, selector, "order_123").await?;
 ```
 
-### Transactional Messages
+### 事务消息
 
-Messages that are sent atomically with a database transaction:
+与本地事务保持原子性的消息：
 
 ```rust
 let transaction_producer = TransactionProducer::new(option)?;
 
 transaction_producer.send_transactional_message(message, |local_state| {
-    // Execute local transaction
+    // 执行本地事务
     let result = execute_database_transaction();
 
-    // Return transaction status
+    // 返回事务状态
     match result {
         Ok(_) => TransactionStatus::CommitMessage,
         Err(_) => TransactionStatus::RollbackMessage,
@@ -130,60 +130,60 @@ transaction_producer.send_transactional_message(message, |local_state| {
 }).await?;
 ```
 
-### Delayed Messages
+### 延迟消息
 
-Messages that are delivered after a specified delay:
+经过指定延迟后再投递的消息：
 
 ```rust
 let mut message = Message::new("DelayedTopic".to_string(), body);
-message.set_delay_time_level(3); // Delay level 3 (e.g., 10 seconds)
+message.set_delay_time_level(3); // 延迟等级 3（例如 10 秒）
 producer.send(message).await?;
 ```
 
-## Message Filtering
+## 消息过滤
 
-### Tag-based Filtering
+### 基于 Tag 的过滤
 
-Filter messages by tags at the broker side:
+在 Broker 侧按 Tag 进行过滤：
 
 ```rust
-// Producer sets tags
+// 生产者设置 tag
 message.set_tags("order_paid");
 
-// Consumer subscribes to specific tags
+// 消费者订阅指定 tag
 consumer.subscribe("OrderEvents", "order_paid || order_shipped").await?;
 ```
 
-### SQL92 Filtering
+### SQL92 过滤
 
-Advanced filtering using SQL92 syntax:
+使用 SQL92 表达式进行高级过滤：
 
 ```rust
-// Producer sets properties
+// 生产者设置属性
 message.put_property("region", "us-west");
 message.put_property("amount", "100");
 
-// Consumer uses SQL expression
+// 消费者使用 SQL 表达式
 consumer.subscribe("OrderEvents", "region = 'us-west' AND amount > 50").await?;
 ```
 
-## Message Properties
+## 消息属性
 
-### System Properties
+### 系统属性
 
-RocketMQ automatically adds system properties to each message:
+RocketMQ 会自动为每条消息写入系统属性：
 
-- `MSG_ID`: Unique message ID
-- `TOPIC`: Topic name
-- `QUEUE_ID`: Queue ID
-- `QUEUE_OFFSET`: Message position in queue
-- `STORE_SIZE`: Message storage size
-- `BORN_TIMESTAMP`: Message creation timestamp
-- `STORE_TIMESTAMP`: Message storage timestamp
+- `MSG_ID`：全局唯一消息 ID
+- `TOPIC`：Topic 名称
+- `QUEUE_ID`：Queue ID
+- `QUEUE_OFFSET`：消息在队列中的位置
+- `STORE_SIZE`：消息存储大小
+- `BORN_TIMESTAMP`：消息创建时间
+- `STORE_TIMESTAMP`：消息落盘时间
 
-### User Properties
+### 用户属性
 
-You can add custom properties:
+你也可以写入自定义属性：
 
 ```rust
 message.put_property("source", "mobile_app");
@@ -191,7 +191,7 @@ message.put_property("version", "2.1.0");
 message.put_property("user_id", "user_12345");
 ```
 
-## Message Lifecycle
+## 消息生命周期
 
 ```mermaid
 stateDiagram-v2
@@ -208,32 +208,32 @@ stateDiagram-v2
     Retrying --> DeadLetter: Max retries exceeded
 ```
 
-### Send Flow
+### 发送流程
 
 ```text
-1. Create Message
-2. Set topic, body, tags, keys, properties
-3. Select queue (load balancing or custom)
-4. Send to broker
-5. Broker stores in CommitLog
-6. Broker updates ConsumeQueue
-7. Return result to producer
+1. 创建消息
+2. 设置 topic、body、tags、keys、properties
+3. 选择队列（负载均衡或自定义选择器）
+4. 发送到 broker
+5. broker 写入 CommitLog
+6. broker 更新 ConsumeQueue
+7. 返回发送结果给 producer
 ```
 
-### Consume Flow
+### 消费流程
 
 ```text
-1. Consumer pulls messages from queue
-2. Deserialize message
-3. Process message (user logic)
-4. Acknowledge message
-5. Update consumer offset
-6. Continue to next batch
+1. consumer 从 queue 拉取消息
+2. 反序列化消息
+3. 执行业务处理
+4. 确认消费
+5. 更新消费位点
+6. 继续下一批消费
 ```
 
-## Message Persistence
+## 消息持久化
 
-RocketMQ provides highly reliable message persistence:
+RocketMQ 提供高可靠的持久化机制：
 
 ```text
 ┌─────────────────────────────────────┐
@@ -252,18 +252,18 @@ RocketMQ provides highly reliable message persistence:
 └─────────────────────────────────────┘
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Use meaningful topic names**: Follow a clear naming convention
-2. **Set appropriate tags**: Use tags for message categorization
-3. **Add message keys**: Enable message tracing and querying
-4. **Keep message size reasonable**: Typically < 256KB
-5. **Use properties for metadata**: Don't encode metadata in message body
-6. **Consider ordering requirements**: Choose appropriate message type
-7. **Handle idempotency**: Design consumers to handle duplicate messages
+1. **使用清晰的 Topic 命名规范**：便于治理与排障
+2. **合理设置 Tag**：提升过滤效率
+3. **写入消息 Key**：便于追踪与查询
+4. **控制消息体大小**：通常建议小于 256KB
+5. **将元数据放入 properties**：避免塞入 body
+6. **明确顺序需求**：根据业务选择顺序或普通消息
+7. **实现幂等消费**：应对至少一次语义下的重复消息
 
-## Next Steps
+## 下一步
 
-- [Storage](../architecture/storage) - Learn about message persistence
-- [Producer](../category/producer) - Advanced producer features
-- [Consumer](../category/consumer) - Advanced consumer features
+- [存储](../architecture/storage) - 了解持久化实现
+- [生产者](../category/producer) - 学习生产者高级特性
+- [消费者](../category/consumer) - 学习消费者高级特性

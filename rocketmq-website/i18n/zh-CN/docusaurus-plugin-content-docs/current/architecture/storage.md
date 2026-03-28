@@ -1,12 +1,12 @@
 ---
 sidebar_position: 3
-title: Storage
+title: 存储
 ---
-# Storage
+# 存储
 
-RocketMQ-Rust employs a high-performance storage mechanism designed for reliable message persistence and fast retrieval.
+RocketMQ-Rust 采用高性能存储机制，实现可靠消息持久化与快速检索。
 
-## Storage Architecture
+## 存储架构
 
 ```mermaid
 graph TB
@@ -37,30 +37,30 @@ graph TB
 
 ## CommitLog
 
-The CommitLog is the core storage file that stores all messages sequentially.
+CommitLog 是核心存储文件，所有消息都按顺序追加写入。
 
-### Characteristics
+### 特性
 
-- **Sequential writes**: All messages are written in append-only mode
-- **Fixed size**: Each CommitLog file has a fixed size (default 1GB)
-- **Rolling**: When full, a new CommitLog file is created
-- **No deletes**: Messages are deleted only after expiration
+- **顺序写**：消息以 append-only 方式写入
+- **固定文件大小**：每个 CommitLog 文件大小固定（默认 1GB）
+- **滚动创建**：写满后创建新文件
+- **延迟删除**：仅在过期后进行清理
 
-### CommitLog Structure
+### CommitLog 结构
 
 ```text
-CommitLog File (1GB each)
+CommitLog 文件（每个 1GB）
 
 ┌────────────────────────────────────────────────────┐
 │ [Message 1][Message 2][Message 3]...[Message N]    │
 │  ↑                                                 │
-│  Sequential append writes                          │
+│  顺序追加写入                                        │
 └────────────────────────────────────────────────────┘
 
-File naming: 00000000000000000000, 00000000000000001000, ...
+文件命名：00000000000000000000, 00000000000000001000, ...
 ```
 
-### Message Format in CommitLog
+### CommitLog 中的消息格式
 
 ```rust
 pub struct CommitLogMessage {
@@ -87,9 +87,9 @@ pub struct CommitLogMessage {
 }
 ```
 
-### Sequential Write Performance
+### 顺序写性能
 
-Sequential writes to CommitLog provide excellent performance:
+CommitLog 的顺序写可显著提升性能：
 
 ```text
 Traditional random I/O:  ~10,000   ops/sec
@@ -99,36 +99,36 @@ Sequential I/O (HDD):    ~50,000+  ops/sec
 
 ## ConsumeQueue
 
-ConsumeQueue is an index structure for fast message consumption.
+ConsumeQueue 是用于快速消费读取的索引结构。
 
-### ConsumeQueue Structure
+### ConsumeQueue 结构
 
-Each topic queue has its own ConsumeQueue:
+每个 Topic 的每个 Queue 都有独立 ConsumeQueue：
 
 ```text
-ConsumeQueue for Topic:OrderEvents, Queue:0
+ConsumeQueue（Topic: OrderEvents, Queue: 0）
 
 ┌─────────────────────────────────────────────┐
-│ Entry Size: 20 bytes                        │
+│ 单条索引大小：20 字节                          │
 ├─────────────────────────────────────────────┤
 │ [CommitLog Offset][Size][Tags Hash]         │
 │ [8 bytes         ][4B  ][8 bytes  ]         │
 │                                             │
-│ Example:                                    │
+│ 示例：                                       │
 │ [0x00000000][0x0064][0x12345678]            │
 │ [0x00000064][0x0080][0x87654321]            │
 │ [0x000000E4][0x0050][0xABCDEF12]            │
 └─────────────────────────────────────────────┘
 ```
 
-### Purpose
+### 作用
 
-1. **Fast lookup**: Quickly locate messages by offset
-2. **Memory mapped**: Can be memory-mapped for fast access
-3. **Small size**: Each entry is only 20 bytes
-4. **Filtering**: Supports tag-based filtering
+1. **快速定位**：按 offset 快速定位消息
+2. **内存映射友好**：可通过 mmap 高效访问
+3. **体积小**：单条索引仅 20 字节
+4. **支持过滤**：可配合 Tag 过滤
 
-### Reading Messages
+### 读取流程
 
 ```mermaid
 sequenceDiagram
@@ -144,104 +144,103 @@ sequenceDiagram
 
 ## IndexFile
 
-IndexFile provides fast message lookup by key.
+IndexFile 提供基于 Key 的快速查询能力。
 
-### IndexFile Structure
+### IndexFile 结构
 
 ```text
 IndexFile
 
 ┌─────────────────────────────────────────────┐
-│ Hash Slots (5 million slots)                │
+│ Hash 槽位（500 万个 slots）                   │
 │ ↓                                           │
 │ [Slot 0] → [Head Index] → ...               │
 │ [Slot 1] → [Head Index] → ...               │
 │ [Slot 2] → [Head Index] → ...               │
 │ ...                                         │
 │                                             │
-│ Each Index Entry (20 bytes):                │
-│ - Key Hash (4 bytes)                        │
-│ - CommitLog Offset (8 bytes)                │
-│ - Time Diff (4 bytes)                       │
-│ - Next Index Offset (4 bytes)               │
+│ 每条索引（20 字节）：                           │
+│ - Key Hash（4 字节）                         │
+│ - CommitLog Offset（8 字节）                 │
+│ - Time Diff（4 字节）                        │
+│ - Next Index Offset（4 字节）                │
 └─────────────────────────────────────────────┘
 ```
 
-### Usage
+### 使用方式
 
 ```rust
-// Query messages by key
+// 按 key 查询消息
 let messages = broker.query_message_by_key("OrderEvents", "order_12345")?;
 
-// Returns all messages with key "order_12345"
+// 返回 key 为 "order_12345" 的消息列表
 ```
 
-## Flush Strategies
+## 刷盘策略
 
-RocketMQ supports different flush strategies to balance performance and reliability.
+RocketMQ 支持多种刷盘策略，用于平衡性能与可靠性。
 
-### ASYNC_FLUSH (Default)
+### ASYNC_FLUSH（默认）
 
-- Messages are written to OS page cache
-- Returns immediately
-- Background thread flushes to disk
-- **Performance**: Highest
-- **Reliability**: May lose messages on system failure
+- 消息先写入 OS Page Cache
+- 立即返回发送结果
+- 后台线程异步刷盘
+- **性能**：最高
+- **可靠性**：系统异常时可能丢失少量消息
 
 ### SYNC_FLUSH
 
-- Messages are written to OS page cache
-- Forces flush to disk before returning
-- **Performance**: Lower
-- **Reliability**: No message loss
+- 消息写入 OS Page Cache 后强制刷盘再返回
+- **性能**：低于异步刷盘
+- **可靠性**：更高，可避免刷盘前丢失
 
 ```rust
-// Configure flush mode
+// 配置刷盘模式
 let mut broker_config = BrokerConfig::default();
 broker_config.set_flush_disk_type(FlushDiskType::SYNC_FLUSH);
 ```
 
-## File Deletion
+## 文件删除
 
-RocketMQ automatically deletes expired files to free disk space.
+RocketMQ 会自动清理过期文件以释放磁盘空间。
 
-### Deletion Policy
+### 删除策略
 
-Files are deleted when any of these conditions are met:
+满足任一条件时会触发删除：
 
-1. **Disk space low**: Disk usage exceeds threshold (default 85%)
-2. **Time-based**: Files older than default (72 hours)
-3. **Manual**: Triggered by admin command
+1. **磁盘空间不足**：磁盘使用超过阈值（默认 85%）
+2. **时间过期**：超过保留时间（默认 72 小时）
+3. **手动触发**：通过管理命令清理
 
 ```rust
-// Configure retention policy
+// 配置保留策略
 let mut broker_config = BrokerConfig::default();
 broker_config.set_delete_when(DeleteWhen::DiskFull);
 broker_config.set_file_reserved_time(72); // hours
 ```
 
-## Memory Mapping
+## 内存映射
 
-ConsumeQueue and IndexFile use memory-mapped files for fast access:
+ConsumeQueue 与 IndexFile 使用 mmap 提升读取效率：
 
 ```rust
 // Memory-mapped file I/O
 let mmap = unsafe { MmapOptions::new().map(&file)? };
 
-// Access memory directly
+// 直接访问内存
 let offset = mmap.read_u64(offset_position)?;
 let size = mmap.read_u32(size_position)?;
 ```
 
-### Benefits
+### 优势
 
-- Zero-copy I/O
-- Fast access to frequently read data
-- OS manages paging
+- 零拷贝 I/O
+- 热数据访问速度快
+- 由操作系统统一管理分页
 
-## Storage Performance
+## 存储性能
 
-### Write Performance
+### 写性能
 
 ```text
 Type                | Throughput    | Latency
@@ -251,7 +250,7 @@ Multi Thread        | 500K+ msg/s   | < 5ms
 Batch Send          | 1M+   msg/s   | < 10ms
 ```
 
-### Read Performance
+### 读性能
 
 ```text
 Operation           | Latency
@@ -261,7 +260,7 @@ Random Read (mmap)  | < 1ms
 Index Lookup        | < 1ms
 ```
 
-## Storage Configuration
+## 存储配置示例
 
 ```toml
 [broker]
@@ -285,17 +284,17 @@ disk_max_used_space_ratio = 85
 disk_space_warning_level_ratio = 90
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Use SSDs**: Significantly improves random read performance
-2. **Monitor disk usage**: Set up alerts for disk space
-3. **Choose appropriate flush mode**: Balance performance vs reliability
-4. **Separate CommitLog and ConsumeQueue**: Use different disks if possible
-5. **Regular backups**: Implement backup strategy for critical data
-6. **Configure retention**: Set appropriate file retention time
+1. **优先使用 SSD**：可显著提升随机读能力
+2. **监控磁盘使用率**：为磁盘阈值设置告警
+3. **按业务选择刷盘策略**：平衡性能与可靠性
+4. **CommitLog 与 ConsumeQueue 分盘**：条件允许时可优化 I/O
+5. **建立备份策略**：保护关键数据
+6. **合理设置保留时间**：控制存储成本
 
-## Next Steps
+## 下一步
 
-- [Producer](../category/producer) - Learn about sending messages
-- [Consumer](../category/consumer) - Learn about consuming messages
-- [Configuration](../category/configuration) - Configure storage settings
+- [生产者](../category/producer) - 了解消息发送
+- [消费者](../category/consumer) - 了解消息消费
+- [配置](../category/configuration) - 配置存储参数

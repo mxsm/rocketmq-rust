@@ -64,16 +64,19 @@ graph TB
 The Name Server is a lightweight registry service that provides:
 
 **Functions:**
+
 - Broker registration and discovery
 - Route information management
 - Heartbeat detection
 
 **Characteristics:**
+
 - Stateless design
 - Cluster deployment for high availability
 - No data synchronization needed between nodes
 
 **Key Operations:**
+
 ```rust
 // Client queries name server for broker addresses
 let broker_addrs = name_server.lookup_broker("TopicTest").await?;
@@ -84,6 +87,7 @@ let broker_addrs = name_server.lookup_broker("TopicTest").await?;
 Brokers are the core message handling component:
 
 **Responsibilities:**
+
 - Message reception and storage
 - Message querying and delivery
 - Consumer offset management
@@ -108,6 +112,7 @@ graph TB
 ```
 
 **Message Storage:**
+
 - CommitLog: Sequential storage for all messages
 - ConsumeQueue: Index structure for fast consumption
 - IndexFile: Hash index for message key queries
@@ -117,6 +122,7 @@ graph TB
 Producers send messages to brokers:
 
 **Features:**
+
 - Asynchronous sending
 - Automatic retry on failure
 - Load balancing across brokers
@@ -141,10 +147,12 @@ sequenceDiagram
 Consumers receive and process messages:
 
 **Types:**
+
 - **Push Consumer**: Event-driven, broker pushes messages
 - **Pull Consumer**: Polling-based, consumer pulls messages
 
 **Consumption Models:**
+
 - **Clustering**: Load balancing across consumers
 - **Broadcasting**: Each consumer receives all messages
 
@@ -168,7 +176,7 @@ sequenceDiagram
 
 ### Message Sending
 
-```
+```text
 1. Producer queries Name Server for topic route info
 2. Name Server returns broker list with queue information
 3. Producer selects a queue (load balancing)
@@ -180,7 +188,7 @@ sequenceDiagram
 
 ### Message Consumption
 
-```
+```text
 1. Consumer queries Name Server for topic route info
 2. Name Server returns broker list with queue information
 3. Consumer rebalances and assigns queues
@@ -216,6 +224,7 @@ graph TB
 ### Name Server HA
 
 Name Servers form a cluster:
+
 - Each broker registers with all name servers
 - Clients can query any name server
 - No single point of failure
@@ -225,6 +234,7 @@ Name Servers form a cluster:
 ### Memory Safety
 
 RocketMQ-Rust leverages Rust's ownership model:
+
 - No manual memory management
 - No null pointer dereferences
 - No data races at compile time
@@ -232,6 +242,7 @@ RocketMQ-Rust leverages Rust's ownership model:
 ### Async Architecture
 
 Built on Tokio runtime:
+
 - Non-blocking I/O operations
 - Efficient resource utilization
 - High concurrency with minimal overhead
