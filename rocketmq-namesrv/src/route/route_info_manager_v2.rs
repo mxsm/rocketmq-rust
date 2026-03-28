@@ -162,22 +162,7 @@ impl RouteInfoManagerV2 {
         broker_live_table: &BrokerLiveTable,
         socket_addr: SocketAddr,
     ) -> Option<(Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>)> {
-        broker_live_table
-            .get_all()
-            .into_iter()
-            .find(|(_, live_info)| live_info.remote_addr == socket_addr)
-    }
-
-    /// Find broker name by broker address
-    fn find_broker_name_by_addr(broker_addr_table: &BrokerAddrTable, broker_addr: &str) -> Option<String> {
-        for (broker_name, broker_data) in broker_addr_table.get_all_brokers() {
-            for (_broker_id, addr) in broker_data.broker_addrs().iter() {
-                if addr.as_str() == broker_addr {
-                    return Some(broker_name.to_string());
-                }
-            }
-        }
-        None
+        broker_live_table.get_broker_info_by_remote_addr(socket_addr)
     }
 
     /// Cleanup broker from all tables
@@ -1655,19 +1640,13 @@ impl RouteInfoManagerV2 {
         unregister_request.cluster_name = broker_addr_info.cluster_name.clone();
         unregister_request.broker_addr = broker_addr_info.broker_addr.clone();
 
-        // Find broker name and broker ID from broker_addr_table
-        for (broker_name, broker_data) in broker_addr_table.get_all_brokers() {
-            if broker_addr_info.cluster_name != broker_data.cluster() {
-                continue;
-            }
-
-            for (broker_id, addr) in broker_data.broker_addrs().iter() {
-                if broker_addr_info.broker_addr.as_str() == addr.as_str() {
-                    unregister_request.broker_name = broker_name;
-                    unregister_request.broker_id = *broker_id;
-                    return true;
-                }
-            }
+        if let Some((broker_name, broker_id)) = broker_addr_table.find_broker_by_addr_in_cluster(
+            broker_addr_info.cluster_name.as_str(),
+            broker_addr_info.broker_addr.as_str(),
+        ) {
+            unregister_request.broker_name = broker_name;
+            unregister_request.broker_id = broker_id;
+            return true;
         }
 
         false
@@ -1675,14 +1654,7 @@ impl RouteInfoManagerV2 {
 
     /// Find broker name and ID by address
     fn find_broker_by_addr(&self, broker_addr: &str) -> Option<(CheetahString, u64)> {
-        for (broker_name, broker_data) in self.broker_addr_table.get_all_brokers() {
-            for (broker_id, addr) in broker_data.broker_addrs().iter() {
-                if addr.as_str() == broker_addr {
-                    return Some((broker_name, *broker_id));
-                }
-            }
-        }
-        None
+        self.broker_addr_table.find_broker_by_addr(broker_addr)
     }
 
     // ==================== Compatibility Methods for v1 API ====================
@@ -1780,30 +1752,9 @@ impl RouteInfoManagerV2 {
     ///
     /// Rust requires creating snapshot copies due to ownership rules and DashMap usage.
     pub fn get_all_cluster_info(&self) -> RouteResult<ClusterInfo> {
-        use std::collections::HashSet;
-
-        // Get all cluster data first for capacity pre-allocation
-        let cluster_data = self.cluster_addr_table.get_all_cluster_brokers();
-        let broker_data_list = self.broker_addr_table.get_all_brokers();
-
-        // Pre-allocate with known capacity for better performance
-        let mut cluster_addr_table: HashMap<CheetahString, HashSet<CheetahString>> =
-            HashMap::with_capacity(cluster_data.len());
-        let mut broker_addr_table = HashMap::with_capacity(broker_data_list.len());
-
-        // Populate cluster_addr_table
-        for (cluster_name, broker_names) in cluster_data {
-            cluster_addr_table.insert(cluster_name, broker_names.into_iter().collect());
-        }
-
-        // Populate broker_addr_table
-        for (broker_name, broker_data) in broker_data_list {
-            broker_addr_table.insert(broker_name, broker_data.as_ref().clone());
-        }
-
         Ok(ClusterInfo {
-            broker_addr_table: Some(broker_addr_table),
-            cluster_addr_table: Some(cluster_addr_table),
+            broker_addr_table: Some(self.broker_addr_table.snapshot()),
+            cluster_addr_table: Some(self.cluster_addr_table.snapshot()),
         })
     }
 
@@ -1883,26 +1834,13 @@ impl RouteInfoManagerV2 {
     /// Java NameServer exposes cluster names and broker names here rather than
     /// filtering the topic table by built-in system topics.
     pub fn get_system_topic_list(&self) -> RouteResult<TopicList> {
-        let cluster_data = self.cluster_addr_table.get_all_cluster_brokers();
-        let broker_data_list = self.broker_addr_table.get_all_brokers();
-        let mut topic_list = Vec::new();
-        let mut broker_addr = None;
-
-        for (cluster_name, broker_names) in cluster_data {
-            topic_list.push(cluster_name);
-            topic_list.extend(broker_names);
-        }
-
-        for (_broker_name, broker_data) in broker_data_list {
-            if let Some(addr) = broker_data.broker_addrs().values().next() {
-                broker_addr = Some(addr.clone());
-                break;
-            }
-        }
+        let mut topic_list =
+            Vec::with_capacity(self.cluster_addr_table.cluster_count() + self.cluster_addr_table.total_broker_count());
+        self.cluster_addr_table.append_cluster_and_broker_names(&mut topic_list);
 
         Ok(TopicList {
             topic_list,
-            broker_addr,
+            broker_addr: self.broker_addr_table.first_broker_addr(),
         })
     }
 
@@ -1913,19 +1851,9 @@ impl RouteInfoManagerV2 {
     pub fn get_unit_topics(&self) -> RouteResult<TopicList> {
         use rocketmq_common::common::TopicSysFlag;
 
-        // Filter topics with unit flag set
-        let topics: Vec<CheetahString> = self
+        let topics = self
             .topic_queue_table
-            .iter_all_with_data()
-            .into_iter()
-            .filter(|(_, queue_datas)| {
-                queue_datas
-                    .first()
-                    .map(|qd| TopicSysFlag::has_unit_flag(qd.topic_sys_flag()))
-                    .unwrap_or(false)
-            })
-            .map(|(topic, _)| CheetahString::from_string(topic))
-            .collect();
+            .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_flag(queue_data.topic_sys_flag()));
 
         Ok(TopicList {
             topic_list: topics,
@@ -1940,19 +1868,9 @@ impl RouteInfoManagerV2 {
     pub fn get_has_unit_sub_topic_list(&self) -> RouteResult<TopicList> {
         use rocketmq_common::common::TopicSysFlag;
 
-        // Filter topics with unit subscription flag set
-        let topics: Vec<CheetahString> = self
+        let topics = self
             .topic_queue_table
-            .iter_all_with_data()
-            .into_iter()
-            .filter(|(_, queue_datas)| {
-                queue_datas
-                    .first()
-                    .map(|qd| TopicSysFlag::has_unit_sub_flag(qd.topic_sys_flag()))
-                    .unwrap_or(false)
-            })
-            .map(|(topic, _)| CheetahString::from_string(topic))
-            .collect();
+            .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_sub_flag(queue_data.topic_sys_flag()));
 
         Ok(TopicList {
             topic_list: topics,
@@ -1970,22 +1888,10 @@ impl RouteInfoManagerV2 {
     pub fn get_has_unit_sub_ununit_topic_list(&self) -> RouteResult<TopicList> {
         use rocketmq_common::common::TopicSysFlag;
 
-        // Filter topics that have unit subscription but are not unit topics
-        let topics: Vec<CheetahString> = self
-            .topic_queue_table
-            .iter_all_with_data()
-            .into_iter()
-            .filter(|(_, queue_datas)| {
-                queue_datas
-                    .first()
-                    .map(|qd| {
-                        let sys_flag = qd.topic_sys_flag();
-                        !TopicSysFlag::has_unit_flag(sys_flag) && TopicSysFlag::has_unit_sub_flag(sys_flag)
-                    })
-                    .unwrap_or(false)
-            })
-            .map(|(topic, _)| CheetahString::from_string(topic))
-            .collect();
+        let topics = self.topic_queue_table.filter_topics_by_first_queue(|queue_data| {
+            let sys_flag = queue_data.topic_sys_flag();
+            !TopicSysFlag::has_unit_flag(sys_flag) && TopicSysFlag::has_unit_sub_flag(sys_flag)
+        });
 
         Ok(TopicList {
             topic_list: topics,

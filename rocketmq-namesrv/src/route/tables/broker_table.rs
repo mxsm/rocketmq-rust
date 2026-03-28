@@ -16,8 +16,10 @@
 //!
 //! Manages broker name -> broker data mappings.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
@@ -118,6 +120,55 @@ impl BrokerAddrTable {
             .iter()
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect()
+    }
+
+    /// Find a broker by any registered address.
+    ///
+    /// Returns the broker name and broker ID for the matching address.
+    pub fn find_broker_by_addr(&self, broker_addr: &str) -> Option<(BrokerName, u64)> {
+        for entry in self.inner.iter() {
+            for (broker_id, addr) in entry.value().broker_addrs() {
+                if addr.as_str() == broker_addr {
+                    return Some((entry.key().clone(), *broker_id));
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a broker by address within the given cluster.
+    pub fn find_broker_by_addr_in_cluster(&self, cluster_name: &str, broker_addr: &str) -> Option<(BrokerName, u64)> {
+        for entry in self.inner.iter() {
+            if entry.value().cluster() != cluster_name {
+                continue;
+            }
+
+            for (broker_id, addr) in entry.value().broker_addrs() {
+                if addr.as_str() == broker_addr {
+                    return Some((entry.key().clone(), *broker_id));
+                }
+            }
+        }
+        None
+    }
+
+    /// Return the first available broker address, if any.
+    pub fn first_broker_addr(&self) -> Option<CheetahString> {
+        for entry in self.inner.iter() {
+            if let Some(addr) = entry.value().broker_addrs().values().next() {
+                return Some(addr.clone());
+            }
+        }
+        None
+    }
+
+    /// Snapshot the table into an owned HashMap without building an intermediate Vec.
+    pub fn snapshot(&self) -> HashMap<BrokerName, BrokerData> {
+        let mut snapshot = HashMap::with_capacity(self.inner.len());
+        for entry in self.inner.iter() {
+            snapshot.insert(entry.key().clone(), entry.value().as_ref().clone());
+        }
+        snapshot
     }
 
     /// Get brokers by cluster name
@@ -311,6 +362,34 @@ mod tests {
         let broker = table.get("broker-a").unwrap();
         assert!(!broker.broker_addrs().contains_key(&1));
         assert!(broker.broker_addrs().contains_key(&0)); // Master still exists
+    }
+
+    #[test]
+    fn test_find_broker_by_addr_helpers() {
+        let table = BrokerAddrTable::new();
+        let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
+        let mut broker_data = create_test_broker_data("ClusterA", "broker-a");
+        broker_data.broker_addrs_mut().insert(1, "slave1:10911".into());
+
+        table.insert(broker_name.clone(), broker_data);
+
+        let (found_name, found_id) = table
+            .find_broker_by_addr("slave1:10911")
+            .expect("broker should be found by address");
+        assert_eq!(found_name, broker_name);
+        assert_eq!(found_id, 1);
+
+        let (found_name, found_id) = table
+            .find_broker_by_addr_in_cluster("ClusterA", "broker-a:10911")
+            .expect("broker should be found by cluster and address");
+        assert_eq!(found_name.as_str(), "broker-a");
+        assert_eq!(found_id, 0);
+
+        let first_addr = table
+            .first_broker_addr()
+            .map(|addr| addr.to_string())
+            .expect("table should return at least one broker address");
+        assert!(first_addr == "broker-a:10911" || first_addr == "slave1:10911");
     }
 
     #[test]

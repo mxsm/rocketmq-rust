@@ -770,222 +770,230 @@ impl NameServerRuntimeInner {
     }
 
     pub fn get_all_configs_format_string(&self) -> Result<String, String> {
-        let mut properties = HashMap::new();
+        let mut entries = Vec::with_capacity(41);
 
-        insert_config(&mut properties, "rocketmqHome", &self.name_server_config.rocketmq_home);
-        insert_config(&mut properties, "kvConfigPath", &self.name_server_config.kv_config_path);
-        insert_config(
-            &mut properties,
+        push_config_entry(&mut entries, "rocketmqHome", &self.name_server_config.rocketmq_home);
+        push_config_entry(&mut entries, "kvConfigPath", &self.name_server_config.kv_config_path);
+        push_config_entry(
+            &mut entries,
             "configStorePath",
             &self.name_server_config.config_store_path,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "productEnvName",
             &self.name_server_config.product_env_name,
         );
-        insert_config(&mut properties, "clusterTest", self.name_server_config.cluster_test);
-        insert_config(
-            &mut properties,
+        push_config_entry(&mut entries, "clusterTest", self.name_server_config.cluster_test);
+        push_config_entry(
+            &mut entries,
             "orderMessageEnable",
             self.name_server_config.order_message_enable,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "returnOrderTopicConfigToBroker",
             self.name_server_config.return_order_topic_config_to_broker,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientRequestThreadPoolNums",
             self.name_server_config.client_request_thread_pool_nums,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "defaultThreadPoolNums",
             self.name_server_config.default_thread_pool_nums,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientRequestThreadPoolQueueCapacity",
             self.name_server_config.client_request_thread_pool_queue_capacity,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "defaultThreadPoolQueueCapacity",
             self.name_server_config.default_thread_pool_queue_capacity,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "scanNotActiveBrokerInterval",
             self.name_server_config.scan_not_active_broker_interval,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "unRegisterBrokerQueueCapacity",
             self.name_server_config.unregister_broker_queue_capacity,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "supportActingMaster",
             self.name_server_config.support_acting_master,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "enableAllTopicList",
             self.name_server_config.enable_all_topic_list,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "enableTopicList",
             self.name_server_config.enable_topic_list,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "notifyMinBrokerIdChanged",
             self.name_server_config.notify_min_broker_id_changed,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "enableControllerInNamesrv",
             self.name_server_config.enable_controller_in_namesrv,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "needWaitForService",
             self.name_server_config.need_wait_for_service,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "waitSecondsForService",
             self.name_server_config.wait_seconds_for_service,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "deleteTopicWithBrokerRegistration",
             self.name_server_config.delete_topic_with_broker_registration,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "configBlackList",
             &self.name_server_config.config_black_list,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "useRouteInfoManagerV2",
             self.name_server_config.use_route_info_manager_v2,
         );
 
-        insert_config(&mut properties, "listenPort", self.server_config.listen_port);
-        insert_config(&mut properties, "bindAddress", &self.server_config.bind_address);
+        push_config_entry(&mut entries, "listenPort", self.server_config.listen_port);
+        push_config_entry(&mut entries, "bindAddress", &self.server_config.bind_address);
 
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientWorkerThreads",
             self.tokio_client_config.client_worker_threads,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientCallbackExecutorThreads",
             self.tokio_client_config.client_callback_executor_threads,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientOnewaySemaphoreValue",
             self.tokio_client_config.client_oneway_semaphore_value,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientAsyncSemaphoreValue",
             self.tokio_client_config.client_async_semaphore_value,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "connectTimeoutMillis",
             self.tokio_client_config.connect_timeout_millis,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "channelNotActiveInterval",
             self.tokio_client_config.channel_not_active_interval,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientChannelMaxIdleTimeSeconds",
             self.tokio_client_config.client_channel_max_idle_time_seconds,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientSocketSndBufSize",
             self.tokio_client_config.client_socket_snd_buf_size,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientSocketRcvBufSize",
             self.tokio_client_config.client_socket_rcv_buf_size,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientPooledByteBufAllocatorEnable",
             self.tokio_client_config.client_pooled_byte_buf_allocator_enable,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "clientCloseSocketIfTimeout",
             self.tokio_client_config.client_close_socket_if_timeout,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "socksProxyConfig",
             &self.tokio_client_config.socks_proxy_config,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "writeBufferHighWaterMark",
             self.tokio_client_config.write_buffer_high_water_mark,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "writeBufferLowWaterMark",
             self.tokio_client_config.write_buffer_low_water_mark,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "disableCallbackExecutor",
             self.tokio_client_config.disable_callback_executor,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "disableNettyWorkerGroup",
             self.tokio_client_config.disable_netty_worker_group,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "maxReconnectIntervalTimeSeconds",
             self.tokio_client_config.max_reconnect_interval_time_seconds,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "enableReconnectForGoAway",
             self.tokio_client_config.enable_reconnect_for_go_away,
         );
-        insert_config(
-            &mut properties,
+        push_config_entry(
+            &mut entries,
             "enableTransparentRetry",
             self.tokio_client_config.enable_transparent_retry,
         );
 
-        let mut entries = properties
-            .into_iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries.sort_by_key(|(key, _)| *key);
 
-        Ok(entries
-            .into_iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join("\n"))
+        let estimated_len = entries
+            .iter()
+            .map(|(key, value)| key.len() + value.len() + 2)
+            .sum::<usize>()
+            .saturating_sub(1);
+        let mut config = String::with_capacity(estimated_len);
+
+        for (index, (key, value)) in entries.into_iter().enumerate() {
+            if index > 0 {
+                config.push('\n');
+            }
+            config.push_str(key);
+            config.push('=');
+            config.push_str(&value);
+        }
+
+        Ok(config)
     }
 
     pub fn update_runtime_config(&mut self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
@@ -1137,11 +1145,8 @@ impl NameServerRuntimeInner {
     }
 }
 
-fn insert_config(properties: &mut HashMap<CheetahString, CheetahString>, key: &'static str, value: impl ToString) {
-    properties.insert(
-        CheetahString::from_static_str(key),
-        CheetahString::from_string(value.to_string()),
-    );
+fn push_config_entry(entries: &mut Vec<(&'static str, String)>, key: &'static str, value: impl ToString) {
+    entries.push((key, value.to_string()));
 }
 
 fn parse_config_value<T>(key: &str, value: &CheetahString) -> Result<T, String>

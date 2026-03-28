@@ -16,6 +16,10 @@
 //!
 //! Manages cluster name -> broker names set mappings.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use dashmap::DashSet;
 
@@ -155,6 +159,24 @@ impl ClusterAddrTable {
                 (cluster, brokers)
             })
             .collect()
+    }
+
+    /// Append cluster names and broker names to an output topic list.
+    pub fn append_cluster_and_broker_names(&self, topic_list: &mut Vec<CheetahString>) {
+        for entry in self.inner.iter() {
+            topic_list.push(entry.key().clone());
+            topic_list.extend(entry.value().iter().map(|broker| broker.key().clone()));
+        }
+    }
+
+    /// Snapshot the table into an owned HashMap without building an intermediate Vec.
+    pub fn snapshot(&self) -> HashMap<ClusterName, HashSet<BrokerName>> {
+        let mut snapshot = HashMap::with_capacity(self.inner.len());
+        for entry in self.inner.iter() {
+            let brokers = entry.value().iter().map(|broker| broker.key().clone()).collect();
+            snapshot.insert(entry.key().clone(), brokers);
+        }
+        snapshot
     }
 
     /// Get number of clusters

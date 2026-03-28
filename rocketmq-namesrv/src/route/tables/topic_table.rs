@@ -260,6 +260,23 @@ impl TopicQueueTable {
             })
             .collect()
     }
+
+    /// Filter topics by inspecting only the first queue entry for each topic.
+    ///
+    /// This avoids cloning the full per-topic queue vector on read-heavy paths that
+    /// only care about a single representative queue flag.
+    pub fn filter_topics_by_first_queue<F>(&self, mut predicate: F) -> Vec<TopicName>
+    where
+        F: FnMut(&QueueData) -> bool,
+    {
+        self.inner
+            .iter()
+            .filter_map(|entry| {
+                let first_queue = entry.value().iter().next()?;
+                predicate(first_queue.value().as_ref()).then(|| entry.key().clone())
+            })
+            .collect()
+    }
 }
 
 impl Default for TopicQueueTable {
@@ -271,11 +288,16 @@ impl Default for TopicQueueTable {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::TopicSysFlag;
 
     use super::*;
 
     fn create_test_queue_data(read_count: u32, write_count: u32) -> QueueData {
         QueueData::new("test-broker".into(), read_count, write_count, 6, 0)
+    }
+
+    fn create_test_queue_data_with_flag(read_count: u32, write_count: u32, topic_sys_flag: u32) -> QueueData {
+        QueueData::new("test-broker".into(), read_count, write_count, 6, topic_sys_flag)
     }
 
     #[test]
@@ -353,6 +375,27 @@ mod tests {
         let removed = table.cleanup_empty_topics();
         assert_eq!(removed, 1);
         assert!(!table.contains_topic("EmptyTopic"));
+    }
+
+    #[test]
+    fn test_filter_topics_by_first_queue_predicate() {
+        let table = TopicQueueTable::new();
+
+        table.insert(
+            CheetahString::from_static_str("unit-topic"),
+            CheetahString::from_static_str("broker-a"),
+            create_test_queue_data_with_flag(8, 8, TopicSysFlag::build_sys_flag(true, false)),
+        );
+        table.insert(
+            CheetahString::from_static_str("normal-topic"),
+            CheetahString::from_static_str("broker-b"),
+            create_test_queue_data_with_flag(8, 8, 0),
+        );
+
+        let topics =
+            table.filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_flag(queue_data.topic_sys_flag()));
+
+        assert_eq!(topics, vec![CheetahString::from_static_str("unit-topic")]);
     }
 
     #[test]

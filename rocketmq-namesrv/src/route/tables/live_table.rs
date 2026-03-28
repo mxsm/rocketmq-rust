@@ -345,6 +345,19 @@ impl BrokerLiveTable {
         None
     }
 
+    /// Retrieve broker address information and live info by remote socket address.
+    pub fn get_broker_info_by_remote_addr(
+        &self,
+        remote_addr: SocketAddr,
+    ) -> Option<(Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>)> {
+        for entry in self.inner.iter() {
+            if entry.value().remote_addr == remote_addr {
+                return Some((Arc::clone(entry.key()), Arc::clone(entry.value())));
+            }
+        }
+        None
+    }
+
     /// Update last update timestamp for a broker (v1 compatibility)
     ///
     /// # Arguments
@@ -502,6 +515,27 @@ mod tests {
         assert_eq!(table.len(), 1);
         assert!(table.contains(&broker2));
         assert!(!table.contains(&broker1));
+    }
+
+    #[test]
+    fn test_get_broker_info_by_remote_addr() {
+        let table = BrokerLiveTable::new();
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+        let remote_addr = SocketAddr::from_str("127.0.0.1:10911").unwrap();
+        let live_info = BrokerLiveInfo::new(
+            1000,
+            DataVersion::default(),
+            remote_addr,
+            CheetahString::from_static_str("test-channel-001"),
+        );
+
+        table.register(broker_info.clone(), live_info);
+
+        let (found_broker_info, found_live_info) = table
+            .get_broker_info_by_remote_addr(remote_addr)
+            .expect("broker should be found by remote address");
+        assert_eq!(found_broker_info, broker_info);
+        assert_eq!(found_live_info.remote_addr, remote_addr);
     }
 
     #[test]
