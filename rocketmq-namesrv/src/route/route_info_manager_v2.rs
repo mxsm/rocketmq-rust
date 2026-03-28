@@ -1751,12 +1751,9 @@ impl RouteInfoManagerV2 {
 
     /// Get all cluster info
     ///
-    /// Rust requires creating copies due to ownership rules and DashMap usage.
+    /// Rust requires creating snapshot copies due to ownership rules and DashMap usage.
     pub fn get_all_cluster_info(&self) -> RouteResult<ClusterInfo> {
-        use std::collections::HashMap;
         use std::collections::HashSet;
-
-        use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
         // Get all cluster data first for capacity pre-allocation
         let cluster_data = self.cluster_addr_table.get_all_cluster_brokers();
@@ -1765,7 +1762,7 @@ impl RouteInfoManagerV2 {
         // Pre-allocate with known capacity for better performance
         let mut cluster_addr_table: HashMap<CheetahString, HashSet<CheetahString>> =
             HashMap::with_capacity(cluster_data.len());
-        let mut broker_addr_table: HashMap<CheetahString, BrokerData> = HashMap::with_capacity(broker_data_list.len());
+        let mut broker_addr_table = HashMap::with_capacity(broker_data_list.len());
 
         // Populate cluster_addr_table
         for (cluster_name, broker_names) in cluster_data {
@@ -1774,17 +1771,7 @@ impl RouteInfoManagerV2 {
 
         // Populate broker_addr_table
         for (broker_name, broker_data) in broker_data_list {
-            let data = BrokerData::new(
-                CheetahString::from_slice(broker_data.cluster()),
-                broker_name.clone(),
-                broker_data
-                    .broker_addrs()
-                    .iter()
-                    .map(|(id, addr)| (*id, addr.clone()))
-                    .collect(),
-                None,
-            );
-            broker_addr_table.insert(broker_name, data);
+            broker_addr_table.insert(broker_name, broker_data.as_ref().clone());
         }
 
         Ok(ClusterInfo {
@@ -1865,20 +1852,30 @@ impl RouteInfoManagerV2 {
     }
 
     /// Get system topic list (v1 compatibility)
+    ///
+    /// Java NameServer exposes cluster names and broker names here rather than
+    /// filtering the topic table by built-in system topics.
     pub fn get_system_topic_list(&self) -> RouteResult<TopicList> {
-        use rocketmq_common::common::topic::TopicValidator;
+        let cluster_data = self.cluster_addr_table.get_all_cluster_brokers();
+        let broker_data_list = self.broker_addr_table.get_all_brokers();
+        let mut topic_list = Vec::new();
+        let mut broker_addr = None;
 
-        let system_topic_set = TopicValidator::get_system_topic_set();
-        let topics: Vec<CheetahString> = self
-            .topic_queue_table
-            .get_all_topics()
-            .into_iter()
-            .filter(|topic| system_topic_set.iter().any(|s| s == topic.as_str()))
-            .collect();
+        for (cluster_name, broker_names) in cluster_data {
+            topic_list.push(cluster_name);
+            topic_list.extend(broker_names);
+        }
+
+        for (_broker_name, broker_data) in broker_data_list {
+            if let Some(addr) = broker_data.broker_addrs().values().next() {
+                broker_addr = Some(addr.clone());
+                break;
+            }
+        }
 
         Ok(TopicList {
-            topic_list: topics,
-            broker_addr: None,
+            topic_list,
+            broker_addr,
         })
     }
 

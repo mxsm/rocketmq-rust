@@ -778,3 +778,105 @@ impl NameServerRuntimeInner {
             .expect("BrokerHousekeepingService not initialized")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::mix_all::MASTER_ID;
+    use rocketmq_remoting::local::LocalRequestHarness;
+    use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+
+    use super::*;
+
+    fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
+        let bootstrap = Builder::new().build();
+        assert!(matches!(
+            bootstrap.name_server_runtime.inner.route_info_manager(),
+            RouteInfoManagerWrapper::V2(_)
+        ));
+        bootstrap
+    }
+
+    async fn register_test_broker(
+        bootstrap: &NameServerBootstrap,
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+        broker_addr: &CheetahString,
+        zone_name: &CheetahString,
+        enable_acting_master: bool,
+    ) {
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let result = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .register_broker(
+                cluster_name.clone(),
+                broker_addr.clone(),
+                broker_name.clone(),
+                MASTER_ID,
+                CheetahString::from_static_str("10.0.0.1:10912"),
+                Some(zone_name.clone()),
+                Some(30_000),
+                Some(enable_acting_master),
+                TopicConfigAndMappingSerializeWrapper::default(),
+                vec![],
+                harness.channel(),
+            );
+
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn default_v2_system_topic_list_includes_cluster_and_broker_names() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+
+        register_test_broker(&bootstrap, &cluster_name, &broker_name, &broker_addr, &zone_name, true).await;
+
+        let topic_list = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_system_topic_list();
+
+        assert!(topic_list.topic_list.contains(&cluster_name));
+        assert!(topic_list.topic_list.contains(&broker_name));
+        assert_eq!(topic_list.broker_addr.as_ref(), Some(&broker_addr));
+    }
+
+    #[tokio::test]
+    async fn default_v2_cluster_info_preserves_zone_and_acting_master_metadata() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.1:10911");
+        let zone_name = CheetahString::from_static_str("zone-a");
+
+        register_test_broker(&bootstrap, &cluster_name, &broker_name, &broker_addr, &zone_name, true).await;
+
+        let cluster_info = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_all_cluster_info();
+        let broker_data = cluster_info
+            .broker_addr_table
+            .as_ref()
+            .and_then(|brokers| brokers.get(&broker_name))
+            .expect("registered broker must exist in cluster info");
+        let broker_names = cluster_info
+            .cluster_addr_table
+            .as_ref()
+            .and_then(|clusters| clusters.get(&cluster_name))
+            .expect("registered cluster must exist in cluster info");
+
+        assert!(broker_names.contains(&broker_name));
+        assert_eq!(broker_data.zone_name(), Some(&zone_name));
+        assert!(broker_data.enable_acting_master());
+        assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&broker_addr));
+    }
+}
