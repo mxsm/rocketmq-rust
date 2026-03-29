@@ -515,6 +515,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_add_ignores_stale_version_snapshot() {
+        let mut runtime = new_test_runtime("processor-stale-version").await;
+        let mut inner = runtime.inner_for_test().clone();
+        seed_group_config(
+            &mut inner,
+            "lite-group",
+            HashMap::from([(
+                CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
+                CheetahString::from_static_str("parent-topic"),
+            )]),
+        );
+
+        let mut body = LiteSubscriptionCtlRequestBody::new();
+        body.set_subscription_set(vec![LiteSubscriptionDTO::new()
+            .with_action(LiteSubscriptionAction::CompleteAdd)
+            .with_client_id(CheetahString::from_static_str("client-id"))
+            .with_group(CheetahString::from_static_str("lite-group"))
+            .with_topic(CheetahString::from_static_str("parent-topic"))
+            .with_lite_topic_set(HashSet::from([
+                CheetahString::from_static_str("child-a"),
+                CheetahString::from_static_str("child-b"),
+            ]))
+            .with_version(5)]);
+        let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
+            .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut processor = LiteSubscriptionCtlProcessor::new(inner.clone());
+        let response = processor
+            .process_request(channel.clone(), ctx.clone(), &mut request)
+            .await
+            .expect("processor request should succeed")
+            .expect("processor should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+        let mut stale_body = LiteSubscriptionCtlRequestBody::new();
+        stale_body.set_subscription_set(vec![LiteSubscriptionDTO::new()
+            .with_action(LiteSubscriptionAction::CompleteAdd)
+            .with_client_id(CheetahString::from_static_str("client-id"))
+            .with_group(CheetahString::from_static_str("lite-group"))
+            .with_topic(CheetahString::from_static_str("parent-topic"))
+            .with_lite_topic_set(HashSet::from([CheetahString::from_static_str("child-c")]))
+            .with_version(4)]);
+        let mut stale_request =
+            RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {}).set_body(
+                Bytes::from(serde_json::to_vec(&stale_body).expect("serialize stale request body")),
+            );
+
+        let stale_response = processor
+            .process_request(channel, ctx, &mut stale_request)
+            .await
+            .expect("processor stale request should succeed")
+            .expect("processor should return a response");
+
+        assert_eq!(ResponseCode::from(stale_response.code()), ResponseCode::Success);
+        let subscription = inner
+            .lite_subscription_registry()
+            .lite_subscription(
+                &CheetahString::from_static_str("client-id"),
+                &CheetahString::from_static_str("lite-group"),
+                &CheetahString::from_static_str("parent-topic"),
+            )
+            .expect("registry should retain the latest complete snapshot");
+        assert_eq!(subscription.version(), 5);
+        assert_eq!(
+            subscription.lite_topic_set(),
+            &HashSet::from([
+                CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("convert child-a")),
+                CheetahString::from_string(to_lmq_name("parent-topic", "child-b").expect("convert child-b")),
+            ])
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
     async fn partial_add_returns_quota_exceeded_when_global_limit_is_hit() {
         let mut runtime = new_test_runtime_with_max_subscription_count("quota-exceeded", 1).await;
         let mut inner = runtime.inner_for_test().clone();

@@ -23,6 +23,7 @@ pub struct LiteSubscription {
     pub topic: CheetahString,
     pub lite_topic_set: HashSet<CheetahString>,
     pub update_time: i64,
+    pub version: i64,
 }
 
 impl LiteSubscription {
@@ -34,6 +35,7 @@ impl LiteSubscription {
             topic,
             lite_topic_set: HashSet::new(),
             update_time: Self::current_time_millis(),
+            version: 0,
         }
     }
 
@@ -49,6 +51,13 @@ impl LiteSubscription {
     #[inline]
     pub fn with_update_time(mut self, update_time: i64) -> Self {
         self.update_time = update_time;
+        self
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn with_version(mut self, version: i64) -> Self {
+        self.version = version;
         self
     }
 
@@ -123,6 +132,17 @@ impl LiteSubscription {
         self.update_time = update_time;
     }
 
+    #[must_use]
+    #[inline]
+    pub const fn version(&self) -> i64 {
+        self.version
+    }
+
+    #[inline]
+    pub fn set_version(&mut self, version: i64) {
+        self.version = version;
+    }
+
     #[inline]
     fn refresh_update_time(&mut self) {
         self.update_time = Self::current_time_millis();
@@ -142,8 +162,8 @@ impl fmt::Display for LiteSubscription {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "LiteSubscription {{ group: {}, topic: {}, lite_topic_set: {:?}, update_time: {} }}",
-            self.group, self.topic, self.lite_topic_set, self.update_time
+            "LiteSubscription {{ group: {}, topic: {}, lite_topic_set: {:?}, update_time: {}, version: {} }}",
+            self.group, self.topic, self.lite_topic_set, self.update_time, self.version
         )
     }
 }
@@ -158,12 +178,14 @@ mod tests {
         set.insert("lite_topic".into());
         let subscription = LiteSubscription::new("group".into(), "topic".into())
             .with_lite_topic_set(set.clone())
-            .with_update_time(100);
+            .with_update_time(100)
+            .with_version(2);
 
         assert_eq!(subscription.group(), "group");
         assert_eq!(subscription.topic(), "topic");
         assert_eq!(subscription.lite_topic_set(), &set);
         assert_eq!(subscription.update_time(), 100);
+        assert_eq!(subscription.version(), 2);
     }
 
     #[test]
@@ -194,11 +216,13 @@ mod tests {
         set.insert("topic1".into());
         subscription.set_lite_topic_set(set.clone());
         subscription.set_update_time(200);
+        subscription.set_version(3);
 
         assert_eq!(subscription.group(), "new_group");
         assert_eq!(subscription.topic(), "new_topic");
         assert_eq!(subscription.lite_topic_set(), &set);
         assert_eq!(subscription.update_time(), 200);
+        assert_eq!(subscription.version(), 3);
     }
 
     #[test]
@@ -207,5 +231,6 @@ mod tests {
         let display = format!("{}", subscription);
         assert!(display.contains("group: group"));
         assert!(display.contains("topic: topic"));
+        assert!(display.contains("version: 0"));
     }
 }

@@ -96,6 +96,7 @@ mod tests {
                     CheetahString::from_string(to_lmq_name("parent-topic", "child-b").expect("lmq")),
                 ]),
                 update_time: 1,
+                version: 0,
             },
             LiteSubscriptionRecord {
                 client_id: CheetahString::from_static_str("client-b"),
@@ -105,6 +106,7 @@ mod tests {
                     to_lmq_name("parent-topic", "child-b").expect("lmq"),
                 )]),
                 update_time: 2,
+                version: 0,
             },
         ];
 

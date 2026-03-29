@@ -50,6 +50,7 @@ pub(crate) struct LiteSubscriptionRecord {
     pub(crate) topic: CheetahString,
     pub(crate) lite_topic_set: HashSet<CheetahString>,
     pub(crate) update_time: i64,
+    pub(crate) version: i64,
 }
 
 impl LiteSubscriptionRegistry {
@@ -108,11 +109,18 @@ impl LiteSubscriptionRegistry {
         group: &CheetahString,
         topic: &CheetahString,
         lmq_name_set: &HashSet<CheetahString>,
-        _version: i64,
+        version: i64,
     ) -> LiteSubscription {
         let key = LiteSubscriptionKey::new(client_id.clone(), group.clone(), topic.clone());
+        if let Some(existing) = self.subscriptions.get(&key) {
+            if version < existing.version() {
+                return existing.clone();
+            }
+        }
+
         let mut subscription = LiteSubscription::new(group.clone(), topic.clone());
         subscription.set_lite_topic_set(lmq_name_set.clone());
+        subscription.set_version(version);
 
         if lmq_name_set.is_empty() {
             self.subscriptions.remove(&key);
@@ -170,6 +178,7 @@ impl LiteSubscriptionRegistry {
                 topic: entry.key().topic.clone(),
                 lite_topic_set: entry.value().lite_topic_set().clone(),
                 update_time: entry.value().update_time(),
+                version: entry.value().version(),
             })
             .collect()
     }
@@ -225,5 +234,26 @@ mod tests {
         registry.add_complete_subscription(&client_id_b, &group, &topic, &lmq_names("parent-topic", &["b"]), 1);
 
         assert_eq!(registry.active_subscription_num(), 3);
+    }
+
+    #[test]
+    fn complete_add_ignores_stale_version_updates() {
+        let registry = LiteSubscriptionRegistry::default();
+        let client_id = CheetahString::from_static_str("client-a");
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("parent-topic");
+
+        registry.add_complete_subscription(&client_id, &group, &topic, &lmq_names("parent-topic", &["a", "b"]), 5);
+        let ignored =
+            registry.add_complete_subscription(&client_id, &group, &topic, &lmq_names("parent-topic", &["c"]), 4);
+
+        assert_eq!(ignored.version(), 5);
+        assert_eq!(ignored.lite_topic_set(), &lmq_names("parent-topic", &["a", "b"]));
+
+        let stored = registry
+            .lite_subscription(&client_id, &group, &topic)
+            .expect("subscription should remain stored");
+        assert_eq!(stored.version(), 5);
+        assert_eq!(stored.lite_topic_set(), &lmq_names("parent-topic", &["a", "b"]));
     }
 }
