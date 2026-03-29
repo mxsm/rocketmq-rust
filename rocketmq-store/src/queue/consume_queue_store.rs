@@ -222,6 +222,12 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// The queue offset
     fn get_lmq_queue_offset(&self, queue_key: &str) -> i64;
 
+    /// Get the number of tracked LMQ topics.
+    fn get_lmq_num(&self) -> i32;
+
+    /// Check whether the specified LMQ topic exists.
+    fn is_lmq_exist(&self, lmq_topic: &str) -> bool;
+
     /// Recover offset table by min physical offset
     ///
     /// # Parameters

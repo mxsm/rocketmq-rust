@@ -368,6 +368,14 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         self.inner.queue_offset_operator.current_queue_offset(&queue_key.into())
     }
 
+    fn get_lmq_num(&self) -> i32 {
+        self.inner.queue_offset_operator.get_lmq_num()
+    }
+
+    fn is_lmq_exist(&self, lmq_topic: &str) -> bool {
+        self.inner.queue_offset_operator.is_lmq_exist(lmq_topic)
+    }
+
     fn recover_offset_table(&mut self, min_phy_offset: i64) {
         let mut cq_offset_table = HashMap::with_capacity(1024);
         let mut bcq_offset_table = HashMap::with_capacity(1024);

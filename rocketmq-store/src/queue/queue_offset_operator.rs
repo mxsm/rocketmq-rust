@@ -16,7 +16,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::mix_all::is_lmq;
 use tracing::info;
+
+use crate::queue::multi_dispatch_utils::lmq_queue_key;
 
 pub struct QueueOffsetOperator {
     topic_queue_table: Arc<parking_lot::Mutex<HashMap<CheetahString, i64>>>,
@@ -141,11 +144,22 @@ impl QueueOffsetOperator {
     pub fn set_lmq_topic_queue_table(&self, lmq_topic_queue_table: HashMap<CheetahString, i64>) {
         let mut table = HashMap::new();
         for (key, value) in lmq_topic_queue_table.iter() {
-            if key.contains("lmq") {
+            if is_lmq(Some(key.as_str())) {
                 table.insert(key.clone(), *value);
             }
         }
         *self.lmq_topic_queue_table.lock() = table;
+    }
+
+    #[inline]
+    pub fn get_lmq_num(&self) -> i32 {
+        self.lmq_topic_queue_table.lock().len() as i32
+    }
+
+    #[inline]
+    pub fn is_lmq_exist(&self, lmq_topic: &str) -> bool {
+        let queue_key = CheetahString::from_string(lmq_queue_key(lmq_topic));
+        self.lmq_topic_queue_table.lock().contains_key(&queue_key)
     }
 
     #[inline]
@@ -229,5 +243,23 @@ mod tests {
         operator.set_topic_queue_table(new_table);
 
         assert_eq!(operator.get_queue_offset("new_key".into()), 10);
+    }
+
+    #[test]
+    fn set_lmq_topic_queue_table_keeps_prefixed_lmq_entries() {
+        let operator = QueueOffsetOperator::new();
+        let mut table = HashMap::new();
+        table.insert(CheetahString::from_static_str("%LMQ%group-0"), 7);
+        table.insert(CheetahString::from_static_str("normal-topic-0"), 3);
+
+        operator.set_lmq_topic_queue_table(table);
+
+        let lmq_table = operator.lmq_topic_queue_table.lock();
+        assert_eq!(lmq_table.len(), 1);
+        assert_eq!(lmq_table.get(&CheetahString::from_static_str("%LMQ%group-0")), Some(&7));
+        drop(lmq_table);
+        assert_eq!(operator.get_lmq_num(), 1);
+        assert!(operator.is_lmq_exist("%LMQ%group"));
+        assert!(!operator.is_lmq_exist("normal-topic"));
     }
 }

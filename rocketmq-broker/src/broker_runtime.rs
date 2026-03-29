@@ -379,9 +379,6 @@ impl BrokerRuntime {
         }
         self.consumer_ids_change_listener.shutdown();
         self.topic_queue_mapping_clean_service.shutdown();
-        if let Some(timer_message_store) = self.inner.timer_message_store.as_mut() {
-            timer_message_store.shutdown();
-        }
 
         self.inner.broadcast_offset_manager.shutdown();
 
@@ -503,11 +500,7 @@ impl BrokerRuntime {
             ));
             let message_store_clone = message_store.clone();
             message_store.set_message_store_arc(message_store_clone);
-            if self.inner.message_store_config.is_timer_wheel_enable() {
-                let timer_message_store = Arc::new(TimerMessageStore::new(Some(message_store.clone())));
-                message_store.set_timer_message_store(timer_message_store.clone());
-                self.inner.timer_message_store = Some(timer_message_store);
-            }
+            self.inner.timer_message_store = message_store.get_timer_message_store().cloned();
             self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
             self.inner.message_store = Some(message_store.clone());
             self.inner
@@ -551,20 +544,6 @@ impl BrokerRuntime {
             result &= self.inner.message_store.as_mut().unwrap().load().await;
             if !result {
                 warn!("Load message store failed");
-                return false;
-            }
-        }
-
-        if self.inner.broker_config.timer_wheel_config.timer_wheel_enable {
-            if let Some(timer_message_store) = &mut self.inner.timer_message_store {
-                info!("Timer wheel is enabled, load timer message store");
-                result &= timer_message_store.load();
-                if !result {
-                    warn!("Load timer message store failed");
-                    return false;
-                }
-            } else {
-                warn!("Timer wheel is enabled, but timer message store is None");
                 return false;
             }
         }
@@ -1031,9 +1010,6 @@ impl BrokerRuntime {
             panic!("Message store is not initialized");
         }
 
-        if let Some(timer_message_store) = self.inner.timer_message_store.as_mut() {
-            timer_message_store.start();
-        }
         if let Some(replicas_manager) = self.inner.replicas_manager.as_mut() {
             replicas_manager.start();
         }
@@ -3993,6 +3969,36 @@ mod tests {
             .as_ref();
 
         assert!(std::ptr::eq(timer_store, configured_store));
+    }
+
+    #[tokio::test]
+    async fn initialize_message_store_reuses_store_owned_timer_message_store() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-timer-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_metadata());
+        assert!(runtime.initialize_message_store().await);
+
+        let store_timer = runtime
+            .inner
+            .message_store()
+            .expect("message store should be initialized")
+            .get_timer_message_store()
+            .cloned()
+            .expect("store should own timer store");
+        let runtime_timer = runtime
+            .inner
+            .timer_message_store()
+            .cloned()
+            .expect("runtime should expose timer store");
+
+        assert!(Arc::ptr_eq(&store_timer, &runtime_timer));
+
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]

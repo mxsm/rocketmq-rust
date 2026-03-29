@@ -289,6 +289,10 @@ impl LocalFileMessageStore {
         self.message_store_arc = Some(message_store_arc.clone());
         self.commit_log.set_local_file_message_store(message_store_arc.clone());
         self.consume_queue_store.set_message_store(message_store_arc);
+        if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
+            let timer_message_store = Arc::new(TimerMessageStore::new(self.message_store_arc.clone()));
+            self.set_timer_message_store(timer_message_store);
+        }
     }
 
     #[inline]
@@ -2620,4 +2624,45 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
     }
 
     (delay_level_table, max_delay_level)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_rust::ArcMut;
+    use tempfile::tempdir;
+
+    use super::LocalFileMessageStore;
+    use crate::base::message_store::MessageStore;
+    use crate::config::message_store_config::MessageStoreConfig;
+
+    #[test]
+    fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled() {
+        let temp_dir = tempdir().unwrap();
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+            timer_wheel_enable: true,
+            ..MessageStoreConfig::default()
+        };
+
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+
+        assert!(store.get_timer_message_store().is_none());
+
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+
+        assert!(store.get_timer_message_store().is_some());
+    }
 }
