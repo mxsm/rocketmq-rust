@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod lite_consumer_lag_calculator;
 pub(crate) mod lite_event_dispatcher;
 pub(crate) mod lite_lifecycle_manager;
+pub(crate) mod lite_sharding;
 pub(crate) mod memory_consumer_order_info_manager;

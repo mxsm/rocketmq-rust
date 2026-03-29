@@ -32,7 +32,6 @@ use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLi
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
-use rocketmq_remoting::protocol::body::lite_lag_info::LiteLagInfo;
 use rocketmq_remoting::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
@@ -49,6 +48,8 @@ use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::lite::lite_consumer_lag_calculator::LiteConsumerLagCalculator;
+use crate::lite::lite_sharding::LiteSharding;
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRecord;
 
 pub(crate) struct LiteManagerProcessor<MS: MessageStore> {
@@ -96,9 +97,9 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             .broker_runtime_inner
             .lite_subscription_registry()
             .all_subscriptions();
-        let topic_meta = self.build_lite_topic_meta(&subscriptions);
-        let group_meta = self.build_lite_group_meta(&subscriptions);
-        let unique_lmq_count = topic_meta.values().copied().sum::<i32>();
+        let topic_meta = self.build_lite_topic_meta();
+        let group_meta = self.build_lite_group_meta();
+        let unique_lmq_count = self.unique_lmq_count(&subscriptions);
         let (store_lmq_num, cq_table_size) = self.queue_store_stats();
 
         let mut body = GetBrokerLiteInfoResponseBody::new();
@@ -156,18 +157,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             .into_iter()
             .filter(|subscription| subscription.topic == request_header.topic)
             .collect::<Vec<_>>();
-        if subscriptions.is_empty() {
-            return Ok(Some(self.response_with_code(
-                request,
-                ResponseCode::QueryNotFound,
-                format!("Topic [{}] has no lite subscriptions.", request_header.topic),
-            )));
-        }
-
-        let groups = subscriptions
-            .iter()
-            .map(|subscription| subscription.group.clone())
-            .collect::<HashSet<_>>();
+        let groups = self.lite_bound_groups(&request_header.topic);
         let lite_topic_count = self
             .broker_runtime_inner
             .lite_lifecycle_manager()
@@ -222,11 +212,16 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             )));
         }
 
+        let parent_topic = request_header.parent_topic;
+        let lite_topic = request_header.lite_topic;
         let mut body = GetLiteTopicInfoResponseBody::new();
-        body.with_parent_topic(request_header.parent_topic)
-            .with_lite_topic(request_header.lite_topic)
+        body.with_parent_topic(parent_topic.clone())
+            .with_lite_topic(lite_topic)
             .with_subscriber(subscribers)
-            .with_sharding_to_broker(false);
+            .with_sharding_to_broker(
+                LiteSharding::sharding_by_lmq_name(self.broker_runtime_inner.as_ref(), &parent_topic, &lmq_name)
+                    == *self.broker_runtime_inner.broker_config().broker_name(),
+            );
         if let Some(topic_offset) = self.topic_offset_for_lmq(&lmq_name) {
             body.with_topic_offset(topic_offset);
         }
@@ -319,38 +314,15 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             .with_lite_topic(lite_topic.clone());
 
         if lite_topic.is_empty() {
-            let lag_infos = self.collect_group_lag_infos(&group, &bind_topic);
-            let total_lag_count = lag_infos.iter().map(|info| info.lag_count()).sum();
-            let earliest_unconsumed_timestamp = lag_infos
-                .iter()
-                .map(|info| info.earliest_unconsumed_timestamp())
-                .filter(|timestamp| *timestamp >= 0)
-                .min()
-                .unwrap_or(0);
-
-            let mut lag_count_top_k = lag_infos.clone();
-            lag_count_top_k.sort_by(|left, right| {
-                right
-                    .lag_count()
-                    .cmp(&left.lag_count())
-                    .then_with(|| left.lite_topic().as_str().cmp(right.lite_topic().as_str()))
-            });
-
-            let mut lag_timestamp_top_k = lag_infos;
-            lag_timestamp_top_k.sort_by(|left, right| {
-                left.earliest_unconsumed_timestamp()
-                    .cmp(&right.earliest_unconsumed_timestamp())
-                    .then_with(|| right.lag_count().cmp(&left.lag_count()))
-                    .then_with(|| left.lite_topic().as_str().cmp(right.lite_topic().as_str()))
-            });
-
-            let limit = if top_k > 0 {
-                top_k as usize
-            } else {
-                lag_count_top_k.len()
-            };
-            lag_count_top_k.truncate(limit);
-            lag_timestamp_top_k.truncate(limit);
+            let (lag_count_top_k, total_lag_count) =
+                LiteConsumerLagCalculator::get_lag_count_top_k(self.broker_runtime_inner.as_ref(), &group, top_k);
+            let (lag_timestamp_top_k, earliest_unconsumed_timestamp) =
+                LiteConsumerLagCalculator::get_lag_timestamp_top_k(
+                    self.broker_runtime_inner.as_ref(),
+                    &group,
+                    &bind_topic,
+                    top_k,
+                );
 
             body.with_total_lag_count(total_lag_count)
                 .with_earliest_unconsumed_timestamp(earliest_unconsumed_timestamp)
@@ -418,7 +390,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         ))
     }
 
-    fn build_lite_topic_meta(&self, subscriptions: &[LiteSubscriptionRecord]) -> HashMap<CheetahString, i32> {
+    fn unique_lmq_count(&self, subscriptions: &[LiteSubscriptionRecord]) -> i32 {
         subscriptions
             .iter()
             .fold(
@@ -430,64 +402,49 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
                     acc
                 },
             )
-            .into_iter()
-            .map(|(topic, lite_topics)| (topic, lite_topics.len() as i32))
+            .into_values()
+            .map(|lite_topics| lite_topics.len() as i32)
+            .sum()
+    }
+
+    fn build_lite_topic_meta(&self) -> HashMap<CheetahString, i32> {
+        self.broker_runtime_inner
+            .topic_config_manager()
+            .topic_config_table()
+            .iter()
+            .filter_map(|entry| {
+                (entry.value().get_topic_message_type() == TopicMessageType::Lite)
+                    .then(|| (entry.key().clone(), entry.value().get_lite_topic_expiration()))
+            })
             .collect()
     }
 
-    fn build_lite_group_meta(
-        &self,
-        subscriptions: &[LiteSubscriptionRecord],
-    ) -> HashMap<CheetahString, HashSet<CheetahString>> {
-        subscriptions.iter().fold(
-            HashMap::<CheetahString, HashSet<CheetahString>>::new(),
-            |mut acc, subscription| {
-                acc.entry(subscription.topic.clone())
-                    .or_default()
-                    .insert(subscription.group.clone());
-                acc
-            },
-        )
+    fn build_lite_group_meta(&self) -> HashMap<CheetahString, HashSet<CheetahString>> {
+        self.broker_runtime_inner
+            .subscription_group_manager()
+            .subscription_group_table()
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .value()
+                    .lite_bind_topic()
+                    .map(|bind_topic| (bind_topic.clone(), entry.key().clone()))
+            })
+            .fold(
+                HashMap::<CheetahString, HashSet<CheetahString>>::new(),
+                |mut acc, (topic, group)| {
+                    acc.entry(topic).or_default().insert(group);
+                    acc
+                },
+            )
     }
 
-    fn collect_group_lag_infos(&self, group: &CheetahString, parent_topic: &CheetahString) -> Vec<LiteLagInfo> {
-        let lite_topics = self
-            .broker_runtime_inner
-            .lite_subscription_registry()
-            .all_subscriptions()
-            .into_iter()
-            .filter(|subscription| subscription.group == *group && subscription.topic == *parent_topic)
-            .flat_map(|subscription| subscription.lite_topic_set.into_iter())
-            .filter_map(|lmq_name| get_lite_topic(lmq_name.as_str()).map(CheetahString::from_string))
-            .collect::<BTreeSet<_>>();
-
-        lite_topics
-            .into_iter()
-            .map(|lite_topic| {
-                let lmq_name =
-                    CheetahString::from_string(to_lmq_name(parent_topic.as_str(), lite_topic.as_str()).expect("lmq"));
-                let broker_offset = self.lmq_broker_offset(&lmq_name);
-                let commit_offset = self
-                    .broker_runtime_inner
-                    .consumer_offset_manager()
-                    .query_offset(group, &lmq_name, 0);
-                let lag_count = if broker_offset > 0 {
-                    (broker_offset - commit_offset.max(0)).max(0)
-                } else {
-                    0
-                };
-
-                let mut lag_info = LiteLagInfo::new();
-                lag_info
-                    .with_lite_topic(lite_topic)
-                    .with_lag_count(lag_count)
-                    .with_earliest_unconsumed_timestamp(if broker_offset > 0 {
-                        self.earliest_unconsumed_timestamp(&lmq_name, commit_offset)
-                    } else {
-                        -1
-                    });
-                lag_info
-            })
+    fn lite_bound_groups(&self, parent_topic: &CheetahString) -> HashSet<CheetahString> {
+        self.broker_runtime_inner
+            .subscription_group_manager()
+            .subscription_group_table()
+            .iter()
+            .filter_map(|entry| (entry.value().lite_bind_topic() == Some(parent_topic)).then(|| entry.key().clone()))
             .collect()
     }
 
@@ -594,7 +551,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn earliest_unconsumed_timestamp(&self, lmq_name: &CheetahString, commit_offset: i64) -> i64 {
-        if commit_offset <= 0 {
+        if commit_offset < 0 {
             return 0;
         }
 
