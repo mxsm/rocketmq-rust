@@ -32,14 +32,46 @@ use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
+use crate::long_polling::polling_result::PollingResult;
 
 pub(crate) struct PopLiteMessageProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    pop_lite_long_polling_service: ArcMut<PopLiteLongPollingService<MS, PopLiteMessageProcessor<MS>>>,
 }
 
 impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
     pub(crate) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self { broker_runtime_inner }
+        Self {
+            pop_lite_long_polling_service: ArcMut::new(PopLiteLongPollingService::new(broker_runtime_inner.clone())),
+            broker_runtime_inner,
+        }
+    }
+
+    pub(crate) fn new_arc_mut(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
+        let mut processor = ArcMut::new(Self::new(broker_runtime_inner.clone()));
+        let wakeup_sender = processor.pop_lite_long_polling_service.wakeup_sender();
+        broker_runtime_inner
+            .lite_event_dispatcher()
+            .set_wakeup_sender(wakeup_sender);
+
+        let cloned = processor.clone();
+        processor.pop_lite_long_polling_service.set_processor(cloned);
+        processor
+    }
+
+    pub(crate) fn start(&mut self) {
+        PopLiteLongPollingService::start(self.pop_lite_long_polling_service.clone());
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        self.pop_lite_long_polling_service.shutdown();
+    }
+
+    pub(crate) fn pop_lite_long_polling_service(
+        &self,
+    ) -> &ArcMut<PopLiteLongPollingService<MS, PopLiteMessageProcessor<MS>>> {
+        &self.pop_lite_long_polling_service
     }
 
     fn pre_check(&self, request_header: &PopLiteMessageRequestHeader) -> Option<(ResponseCode, CheetahString)> {
@@ -245,7 +277,7 @@ impl<MS: MessageStore> RequestProcessor for PopLiteMessageProcessor<MS> {
     async fn process_request(
         &mut self,
         _channel: Channel,
-        _ctx: ConnectionHandlerContext,
+        ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<PopLiteMessageRequestHeader>()?;
@@ -284,8 +316,29 @@ impl<MS: MessageStore> RequestProcessor for PopLiteMessageProcessor<MS> {
                 response.set_body_mut_ref(body);
             }
             None => {
-                response.set_code_ref(ResponseCode::PollingTimeout);
-                response.set_remark_mut("NO_MESSAGE_IN_QUEUE");
+                match self.pop_lite_long_polling_service.polling(
+                    ctx,
+                    request,
+                    &request_header.client_id,
+                    request_header.born_time,
+                    request_header.poll_time,
+                ) {
+                    PollingResult::PollingSuc => {
+                        if !dispatcher.pending_events(&request_header.client_id).is_empty() {
+                            self.pop_lite_long_polling_service
+                                .wake_up_client(&request_header.client_id);
+                        }
+                        return Ok(None);
+                    }
+                    PollingResult::PollingFull => {
+                        response.set_code_ref(ResponseCode::PollingFull);
+                        response.set_remark_mut("POP_LITE_POLLING_FULL");
+                    }
+                    _ => {
+                        response.set_code_ref(ResponseCode::PollingTimeout);
+                        response.set_remark_mut("NO_MESSAGE_IN_QUEUE");
+                    }
+                }
             }
         }
 

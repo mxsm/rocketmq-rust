@@ -257,6 +257,7 @@ impl BrokerRuntime {
             is_transaction_check_service_start: Arc::new(Default::default()),
             client_housekeeping_service: None,
             pop_message_processor: None,
+            pop_lite_message_processor: None,
             ack_message_processor: None,
             notification_processor: None,
             query_assignment_processor: None,
@@ -373,6 +374,10 @@ impl BrokerRuntime {
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
             pop_message_processor.shutdown();
+        }
+
+        if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
+            pop_lite_message_processor.shutdown();
         }
 
         if let Some(ack_message_processor) = self.inner.ack_message_processor.as_mut() {
@@ -639,6 +644,8 @@ impl BrokerRuntime {
 
         let pop_message_processor = PopMessageProcessor::new_arc_mut(self.inner.clone());
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
+        let pop_lite_message_processor = PopLiteMessageProcessor::new_arc_mut(self.inner.clone());
+        self.inner.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
             self.inner.clone(),
             pop_message_processor.clone(),
@@ -696,7 +703,7 @@ impl BrokerRuntime {
         );
         broker_request_processor.register_processor(
             RequestCode::PopLiteMessage as i32,
-            BrokerProcessorType::PopLite(ArcMut::new(PopLiteMessageProcessor::new(self.inner.clone()))),
+            BrokerProcessorType::PopLite(pop_lite_message_processor),
         );
 
         //AckMessageProcessor
@@ -1082,6 +1089,9 @@ impl BrokerRuntime {
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
             pop_message_processor.start();
+        }
+        if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
+            pop_lite_message_processor.start();
         }
         if let Some(ack_message_processor) = self.inner.ack_message_processor.as_mut() {
             ack_message_processor.start();
@@ -1560,6 +1570,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     client_housekeeping_service: Option<Arc<ClientHousekeepingService<MS>>>,
     //Processor
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
+    pop_lite_message_processor: Option<ArcMut<PopLiteMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
@@ -4664,6 +4675,161 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::PollingTimeout);
 
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn pop_lite_message_without_events_suspends_when_polling_enabled() {
+        let mut runtime = new_lite_test_runtime("pop-lite-suspend").await;
+        seed_lite_query_state(&mut runtime);
+
+        let (mut processor, _) = runtime.init_processor();
+        runtime
+            .inner
+            .pop_lite_message_processor
+            .as_mut()
+            .expect("pop lite processor should be initialized")
+            .start();
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 60_000,
+            poll_time: 3_000,
+            born_time: current_millis() as i64,
+            attempt_id: None,
+            rpc: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed");
+
+        assert!(
+            response.is_none(),
+            "polling pop-lite should suspend instead of responding"
+        );
+        assert!(request.suspended());
+        assert_eq!(
+            runtime
+                .inner
+                .pop_lite_message_processor
+                .as_ref()
+                .expect("pop lite processor should be initialized")
+                .pop_lite_long_polling_service()
+                .get_polling_num("client-1"),
+            1
+        );
+
+        runtime
+            .inner
+            .pop_lite_message_processor
+            .as_mut()
+            .expect("pop lite processor should be initialized")
+            .shutdown();
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn trigger_lite_dispatch_wakes_suspended_pop_lite_request_and_advances_offset() {
+        let mut runtime = new_lite_test_runtime("pop-lite-trigger-wakeup").await;
+        seed_lite_query_state(&mut runtime);
+        seed_lmq_message(&mut runtime, "child-a", b"lite-body").await;
+        let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
+
+        let (mut processor, _) = runtime.init_processor();
+        runtime
+            .inner
+            .pop_lite_message_processor
+            .as_mut()
+            .expect("pop lite processor should be initialized")
+            .start();
+
+        let pop_channel = create_test_channel().await;
+        let pop_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
+        let pop_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 60_000,
+            poll_time: 3_000,
+            born_time: current_millis() as i64,
+            attempt_id: None,
+            rpc: None,
+        };
+        let mut pop_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, pop_header);
+        pop_request.make_custom_header_to_net();
+        let response = processor
+            .process_request(pop_channel, pop_ctx, &mut pop_request)
+            .await
+            .expect("pop lite should suspend cleanly");
+        assert!(
+            response.is_none(),
+            "suspended pop-lite should not produce an immediate response"
+        );
+
+        let trigger_channel = create_test_channel().await;
+        let trigger_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(trigger_channel.clone()));
+        let trigger_header = TriggerLiteDispatchRequestHeader {
+            group: CheetahString::from_static_str("group-a"),
+            client_id: Some(CheetahString::from_static_str("client-1")),
+        };
+        let mut trigger_request =
+            RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, trigger_header);
+        trigger_request.make_custom_header_to_net();
+        let trigger_response = processor
+            .process_request(trigger_channel, trigger_ctx, &mut trigger_request)
+            .await
+            .expect("trigger lite dispatch should succeed")
+            .expect("trigger lite dispatch should return a response");
+        assert_eq!(ResponseCode::from(trigger_response.code()), ResponseCode::Success);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            if runtime.inner.consumer_offset_manager().query_offset(
+                &CheetahString::from_static_str("group-a"),
+                &lmq_name,
+                0,
+            ) == 1
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "suspended pop-lite request should be woken and advance offset"
+            );
+            sleep(Duration::from_millis(20)).await;
+        }
+
+        assert_eq!(
+            runtime
+                .inner
+                .pop_lite_message_processor
+                .as_ref()
+                .expect("pop lite processor should be initialized")
+                .pop_lite_long_polling_service()
+                .get_polling_num("client-1"),
+            0
+        );
+        assert!(runtime
+            .inner
+            .lite_event_dispatcher()
+            .pending_events(&CheetahString::from_static_str("client-1"))
+            .is_empty());
+
+        runtime
+            .inner
+            .pop_lite_message_processor
+            .as_mut()
+            .expect("pop lite processor should be initialized")
+            .shutdown();
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

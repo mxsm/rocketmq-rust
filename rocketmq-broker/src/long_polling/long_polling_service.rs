@@ -12,5 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod pop_lite_long_polling_service;
 pub(crate) mod pop_long_polling_service;
 pub(crate) mod pull_request_hold_service;

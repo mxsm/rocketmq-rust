@@ -16,10 +16,12 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::TimeUtils::current_millis;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Clone, Default)]
 struct ClientEventState {
@@ -31,9 +33,14 @@ struct ClientEventState {
 pub(crate) struct LiteEventDispatcher {
     client_events: Arc<DashMap<CheetahString, ClientEventState>>,
     client_last_access_time: Arc<DashMap<CheetahString, u64>>,
+    wakeup_sender: Arc<Mutex<Option<UnboundedSender<CheetahString>>>>,
 }
 
 impl LiteEventDispatcher {
+    pub(crate) fn set_wakeup_sender(&self, wakeup_sender: UnboundedSender<CheetahString>) {
+        *self.wakeup_sender.lock().expect("lite wakeup sender lock poisoned") = Some(wakeup_sender);
+    }
+
     pub(crate) fn touch_client(&self, client_id: &CheetahString) {
         self.client_last_access_time.insert(client_id.clone(), current_millis());
     }
@@ -60,11 +67,17 @@ impl LiteEventDispatcher {
             return 0;
         }
 
-        let mut entry = self.client_events.entry(client_id.clone()).or_default();
-        entry.group = group.clone();
-        let original_len = entry.events.len();
-        entry.events.extend(lmq_names.iter().cloned());
-        entry.events.len().saturating_sub(original_len)
+        let inserted = {
+            let mut entry = self.client_events.entry(client_id.clone()).or_default();
+            entry.group = group.clone();
+            let original_len = entry.events.len();
+            entry.events.extend(lmq_names.iter().cloned());
+            entry.events.len().saturating_sub(original_len)
+        };
+        if inserted > 0 {
+            self.notify_client(client_id);
+        }
+        inserted
     }
 
     pub(crate) fn do_full_dispatch_by_group(
@@ -90,6 +103,17 @@ impl LiteEventDispatcher {
             .remove(client_id)
             .map(|(_, entry)| entry.events.into_iter().collect())
             .unwrap_or_default()
+    }
+
+    fn notify_client(&self, client_id: &CheetahString) {
+        let sender = self
+            .wakeup_sender
+            .lock()
+            .expect("lite wakeup sender lock poisoned")
+            .clone();
+        if let Some(sender) = sender {
+            let _ = sender.send(client_id.clone());
+        }
     }
 }
 
@@ -142,5 +166,19 @@ mod tests {
             vec![CheetahString::from_static_str("%LMQ%$parent$child-a")]
         );
         assert_eq!(dispatcher.event_map_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn do_full_dispatch_notifies_registered_wakeup_sender() {
+        let dispatcher = LiteEventDispatcher::default();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        dispatcher.set_wakeup_sender(sender);
+        let client_id = CheetahString::from_static_str("client-a");
+        let group = CheetahString::from_static_str("group-a");
+        let lmq_names = HashSet::from([CheetahString::from_static_str("%LMQ%$parent$child-a")]);
+
+        dispatcher.do_full_dispatch(&client_id, &group, &lmq_names);
+
+        assert_eq!(receiver.recv().await, Some(client_id));
     }
 }
