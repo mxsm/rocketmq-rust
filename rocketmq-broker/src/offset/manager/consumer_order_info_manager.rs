@@ -264,21 +264,21 @@ pub(crate) struct ConsumerOrderInfoWrapper {
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub(crate) struct OrderInfo {
     #[serde(rename = "popTime")]
-    pop_time: u64,
+    pub(crate) pop_time: u64,
     #[serde(rename = "i")]
-    invisible_time: Option<u64>,
+    pub(crate) invisible_time: Option<u64>,
     #[serde(rename = "0")]
-    offset_list: Vec<u64>,
+    pub(crate) offset_list: Vec<u64>,
     #[serde(rename = "ot")]
-    offset_next_visible_time: HashMap<u64, u64>,
+    pub(crate) offset_next_visible_time: HashMap<u64, u64>,
     #[serde(rename = "oc")]
-    offset_consumed_count: HashMap<u64, i32>,
+    pub(crate) offset_consumed_count: HashMap<u64, i32>,
     #[serde(rename = "l")]
-    last_consume_timestamp: u64,
+    pub(crate) last_consume_timestamp: u64,
     #[serde(rename = "cm")]
-    commit_offset_bit: u64,
+    pub(crate) commit_offset_bit: u64,
     #[serde(rename = "a")]
-    attempt_id: String,
+    pub(crate) attempt_id: String,
 }
 
 impl Display for OrderInfo {

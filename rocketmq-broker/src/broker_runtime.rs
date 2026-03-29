@@ -3328,6 +3328,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
+    use rocketmq_common::common::attribute::Attribute;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::entity::ClientGroup;
     use rocketmq_common::common::lite::to_lmq_name;
@@ -3339,6 +3340,7 @@ mod tests {
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::TimeUtils::current_millis;
+    use rocketmq_common::TopicAttributes;
     use rocketmq_controller::config::RaftPeer;
     use rocketmq_controller::config::StorageBackendType;
     use rocketmq_controller::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
@@ -3370,6 +3372,7 @@ mod tests {
     use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
     use rocketmq_remoting::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
+    use rocketmq_remoting::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
     use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -3520,9 +3523,17 @@ mod tests {
 
     fn seed_lite_query_state(runtime: &mut BrokerRuntime) {
         let inner = runtime.inner_for_test();
+        let mut topic_config = TopicConfig::with_queues("parent-topic", 1, 1);
+        topic_config.attributes.insert(
+            CheetahString::from_string(format!(
+                "+{}",
+                TopicAttributes::TopicAttributes::topic_message_type_attribute().name()
+            )),
+            CheetahString::from_static_str("LITE"),
+        );
         inner
             .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("parent-topic", 1, 1)));
+            .update_topic_config(ArcMut::new(topic_config));
 
         for group in ["group-a", "group-b"] {
             let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str(group));
@@ -4945,6 +4956,164 @@ mod tests {
             .lite_event_dispatcher()
             .pending_events(&CheetahString::from_static_str("client-1"))
             .is_empty());
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn pop_lite_message_blocks_fifo_for_different_attempt_id() {
+        let mut runtime = new_lite_test_runtime("pop-lite-fifo-block").await;
+        seed_lite_query_state(&mut runtime);
+        seed_lmq_message(&mut runtime, "child-a", b"lite-body-1").await;
+        seed_lmq_message(&mut runtime, "child-a", b"lite-body-2").await;
+        let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
+
+        let (mut processor, _) = runtime.init_processor();
+        runtime.inner.lite_event_dispatcher().do_full_dispatch(
+            &CheetahString::from_static_str("client-1"),
+            &CheetahString::from_static_str("group-a"),
+            &HashSet::from([lmq_name.clone()]),
+        );
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let first_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 5_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: Some(CheetahString::from_static_str("attempt-1")),
+            rpc: None,
+        };
+        let mut first_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, first_header);
+        first_request.make_custom_header_to_net();
+        let first_response = processor
+            .process_request(channel, ctx, &mut first_request)
+            .await
+            .expect("first pop lite should succeed")
+            .expect("first pop lite should return a response");
+        assert_eq!(ResponseCode::from(first_response.code()), ResponseCode::Success);
+        assert_eq!(
+            runtime.inner.consumer_offset_manager().query_offset(
+                &CheetahString::from_static_str("group-a"),
+                &lmq_name,
+                0
+            ),
+            1
+        );
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let second_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 5_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: Some(CheetahString::from_static_str("attempt-2")),
+            rpc: None,
+        };
+        let mut second_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, second_header);
+        second_request.make_custom_header_to_net();
+        let second_response = processor
+            .process_request(channel, ctx, &mut second_request)
+            .await
+            .expect("second pop lite should succeed")
+            .expect("second pop lite should return a response");
+        assert_eq!(ResponseCode::from(second_response.code()), ResponseCode::PollingTimeout);
+        assert_eq!(
+            runtime.inner.consumer_offset_manager().query_offset(
+                &CheetahString::from_static_str("group-a"),
+                &lmq_name,
+                0
+            ),
+            1
+        );
+        assert_eq!(
+            runtime
+                .inner
+                .lite_event_dispatcher()
+                .pending_events(&CheetahString::from_static_str("client-1")),
+            vec![lmq_name.clone()]
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn pop_lite_message_allows_same_attempt_id_to_continue_fifo_consumption() {
+        let mut runtime = new_lite_test_runtime("pop-lite-fifo-same-attempt").await;
+        seed_lite_query_state(&mut runtime);
+        seed_lmq_message(&mut runtime, "child-a", b"lite-body-1").await;
+        seed_lmq_message(&mut runtime, "child-a", b"lite-body-2").await;
+        let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
+
+        let (mut processor, _) = runtime.init_processor();
+        runtime.inner.lite_event_dispatcher().do_full_dispatch(
+            &CheetahString::from_static_str("client-1"),
+            &CheetahString::from_static_str("group-a"),
+            &HashSet::from([lmq_name.clone()]),
+        );
+
+        let first_channel = create_test_channel().await;
+        let first_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(first_channel.clone()));
+        let first_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 5_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: Some(CheetahString::from_static_str("attempt-1")),
+            rpc: None,
+        };
+        let mut first_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, first_header);
+        first_request.make_custom_header_to_net();
+        let _ = processor
+            .process_request(first_channel, first_ctx, &mut first_request)
+            .await
+            .expect("first pop lite should succeed")
+            .expect("first pop lite should return a response");
+
+        let second_channel = create_test_channel().await;
+        let second_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(second_channel.clone()));
+        let second_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 5_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: Some(CheetahString::from_static_str("attempt-1")),
+            rpc: None,
+        };
+        let mut second_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, second_header);
+        second_request.make_custom_header_to_net();
+        let second_response = processor
+            .process_request(second_channel, second_ctx, &mut second_request)
+            .await
+            .expect("second pop lite should succeed")
+            .expect("second pop lite should return a response");
+        assert_eq!(ResponseCode::from(second_response.code()), ResponseCode::Success);
+        let second_header = second_response
+            .read_custom_header_ref::<PopLiteMessageResponseHeader>()
+            .expect("pop lite success response should keep an in-memory response header");
+        assert!(second_header.order_count_info.is_some());
+        assert_eq!(
+            runtime.inner.consumer_offset_manager().query_offset(
+                &CheetahString::from_static_str("group-a"),
+                &lmq_name,
+                0
+            ),
+            2
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

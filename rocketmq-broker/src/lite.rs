@@ -14,3 +14,4 @@
 
 pub(crate) mod lite_event_dispatcher;
 pub(crate) mod lite_lifecycle_manager;
+pub(crate) mod memory_consumer_order_info_manager;
