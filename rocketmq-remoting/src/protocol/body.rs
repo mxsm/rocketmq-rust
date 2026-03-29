@@ -47,6 +47,7 @@ pub mod ha_connection_runtime_info;
 pub mod ha_runtime_info;
 pub mod kv_table;
 pub mod lite_lag_info;
+pub mod lite_subscription_ctl_request_body;
 pub mod message_request_mode_serialize_wrapper;
 pub mod pop_process_queue_info;
 pub mod process_queue_info;
