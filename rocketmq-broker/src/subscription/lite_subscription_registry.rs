@@ -155,7 +155,10 @@ impl LiteSubscriptionRegistry {
     }
 
     pub(crate) fn active_subscription_num(&self) -> usize {
-        self.subscriptions.len()
+        self.subscriptions
+            .iter()
+            .map(|entry| entry.value().lite_topic_set().len())
+            .sum()
     }
 
     pub(crate) fn all_subscriptions(&self) -> Vec<LiteSubscriptionRecord> {
@@ -208,5 +211,19 @@ mod tests {
 
         assert!(registry.lite_subscription(&client_id, &group, &topic).is_none());
         assert_eq!(registry.active_subscription_num(), 0);
+    }
+
+    #[test]
+    fn active_subscription_num_counts_lite_topic_references() {
+        let registry = LiteSubscriptionRegistry::default();
+        let client_id_a = CheetahString::from_static_str("client-a");
+        let client_id_b = CheetahString::from_static_str("client-b");
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("parent-topic");
+
+        registry.add_complete_subscription(&client_id_a, &group, &topic, &lmq_names("parent-topic", &["a", "b"]), 1);
+        registry.add_complete_subscription(&client_id_b, &group, &topic, &lmq_names("parent-topic", &["b"]), 1);
+
+        assert_eq!(registry.active_subscription_num(), 3);
     }
 }

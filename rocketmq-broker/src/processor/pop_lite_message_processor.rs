@@ -100,6 +100,10 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
         self.consumer_order_info_manager.order_info_count() as i32
     }
 
+    pub(crate) fn clear_order_info(&self, topic: &CheetahString, group: &CheetahString) {
+        self.consumer_order_info_manager.clear_block(topic, group, 0);
+    }
+
     fn pre_check(&self, request_header: &PopLiteMessageRequestHeader) -> Option<(ResponseCode, CheetahString)> {
         if request_header.client_id.is_empty() {
             return Some((

@@ -85,7 +85,7 @@ mod tests {
     fn java_string_hash_code_matches_java_contract() {
         assert_eq!(java_string_hash_code(""), 0);
         assert_eq!(java_string_hash_code("abc"), 96_354);
-        assert_eq!(java_string_hash_code("lite_topic"), 1_608_266_772);
+        assert_eq!(java_string_hash_code("lite_topic"), 2_023_630_430);
     }
 
     #[test]

@@ -154,6 +154,7 @@ define_response_code! {
         ControllerElectMasterFailed = 2012,
         ControllerAlterSyncStateSetFailed = 2013,
         ControllerBrokerIdInvalid = 2014,
+        LiteSubscriptionQuotaExceeded = 2018,
     },
     default = SystemError
 }
@@ -288,6 +289,7 @@ mod tests {
             ResponseCode::ControllerAlterSyncStateSetFailed
         );
         assert_eq!(ResponseCode::from(2014), ResponseCode::ControllerBrokerIdInvalid);
+        assert_eq!(ResponseCode::from(2018), ResponseCode::LiteSubscriptionQuotaExceeded);
         assert_eq!(ResponseCode::from(9999), ResponseCode::SystemError); // Edge case - unknown
                                                                          // defaults to SystemError
     }

@@ -16,7 +16,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
 use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
+use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME;
+use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
+use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
+use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use serde::Deserialize;
 use serde::Serialize;
@@ -170,6 +175,39 @@ impl SubscriptionGroupConfig {
         self.attributes
             .get(&CheetahString::from_static_str(LITE_BIND_TOPIC_ATTRIBUTE_NAME))
             .filter(|value| !value.is_empty())
+    }
+
+    #[inline]
+    pub fn lite_sub_client_quota(&self) -> i32 {
+        self.attributes
+            .get(&CheetahString::from_static_str(LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME))
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(SubscriptionGroupAttributes::lite_sub_client_quota_attribute().default_value()) as i32
+    }
+
+    #[inline]
+    pub fn lite_sub_exclusive(&self) -> bool {
+        self.attributes
+            .get(&CheetahString::from_static_str(LITE_SUB_MODEL_ATTRIBUTE_NAME))
+            .is_some_and(|value| value == "Exclusive")
+    }
+
+    #[inline]
+    pub fn reset_offset_in_exclusive_mode(&self) -> bool {
+        self.attributes
+            .get(&CheetahString::from_static_str(
+                LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME,
+            ))
+            .is_some_and(|value| value.parse::<bool>().unwrap_or(false))
+    }
+
+    #[inline]
+    pub fn reset_offset_on_unsubscribe(&self) -> bool {
+        self.attributes
+            .get(&CheetahString::from_static_str(
+                LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME,
+            ))
+            .is_some_and(|value| value.parse::<bool>().unwrap_or(false))
     }
 
     #[inline]
@@ -339,5 +377,43 @@ mod subscription_group_config_tests {
 
         config.set_lite_bind_topic(None);
         assert!(config.lite_bind_topic().is_none());
+    }
+
+    #[test]
+    fn lite_subscription_attributes_use_java_defaults() {
+        let config = SubscriptionGroupConfig::default();
+
+        assert_eq!(config.lite_sub_client_quota(), 2000);
+        assert!(!config.lite_sub_exclusive());
+        assert!(!config.reset_offset_in_exclusive_mode());
+        assert!(!config.reset_offset_on_unsubscribe());
+    }
+
+    #[test]
+    fn lite_subscription_attributes_parse_from_attribute_map() {
+        let mut config = SubscriptionGroupConfig::default();
+        config.set_attributes(HashMap::from([
+            (
+                CheetahString::from_static_str(LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("128"),
+            ),
+            (
+                CheetahString::from_static_str(LITE_SUB_MODEL_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("Exclusive"),
+            ),
+            (
+                CheetahString::from_static_str(LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("true"),
+            ),
+            (
+                CheetahString::from_static_str(LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("true"),
+            ),
+        ]));
+
+        assert_eq!(config.lite_sub_client_quota(), 128);
+        assert!(config.lite_sub_exclusive());
+        assert!(config.reset_offset_in_exclusive_mode());
+        assert!(config.reset_offset_on_unsubscribe());
     }
 }

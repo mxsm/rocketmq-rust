@@ -4387,7 +4387,7 @@ mod tests {
         );
         assert_eq!(body.get_max_lmq_num(), 32);
         assert_eq!(body.get_current_lmq_num(), 2);
-        assert_eq!(body.get_lite_subscription_count(), 2);
+        assert_eq!(body.get_lite_subscription_count(), 3);
         assert_eq!(
             body.get_topic_meta()
                 .get(&CheetahString::from_static_str("parent-topic")),

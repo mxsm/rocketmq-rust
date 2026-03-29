@@ -109,6 +109,16 @@ where
         }
     }
 
+    pub fn assign_reset_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32, offset: i64) {
+        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        self.consumer_offset_wrapper
+            .reset_offset_table
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(queue_id, offset);
+    }
+
     pub fn clean_offset_by_topic(&self, topic: &CheetahString) {
         let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
         let mut keys_to_remove = Vec::new();
