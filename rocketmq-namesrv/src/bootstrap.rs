@@ -18,15 +18,18 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::net::IpAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::network_util::NetworkUtil;
+use rocketmq_controller::ControllerManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
@@ -48,6 +51,8 @@ use tracing::instrument;
 use tracing::warn;
 
 use crate::processor::ClientRequestProcessor;
+use crate::processor::ClusterTestRequestProcessor;
+use crate::processor::ClusterTestRouteLookup;
 use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
 use crate::route::route_info_manager::RouteInfoManager;
@@ -148,6 +153,8 @@ pub struct NameServerBootstrap {
 pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
     server_config: Option<ServerConfig>,
+    controller_config: Option<ControllerConfig>,
+    cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
 }
 
 /// Core runtime managing NameServer lifecycle and operations
@@ -166,6 +173,11 @@ struct NameServerRuntime {
 }
 
 impl NameServerBootstrap {
+    #[inline]
+    pub(crate) fn runtime_inner(&self) -> ArcMut<NameServerRuntimeInner> {
+        self.name_server_runtime.inner.clone()
+    }
+
     /// Boot the NameServer and run until shutdown signal
     ///
     /// This is the main entry point that orchestrates:
@@ -184,7 +196,7 @@ impl NameServerBootstrap {
     #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown")]
     pub async fn boot_with_shutdown<F>(mut self, shutdown_signal: F) -> RocketMQResult<()>
     where
-        F: Future<Output = ()> + Send,
+        F: Future<Output = ()> + Send + 'static,
     {
         info!("Booting RocketMQ NameServer (Rust)...");
 
@@ -193,10 +205,13 @@ impl NameServerBootstrap {
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
 
-        tokio::join!(
-            self.name_server_runtime.start(),
-            relay_shutdown_signal(shutdown_tx, shutdown_signal)
-        );
+        let relay_handle = tokio::spawn(relay_shutdown_signal(shutdown_tx, shutdown_signal));
+        let start_result = self.name_server_runtime.start().await;
+        if !relay_handle.is_finished() {
+            relay_handle.abort();
+        }
+        let _ = relay_handle.await;
+        start_result?;
 
         info!("NameServer shutdown completed");
         Ok(())
@@ -312,20 +327,28 @@ impl NameServerRuntime {
     fn validate_runtime_config(&self) -> RocketMQResult<()> {
         let namesrv_config = self.inner.name_server_config();
 
-        if namesrv_config.cluster_test {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "clusterTest",
-                value: namesrv_config.cluster_test.to_string(),
-                reason: "cluster test mode is not implemented in rocketmq-namesrv yet".to_string(),
-            });
-        }
-
         if namesrv_config.enable_controller_in_namesrv {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "enableControllerInNamesrv",
-                value: namesrv_config.enable_controller_in_namesrv.to_string(),
-                reason: "controller-in-namesrv startup is not implemented in rocketmq-namesrv yet".to_string(),
-            });
+            let controller_config =
+                self.inner
+                    .controller_config()
+                    .ok_or_else(|| RocketMQError::ConfigInvalidValue {
+                        key: "enableControllerInNamesrv",
+                        value: namesrv_config.enable_controller_in_namesrv.to_string(),
+                        reason: "controller config is missing".to_string(),
+                    })?;
+
+            if controller_conflicts_with_namesrv(controller_config, self.inner.server_config()) {
+                return Err(RocketMQError::ConfigInvalidValue {
+                    key: "enableControllerInNamesrv",
+                    value: namesrv_config.enable_controller_in_namesrv.to_string(),
+                    reason: format!(
+                        "controller listen address {} conflicts with namesrv address {}:{}",
+                        controller_config.listen_addr,
+                        self.inner.server_config().bind_address,
+                        self.inner.server_config().listen_port
+                    ),
+                });
+            }
         }
 
         Ok(())
@@ -338,6 +361,28 @@ impl NameServerRuntime {
             RocketMQError::storage_read_failed("kv_config", format!("Configuration load error: {}", e))
         })?;
         debug!("KV configuration loaded successfully");
+
+        if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
+            cluster_test_route_lookup.start().await?;
+            debug!("Cluster test route lookup started successfully");
+        }
+
+        if self.inner.name_server_config().enable_controller_in_namesrv {
+            let controller_config = self
+                .inner
+                .controller_config()
+                .cloned()
+                .expect("controller config should exist when embedded controller is enabled");
+            let controller_manager = ArcMut::new(ControllerManager::new(controller_config).await?);
+            let initialized = ControllerManager::initialize(controller_manager.clone()).await?;
+            if !initialized {
+                return Err(RocketMQError::Internal(
+                    "controller manager initialization returned false".to_string(),
+                ));
+            }
+            self.inner.controller_manager = Some(controller_manager);
+            debug!("Embedded controller initialized successfully");
+        }
         Ok(())
     }
 
@@ -393,11 +438,11 @@ impl NameServerRuntime {
     /// 4. Waits for shutdown signal
     /// 5. Performs graceful shutdown
     #[instrument(skip(self), name = "runtime_start")]
-    pub async fn start(&mut self) {
+    pub async fn start(&mut self) -> RocketMQResult<()> {
         // Validate we're in Initialized state
         if let Err(e) = self.validate_state(&[RuntimeState::Initialized], "start") {
             error!("Cannot start: {}", e);
-            return;
+            return Err(e);
         }
 
         info!("Starting NameServer main loop...");
@@ -454,10 +499,20 @@ impl NameServerRuntime {
         // Start remoting client directly (no spawn needed as it's managed by self.inner)
         self.inner.remoting_client.start(weak_arc_mut).await;
 
+        if let Some(controller_manager) = self.inner.controller_manager().cloned() {
+            if let Err(error) = ControllerManager::start(controller_manager).await {
+                if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
+                    let _ = shutdown_tx.send(());
+                }
+                self.shutdown().await;
+                return Err(error.into());
+            }
+        }
+
         // Transition to Running state
         if let Err(e) = self.transition_to(RuntimeState::Running) {
             error!("Failed to transition to Running state: {}", e);
-            return;
+            return Err(e);
         }
 
         info!("NameServer is now running and accepting requests");
@@ -474,6 +529,8 @@ impl NameServerRuntime {
                 self.shutdown().await;
             }
         }
+
+        Ok(())
     }
 
     /// Perform graceful shutdown of all components
@@ -510,11 +567,22 @@ impl NameServerRuntime {
         info!("Phase 2/4: Stopping scheduled tasks...");
         self.scheduled_task_manager.cancel_all();
 
-        info!("Phase 3/4: Shutting down route info manager...");
+        info!("Phase 3/5: Shutting down embedded controller...");
+        if let Some(controller_manager) = self.inner.controller_manager() {
+            if let Err(error) = controller_manager.shutdown().await {
+                warn!("Embedded controller shutdown failed: {}", error);
+            }
+        }
+
+        info!("Phase 4/5: Shutting down route info manager...");
         self.inner.route_info_manager_mut().shutdown_unregister_service();
 
+        if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
+            cluster_test_route_lookup.shutdown().await;
+        }
+
         info!(
-            "Phase 4/4: Waiting for server task (timeout: {}s)...",
+            "Phase 5/5: Waiting for server task (timeout: {}s)...",
             TASK_JOIN_TIMEOUT.as_secs()
         );
         if let Err(e) = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await {
@@ -591,17 +659,22 @@ impl NameServerRuntime {
     /// - DefaultRequestProcessor: Handles all other requests
     #[inline]
     fn init_processors(&self) -> NameServerRequestProcessor {
-        let client_request_processor = ClientRequestProcessor::new(self.inner.clone());
+        let route_request_processor = if self.inner.name_server_config().cluster_test {
+            NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(ArcMut::new(
+                ClusterTestRequestProcessor::new(self.inner.clone()),
+            ))
+        } else {
+            NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(ClientRequestProcessor::new(
+                self.inner.clone(),
+            )))
+        };
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(self.inner.clone());
 
         let mut name_server_request_processor = NameServerRequestProcessor::new();
 
         // Register topic route query processor
-        name_server_request_processor.register_processor(
-            RequestCode::GetRouteinfoByTopic,
-            NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(client_request_processor)),
-        );
+        name_server_request_processor.register_processor(RequestCode::GetRouteinfoByTopic, route_request_processor);
 
         // Register default processor for all other requests
         name_server_request_processor.register_default_processor(
@@ -643,6 +716,8 @@ impl Builder {
         Builder {
             name_server_config: None,
             server_config: None,
+            controller_config: None,
+            cluster_test_route_lookup: None,
         }
     }
 
@@ -658,6 +733,27 @@ impl Builder {
         self
     }
 
+    #[inline]
+    pub fn set_controller_config(mut self, controller_config: ControllerConfig) -> Self {
+        self.controller_config = Some(controller_config);
+        self
+    }
+
+    #[inline]
+    pub fn set_controller_config_opt(mut self, controller_config: Option<ControllerConfig>) -> Self {
+        self.controller_config = controller_config;
+        self
+    }
+
+    #[inline]
+    pub(crate) fn set_cluster_test_route_lookup(
+        mut self,
+        cluster_test_route_lookup: Arc<ClusterTestRouteLookup>,
+    ) -> Self {
+        self.cluster_test_route_lookup = Some(cluster_test_route_lookup);
+        self
+    }
+
     /// Build the NameServerBootstrap with configured settings
     ///
     /// Creates all necessary components and initializes them immediately.
@@ -666,6 +762,21 @@ impl Builder {
         let name_server_config = self.name_server_config.unwrap_or_default();
         let tokio_client_config = TokioClientConfig::default();
         let server_config = self.server_config.unwrap_or_default();
+        let controller_config = if name_server_config.enable_controller_in_namesrv {
+            Some(self.controller_config.unwrap_or_else(|| {
+                ControllerConfig::default().with_rocketmq_home(name_server_config.rocketmq_home.clone())
+            }))
+        } else {
+            self.controller_config
+        };
+        let cluster_test_route_lookup = if name_server_config.cluster_test {
+            Some(
+                self.cluster_test_route_lookup
+                    .unwrap_or_else(|| Arc::new(ClusterTestRouteLookup::new(&name_server_config.product_env_name))),
+            )
+        } else {
+            self.cluster_test_route_lookup
+        };
 
         info!("Building NameServer with configuration:");
         info!("  - Listen port: {}", server_config.listen_port);
@@ -693,6 +804,9 @@ impl Builder {
             kvconfig_manager: None,
             remoting_client,
             broker_housekeeping_service: None,
+            controller_config,
+            controller_manager: None,
+            cluster_test_route_lookup,
         });
 
         // Check configuration flag for RouteInfoManager version
@@ -740,12 +854,15 @@ pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
     server_config: ServerConfig,
+    controller_config: Option<ControllerConfig>,
 
     // Mutable components (Option for delayed initialization)
     route_info_manager: Option<RouteInfoManagerWrapper>,
     kvconfig_manager: Option<KVConfigManager>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
+    controller_manager: Option<ArcMut<ControllerManager>>,
+    cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
 }
 
 impl NameServerRuntimeInner {
@@ -779,6 +896,16 @@ impl NameServerRuntimeInner {
     #[inline]
     pub fn server_config_mut(&mut self) -> &mut ServerConfig {
         &mut self.server_config
+    }
+
+    #[inline]
+    pub fn controller_config(&self) -> Option<&ControllerConfig> {
+        self.controller_config.as_ref()
+    }
+
+    #[inline]
+    pub fn controller_config_mut(&mut self) -> Option<&mut ControllerConfig> {
+        self.controller_config.as_mut()
     }
 
     pub fn get_all_configs_format_string(&self) -> Result<String, String> {
@@ -1155,6 +1282,32 @@ impl NameServerRuntimeInner {
             .as_ref()
             .expect("BrokerHousekeepingService not initialized")
     }
+
+    #[inline]
+    pub fn controller_manager(&self) -> Option<&ArcMut<ControllerManager>> {
+        self.controller_manager.as_ref()
+    }
+
+    #[inline]
+    pub fn cluster_test_route_lookup(&self) -> Option<&Arc<ClusterTestRouteLookup>> {
+        self.cluster_test_route_lookup.as_ref()
+    }
+}
+
+fn controller_conflicts_with_namesrv(controller_config: &ControllerConfig, server_config: &ServerConfig) -> bool {
+    if controller_config.listen_addr.port() != server_config.listen_port as u16 {
+        return false;
+    }
+
+    let bind_address = server_config.bind_address.as_str();
+    if bind_address == "0.0.0.0" || bind_address == "::" {
+        return true;
+    }
+
+    match bind_address.parse::<IpAddr>() {
+        Ok(bind_ip) => bind_ip.is_unspecified() || bind_ip == controller_config.listen_addr.ip(),
+        Err(_) => bind_address == controller_config.listen_addr.ip().to_string(),
+    }
 }
 
 fn push_config_entry(entries: &mut Vec<(&'static str, String)>, key: &'static str, value: impl ToString) {
@@ -1173,12 +1326,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
     use std::str;
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::constant::PermName;
+    use rocketmq_common::common::controller::ControllerConfig;
     use rocketmq_common::common::mix_all::string_to_properties;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::mq_version::RocketMqVersion;
@@ -1201,6 +1356,7 @@ mod tests {
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use tokio::sync::broadcast;
     use tokio::time::sleep;
 
     use super::*;
@@ -1219,6 +1375,27 @@ mod tests {
 
     fn build_bootstrap_with_default_v2() -> NameServerBootstrap {
         build_bootstrap_with_v2_config(NamesrvConfig::default())
+    }
+
+    fn reserve_local_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .expect("should reserve a local port")
+            .local_addr()
+            .expect("reserved listener should expose a local addr")
+            .port()
+    }
+
+    fn namesrv_server_config() -> ServerConfig {
+        ServerConfig {
+            listen_port: reserve_local_port() as u32,
+            bind_address: "127.0.0.1".to_string(),
+        }
+    }
+
+    fn embedded_controller_config() -> ControllerConfig {
+        ControllerConfig::default()
+            .with_node_info(1, format!("127.0.0.1:{}", reserve_local_port()).parse().unwrap())
+            .with_storage_path("".to_string())
     }
 
     async fn process_with_default_processor(
@@ -2048,35 +2225,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn boot_fails_fast_when_cluster_test_mode_is_enabled() {
+    async fn boot_supports_cluster_test_mode() {
         let namesrv_config = NamesrvConfig {
             cluster_test: true,
             ..NamesrvConfig::default()
         };
-        let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
+        let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(namesrv_server_config())
+            .build();
 
-        let error = bootstrap
+        bootstrap
             .boot_with_shutdown(async {})
             .await
-            .expect_err("cluster test mode should fail fast until implemented");
-
-        assert!(error.to_string().contains("clusterTest"));
+            .expect("cluster test mode should boot and shut down cleanly once implemented");
     }
 
     #[tokio::test]
-    async fn boot_fails_fast_when_controller_in_namesrv_is_enabled() {
+    async fn boot_supports_enable_controller_in_namesrv_mode() {
         let namesrv_config = NamesrvConfig {
             enable_controller_in_namesrv: true,
             ..NamesrvConfig::default()
         };
-        let bootstrap = Builder::new().set_name_server_config(namesrv_config).build();
+        let bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(namesrv_server_config())
+            .set_controller_config(embedded_controller_config())
+            .build();
 
-        let error = bootstrap
+        bootstrap
             .boot_with_shutdown(async {})
             .await
-            .expect_err("controller-in-namesrv mode should fail fast until implemented");
+            .expect("controller-in-namesrv mode should boot and shut down cleanly once implemented");
+    }
 
-        assert!(error.to_string().contains("enableControllerInNamesrv"));
+    #[tokio::test]
+    async fn enable_controller_in_namesrv_rejects_conflicting_listen_addr() {
+        let server_config = namesrv_server_config();
+        let conflicting_controller = ControllerConfig::default()
+            .with_node_info(1, format!("127.0.0.1:{}", server_config.listen_port).parse().unwrap());
+        let namesrv_config = NamesrvConfig {
+            enable_controller_in_namesrv: true,
+            ..NamesrvConfig::default()
+        };
+        let mut bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(server_config)
+            .set_controller_config(conflicting_controller)
+            .build();
+
+        let error = bootstrap
+            .name_server_runtime
+            .initialize()
+            .await
+            .expect_err("embedded controller should reject conflicting listen addresses");
+
+        assert!(error.to_string().contains("conflicts with namesrv address"));
+    }
+
+    #[tokio::test]
+    async fn enable_controller_in_namesrv_lifecycle_matches_namesrv_runtime() {
+        let namesrv_config = NamesrvConfig {
+            enable_controller_in_namesrv: true,
+            ..NamesrvConfig::default()
+        };
+        let mut bootstrap = Builder::new()
+            .set_name_server_config(namesrv_config)
+            .set_server_config(namesrv_server_config())
+            .set_controller_config(embedded_controller_config())
+            .build();
+
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        bootstrap.name_server_runtime.shutdown_tx = Some(shutdown_tx.clone());
+        bootstrap.name_server_runtime.shutdown_rx = Some(shutdown_rx);
+        bootstrap
+            .name_server_runtime
+            .initialize()
+            .await
+            .expect("runtime initialize should succeed");
+
+        let controller_manager = bootstrap
+            .name_server_runtime
+            .inner
+            .controller_manager()
+            .cloned()
+            .expect("embedded controller should be initialized");
+        assert!(controller_manager.is_initialized());
+        assert!(!controller_manager.is_running());
+
+        let mut runtime = bootstrap.name_server_runtime;
+        let start_handle = tokio::spawn(async move { runtime.start().await });
+        wait_until("embedded controller to start", || controller_manager.is_running()).await;
+
+        shutdown_tx
+            .send(())
+            .expect("shutdown broadcast should reach the running runtime");
+
+        start_handle
+            .await
+            .expect("runtime task should not panic")
+            .expect("runtime start should exit cleanly");
+
+        assert!(!controller_manager.is_running());
     }
 
     #[tokio::test]

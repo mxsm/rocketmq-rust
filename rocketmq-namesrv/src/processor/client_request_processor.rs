@@ -147,7 +147,7 @@ impl ClientRequestProcessor {
     }
 }
 
-fn encode_topic_route_response(
+pub(crate) fn encode_topic_route_response(
     topic_route_data: &TopicRouteData,
     request_version: i32,
     accept_standard_json_only: Option<bool>,
@@ -159,7 +159,7 @@ fn encode_topic_route_response(
     }
 }
 
-fn should_use_standard_json(request_version: i32, accept_standard_json_only: Option<bool>) -> bool {
+pub(crate) fn should_use_standard_json(request_version: i32, accept_standard_json_only: Option<bool>) -> bool {
     request_version >= RocketMqVersion::V4_9_4 as i32 || accept_standard_json_only.unwrap_or(false)
 }
 

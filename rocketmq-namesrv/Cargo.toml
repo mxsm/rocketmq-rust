@@ -32,6 +32,8 @@ rocketmq-rust     = { workspace = true }
 rocketmq-common   = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
+rocketmq-client   = { version = "0.8.0", path = "../rocketmq-client", package = "rocketmq-client-rust" }
+rocketmq-controller = { workspace = true }
 
 
 anyhow.workspace = true

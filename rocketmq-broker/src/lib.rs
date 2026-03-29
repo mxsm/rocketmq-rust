@@ -17,6 +17,7 @@
 #![feature(duration_constructors)]
 #![allow(clippy::mut_from_ref)]
 #![allow(clippy::result_large_err)]
+#![recursion_limit = "512"]
 
 pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;

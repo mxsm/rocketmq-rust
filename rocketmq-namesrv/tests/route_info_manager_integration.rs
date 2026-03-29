@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "512"]
+
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,6 +48,7 @@ use rocketmq_remoting::protocol::header::namesrv::register_broker_header::Regist
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
@@ -65,9 +69,12 @@ struct NamesrvHarness {
 }
 
 impl NamesrvHarness {
-    async fn start(namesrv_config: NamesrvConfig) -> Self {
+    async fn start(mut namesrv_config: NamesrvConfig) -> Self {
         let port = reserve_local_port();
         let addr = CheetahString::from_string(format!("127.0.0.1:{port}"));
+        let data_dir = isolated_namesrv_data_dir(port);
+        namesrv_config.kv_config_path = data_dir.join("kvConfig.json").display().to_string();
+        namesrv_config.config_store_path = data_dir.join("rocketmq-namesrv.properties").display().to_string();
         let server_config = ServerConfig {
             listen_port: port as u32,
             bind_address: "127.0.0.1".to_string(),
@@ -168,6 +175,12 @@ fn reserve_local_port() -> u16 {
         .local_addr()
         .expect("reserved listener should expose a local addr")
         .port()
+}
+
+fn isolated_namesrv_data_dir(port: u16) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rocketmq-namesrv-test-{}-{}", std::process::id(), port));
+    std::fs::create_dir_all(&dir).expect("namesrv integration test should create an isolated data dir");
+    dir
 }
 
 fn default_v2_namesrv_config() -> NamesrvConfig {
@@ -639,6 +652,77 @@ async fn namesrv_zone_route_accept_standard_json_only_preserves_standard_json_ov
         Some(&broker_id_two_addr)
     );
     assert!(!body.contains(other_zone_addr.as_str()));
+
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn namesrv_cluster_test_returns_local_order_conf_and_legacy_route_encoding_over_remoting() {
+    let product_env_name = format!("cluster-test-env-{}", reserve_local_port());
+    let harness = NamesrvHarness::start(NamesrvConfig {
+        use_route_info_manager_v2: true,
+        cluster_test: true,
+        order_message_enable: false,
+        product_env_name,
+        ..NamesrvConfig::default()
+    })
+    .await;
+
+    let cluster_name = CheetahString::from_static_str("cluster-test-cluster");
+    let broker_name = CheetahString::from_static_str("cluster-test-broker");
+    let broker_addr = CheetahString::from_static_str("127.0.0.1:11911");
+    let topic_name = CheetahString::from_static_str("cluster-test-topic");
+    let order_conf = CheetahString::from_static_str("broker-a:2");
+
+    let mut put_order_request = RemotingCommand::create_request_command(
+        RequestCode::PutKvConfig,
+        PutKVConfigRequestHeader::new(
+            CheetahString::from_static_str(ORDER_TOPIC_NAMESPACE),
+            topic_name.clone(),
+            order_conf.clone(),
+        ),
+    );
+    put_order_request.make_custom_header_to_net();
+    let put_order_response = harness.request(put_order_request).await.unwrap();
+    assert_eq!(ResponseCode::from(put_order_response.code()), ResponseCode::Success);
+
+    let register_response = harness
+        .request(register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            &topic_name,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(ResponseCode::from(register_response.code()), ResponseCode::Success);
+
+    let route_response = harness
+        .request(route_request_with_options(
+            &topic_name,
+            Some(true),
+            RocketMqVersion::V5_0_0 as i32,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        ResponseCode::from(route_response.code()),
+        ResponseCode::Success,
+        "unexpected route response remark: {:?}",
+        route_response.remark()
+    );
+
+    let body = route_response.body().expect("route response should include a body");
+    let topic_route_data = TopicRouteData::decode(body).expect("route response body should decode");
+    assert_eq!(topic_route_data.order_topic_conf.as_ref(), Some(&order_conf));
+    assert_eq!(
+        body.as_ref(),
+        topic_route_data
+            .encode()
+            .expect("legacy encoding should succeed")
+            .as_slice()
+    );
 
     harness.shutdown().await;
 }

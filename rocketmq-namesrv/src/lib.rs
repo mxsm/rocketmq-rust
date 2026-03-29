@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 #![allow(clippy::result_large_err)]
+#![recursion_limit = "512"]
 
 pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
 pub use self::namesrv_config_parse::parse_command_and_config_file;

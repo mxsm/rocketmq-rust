@@ -12,20 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "512"]
+
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process;
 
 use anyhow::bail;
 use clap::Parser;
+use config::Config;
+use rocketmq_common::common::controller::controller_config::RaftPeer;
+use rocketmq_common::common::controller::controller_config::StorageBackendType;
+use rocketmq_common::common::metrics::MetricsExporterType;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
+use rocketmq_controller::ControllerCli;
+use rocketmq_controller::ControllerConfig;
 use rocketmq_error::Result;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
+use serde::Deserialize;
 use tracing::error;
 use tracing::info;
 
@@ -54,10 +64,10 @@ async fn main() -> Result<()> {
 
     // Parse and merge configurations
     match parse_and_merge_config(&args) {
-        Ok((namesrv_config, server_config)) => {
+        Ok((namesrv_config, server_config, controller_config)) => {
             // Handle print config item mode
             if args.print_config_item {
-                print_config_and_exit(&namesrv_config, &server_config);
+                print_config_and_exit(&namesrv_config, &server_config, controller_config.as_ref());
             }
 
             // Validate ROCKETMQ_HOME is set
@@ -84,6 +94,7 @@ async fn main() -> Result<()> {
             Builder::new()
                 .set_name_server_config(namesrv_config)
                 .set_server_config(server_config)
+                .set_controller_config_opt(controller_config)
                 .build()
                 .boot()
                 .await?;
@@ -99,7 +110,7 @@ async fn main() -> Result<()> {
 
 /// Parse configuration file and merge with command line arguments
 /// Command line arguments take precedence over config file settings
-fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig)> {
+fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig, Option<ControllerConfig>)> {
     let home = EnvUtils::get_rocketmq_home();
     info!("RocketMQ Home: {}", home);
 
@@ -128,11 +139,21 @@ fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig)> 
         bind_address: args.bind_address.clone().unwrap_or_else(|| "0.0.0.0".to_string()),
     };
 
-    Ok((namesrv_config, server_config))
+    let controller_config = if namesrv_config.enable_controller_in_namesrv {
+        Some(load_controller_config(args.config_file.clone(), &namesrv_config)?)
+    } else {
+        None
+    };
+
+    Ok((namesrv_config, server_config, controller_config))
 }
 
 /// Print all configuration items and exit
-fn print_config_and_exit(namesrv_config: &NamesrvConfig, server_config: &ServerConfig) {
+fn print_config_and_exit(
+    namesrv_config: &NamesrvConfig,
+    server_config: &ServerConfig,
+    controller_config: Option<&ControllerConfig>,
+) {
     println!("\n========== Name Server Configuration ==========");
     println!("rocketmqHome = {}", namesrv_config.rocketmq_home);
     println!("kvConfigPath = {}", namesrv_config.kv_config_path);
@@ -188,8 +209,199 @@ fn print_config_and_exit(namesrv_config: &NamesrvConfig, server_config: &ServerC
     println!("listenPort = {}", server_config.listen_port);
     println!("bindAddress = {}", server_config.bind_address);
 
+    if let Some(controller_config) = controller_config {
+        ControllerCli::print_config(controller_config);
+    }
+
     println!("\n===========================================\n");
     process::exit(0);
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ControllerConfigOverrides {
+    rocketmq_home: Option<String>,
+    config_store_path: Option<PathBuf>,
+    controller_type: Option<String>,
+    scan_not_active_broker_interval: Option<u64>,
+    controller_thread_pool_nums: Option<usize>,
+    controller_request_thread_pool_queue_capacity: Option<usize>,
+    mapped_file_size: Option<usize>,
+    controller_store_path: Option<String>,
+    elect_master_max_retry_count: Option<u32>,
+    enable_elect_unclean_master: Option<bool>,
+    is_process_read_event: Option<bool>,
+    notify_broker_role_changed: Option<bool>,
+    scan_inactive_master_interval: Option<u64>,
+    metrics_exporter_type: Option<String>,
+    metrics_grpc_exporter_target: Option<String>,
+    metrics_grpc_exporter_header: Option<String>,
+    metric_grpc_exporter_time_out_in_mills: Option<u64>,
+    metric_grpc_exporter_interval_in_mills: Option<u64>,
+    metric_logging_exporter_interval_in_mills: Option<u64>,
+    metrics_prom_exporter_port: Option<u16>,
+    metrics_prom_exporter_host: Option<String>,
+    metrics_label: Option<String>,
+    metrics_in_delta: Option<bool>,
+    config_black_list: Option<String>,
+    node_id: Option<u64>,
+    listen_addr: Option<SocketAddr>,
+    raft_peers: Option<String>,
+    controller_peers: Option<String>,
+    election_timeout_ms: Option<u64>,
+    heartbeat_interval_ms: Option<u64>,
+    storage_path: Option<String>,
+    storage_backend: Option<String>,
+    enable_elect_unclean_master_local: Option<bool>,
+}
+
+fn load_controller_config(config_file: Option<PathBuf>, namesrv_config: &NamesrvConfig) -> Result<ControllerConfig> {
+    let mut controller_config = ControllerConfig::default().with_rocketmq_home(namesrv_config.rocketmq_home.clone());
+
+    if let Some(config_file) = config_file {
+        let cfg = Config::builder()
+            .add_source(config::File::from(config_file.as_path()))
+            .build()?;
+        let overrides = cfg.try_deserialize::<ControllerConfigOverrides>()?;
+        apply_controller_config_overrides(&mut controller_config, overrides)?;
+    }
+
+    Ok(controller_config)
+}
+
+fn apply_controller_config_overrides(
+    controller_config: &mut ControllerConfig,
+    overrides: ControllerConfigOverrides,
+) -> Result<()> {
+    if let Some(rocketmq_home) = overrides.rocketmq_home {
+        controller_config.rocketmq_home = rocketmq_home;
+    }
+    if let Some(config_store_path) = overrides.config_store_path {
+        controller_config.config_store_path = config_store_path;
+    }
+    if let Some(controller_type) = overrides.controller_type {
+        controller_config.controller_type = controller_type;
+    }
+    if let Some(scan_not_active_broker_interval) = overrides.scan_not_active_broker_interval {
+        controller_config.scan_not_active_broker_interval = scan_not_active_broker_interval;
+    }
+    if let Some(controller_thread_pool_nums) = overrides.controller_thread_pool_nums {
+        controller_config.controller_thread_pool_nums = controller_thread_pool_nums;
+    }
+    if let Some(controller_request_thread_pool_queue_capacity) = overrides.controller_request_thread_pool_queue_capacity
+    {
+        controller_config.controller_request_thread_pool_queue_capacity = controller_request_thread_pool_queue_capacity;
+    }
+    if let Some(mapped_file_size) = overrides.mapped_file_size {
+        controller_config.mapped_file_size = mapped_file_size;
+    }
+    if let Some(controller_store_path) = overrides.controller_store_path {
+        controller_config.controller_store_path = controller_store_path;
+    }
+    if let Some(elect_master_max_retry_count) = overrides.elect_master_max_retry_count {
+        controller_config.elect_master_max_retry_count = elect_master_max_retry_count;
+    }
+    if let Some(enable_elect_unclean_master) = overrides.enable_elect_unclean_master {
+        controller_config.enable_elect_unclean_master = enable_elect_unclean_master;
+    }
+    if let Some(is_process_read_event) = overrides.is_process_read_event {
+        controller_config.is_process_read_event = is_process_read_event;
+    }
+    if let Some(notify_broker_role_changed) = overrides.notify_broker_role_changed {
+        controller_config.notify_broker_role_changed = notify_broker_role_changed;
+    }
+    if let Some(scan_inactive_master_interval) = overrides.scan_inactive_master_interval {
+        controller_config.scan_inactive_master_interval = scan_inactive_master_interval;
+    }
+    if let Some(metrics_exporter_type) = overrides.metrics_exporter_type {
+        controller_config.metrics_exporter_type = metrics_exporter_type
+            .parse::<MetricsExporterType>()
+            .map_err(|_| anyhow::anyhow!("invalid metricsExporterType: {}", metrics_exporter_type))?;
+    }
+    if let Some(metrics_grpc_exporter_target) = overrides.metrics_grpc_exporter_target {
+        controller_config.metrics_grpc_exporter_target = metrics_grpc_exporter_target;
+    }
+    if let Some(metrics_grpc_exporter_header) = overrides.metrics_grpc_exporter_header {
+        controller_config.metrics_grpc_exporter_header = metrics_grpc_exporter_header;
+    }
+    if let Some(metric_grpc_exporter_time_out_in_mills) = overrides.metric_grpc_exporter_time_out_in_mills {
+        controller_config.metric_grpc_exporter_time_out_in_mills = metric_grpc_exporter_time_out_in_mills;
+    }
+    if let Some(metric_grpc_exporter_interval_in_mills) = overrides.metric_grpc_exporter_interval_in_mills {
+        controller_config.metric_grpc_exporter_interval_in_mills = metric_grpc_exporter_interval_in_mills;
+    }
+    if let Some(metric_logging_exporter_interval_in_mills) = overrides.metric_logging_exporter_interval_in_mills {
+        controller_config.metric_logging_exporter_interval_in_mills = metric_logging_exporter_interval_in_mills;
+    }
+    if let Some(metrics_prom_exporter_port) = overrides.metrics_prom_exporter_port {
+        controller_config.metrics_prom_exporter_port = metrics_prom_exporter_port;
+    }
+    if let Some(metrics_prom_exporter_host) = overrides.metrics_prom_exporter_host {
+        controller_config.metrics_prom_exporter_host = metrics_prom_exporter_host;
+    }
+    if let Some(metrics_label) = overrides.metrics_label {
+        controller_config.metrics_label = metrics_label;
+    }
+    if let Some(metrics_in_delta) = overrides.metrics_in_delta {
+        controller_config.metrics_in_delta = metrics_in_delta;
+    }
+    if let Some(config_black_list) = overrides.config_black_list {
+        controller_config.config_black_list = config_black_list;
+    }
+    if let Some(node_id) = overrides.node_id {
+        controller_config.node_id = node_id;
+    }
+    if let Some(listen_addr) = overrides.listen_addr {
+        controller_config.listen_addr = listen_addr;
+    }
+    if let Some(raft_peers) = overrides.raft_peers {
+        controller_config.raft_peers = parse_raft_peers(&raft_peers)?;
+    }
+    if let Some(controller_peers) = overrides.controller_peers {
+        controller_config.controller_peers = parse_raft_peers(&controller_peers)?;
+    }
+    if let Some(election_timeout_ms) = overrides.election_timeout_ms {
+        controller_config.election_timeout_ms = election_timeout_ms;
+    }
+    if let Some(heartbeat_interval_ms) = overrides.heartbeat_interval_ms {
+        controller_config.heartbeat_interval_ms = heartbeat_interval_ms;
+    }
+    if let Some(storage_path) = overrides.storage_path {
+        controller_config.storage_path = storage_path;
+    }
+    if let Some(storage_backend) = overrides.storage_backend {
+        controller_config.storage_backend = match storage_backend.to_ascii_lowercase().as_str() {
+            "rocks_db" | "rocksdb" => StorageBackendType::RocksDB,
+            "file" => StorageBackendType::File,
+            "memory" => StorageBackendType::Memory,
+            _ => bail!("invalid storageBackend: {}", storage_backend),
+        };
+    }
+    if let Some(enable_elect_unclean_master_local) = overrides.enable_elect_unclean_master_local {
+        controller_config.enable_elect_unclean_master_local = enable_elect_unclean_master_local;
+    }
+
+    Ok(())
+}
+
+fn parse_raft_peers(value: &str) -> Result<Vec<RaftPeer>> {
+    if value.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    value
+        .split(';')
+        .filter(|entry| !entry.trim().is_empty())
+        .map(|entry| {
+            let (id, addr) = entry
+                .split_once('-')
+                .ok_or_else(|| anyhow::anyhow!("invalid raft peer entry: {}", entry))?;
+            Ok(RaftPeer {
+                id: id.parse()?,
+                addr: addr.parse()?,
+            })
+        })
+        .collect()
 }
 
 /// Command line arguments structure

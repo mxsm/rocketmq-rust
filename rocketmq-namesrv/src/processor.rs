@@ -24,9 +24,12 @@ use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 
 pub use self::client_request_processor::ClientRequestProcessor;
+pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
+pub(crate) use self::cluster_test_request_processor::ClusterTestRouteLookup;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
 
 mod client_request_processor;
+mod cluster_test_request_processor;
 pub mod default_request_processor;
 
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
@@ -34,6 +37,7 @@ const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 #[derive(Clone)]
 pub enum NameServerRequestProcessorWrapper {
     ClientRequestProcessor(ArcMut<ClientRequestProcessor>),
+    ClusterTestRequestProcessor(ArcMut<ClusterTestRequestProcessor>),
     DefaultRequestProcessor(ArcMut<DefaultRequestProcessor>),
 }
 
@@ -48,6 +52,9 @@ impl RequestProcessor for NameServerRequestProcessorWrapper {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
                 processor.process_request(channel, ctx, request).await
             }
+            NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
             NameServerRequestProcessorWrapper::DefaultRequestProcessor(processor) => {
                 processor.process_request(channel, ctx, request).await
             }
@@ -57,6 +64,9 @@ impl RequestProcessor for NameServerRequestProcessorWrapper {
     fn reject_request(&self, code: i32) -> RejectRequestResponse {
         match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
+                RequestProcessor::reject_request(processor.as_ref(), code)
+            }
+            NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(processor) => {
                 RequestProcessor::reject_request(processor.as_ref(), code)
             }
             NameServerRequestProcessorWrapper::DefaultRequestProcessor(processor) => {
