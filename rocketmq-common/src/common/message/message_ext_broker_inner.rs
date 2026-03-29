@@ -25,6 +25,7 @@ use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
+use crate::common::message::message_decoder::message_properties_to_string;
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
@@ -256,11 +257,12 @@ impl MessageTrait for MessageExtBrokerInner {
     #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.message_ext_inner.put_property(key, value);
+        self.properties_string = message_properties_to_string(self.message_ext_inner.get_properties());
     }
 
     #[inline]
     fn clear_property(&mut self, name: &str) {
-        self.message_ext_inner.clear_property(name);
+        self.delete_property(name);
     }
 
     #[inline]
@@ -309,7 +311,8 @@ impl MessageTrait for MessageExtBrokerInner {
 
     #[inline]
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
-        self.message_ext_inner.set_properties(properties);
+        self.message_ext_inner.set_properties(properties.clone());
+        self.properties_string = message_properties_to_string(&properties);
     }
 
     #[inline]
@@ -385,7 +388,10 @@ impl From<crate::common::message::broker_message::BrokerMessage> for MessageExtB
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::MessageExtBrokerInner;
+    use crate::common::message::message_decoder::string_to_message_properties;
     use crate::common::message::MessageTrait;
     use cheetah_string::CheetahString;
 
@@ -395,5 +401,26 @@ mod tests {
         MessageTrait::set_transaction_id(&mut message, CheetahString::from("tx-123"));
 
         assert_eq!(message.get_transaction_id(), Some(&CheetahString::from("tx-123")));
+    }
+
+    #[test]
+    fn message_ext_broker_inner_put_property_updates_properties_string() {
+        let mut message = MessageExtBrokerInner::default();
+
+        message.put_property(CheetahString::from("k"), CheetahString::from("v"));
+
+        let decoded = string_to_message_properties(Some(&CheetahString::from(message.properties_string())));
+        assert_eq!(decoded.get("k").map(CheetahString::as_str), Some("v"));
+    }
+
+    #[test]
+    fn message_ext_broker_inner_set_properties_updates_properties_string() {
+        let mut message = MessageExtBrokerInner::default();
+        let properties = HashMap::from([(CheetahString::from("k"), CheetahString::from("v"))]);
+
+        message.set_properties(properties);
+
+        let decoded = string_to_message_properties(Some(&CheetahString::from(message.properties_string())));
+        assert_eq!(decoded.get("k").map(CheetahString::as_str), Some("v"));
     }
 }

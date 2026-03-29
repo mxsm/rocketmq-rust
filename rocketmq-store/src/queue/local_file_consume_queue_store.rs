@@ -359,13 +359,23 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn increase_lmq_offset(&self, queue_key: &str, message_num: i16) {
+        let queue_key = CheetahString::from(queue_key);
         self.inner
             .queue_offset_operator
-            .increase_queue_offset(CheetahString::from(queue_key), message_num);
+            .increase_queue_offset(queue_key.clone(), message_num);
+        self.inner
+            .queue_offset_operator
+            .increase_lmq_offset(&queue_key, message_num);
     }
 
     fn get_lmq_queue_offset(&self, queue_key: &str) -> i64 {
-        self.inner.queue_offset_operator.current_queue_offset(&queue_key.into())
+        let queue_key = CheetahString::from(queue_key);
+        let lmq_offset = self.inner.queue_offset_operator.get_lmq_offset(&queue_key);
+        if lmq_offset > 0 {
+            lmq_offset
+        } else {
+            self.inner.queue_offset_operator.current_queue_offset(&queue_key)
+        }
     }
 
     fn get_lmq_num(&self) -> i32 {

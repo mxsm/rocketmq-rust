@@ -113,6 +113,7 @@ use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
+use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
@@ -692,6 +693,10 @@ impl BrokerRuntime {
         broker_request_processor.register_processor(
             RequestCode::PopMessage as i32,
             BrokerProcessorType::Pop(pop_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::PopLiteMessage as i32,
+            BrokerProcessorType::PopLite(ArcMut::new(PopLiteMessageProcessor::new(self.inner.clone()))),
         );
 
         //AckMessageProcessor
@@ -3315,6 +3320,10 @@ mod tests {
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::entity::ClientGroup;
     use rocketmq_common::common::lite::to_lmq_name;
+    use rocketmq_common::common::message::message_decoder;
+    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
@@ -3349,6 +3358,7 @@ mod tests {
     use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
     use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+    use rocketmq_remoting::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
     use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -3358,6 +3368,7 @@ mod tests {
     use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use rocketmq_store::base::message_status_enum::GetMessageStatus;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
@@ -3485,7 +3496,10 @@ mod tests {
         });
         let message_store_config = Arc::new(MessageStoreConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            enable_lmq: true,
+            enable_multi_dispatch: true,
             max_lmq_consume_queue_num: 32,
+            read_uncommitted: true,
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -3563,6 +3577,38 @@ mod tests {
             0,
             offset,
         );
+    }
+
+    async fn seed_lmq_message(runtime: &mut BrokerRuntime, lite_topic: &str, body: &'static [u8]) -> i64 {
+        let inner = runtime.inner_for_test();
+        let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", lite_topic).expect("lmq name"));
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(CheetahString::from_static_str("parent-topic"));
+        message.message_ext_inner.set_queue_id(0);
+        message.set_body(Bytes::from_static(body));
+        message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            lmq_name,
+        );
+
+        let put_result = inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .put_message(message)
+            .await;
+        assert!(put_result.is_ok(), "seed lmq message should succeed");
+        let wrote_offset = put_result
+            .append_message_result()
+            .expect("seed message should expose append result")
+            .wrote_offset;
+        inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .reput_once()
+            .await;
+        wrote_offset
     }
 
     async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
@@ -4584,6 +4630,154 @@ mod tests {
         );
         assert!(dispatcher
             .pending_events(&CheetahString::from_static_str("client-2"))
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn pop_lite_message_without_events_returns_polling_timeout() {
+        let mut runtime = new_lite_test_runtime("pop-lite-route").await;
+        seed_lite_query_state(&mut runtime);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 60_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: None,
+            rpc: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("pop lite should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::PollingTimeout);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn pop_lite_message_returns_dispatched_lmq_payload_and_advances_offset() {
+        let mut runtime = new_lite_test_runtime("pop-lite-consume").await;
+        seed_lite_query_state(&mut runtime);
+        let commit_log_offset = seed_lmq_message(&mut runtime, "child-a", b"lite-body").await;
+        let expected_lmq_name = to_lmq_name("parent-topic", "child-a").expect("child-a lmq");
+        let seeded = runtime
+            .inner
+            .message_store()
+            .expect("message store should be initialized")
+            .look_message_by_offset(commit_log_offset)
+            .expect("seeded parent message should be readable");
+        assert_eq!(seeded.topic(), &CheetahString::from_static_str("parent-topic"));
+        assert_eq!(
+            seeded
+                .property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_INNER_MULTI_DISPATCH
+                ))
+                .as_deref(),
+            Some(expected_lmq_name.as_str())
+        );
+        assert_eq!(
+            seeded
+                .property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET
+                ))
+                .as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            runtime
+                .inner
+                .message_store()
+                .expect("message store should be initialized")
+                .get_max_offset_in_queue(&CheetahString::from_static_str("parent-topic"), 0),
+            1
+        );
+        let lmq_name = CheetahString::from_string(expected_lmq_name);
+        assert_eq!(
+            runtime
+                .inner
+                .message_store()
+                .expect("message store should be initialized")
+                .get_max_offset_in_queue(&lmq_name, 0),
+            1
+        );
+        let direct_read = runtime
+            .inner
+            .message_store()
+            .expect("message store should be initialized")
+            .get_message(&CheetahString::from_static_str("group-a"), &lmq_name, 0, 0, 1, None)
+            .await
+            .expect("direct lmq read should return a result");
+        assert_eq!(direct_read.status(), Some(GetMessageStatus::Found));
+        runtime.inner.lite_event_dispatcher().do_full_dispatch(
+            &CheetahString::from_static_str("client-1"),
+            &CheetahString::from_static_str("group-a"),
+            &HashSet::from([lmq_name.clone()]),
+        );
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let pop_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 60_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: None,
+            rpc: None,
+        };
+        let mut pop_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, pop_header);
+        pop_request.make_custom_header_to_net();
+        let mut pop_response = processor
+            .process_request(channel, ctx, &mut pop_request)
+            .await
+            .expect("pop lite should succeed")
+            .expect("pop lite should return a response");
+
+        assert_eq!(ResponseCode::from(pop_response.code()), ResponseCode::Success);
+        let body = pop_response
+            .take_body()
+            .expect("pop lite success response should contain a body");
+        let mut bytes = body;
+        let message = message_decoder::decode(&mut bytes, true, false, false, false, false)
+            .expect("decode pop lite response message");
+        assert_eq!(message.topic(), &CheetahString::from_static_str("parent-topic"));
+        assert_eq!(
+            message
+                .property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_INNER_MULTI_DISPATCH
+                ))
+                .as_deref(),
+            Some(lmq_name.as_str())
+        );
+        assert_eq!(message.body(), Some(Bytes::from_static(b"lite-body")));
+        assert_eq!(
+            runtime.inner.consumer_offset_manager().query_offset(
+                &CheetahString::from_static_str("group-a"),
+                &lmq_name,
+                0,
+            ),
+            1
+        );
+        assert!(runtime
+            .inner
+            .lite_event_dispatcher()
+            .pending_events(&CheetahString::from_static_str("client-1"))
             .is_empty());
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());

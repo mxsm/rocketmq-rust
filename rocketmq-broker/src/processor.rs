@@ -36,6 +36,7 @@ use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProces
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
+use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
@@ -58,6 +59,7 @@ pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
 pub(crate) mod pop_inflight_message_counter;
+pub(crate) mod pop_lite_message_processor;
 pub(crate) mod pop_message_processor;
 pub(crate) mod processor_service;
 pub(crate) mod pull_message_processor;
@@ -73,6 +75,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Pull(ArcMut<PullMessageProcessor<MS>>),
     Peek(ArcMut<PeekMessageProcessor<MS>>),
     Pop(ArcMut<PopMessageProcessor<MS>>),
+    PopLite(ArcMut<PopLiteMessageProcessor<MS>>),
     Ack(ArcMut<AckMessageProcessor<MS>>),
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
     Notification(ArcMut<NotificationProcessor<MS>>),
@@ -105,6 +108,7 @@ where
             BrokerProcessorType::Pull(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Peek(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Pop(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::PopLite(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Ack(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::ChangeInvisible(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Notification(processor) => processor.process_request(channel, ctx, request).await,
@@ -130,6 +134,7 @@ where
             BrokerProcessorType::Pull(processor) => processor.reject_request(code),
             BrokerProcessorType::Peek(processor) => processor.reject_request(code),
             BrokerProcessorType::Pop(processor) => processor.reject_request(code),
+            BrokerProcessorType::PopLite(processor) => processor.reject_request(code),
             BrokerProcessorType::Ack(processor) => processor.reject_request(code),
             BrokerProcessorType::ChangeInvisible(processor) => processor.reject_request(code),
             BrokerProcessorType::Notification(processor) => processor.reject_request(code),

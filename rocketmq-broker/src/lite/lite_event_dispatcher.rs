@@ -84,6 +84,13 @@ impl LiteEventDispatcher {
             .map(|entry| entry.events.iter().cloned().collect())
             .unwrap_or_default()
     }
+
+    pub(crate) fn take_pending_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
+        self.client_events
+            .remove(client_id)
+            .map(|(_, entry)| entry.events.into_iter().collect())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -119,5 +126,21 @@ mod tests {
         assert_eq!(dispatcher.event_map_size(), 1);
         assert_eq!(dispatcher.pending_events(&client_id).len(), 2);
         assert!(dispatcher.get_client_last_access_time(&client_id) > 0);
+    }
+
+    #[test]
+    fn take_pending_events_drains_client_event_state() {
+        let dispatcher = LiteEventDispatcher::default();
+        let client_id = CheetahString::from_static_str("client-a");
+        let group = CheetahString::from_static_str("group-a");
+        let lmq_names = HashSet::from([CheetahString::from_static_str("%LMQ%$parent$child-a")]);
+
+        dispatcher.do_full_dispatch(&client_id, &group, &lmq_names);
+
+        assert_eq!(
+            dispatcher.take_pending_events(&client_id),
+            vec![CheetahString::from_static_str("%LMQ%$parent$child-a")]
+        );
+        assert_eq!(dispatcher.event_map_size(), 0);
     }
 }

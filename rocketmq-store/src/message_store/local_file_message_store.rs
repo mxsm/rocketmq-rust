@@ -50,9 +50,11 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit;
+use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::running::running_stats::RunningStats;
@@ -326,6 +328,77 @@ impl LocalFileMessageStore {
             return None;
         }
         self.topic_config_table.get(topic).as_deref().cloned()
+    }
+
+    fn prepare_lmq_dispatch(&self, msg: &mut MessageExtBrokerInner) {
+        if !self.message_store_config.enable_multi_dispatch {
+            return;
+        }
+        let Some(multi_dispatch_queue) = msg.property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+            return;
+        };
+        if multi_dispatch_queue.is_empty() {
+            return;
+        }
+        if msg
+            .property(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET)
+            .is_some_and(|queue_offset| !queue_offset.is_empty())
+        {
+            return;
+        }
+
+        let queue_names: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        let queue_keys = self.collect_lmq_dispatch_queue_keys_from_names(&queue_names);
+        if queue_keys.len() != queue_names.len() {
+            return;
+        }
+
+        let queue_offsets = queue_keys
+            .iter()
+            .map(|queue_key| {
+                self.consume_queue_store
+                    .get_lmq_queue_offset(queue_key.as_str())
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(MULTI_DISPATCH_QUEUE_SPLITTER);
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_string(queue_offsets),
+        );
+    }
+
+    fn collect_lmq_dispatch_queue_keys(&self, msg: &MessageExtBrokerInner) -> Vec<String> {
+        let Some(multi_dispatch_queue) = msg.property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+            return Vec::new();
+        };
+        let queue_names: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        self.collect_lmq_dispatch_queue_keys_from_names(&queue_names)
+    }
+
+    fn collect_lmq_dispatch_queue_keys_from_names(&self, queue_names: &[&str]) -> Vec<String> {
+        if !self.message_store_config.enable_lmq {
+            return Vec::new();
+        }
+
+        queue_names
+            .iter()
+            .filter(|queue_name| is_lmq(Some(queue_name)))
+            .map(|queue_name| format!("{queue_name}-{LMQ_QUEUE_ID}"))
+            .collect()
+    }
+
+    fn update_lmq_offsets(&self, queue_keys: &[String], message_num: i16) {
+        for queue_key in queue_keys {
+            self.consume_queue_store
+                .increase_lmq_offset(queue_key.as_str(), message_num);
+        }
+    }
+
+    fn get_lmq_dispatch_message_num(&self, msg: &MessageExtBrokerInner) -> i16 {
+        msg.property(MessageConst::PROPERTY_INNER_NUM)
+            .and_then(|message_num| message_num.parse::<i16>().ok())
+            .unwrap_or(1)
     }
 
     fn is_temp_file_exist(&self) -> bool {
@@ -800,6 +873,9 @@ impl MessageStore for LocalFileMessageStore {
                 return result;
             }
         }
+        self.prepare_lmq_dispatch(&mut msg);
+        let lmq_dispatch_queue_keys = self.collect_lmq_dispatch_queue_keys(&msg);
+        let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&msg);
 
         if msg
             .message_ext_inner
@@ -841,6 +917,9 @@ impl MessageStore for LocalFileMessageStore {
 
         // Notify ReputMessageService that new message has arrived
         if result.is_ok() {
+            if !lmq_dispatch_queue_keys.is_empty() {
+                self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
+            }
             self.reput_message_service.notify_new_message();
         }
 
@@ -853,6 +932,9 @@ impl MessageStore for LocalFileMessageStore {
                 return result;
             }
         }
+        self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
+        let lmq_dispatch_queue_keys = self.collect_lmq_dispatch_queue_keys(&message_ext_batch.message_ext_broker_inner);
+        let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&message_ext_batch.message_ext_broker_inner);
 
         let begin_time = Instant::now();
         //put message to commit log
@@ -871,6 +953,9 @@ impl MessageStore for LocalFileMessageStore {
 
         // Notify ReputMessageService that new messages have arrived
         if result.is_ok() {
+            if !lmq_dispatch_queue_keys.is_empty() {
+                self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
+            }
             self.reput_message_service.notify_new_message();
         }
 

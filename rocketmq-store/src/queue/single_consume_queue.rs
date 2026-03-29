@@ -26,6 +26,10 @@ use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::mix_all::is_lmq;
+use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
+use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
@@ -319,8 +323,65 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         None
     }
 
-    fn multi_dispatch_lmq_queue(&self, request: &DispatchRequest, max_retries: i32) {
-        error!(" multi_dispatch_lmq_queue is not implemented yet ");
+    fn multi_dispatch_lmq_queue(&self, request: &DispatchRequest, _max_retries: i32) {
+        let Some(properties_map) = request.properties_map.as_ref() else {
+            return;
+        };
+        let Some(multi_dispatch_queue) = properties_map.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+            return;
+        };
+        let Some(multi_queue_offset) = properties_map.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET) else {
+            return;
+        };
+
+        let queues: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        let queue_offsets: Vec<&str> = multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        if queues.len() != queue_offsets.len() {
+            error!(
+                "[BUG] queues length mismatches queueOffsets length for topic {}",
+                request.topic
+            );
+            return;
+        }
+
+        for (queue_name, queue_offset) in queues.into_iter().zip(queue_offsets) {
+            if queue_name.chars().any(std::path::is_separator) {
+                continue;
+            }
+
+            let Ok(queue_offset) = queue_offset.parse::<i64>() else {
+                warn!(
+                    "Skip invalid multi-dispatch queue offset, topic={}, queueName={}, queueOffset={}",
+                    request.topic, queue_name, queue_offset
+                );
+                continue;
+            };
+
+            let queue_id = if self.message_store.get_message_store_config().enable_lmq && is_lmq(Some(queue_name)) {
+                LMQ_QUEUE_ID as i32
+            } else {
+                request.queue_id
+            };
+
+            let Some(mut consume_queue) = self
+                .message_store
+                .find_consume_queue(&CheetahString::from(queue_name), queue_id)
+            else {
+                warn!(
+                    "Skip multi-dispatch queue because consume queue lookup failed, topic={}, queueName={}, queueId={}",
+                    request.topic, queue_name, queue_id
+                );
+                continue;
+            };
+
+            let mut lmq_dispatch_request = request.clone();
+            lmq_dispatch_request.topic = CheetahString::from(queue_name);
+            lmq_dispatch_request.queue_id = queue_id;
+            lmq_dispatch_request.consume_queue_offset = queue_offset;
+            lmq_dispatch_request.properties_map = None;
+
+            consume_queue.put_message_position_info_wrapper(&lmq_dispatch_request);
+        }
     }
 
     /// Binary search within a mapped file to find the offset by timestamp.
