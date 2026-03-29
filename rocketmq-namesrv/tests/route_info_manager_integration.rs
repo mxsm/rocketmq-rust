@@ -60,6 +60,7 @@ use tokio::time::Instant;
 const REQUEST_TIMEOUT_MILLIS: u64 = 3_000;
 const MASTER_ID: u64 = 0;
 const ORDER_TOPIC_NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
+const STARTUP_RETRY_LIMIT: usize = 3;
 
 struct NamesrvHarness {
     addr: CheetahString,
@@ -70,74 +71,63 @@ struct NamesrvHarness {
 
 impl NamesrvHarness {
     async fn start(mut namesrv_config: NamesrvConfig) -> Self {
-        let port = reserve_local_port();
-        let addr = CheetahString::from_string(format!("127.0.0.1:{port}"));
-        let data_dir = isolated_namesrv_data_dir(port);
-        namesrv_config.kv_config_path = data_dir.join("kvConfig.json").display().to_string();
-        namesrv_config.config_store_path = data_dir.join("rocketmq-namesrv.properties").display().to_string();
-        let server_config = ServerConfig {
-            listen_port: port as u32,
-            bind_address: "127.0.0.1".to_string(),
-        };
-        let bootstrap = Builder::new()
-            .set_name_server_config(namesrv_config)
-            .set_server_config(server_config)
-            .build();
+        let mut last_error = None;
 
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server_task = tokio::spawn(async move {
-            bootstrap
-                .boot_with_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-        });
-
-        let client = ArcMut::new(RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
-        ));
-        client.update_name_server_address_list(vec![addr.clone()]).await;
-        let weak_client = ArcMut::downgrade(&client);
-        client.start(weak_client).await;
-
-        let harness = Self {
-            addr,
-            client,
-            shutdown_tx: Some(shutdown_tx),
-            server_task,
-        };
-        harness.wait_until_ready().await;
-        harness
-    }
-
-    async fn wait_until_ready(&self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-
-        loop {
-            let mut request = RemotingCommand::create_request_command(
-                RequestCode::GetNamesrvConfig,
-                GetNamesrvConfigRequestHeader::default(),
-            );
-            request.make_custom_header_to_net();
-
-            let failure = match self.request(request).await {
-                Ok(response) if ResponseCode::from(response.code()) == ResponseCode::Success => return,
-                Ok(response) => format!(
-                    "unexpected response code {:?}, remark {:?}",
-                    ResponseCode::from(response.code()),
-                    response.remark()
-                ),
-                Err(error) => error.to_string(),
+        for _attempt in 0..STARTUP_RETRY_LIMIT {
+            let port = reserve_local_port();
+            let addr = CheetahString::from_string(format!("127.0.0.1:{port}"));
+            let data_dir = isolated_namesrv_data_dir(port);
+            namesrv_config.kv_config_path = data_dir.join("kvConfig.json").display().to_string();
+            namesrv_config.config_store_path = data_dir.join("rocketmq-namesrv.properties").display().to_string();
+            let server_config = ServerConfig {
+                listen_port: port as u32,
+                bind_address: "127.0.0.1".to_string(),
             };
+            let bootstrap = Builder::new()
+                .set_name_server_config(namesrv_config.clone())
+                .set_server_config(server_config)
+                .build();
 
-            assert!(
-                Instant::now() < deadline,
-                "namesrv did not become ready in time: {}",
-                failure
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            let mut server_task = tokio::spawn(async move {
+                bootstrap
+                    .boot_with_shutdown(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await
+            });
+
+            let client = ArcMut::new(RocketmqDefaultClient::new(
+                Arc::new(TokioClientConfig::default()),
+                DefaultRemotingRequestProcessor,
+            ));
+            client.update_name_server_address_list(vec![addr.clone()]).await;
+            let weak_client = ArcMut::downgrade(&client);
+            client.start(weak_client).await;
+
+            match wait_until_ready(&addr, &client, &mut server_task).await {
+                Ok(()) => {
+                    return Self {
+                        addr,
+                        client,
+                        shutdown_tx: Some(shutdown_tx),
+                        server_task,
+                    };
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    let _ = shutdown_tx.send(());
+                    client.mut_from_ref().shutdown();
+                    let _ = tokio::time::timeout(Duration::from_secs(1), &mut server_task).await;
+                }
+            }
         }
+
+        panic!(
+            "namesrv failed to start after {} attempts: {}",
+            STARTUP_RETRY_LIMIT,
+            last_error.unwrap_or_else(|| "unknown startup error".to_string())
+        );
     }
 
     async fn request(&self, request: RemotingCommand) -> RocketMQResult<RemotingCommand> {
@@ -181,6 +171,49 @@ fn isolated_namesrv_data_dir(port: u16) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("rocketmq-namesrv-test-{}-{}", std::process::id(), port));
     std::fs::create_dir_all(&dir).expect("namesrv integration test should create an isolated data dir");
     dir
+}
+
+async fn wait_until_ready(
+    addr: &CheetahString,
+    client: &ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    server_task: &mut JoinHandle<RocketMQResult<()>>,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    loop {
+        if server_task.is_finished() {
+            return Err(describe_finished_server_task(server_task).await);
+        }
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetNamesrvConfig,
+            GetNamesrvConfigRequestHeader::default(),
+        );
+        request.make_custom_header_to_net();
+
+        let failure = match client.invoke_request(Some(addr), request, REQUEST_TIMEOUT_MILLIS).await {
+            Ok(response) if ResponseCode::from(response.code()) == ResponseCode::Success => return Ok(()),
+            Ok(response) => format!(
+                "unexpected response code {:?}, remark {:?}",
+                ResponseCode::from(response.code()),
+                response.remark()
+            ),
+            Err(error) => error.to_string(),
+        };
+
+        if Instant::now() >= deadline {
+            return Err(format!("namesrv did not become ready in time: {}", failure));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn describe_finished_server_task(server_task: &mut JoinHandle<RocketMQResult<()>>) -> String {
+    match server_task.await {
+        Ok(Ok(())) => "server task exited before readiness probe without an error".to_string(),
+        Ok(Err(error)) => format!("server task exited before readiness probe: {}", error),
+        Err(error) => format!("server task panicked before readiness probe: {}", error),
+    }
 }
 
 fn default_v2_namesrv_config() -> NamesrvConfig {
