@@ -2132,6 +2132,7 @@ fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessa
         TopicMessageType::Delay => ProxyTopicMessageType::Delay,
         TopicMessageType::Transaction => ProxyTopicMessageType::Transaction,
         TopicMessageType::Mixed => ProxyTopicMessageType::Mixed,
+        TopicMessageType::Lite => ProxyTopicMessageType::Lite,
     }
 }
 
@@ -2186,6 +2187,10 @@ mod tests {
         assert_eq!(
             convert_topic_message_type(TopicMessageType::Fifo),
             ProxyTopicMessageType::Fifo
+        );
+        assert_eq!(
+            convert_topic_message_type(TopicMessageType::Lite),
+            ProxyTopicMessageType::Lite
         );
     }
 

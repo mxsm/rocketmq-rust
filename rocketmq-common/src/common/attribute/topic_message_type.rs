@@ -26,6 +26,7 @@ pub enum TopicMessageType {
     Fifo,
     Delay,
     Transaction,
+    Lite,
     Mixed,
 }
 
@@ -37,6 +38,7 @@ impl From<String> for TopicMessageType {
             "FIFO" => Self::Fifo,
             "DELAY" => Self::Delay,
             "TRANSACTION" => Self::Transaction,
+            "LITE" => Self::Lite,
             "MIXED" => Self::Mixed,
             _ => Self::Unspecified,
         }
@@ -51,6 +53,7 @@ impl TopicMessageType {
             Self::Fifo.to_string(),
             Self::Delay.to_string(),
             Self::Transaction.to_string(),
+            Self::Lite.to_string(),
             Self::Mixed.to_string(),
         ]
         .into_iter()
@@ -65,10 +68,13 @@ impl TopicMessageType {
         } else if message_property.contains_key(MessageConst::PROPERTY_DELAY_TIME_LEVEL)
             || message_property.contains_key(MessageConst::PROPERTY_TIMER_DELIVER_MS)
             || message_property.contains_key(MessageConst::PROPERTY_TIMER_DELAY_SEC)
+            || message_property.contains_key(MessageConst::PROPERTY_TIMER_DELAY_MS)
         {
             return Self::Delay;
         } else if message_property.contains_key(MessageConst::PROPERTY_SHARDING_KEY) {
             return Self::Fifo;
+        } else if message_property.contains_key(MessageConst::PROPERTY_LITE_TOPIC) {
+            return Self::Lite;
         }
         Self::Normal
     }
@@ -86,6 +92,7 @@ impl Display for TopicMessageType {
             Self::Fifo => "FIFO".to_string(),
             Self::Delay => "DELAY".to_string(),
             Self::Transaction => "TRANSACTION".to_string(),
+            Self::Lite => "LITE".to_string(),
             Self::Mixed => "MIXED".to_string(),
         };
         write!(f, "{str}",)
@@ -106,6 +113,7 @@ mod tests {
             "FIFO".to_string(),
             "DELAY".to_string(),
             "TRANSACTION".to_string(),
+            "LITE".to_string(),
             "MIXED".to_string(),
         ]
         .into_iter()
@@ -153,6 +161,21 @@ mod tests {
             TopicMessageType::parse_from_message_property(&message_property),
             TopicMessageType::Normal
         );
+    }
+
+    #[test]
+    fn test_parse_from_message_property_lite() {
+        let mut message_property = HashMap::new();
+        message_property.insert(MessageConst::PROPERTY_LITE_TOPIC.to_string(), "true".to_string());
+        assert_eq!(
+            TopicMessageType::parse_from_message_property(&message_property),
+            TopicMessageType::Lite
+        );
+    }
+
+    #[test]
+    fn test_from_string_lite() {
+        assert_eq!(TopicMessageType::from("LITE".to_string()), TopicMessageType::Lite);
     }
 
     #[test]

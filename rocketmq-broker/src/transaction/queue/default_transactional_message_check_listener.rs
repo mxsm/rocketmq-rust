@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(result.get_flag(), msg_ext.get_flag());
         assert_eq!(
             result.properties_string,
-            MessageDecoder::message_properties_to_string(msg_ext.get_properties())
+            MessageDecoder::message_properties_to_string(result.get_properties())
         );
         assert_eq!(
             result.tags_code,
@@ -220,6 +220,14 @@ mod tests {
         assert_eq!(result.message_ext_inner.msg_id, msg_ext.msg_id().clone());
         assert_eq!(result.message_ext_inner.reconsume_times, msg_ext.reconsume_times());
         assert!(!result.is_wait_store_msg_ok());
+        assert_eq!(
+            result
+                .property_ref(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_WAIT_STORE_MSG_OK
+                ))
+                .map(CheetahString::as_str),
+            Some("false")
+        );
     }
 
     #[test]

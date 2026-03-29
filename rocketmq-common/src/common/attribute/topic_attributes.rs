@@ -61,6 +61,12 @@ impl TopicAttributes {
         INSTANCE.get_or_init(|| LongRangeAttribute::new("reserve.time".into(), true, -1, i64::MAX, -1))
     }
 
+    /// Lite topic expiration attribute defining per-topic lite TTL
+    pub fn lite_topic_expiration_attribute() -> &'static LongRangeAttribute {
+        static INSTANCE: OnceLock<LongRangeAttribute> = OnceLock::new();
+        INSTANCE.get_or_init(|| LongRangeAttribute::new("lite.topic.expiration".into(), true, -1, i64::MAX, -1))
+    }
+
     /// Returns all defined attributes in a HashMap
     pub fn all() -> &'static HashMap<CheetahString, Arc<dyn Attribute>> {
         static ALL: OnceLock<HashMap<CheetahString, Arc<dyn Attribute>>> = OnceLock::new();
@@ -71,6 +77,7 @@ impl TopicAttributes {
             let cleanup_policy = Self::cleanup_policy_attribute();
             let message_type = Self::topic_message_type_attribute();
             let reserve_time = Self::topic_reserve_time_attribute();
+            let lite_expiration = Self::lite_topic_expiration_attribute();
 
             map.insert(
                 queue_type.name().clone(),
@@ -87,6 +94,10 @@ impl TopicAttributes {
             map.insert(
                 reserve_time.name().clone(),
                 Arc::new(reserve_time.clone()) as Arc<dyn Attribute>,
+            );
+            map.insert(
+                lite_expiration.name().clone(),
+                Arc::new(lite_expiration.clone()) as Arc<dyn Attribute>,
             );
 
             map
@@ -164,11 +175,25 @@ mod tests {
     }
 
     #[test]
+    fn lite_topic_expiration_attribute_default_value() {
+        let attribute = TopicAttributes::lite_topic_expiration_attribute();
+        assert_eq!(attribute.default_value(), -1);
+    }
+
+    #[test]
+    fn lite_topic_expiration_attribute_valid_range() {
+        let attribute = TopicAttributes::lite_topic_expiration_attribute();
+        assert_eq!(attribute.min(), -1);
+        assert_eq!(attribute.max(), i64::MAX);
+    }
+
+    #[test]
     fn all_attributes_contains_all_defined_attributes() {
         let all_attributes = TopicAttributes::all();
         assert!(all_attributes.contains_key("queue.type"));
         assert!(all_attributes.contains_key("cleanup.policy"));
         assert!(all_attributes.contains_key("message.type"));
         assert!(all_attributes.contains_key("reserve.time"));
+        assert!(all_attributes.contains_key("lite.topic.expiration"));
     }
 }

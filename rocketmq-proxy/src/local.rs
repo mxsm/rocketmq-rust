@@ -1780,6 +1780,7 @@ fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessa
         TopicMessageType::Delay => ProxyTopicMessageType::Delay,
         TopicMessageType::Transaction => ProxyTopicMessageType::Transaction,
         TopicMessageType::Mixed => ProxyTopicMessageType::Mixed,
+        TopicMessageType::Lite => ProxyTopicMessageType::Lite,
     }
 }
 
@@ -1799,5 +1800,21 @@ fn sanitize_thread_component(value: &str) -> String {
         "local".to_owned()
     } else {
         sanitized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+
+    use super::convert_topic_message_type;
+    use crate::service::ProxyTopicMessageType;
+
+    #[test]
+    fn topic_message_type_conversion_maps_lite_topics() {
+        assert_eq!(
+            convert_topic_message_type(TopicMessageType::Lite),
+            ProxyTopicMessageType::Lite
+        );
     }
 }

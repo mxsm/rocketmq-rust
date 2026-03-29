@@ -175,6 +175,54 @@ mod defaults {
         true
     }
 
+    pub fn enable_lite_event_mode() -> bool {
+        true
+    }
+
+    pub fn lite_event_check_interval() -> u64 {
+        10_000
+    }
+
+    pub fn lite_ttl_check_interval() -> u64 {
+        120_000
+    }
+
+    pub fn lite_subscription_check_interval() -> u64 {
+        120_000
+    }
+
+    pub fn lite_subscription_check_timeout_mills() -> u64 {
+        180_000
+    }
+
+    pub fn max_lite_subscription_count() -> u64 {
+        100_000
+    }
+
+    pub fn enable_lite_pop_log() -> bool {
+        false
+    }
+
+    pub fn lite_event_full_dispatch_delay_time() -> u64 {
+        10_000
+    }
+
+    pub fn lite_lag_latency_collect_enable() -> bool {
+        false
+    }
+
+    pub fn lite_lag_latency_metrics_enable() -> bool {
+        false
+    }
+
+    pub fn lite_lag_count_metrics_enable() -> bool {
+        false
+    }
+
+    pub fn lite_lag_latency_top_k() -> i32 {
+        50
+    }
+
     pub fn auto_create_subscription_group() -> bool {
         true
     }
@@ -651,6 +699,42 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::lite_pull_message_enable")]
     pub lite_pull_message_enable: bool,
 
+    #[serde(default = "defaults::enable_lite_event_mode")]
+    pub enable_lite_event_mode: bool,
+
+    #[serde(default = "defaults::lite_event_check_interval")]
+    pub lite_event_check_interval: u64,
+
+    #[serde(default = "defaults::lite_ttl_check_interval")]
+    pub lite_ttl_check_interval: u64,
+
+    #[serde(default = "defaults::lite_subscription_check_interval")]
+    pub lite_subscription_check_interval: u64,
+
+    #[serde(default = "defaults::lite_subscription_check_timeout_mills")]
+    pub lite_subscription_check_timeout_mills: u64,
+
+    #[serde(default = "defaults::max_lite_subscription_count")]
+    pub max_lite_subscription_count: u64,
+
+    #[serde(default = "defaults::enable_lite_pop_log")]
+    pub enable_lite_pop_log: bool,
+
+    #[serde(default = "defaults::lite_event_full_dispatch_delay_time")]
+    pub lite_event_full_dispatch_delay_time: u64,
+
+    #[serde(default = "defaults::lite_lag_latency_collect_enable")]
+    pub lite_lag_latency_collect_enable: bool,
+
+    #[serde(default = "defaults::lite_lag_latency_metrics_enable")]
+    pub lite_lag_latency_metrics_enable: bool,
+
+    #[serde(default = "defaults::lite_lag_count_metrics_enable")]
+    pub lite_lag_count_metrics_enable: bool,
+
+    #[serde(default = "defaults::lite_lag_latency_top_k")]
+    pub lite_lag_latency_top_k: i32,
+
     #[serde(default = "defaults::auto_create_subscription_group")]
     pub auto_create_subscription_group: bool,
 
@@ -942,6 +1026,18 @@ impl Default for BrokerConfig {
             namesrv_addr: NAMESRV_ADDR.clone().map(|addr| addr.into()),
             fetch_name_srv_addr_by_dns_lookup: false,
             lite_pull_message_enable: true,
+            enable_lite_event_mode: defaults::enable_lite_event_mode(),
+            lite_event_check_interval: defaults::lite_event_check_interval(),
+            lite_ttl_check_interval: defaults::lite_ttl_check_interval(),
+            lite_subscription_check_interval: defaults::lite_subscription_check_interval(),
+            lite_subscription_check_timeout_mills: defaults::lite_subscription_check_timeout_mills(),
+            max_lite_subscription_count: defaults::max_lite_subscription_count(),
+            enable_lite_pop_log: defaults::enable_lite_pop_log(),
+            lite_event_full_dispatch_delay_time: defaults::lite_event_full_dispatch_delay_time(),
+            lite_lag_latency_collect_enable: defaults::lite_lag_latency_collect_enable(),
+            lite_lag_latency_metrics_enable: defaults::lite_lag_latency_metrics_enable(),
+            lite_lag_count_metrics_enable: defaults::lite_lag_count_metrics_enable(),
+            lite_lag_latency_top_k: defaults::lite_lag_latency_top_k(),
             auto_create_subscription_group: true,
             channel_expired_timeout: 1000 * 120,
             subscription_expired_timeout: 1000 * 60 * 10,
@@ -1188,6 +1284,51 @@ impl BrokerConfig {
             self.lite_pull_message_enable.to_string().into(),
         );
         properties.insert(
+            "enableLiteEventMode".into(),
+            self.enable_lite_event_mode.to_string().into(),
+        );
+        properties.insert(
+            "liteEventCheckInterval".into(),
+            self.lite_event_check_interval.to_string().into(),
+        );
+        properties.insert(
+            "liteTtlCheckInterval".into(),
+            self.lite_ttl_check_interval.to_string().into(),
+        );
+        properties.insert(
+            "liteSubscriptionCheckInterval".into(),
+            self.lite_subscription_check_interval.to_string().into(),
+        );
+        properties.insert(
+            "liteSubscriptionCheckTimeoutMills".into(),
+            self.lite_subscription_check_timeout_mills.to_string().into(),
+        );
+        properties.insert(
+            "maxLiteSubscriptionCount".into(),
+            self.max_lite_subscription_count.to_string().into(),
+        );
+        properties.insert("enableLitePopLog".into(), self.enable_lite_pop_log.to_string().into());
+        properties.insert(
+            "liteEventFullDispatchDelayTime".into(),
+            self.lite_event_full_dispatch_delay_time.to_string().into(),
+        );
+        properties.insert(
+            "liteLagLatencyCollectEnable".into(),
+            self.lite_lag_latency_collect_enable.to_string().into(),
+        );
+        properties.insert(
+            "liteLagLatencyMetricsEnable".into(),
+            self.lite_lag_latency_metrics_enable.to_string().into(),
+        );
+        properties.insert(
+            "liteLagCountMetricsEnable".into(),
+            self.lite_lag_count_metrics_enable.to_string().into(),
+        );
+        properties.insert(
+            "liteLagLatencyTopK".into(),
+            self.lite_lag_latency_top_k.to_string().into(),
+        );
+        properties.insert(
             "autoCreateSubscriptionGroup".into(),
             self.auto_create_subscription_group.to_string().into(),
         );
@@ -1299,4 +1440,97 @@ impl Default for TopicQueueConfig {
 pub struct TimerWheelConfig {
     #[serde(default)]
     pub timer_wheel_enable: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrokerConfig;
+
+    #[test]
+    fn default_broker_config_uses_java_lite_defaults() {
+        let config = BrokerConfig::default();
+
+        assert!(config.lite_pull_message_enable);
+        assert!(config.enable_lite_event_mode);
+        assert_eq!(config.lite_event_check_interval, 10_000);
+        assert_eq!(config.lite_ttl_check_interval, 120_000);
+        assert_eq!(config.lite_subscription_check_interval, 120_000);
+        assert_eq!(config.lite_subscription_check_timeout_mills, 180_000);
+        assert_eq!(config.max_lite_subscription_count, 100_000);
+        assert!(!config.enable_lite_pop_log);
+        assert_eq!(config.lite_event_full_dispatch_delay_time, 10_000);
+        assert!(!config.lite_lag_latency_collect_enable);
+        assert!(!config.lite_lag_latency_metrics_enable);
+        assert!(!config.lite_lag_count_metrics_enable);
+        assert_eq!(config.lite_lag_latency_top_k, 50);
+    }
+
+    #[test]
+    fn get_properties_contains_java_lite_keys() {
+        let config = BrokerConfig::default();
+        let properties = config.get_properties();
+
+        assert_eq!(
+            properties.get("litePullMessageEnable").map(|value| value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("enableLiteEventMode").map(|value| value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("liteEventCheckInterval").map(|value| value.as_str()),
+            Some("10000")
+        );
+        assert_eq!(
+            properties.get("liteTtlCheckInterval").map(|value| value.as_str()),
+            Some("120000")
+        );
+        assert_eq!(
+            properties
+                .get("liteSubscriptionCheckInterval")
+                .map(|value| value.as_str()),
+            Some("120000")
+        );
+        assert_eq!(
+            properties
+                .get("liteSubscriptionCheckTimeoutMills")
+                .map(|value| value.as_str()),
+            Some("180000")
+        );
+        assert_eq!(
+            properties.get("maxLiteSubscriptionCount").map(|value| value.as_str()),
+            Some("100000")
+        );
+        assert_eq!(
+            properties.get("enableLitePopLog").map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties
+                .get("liteEventFullDispatchDelayTime")
+                .map(|value| value.as_str()),
+            Some("10000")
+        );
+        assert_eq!(
+            properties
+                .get("liteLagLatencyCollectEnable")
+                .map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties
+                .get("liteLagLatencyMetricsEnable")
+                .map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("liteLagCountMetricsEnable").map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("liteLagLatencyTopK").map(|value| value.as_str()),
+            Some("50")
+        );
+    }
 }

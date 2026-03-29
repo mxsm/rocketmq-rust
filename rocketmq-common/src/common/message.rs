@@ -463,6 +463,7 @@ impl MessageConst {
     pub const PROPERTY_REPLY_MESSAGE_ARRIVE_TIME: &'static str = "ARRIVE_TIME";
     pub const PROPERTY_RETRY_TOPIC: &'static str = "RETRY_TOPIC";
     pub const PROPERTY_SHARDING_KEY: &'static str = "__SHARDINGKEY";
+    pub const PROPERTY_LITE_TOPIC: &'static str = "__LITE_TOPIC";
     pub const PROPERTY_TAGS: &'static str = "TAGS";
     pub const PROPERTY_TIMER_DELAY_LEVEL: &'static str = "TIMER_DELAY_LEVEL";
     pub const PROPERTY_TIMER_DELAY_MS: &'static str = "TIMER_DELAY_MS";
@@ -558,5 +559,6 @@ pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     set.insert(MessageConst::PROPERTY_DLQ_ORIGIN_TOPIC);
     set.insert(MessageConst::PROPERTY_DLQ_ORIGIN_MESSAGE_ID);
     set.insert(MessageConst::PROPERTY_CRC32);
+    set.insert(MessageConst::PROPERTY_LITE_TOPIC);
     set
 });

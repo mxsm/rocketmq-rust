@@ -89,6 +89,26 @@ impl TopicConfig {
         TopicMessageType::Normal
     }
 
+    pub fn set_lite_topic_expiration(&mut self, lite_topic_expiration: i32) {
+        if self.get_topic_message_type() != TopicMessageType::Lite {
+            return;
+        }
+        self.attributes.insert(
+            TopicAttributes::lite_topic_expiration_attribute().name().clone(),
+            CheetahString::from_string(lite_topic_expiration.to_string()),
+        );
+    }
+
+    pub fn get_lite_topic_expiration(&self) -> i32 {
+        if self.get_topic_message_type() != TopicMessageType::Lite {
+            return -1;
+        }
+        self.attributes
+            .get(TopicAttributes::lite_topic_expiration_attribute().name())
+            .and_then(|content| content.parse::<i32>().ok())
+            .unwrap_or(-1)
+    }
+
     pub fn new(topic_name: impl Into<CheetahString>) -> Self {
         TopicConfig {
             topic_name: Some(topic_name.into()),
@@ -281,8 +301,45 @@ mod tests {
         let mut config = TopicConfig::default();
         config.attributes.insert(
             CheetahString::from(TopicAttributes::topic_message_type_attribute().name()),
-            CheetahString::from("Normal"),
+            CheetahString::from("LITE"),
         );
-        assert_eq!(config.get_topic_message_type(), TopicMessageType::Normal);
+        assert_eq!(config.get_topic_message_type(), TopicMessageType::Lite);
+    }
+
+    #[test]
+    fn get_lite_topic_expiration_defaults_to_minus_one_for_non_lite_topic() {
+        let config = TopicConfig::default();
+
+        assert_eq!(config.get_lite_topic_expiration(), -1);
+    }
+
+    #[test]
+    fn get_lite_topic_expiration_reads_attribute_for_lite_topic() {
+        let mut config = TopicConfig::default();
+        config.attributes.insert(
+            CheetahString::from(TopicAttributes::topic_message_type_attribute().name()),
+            CheetahString::from("LITE"),
+        );
+        config.attributes.insert(
+            CheetahString::from(TopicAttributes::lite_topic_expiration_attribute().name()),
+            CheetahString::from("600"),
+        );
+
+        assert_eq!(config.get_lite_topic_expiration(), 600);
+    }
+
+    #[test]
+    fn set_lite_topic_expiration_only_applies_to_lite_topics() {
+        let mut normal_config = TopicConfig::default();
+        normal_config.set_lite_topic_expiration(600);
+        assert_eq!(normal_config.get_lite_topic_expiration(), -1);
+
+        let mut lite_config = TopicConfig::default();
+        lite_config.attributes.insert(
+            CheetahString::from(TopicAttributes::topic_message_type_attribute().name()),
+            CheetahString::from("LITE"),
+        );
+        lite_config.set_lite_topic_expiration(600);
+        assert_eq!(lite_config.get_lite_topic_expiration(), 600);
     }
 }
