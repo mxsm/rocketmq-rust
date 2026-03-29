@@ -2259,14 +2259,30 @@ mod tests {
 
         assert_eq!(timer_message_store.process_once().await, 1);
 
-        let rolled_slot_time = now_floor + 4_000;
         let original_slot_time = timer_message_store.ceil_time_ms(deliver_ms as i64);
-        let slot = timer_message_store.get_timer_wheel_slot(rolled_slot_time).unwrap();
+        let active_slots = timer_message_store
+            .timer_wheel
+            .lock()
+            .as_ref()
+            .map(TimerWheel::slots_snapshot)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|slot| slot.num > 0)
+            .collect::<Vec<_>>();
+        assert_eq!(active_slots.len(), 1);
+
+        let slot = active_slots[0];
+        let rolled_slot_time = slot.time_ms;
         let entries = timer_message_store.load_slot_entries(slot).unwrap();
+        let now_after_process = timer_message_store.floor_time_ms(current_millis() as i64);
 
         assert!(timer_message_store.get_timer_wheel_slot(original_slot_time).is_none());
         assert_eq!(slot.num, 1);
+        assert_eq!(entries.len(), 1);
         assert_ne!(entries[0].record.magic & MAGIC_ROLL, 0);
+        assert!(rolled_slot_time >= now_floor + timer_message_store.timer_roll_window_ms());
+        assert!(rolled_slot_time <= now_after_process + timer_message_store.timer_roll_window_ms());
+        assert!(rolled_slot_time < original_slot_time);
         assert_eq!(entries[0].record.deliver_time_ms, rolled_slot_time);
     }
 

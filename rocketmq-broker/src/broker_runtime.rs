@@ -1879,6 +1879,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn pop_lite_message_processor(&self) -> Option<&ArcMut<PopLiteMessageProcessor<MS>>> {
+        self.pop_lite_message_processor.as_ref()
+    }
+
+    #[inline]
     pub fn message_store_unchecked(&self) -> &ArcMut<MS> {
         unsafe { self.message_store.as_ref().unwrap_unchecked() }
     }
@@ -3589,6 +3594,34 @@ mod tests {
             .set_topic_queue_table(topic_queue_table);
     }
 
+    fn set_parent_topic_message_type(runtime: &mut BrokerRuntime, message_type: &str) {
+        let topic_config = runtime
+            .inner_for_test()
+            .topic_config_manager()
+            .select_topic_config(&CheetahString::from_static_str("parent-topic"))
+            .expect("parent topic should exist");
+        topic_config.mut_from_ref().attributes.insert(
+            TopicAttributes::TopicAttributes::topic_message_type_attribute()
+                .name()
+                .clone(),
+            CheetahString::from_string(message_type.to_string()),
+        );
+    }
+
+    fn set_parent_topic_lite_expiration(runtime: &mut BrokerRuntime, expiration: i32) {
+        let topic_config = runtime
+            .inner_for_test()
+            .topic_config_manager()
+            .select_topic_config(&CheetahString::from_static_str("parent-topic"))
+            .expect("parent topic should exist");
+        topic_config.mut_from_ref().attributes.insert(
+            TopicAttributes::TopicAttributes::lite_topic_expiration_attribute()
+                .name()
+                .clone(),
+            CheetahString::from_string(expiration.to_string()),
+        );
+    }
+
     fn seed_lmq_consumer_offset(runtime: &mut BrokerRuntime, group: &str, lite_topic: &str, offset: i64) {
         let inner = runtime.inner_for_test();
         let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", lite_topic).expect("lmq name"));
@@ -4339,9 +4372,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_broker_lite_info_reports_pop_lite_order_info_count() {
+        let mut runtime = new_lite_test_runtime("broker-lite-order-info-count").await;
+        seed_lite_query_state(&mut runtime);
+        seed_lmq_message(&mut runtime, "child-a", b"lite-body").await;
+        let lmq_name = CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq"));
+
+        let (mut processor, _) = runtime.init_processor();
+        runtime.inner.lite_event_dispatcher().do_full_dispatch(
+            &CheetahString::from_static_str("client-1"),
+            &CheetahString::from_static_str("group-a"),
+            &HashSet::from([lmq_name]),
+        );
+
+        let pop_channel = create_test_channel().await;
+        let pop_ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(pop_channel.clone()));
+        let pop_header = PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("client-1"),
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("parent-topic"),
+            max_msg_num: 1,
+            invisible_time: 60_000,
+            poll_time: 0,
+            born_time: current_millis() as i64,
+            attempt_id: Some(CheetahString::from_static_str("attempt-1")),
+            rpc: None,
+        };
+        let mut pop_request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, pop_header);
+        pop_request.make_custom_header_to_net();
+        let pop_response = processor
+            .process_request(pop_channel, pop_ctx, &mut pop_request)
+            .await
+            .expect("pop lite should succeed")
+            .expect("pop lite should return a response");
+        assert_eq!(ResponseCode::from(pop_response.code()), ResponseCode::Success);
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = GetBrokerLiteInfoResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetBrokerLiteInfo response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode broker lite info response body");
+        assert_eq!(body.get_order_info_count(), 1);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
     async fn get_parent_topic_info_returns_group_and_lite_counts() {
         let mut runtime = new_lite_test_runtime("parent-topic-info").await;
         seed_lite_query_state(&mut runtime);
+        set_parent_topic_lite_expiration(&mut runtime, 600);
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
@@ -4367,7 +4459,7 @@ mod tests {
         )
         .expect("decode parent topic info response body");
         assert_eq!(body.get_topic(), Some(&CheetahString::from_static_str("parent-topic")));
-        assert_eq!(body.get_ttl(), 0);
+        assert_eq!(body.get_ttl(), 600);
         assert_eq!(body.get_lmq_num(), 2);
         assert_eq!(body.get_lite_topic_count(), 2);
         assert_eq!(
@@ -4377,6 +4469,32 @@ mod tests {
                 CheetahString::from_static_str("group-b"),
             ])
         );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_parent_topic_info_rejects_non_lite_parent_topic() {
+        let mut runtime = new_lite_test_runtime("parent-topic-info-non-lite").await;
+        seed_lite_query_state(&mut runtime);
+        set_parent_topic_message_type(&mut runtime, "NORMAL");
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = GetParentTopicInfoRequestHeader {
+            topic: CheetahString::from_static_str("parent-topic"),
+            rpc: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetParentTopicInfo, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
@@ -4421,6 +4539,32 @@ mod tests {
             CheetahString::from_static_str("client-2"),
             CheetahString::from_static_str("group-b"),
         )));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_lite_topic_info_rejects_non_lite_parent_topic() {
+        let mut runtime = new_lite_test_runtime("lite-topic-info-non-lite").await;
+        seed_lite_query_state(&mut runtime);
+        set_parent_topic_message_type(&mut runtime, "NORMAL");
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = GetLiteTopicInfoRequestHeader {
+            parent_topic: CheetahString::from_static_str("parent-topic"),
+            lite_topic: CheetahString::from_static_str("child-b"),
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
@@ -4471,6 +4615,34 @@ mod tests {
                 CheetahString::from_static_str("child-b"),
             ])
         );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_lite_client_info_rejects_non_lite_parent_topic() {
+        let mut runtime = new_lite_test_runtime("lite-client-info-non-lite").await;
+        seed_lite_query_state(&mut runtime);
+        set_parent_topic_message_type(&mut runtime, "NORMAL");
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = GetLiteClientInfoRequestHeader {
+            parent_topic: Some(CheetahString::from_static_str("parent-topic")),
+            group: Some(CheetahString::from_static_str("group-a")),
+            client_id: Some(CheetahString::from_static_str("client-1")),
+            max_count: 32,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteClientInfo, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

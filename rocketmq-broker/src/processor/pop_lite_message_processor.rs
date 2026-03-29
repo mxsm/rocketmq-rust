@@ -96,6 +96,10 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
         &self.pop_lite_long_polling_service
     }
 
+    pub(crate) fn order_info_count(&self) -> i32 {
+        self.consumer_order_info_manager.order_info_count() as i32
+    }
+
     fn pre_check(&self, request_header: &PopLiteMessageRequestHeader) -> Option<(ResponseCode, CheetahString)> {
         if request_header.client_id.is_empty() {
             return Some((

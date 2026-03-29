@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::entity::ClientGroup;
 use rocketmq_common::common::lite::get_lite_topic;
 use rocketmq_common::common::lite::to_lmq_name;
@@ -117,7 +119,11 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
                 .lite_subscription_registry()
                 .active_subscription_num() as i32,
         );
-        body.set_order_info_count(0);
+        body.set_order_info_count(
+            self.broker_runtime_inner
+                .pop_lite_message_processor()
+                .map_or(0, |processor| processor.order_info_count()),
+        );
         body.set_cq_table_size(cq_table_size);
         body.set_offset_table_size(
             self.broker_runtime_inner
@@ -138,17 +144,10 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetParentTopicInfoRequestHeader>()?;
-        if !self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .contains_topic(&request_header.topic)
-        {
-            return Ok(Some(self.response_with_code(
-                request,
-                ResponseCode::TopicNotExist,
-                format!("Topic [{}] not exist.", request_header.topic),
-            )));
-        }
+        let topic_config = match self.validate_lite_parent_topic(&request_header.topic) {
+            Ok(topic_config) => topic_config,
+            Err((code, remark)) => return Ok(Some(self.response_with_code(request, code, remark))),
+        };
 
         let subscriptions = self
             .broker_runtime_inner
@@ -176,7 +175,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
 
         let mut body = GetParentTopicInfoResponseBody::new();
         body.set_topic(request_header.topic);
-        body.set_ttl(0);
+        body.set_ttl(topic_config.get_lite_topic_expiration());
         body.set_groups(groups);
         body.set_lmq_num(lite_topic_count);
         body.set_lite_topic_count(lite_topic_count);
@@ -189,16 +188,8 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetLiteTopicInfoRequestHeader>()?;
-        if !self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .contains_topic(&request_header.parent_topic)
-        {
-            return Ok(Some(self.response_with_code(
-                request,
-                ResponseCode::TopicNotExist,
-                format!("Topic [{}] not exist.", request_header.parent_topic),
-            )));
+        if let Err((code, remark)) = self.validate_lite_parent_topic(&request_header.parent_topic) {
+            return Ok(Some(self.response_with_code(request, code, remark)));
         }
 
         let Some(lmq_name) = to_lmq_name(request_header.parent_topic.as_str(), request_header.lite_topic.as_str())
@@ -269,6 +260,9 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
                 "clientId is blank.",
             )));
         };
+        if let Err((code, remark)) = self.validate_lite_parent_topic(&parent_topic) {
+            return Ok(Some(self.response_with_code(request, code, remark)));
+        }
         if let Err((code, remark)) = self.validate_consumer_group(&group, &parent_topic) {
             return Ok(Some(self.response_with_code(request, code, remark)));
         }
@@ -675,6 +669,31 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
                 CheetahString::from_string(format!("Subscription [{}]-[{}] not match.", group, topic)),
             )),
         }
+    }
+
+    fn validate_lite_parent_topic(
+        &self,
+        topic: &CheetahString,
+    ) -> Result<ArcMut<TopicConfig>, (ResponseCode, CheetahString)> {
+        let topic_config = self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .select_topic_config(topic)
+            .ok_or_else(|| {
+                (
+                    ResponseCode::TopicNotExist,
+                    CheetahString::from_string(format!("Topic [{}] not exist.", topic)),
+                )
+            })?;
+
+        if topic_config.get_topic_message_type() != TopicMessageType::Lite {
+            return Err((
+                ResponseCode::InvalidParameter,
+                CheetahString::from_string(format!("Topic [{}] type not match.", topic)),
+            ));
+        }
+
+        Ok(topic_config)
     }
 
     fn validate_lite_group(&self, group: &CheetahString) -> Result<CheetahString, (ResponseCode, CheetahString)> {
