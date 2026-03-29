@@ -126,7 +126,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
                 .read()
                 .len() as i32,
         );
-        body.set_event_map_size(0);
+        body.set_event_map_size(self.broker_runtime_inner.lite_event_dispatcher().event_map_size() as i32);
         body.set_topic_meta(topic_meta);
         body.set_group_meta(group_meta);
 
@@ -169,18 +169,17 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             .iter()
             .map(|subscription| subscription.group.clone())
             .collect::<HashSet<_>>();
-        let lite_topic_set = subscriptions
-            .iter()
-            .flat_map(|subscription| subscription.lite_topic_set.iter())
-            .filter_map(|lmq_name| get_lite_topic(lmq_name.as_str()).map(CheetahString::from_string))
-            .collect::<HashSet<_>>();
+        let lite_topic_count = self
+            .broker_runtime_inner
+            .lite_lifecycle_manager()
+            .get_lite_topic_count(&subscriptions, &request_header.topic);
 
         let mut body = GetParentTopicInfoResponseBody::new();
         body.set_topic(request_header.topic);
         body.set_ttl(0);
         body.set_groups(groups);
-        body.set_lmq_num(lite_topic_set.len() as i32);
-        body.set_lite_topic_count(lite_topic_set.len() as i32);
+        body.set_lmq_num(lite_topic_count);
+        body.set_lite_topic_count(lite_topic_count);
 
         Ok(Some(self.response_with_body(request, &body)?))
     }
@@ -290,11 +289,16 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         };
 
         let lite_topic_set = self.decode_lite_topic_set(subscription.lite_topic_set(), request_header.max_count);
+        let last_access_time = self
+            .broker_runtime_inner
+            .lite_event_dispatcher()
+            .get_client_last_access_time(&client_id)
+            .max(subscription.update_time().max(0) as u64);
         let mut body = GetLiteClientInfoResponseBody::new();
         body.with_parent_topic(parent_topic)
             .with_group(group)
             .with_client_id(client_id)
-            .with_last_access_time(subscription.update_time().max(0) as u64)
+            .with_last_access_time(last_access_time)
             .with_last_consume_time(0)
             .with_lite_topic_count(lite_topic_set.len() as u32)
             .with_lite_topic_set(lite_topic_set);
@@ -397,16 +401,27 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         &self,
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request.decode_command_custom_header::<TriggerLiteDispatchRequestHeader>()?;
-        if let Err((code, remark)) = self.validate_lite_group(&request_header.group) {
-            return Ok(Some(self.response_with_code(request, code, remark)));
+        let TriggerLiteDispatchRequestHeader { group, client_id } =
+            request.decode_command_custom_header::<TriggerLiteDispatchRequestHeader>()?;
+        let bind_topic = match self.validate_lite_group(&group) {
+            Ok(bind_topic) => bind_topic,
+            Err((code, remark)) => return Ok(Some(self.response_with_code(request, code, remark))),
+        };
+
+        let dispatcher = self.broker_runtime_inner.lite_event_dispatcher();
+        if let Some(client_id) = client_id.filter(|client_id| !client_id.is_empty()) {
+            let lmq_names = self.dispatchable_lmq_for_client(&client_id, &group, &bind_topic);
+            if !lmq_names.is_empty() {
+                dispatcher.do_full_dispatch(&client_id, &group, &lmq_names);
+            }
+        } else {
+            let dispatch_map = self.dispatchable_lmq_by_group(&group, &bind_topic);
+            dispatcher.do_full_dispatch_by_group(&group, &dispatch_map);
         }
 
-        Ok(Some(self.response_with_code(
-            request,
-            ResponseCode::IllegalOperation,
-            "LiteEventDispatcher is not initialized.",
-        )))
+        Ok(Some(
+            RemotingCommand::create_response_command().set_opaque(request.opaque()),
+        ))
     }
 
     fn build_lite_topic_meta(&self, subscriptions: &[LiteSubscriptionRecord]) -> HashMap<CheetahString, i32> {
@@ -482,6 +497,65 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             .collect()
     }
 
+    fn dispatchable_lmq_for_client(
+        &self,
+        client_id: &CheetahString,
+        group: &CheetahString,
+        parent_topic: &CheetahString,
+    ) -> HashSet<CheetahString> {
+        self.broker_runtime_inner
+            .lite_subscription_registry()
+            .all_subscriptions()
+            .into_iter()
+            .filter(|subscription| {
+                subscription.client_id == *client_id
+                    && subscription.group == *group
+                    && subscription.topic == *parent_topic
+            })
+            .flat_map(|subscription| subscription.lite_topic_set.into_iter())
+            .filter(|lmq_name| self.has_dispatchable_messages(group, lmq_name))
+            .collect()
+    }
+
+    fn dispatchable_lmq_by_group(
+        &self,
+        group: &CheetahString,
+        parent_topic: &CheetahString,
+    ) -> HashMap<CheetahString, HashSet<CheetahString>> {
+        self.broker_runtime_inner
+            .lite_subscription_registry()
+            .all_subscriptions()
+            .into_iter()
+            .filter(|subscription| subscription.group == *group && subscription.topic == *parent_topic)
+            .fold(HashMap::new(), |mut acc, subscription| {
+                let lmq_names = subscription
+                    .lite_topic_set
+                    .into_iter()
+                    .filter(|lmq_name| self.has_dispatchable_messages(group, lmq_name))
+                    .collect::<HashSet<_>>();
+                if !lmq_names.is_empty() {
+                    acc.entry(subscription.client_id).or_default().extend(lmq_names);
+                }
+                acc
+            })
+    }
+
+    fn has_dispatchable_messages(&self, group: &CheetahString, lmq_name: &CheetahString) -> bool {
+        let lifecycle_manager = self.broker_runtime_inner.lite_lifecycle_manager();
+        if !lifecycle_manager.is_lmq_exist(self.broker_runtime_inner.message_store(), lmq_name) {
+            return false;
+        }
+
+        let broker_offset =
+            lifecycle_manager.get_max_offset_in_queue(self.broker_runtime_inner.message_store(), lmq_name);
+        broker_offset > 0
+            && self
+                .broker_runtime_inner
+                .consumer_offset_manager()
+                .query_offset(group, lmq_name, 0)
+                < broker_offset
+    }
+
     fn queue_store_stats(&self) -> (i32, i32) {
         let Some(queue_store) = self.queue_store() else {
             return (0, 0);
@@ -520,10 +594,9 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 
     fn lmq_broker_offset(&self, lmq_name: &CheetahString) -> i64 {
-        let Some(queue_store) = self.queue_store() else {
-            return 0;
-        };
-        queue_store.get_lmq_queue_offset(format!("{lmq_name}-0").as_str())
+        self.broker_runtime_inner
+            .lite_lifecycle_manager()
+            .get_max_offset_in_queue(self.broker_runtime_inner.message_store(), lmq_name)
     }
 
     fn earliest_unconsumed_timestamp(&self, lmq_name: &CheetahString, commit_offset: i64) -> i64 {

@@ -101,6 +101,9 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
                         return Ok(Some(self.response_with_code(request, code, remark)));
                     };
                     registry.update_client_channel(entry.client_id(), channel.clone());
+                    self.broker_runtime_inner
+                        .lite_event_dispatcher()
+                        .touch_client(entry.client_id());
                     registry.add_partial_subscription(entry.client_id(), entry.group(), entry.topic(), &lmq_name_set);
                 }
                 LiteSubscriptionAction::PartialRemove => {
@@ -116,6 +119,9 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
                         return Ok(Some(self.response_with_code(request, code, remark)));
                     };
                     registry.update_client_channel(entry.client_id(), channel.clone());
+                    self.broker_runtime_inner
+                        .lite_event_dispatcher()
+                        .touch_client(entry.client_id());
                     registry.add_complete_subscription(
                         entry.client_id(),
                         entry.group(),

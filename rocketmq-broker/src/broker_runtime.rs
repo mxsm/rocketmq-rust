@@ -91,6 +91,8 @@ use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
 use crate::hook::schedule_message_hook::ScheduleMessageHook;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
+use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
+use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::long_polling::notify_message_arriving_listener::NotifyMessageArrivingListener;
 use crate::offset::manager::broadcast_offset_manager::BroadcastOffsetManager;
@@ -225,6 +227,8 @@ impl BrokerRuntime {
             broker_stats: None,
             schedule_message_service: None,
             timer_message_store: None,
+            lite_event_dispatcher: Arc::new(LiteEventDispatcher::default()),
+            lite_lifecycle_manager: Arc::new(LiteLifecycleManager),
             lite_subscription_registry: Arc::new(LiteSubscriptionRegistry::default()),
             broker_outer_api,
             producer_manager,
@@ -1521,6 +1525,8 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_stats: Option<BrokerStats<MS>>,
     schedule_message_service: Option<ArcMut<ScheduleMessageService<MS>>>,
     timer_message_store: Option<Arc<TimerMessageStore>>,
+    lite_event_dispatcher: Arc<LiteEventDispatcher>,
+    lite_lifecycle_manager: Arc<LiteLifecycleManager>,
     lite_subscription_registry: Arc<LiteSubscriptionRegistry>,
     broker_outer_api: BrokerOuterAPI,
     producer_manager: ProducerManager,
@@ -1844,6 +1850,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn lite_subscription_registry(&self) -> &LiteSubscriptionRegistry {
         self.lite_subscription_registry.as_ref()
+    }
+
+    #[inline]
+    pub fn lite_event_dispatcher(&self) -> &LiteEventDispatcher {
+        self.lite_event_dispatcher.as_ref()
+    }
+
+    #[inline]
+    pub fn lite_lifecycle_manager(&self) -> &LiteLifecycleManager {
+        self.lite_lifecycle_manager.as_ref()
     }
 
     #[inline]
@@ -4489,9 +4505,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trigger_lite_dispatch_returns_illegal_operation_without_dispatcher() {
+    async fn trigger_lite_dispatch_enqueues_events_for_target_client() {
         let mut runtime = new_lite_test_runtime("trigger-lite-dispatch").await;
         seed_lite_query_state(&mut runtime);
+        seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
 
         let (mut processor, _) = runtime.init_processor();
         let channel = create_test_channel().await;
@@ -4508,11 +4525,66 @@ mod tests {
             .expect("processor dispatch should succeed")
             .expect("lite manager should return a response");
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::IllegalOperation);
-        assert!(response
-            .remark()
-            .expect("illegal operation should explain why")
-            .contains("LiteEventDispatcher"));
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("broker lite info should return a response");
+        let body = GetBrokerLiteInfoResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetBrokerLiteInfo response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode broker lite info response body");
+        assert_eq!(body.get_event_map_size(), 1);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn trigger_lite_dispatch_without_client_id_enqueues_events_for_group_subscribers() {
+        let mut runtime = new_lite_test_runtime("trigger-lite-dispatch-group").await;
+        seed_lite_query_state(&mut runtime);
+        seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = TriggerLiteDispatchRequestHeader {
+            group: CheetahString::from_static_str("group-a"),
+            client_id: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+        let dispatcher = runtime.inner.lite_event_dispatcher();
+        assert_eq!(dispatcher.event_map_size(), 1);
+        assert_eq!(
+            dispatcher
+                .pending_events(&CheetahString::from_static_str("client-1"))
+                .into_iter()
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq")),
+                CheetahString::from_string(to_lmq_name("parent-topic", "child-b").expect("child-b lmq")),
+            ])
+        );
+        assert!(dispatcher
+            .pending_events(&CheetahString::from_static_str("client-2"))
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
