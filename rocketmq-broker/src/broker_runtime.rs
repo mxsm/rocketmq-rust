@@ -3264,8 +3264,11 @@ fn need_register(change_list: &[bool]) -> bool {
 mod tests {
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
+    use std::net::TcpListener;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicU16;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -3307,6 +3310,9 @@ mod tests {
     use tokio::time::sleep;
 
     use super::*;
+
+    const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
+    static NEXT_CONTROLLER_TEST_BASE_PORT: AtomicU16 = AtomicU16::new(20_000);
 
     struct TestNameServer {
         addr: CheetahString,
@@ -3364,6 +3370,32 @@ mod tests {
 
     fn controller_cluster_root(prefix: &str) -> PathBuf {
         std::env::temp_dir().join(format!("rocketmq-rust-{prefix}-{}", current_millis()))
+    }
+
+    fn allocate_controller_test_base_port() -> u16 {
+        loop {
+            let base_port =
+                NEXT_CONTROLLER_TEST_BASE_PORT.fetch_add(CONTROLLER_TEST_PORT_BLOCK_SIZE, Ordering::Relaxed);
+            let required_ports = [
+                base_port + 1,
+                base_port + 2,
+                base_port + 3,
+                base_port + 11,
+                base_port + 12,
+                base_port + 13,
+                base_port + 21,
+                base_port + 22,
+                base_port + 31,
+                base_port + 32,
+                base_port + 90,
+            ];
+            if required_ports
+                .into_iter()
+                .all(|port| TcpListener::bind(("127.0.0.1", port)).is_ok())
+            {
+                return base_port;
+            }
+        }
     }
 
     async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
@@ -4047,8 +4079,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_mode_bootstrap() {
-        let port_seed = (current_millis() % 1000) as u16;
-        let base_port = 35000 + port_seed * 10;
+        let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-mode-integration");
 
         let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
@@ -4220,8 +4251,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
-        let port_seed = (current_millis() % 1000) as u16;
-        let base_port = 41000 + port_seed * 10;
+        let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-mode-failover");
 
         let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
@@ -4465,8 +4495,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_mode_failover_reregisters_namesrv_and_updates_store_ha() {
-        let port_seed = (current_millis() % 1000) as u16;
-        let base_port = 45000 + port_seed * 10;
+        let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-mode-namesrv-ha");
         let mut namesrv = start_namesrv(base_port + 90, &root).await;
         let namesrv_addr = namesrv.addr();
@@ -4764,8 +4793,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn three_controller_two_broker_controller_leader_failover_keeps_broker_view_consistent() {
-        let port_seed = (current_millis() % 1000) as u16;
-        let base_port = 43000 + port_seed * 10;
+        let base_port = allocate_controller_test_base_port();
         let root = controller_cluster_root("controller-leader-failover");
 
         let (controllers, controller_peers) = start_controller_cluster(base_port, &root).await;
