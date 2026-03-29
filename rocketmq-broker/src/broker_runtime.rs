@@ -105,6 +105,7 @@ use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
+use crate::processor::lite_manager_processor::LiteManagerProcessor;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
@@ -788,6 +789,22 @@ impl BrokerRuntime {
             BrokerProcessorType::QueryAssignment(query_assignment_processor),
         );
 
+        broker_request_processor.register_processor(
+            RequestCode::GetBrokerLiteInfo as i32,
+            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::GetParentTopicInfo as i32,
+            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::GetLiteTopicInfo as i32,
+            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::GetLiteClientInfo as i32,
+            BrokerProcessorType::LiteManager(ArcMut::new(LiteManagerProcessor::new(self.inner.clone()))),
+        );
         broker_request_processor.register_processor(
             RequestCode::LiteSubscriptionCtl as i32,
             BrokerProcessorType::LiteSubscriptionCtl(ArcMut::new(LiteSubscriptionCtlProcessor::new(
@@ -3256,6 +3273,8 @@ fn need_register(change_list: &[bool]) -> bool {
 mod tests {
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::net::TcpListener;
     use std::path::Path;
     use std::path::PathBuf;
@@ -3268,7 +3287,10 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::entity::ClientGroup;
+    use rocketmq_common::common::lite::to_lmq_name;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
@@ -3291,10 +3313,18 @@ mod tests {
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
+    use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+    use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+    use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+    use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_remoting::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::remoting::RemotingService;
     use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
@@ -3409,6 +3439,75 @@ mod tests {
         let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
         let inner = ArcMut::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
+    }
+
+    fn lite_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-lite-manager-{label}-{}",
+            current_millis()
+        ))
+    }
+
+    async fn new_lite_test_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = lite_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            max_lmq_consume_queue_num: 32,
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await);
+        runtime
+    }
+
+    fn seed_lite_query_state(runtime: &mut BrokerRuntime) {
+        let inner = runtime.inner_for_test();
+        inner
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues("parent-topic", 1, 1)));
+
+        for group in ["group-a", "group-b"] {
+            let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str(group));
+            config.set_attributes(HashMap::from([(
+                CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
+                CheetahString::from_static_str("parent-topic"),
+            )]));
+            inner
+                .subscription_group_manager_mut()
+                .update_subscription_group_config(&mut config);
+        }
+
+        let registry = inner.lite_subscription_registry();
+        let client_one = CheetahString::from_static_str("client-1");
+        let client_two = CheetahString::from_static_str("client-2");
+        let parent_topic = CheetahString::from_static_str("parent-topic");
+        let group_a = CheetahString::from_static_str("group-a");
+        let group_b = CheetahString::from_static_str("group-b");
+
+        registry.add_complete_subscription(
+            &client_one,
+            &group_a,
+            &parent_topic,
+            &HashSet::from([
+                CheetahString::from_string(to_lmq_name("parent-topic", "child-a").expect("child-a lmq")),
+                CheetahString::from_string(to_lmq_name("parent-topic", "child-b").expect("child-b lmq")),
+            ]),
+            1,
+        );
+        registry.add_complete_subscription(
+            &client_two,
+            &group_b,
+            &parent_topic,
+            &HashSet::from([CheetahString::from_string(
+                to_lmq_name("parent-topic", "child-b").expect("child-b lmq"),
+            )]),
+            1,
+        );
     }
 
     async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
@@ -4067,6 +4166,190 @@ mod tests {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::IllegalOperation);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn get_broker_lite_info_returns_registry_aggregates() {
+        let mut runtime = new_lite_test_runtime("broker-lite-info").await;
+        seed_lite_query_state(&mut runtime);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = GetBrokerLiteInfoResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetBrokerLiteInfo response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode broker lite info response body");
+        assert_eq!(
+            body.get_store_type(),
+            Some(&CheetahString::from_static_str("LocalFile"))
+        );
+        assert_eq!(body.get_max_lmq_num(), 32);
+        assert_eq!(body.get_current_lmq_num(), 2);
+        assert_eq!(body.get_lite_subscription_count(), 2);
+        assert_eq!(
+            body.get_topic_meta()
+                .get(&CheetahString::from_static_str("parent-topic")),
+            Some(&2)
+        );
+        assert_eq!(
+            body.get_group_meta()
+                .get(&CheetahString::from_static_str("parent-topic")),
+            Some(&HashSet::from([
+                CheetahString::from_static_str("group-a"),
+                CheetahString::from_static_str("group-b"),
+            ]))
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_parent_topic_info_returns_group_and_lite_counts() {
+        let mut runtime = new_lite_test_runtime("parent-topic-info").await;
+        seed_lite_query_state(&mut runtime);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = GetParentTopicInfoRequestHeader {
+            topic: CheetahString::from_static_str("parent-topic"),
+            rpc: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetParentTopicInfo, header);
+        request.make_custom_header_to_net();
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = GetParentTopicInfoResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetParentTopicInfo response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode parent topic info response body");
+        assert_eq!(body.get_topic(), Some(&CheetahString::from_static_str("parent-topic")));
+        assert_eq!(body.get_ttl(), 0);
+        assert_eq!(body.get_lmq_num(), 2);
+        assert_eq!(body.get_lite_topic_count(), 2);
+        assert_eq!(
+            body.get_groups(),
+            &HashSet::from([
+                CheetahString::from_static_str("group-a"),
+                CheetahString::from_static_str("group-b"),
+            ])
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_lite_topic_info_returns_subscribers_for_matching_lite_topic() {
+        let mut runtime = new_lite_test_runtime("lite-topic-info").await;
+        seed_lite_query_state(&mut runtime);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = GetLiteTopicInfoRequestHeader {
+            parent_topic: CheetahString::from_static_str("parent-topic"),
+            lite_topic: CheetahString::from_static_str("child-b"),
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, header);
+        request.make_custom_header_to_net();
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = GetLiteTopicInfoResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetLiteTopicInfo response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode lite topic info response body");
+        assert_eq!(body.parent_topic(), &CheetahString::from_static_str("parent-topic"));
+        assert_eq!(body.lite_topic(), &CheetahString::from_static_str("child-b"));
+        assert!(!body.sharding_to_broker());
+        assert_eq!(body.subscriber().len(), 2);
+        assert!(body.subscriber().contains(&ClientGroup::from_parts(
+            CheetahString::from_static_str("client-1"),
+            CheetahString::from_static_str("group-a"),
+        )));
+        assert!(body.subscriber().contains(&ClientGroup::from_parts(
+            CheetahString::from_static_str("client-2"),
+            CheetahString::from_static_str("group-b"),
+        )));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_lite_client_info_returns_topics_for_bound_client() {
+        let mut runtime = new_lite_test_runtime("lite-client-info").await;
+        seed_lite_query_state(&mut runtime);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = GetLiteClientInfoRequestHeader {
+            parent_topic: Some(CheetahString::from_static_str("parent-topic")),
+            group: Some(CheetahString::from_static_str("group-a")),
+            client_id: Some(CheetahString::from_static_str("client-1")),
+            max_count: 32,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::GetLiteClientInfo, header);
+        request.make_custom_header_to_net();
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = GetLiteClientInfoResponseBody::decode(
+            response
+                .take_body()
+                .expect("GetLiteClientInfo response should contain a body")
+                .as_ref(),
+        )
+        .expect("decode lite client info response body");
+        assert_eq!(
+            body.parent_topic(),
+            Some(&CheetahString::from_static_str("parent-topic"))
+        );
+        assert_eq!(body.group(), &CheetahString::from_static_str("group-a"));
+        assert_eq!(body.client_id(), &CheetahString::from_static_str("client-1"));
+        assert!(body.last_access_time() > 0);
+        assert_eq!(body.last_consume_time(), 0);
+        assert_eq!(body.lite_topic_count(), 2);
+        assert_eq!(
+            body.lite_topic_set(),
+            &HashSet::from([
+                CheetahString::from_static_str("child-a"),
+                CheetahString::from_static_str("child-b"),
+            ])
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]

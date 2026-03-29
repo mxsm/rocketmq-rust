@@ -43,6 +43,15 @@ pub(crate) struct LiteSubscriptionRegistry {
     client_channels: Arc<DashMap<CheetahString, Channel>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiteSubscriptionRecord {
+    pub(crate) client_id: CheetahString,
+    pub(crate) group: CheetahString,
+    pub(crate) topic: CheetahString,
+    pub(crate) lite_topic_set: HashSet<CheetahString>,
+    pub(crate) update_time: i64,
+}
+
 impl LiteSubscriptionRegistry {
     pub(crate) fn update_client_channel(&self, client_id: &CheetahString, channel: Channel) {
         self.client_channels.insert(client_id.clone(), channel);
@@ -147,6 +156,19 @@ impl LiteSubscriptionRegistry {
 
     pub(crate) fn active_subscription_num(&self) -> usize {
         self.subscriptions.len()
+    }
+
+    pub(crate) fn all_subscriptions(&self) -> Vec<LiteSubscriptionRecord> {
+        self.subscriptions
+            .iter()
+            .map(|entry| LiteSubscriptionRecord {
+                client_id: entry.key().client_id.clone(),
+                group: entry.key().group.clone(),
+                topic: entry.key().topic.clone(),
+                lite_topic_set: entry.value().lite_topic_set().clone(),
+                update_time: entry.value().update_time(),
+            })
+            .collect()
     }
 
     fn cleanup_client_channel_if_unused(&self, client_id: &CheetahString) {
