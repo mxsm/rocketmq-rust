@@ -31,6 +31,7 @@ use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
+use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
@@ -50,6 +51,7 @@ pub(crate) mod client_manage_processor;
 pub(crate) mod consumer_manage_processor;
 pub(crate) mod default_pull_message_result_handler;
 pub(crate) mod end_transaction_processor;
+pub(crate) mod lite_subscription_ctl_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
@@ -79,6 +81,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     ClientManage(ArcMut<ClientManageProcessor<MS>>),
     ConsumerManage(ArcMut<ConsumerManageProcessor<MS>>),
     QueryAssignment(ArcMut<QueryAssignmentProcessor<MS>>),
+    LiteSubscriptionCtl(ArcMut<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(ArcMut<EndTransactionProcessor<TS, MS>>),
     AdminBroker(ArcMut<AdminBrokerProcessor<MS>>),
 }
@@ -109,6 +112,9 @@ where
             BrokerProcessorType::ClientManage(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::ConsumerManage(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::QueryAssignment(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::LiteSubscriptionCtl(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
             BrokerProcessorType::EndTransaction(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::AdminBroker(processor) => processor.process_request(channel, ctx, request).await,
         }
@@ -130,6 +136,7 @@ where
             BrokerProcessorType::ClientManage(processor) => processor.reject_request(code),
             BrokerProcessorType::ConsumerManage(processor) => processor.reject_request(code),
             BrokerProcessorType::QueryAssignment(processor) => processor.reject_request(code),
+            BrokerProcessorType::LiteSubscriptionCtl(processor) => processor.reject_request(code),
             BrokerProcessorType::EndTransaction(processor) => processor.reject_request(code),
             BrokerProcessorType::AdminBroker(processor) => processor.reject_request(code),
         }

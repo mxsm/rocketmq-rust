@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use serde::Deserialize;
 use serde::Serialize;
@@ -165,6 +166,13 @@ impl SubscriptionGroupConfig {
     }
 
     #[inline]
+    pub fn lite_bind_topic(&self) -> Option<&CheetahString> {
+        self.attributes
+            .get(&CheetahString::from_static_str(LITE_BIND_TOPIC_ATTRIBUTE_NAME))
+            .filter(|value| !value.is_empty())
+    }
+
+    #[inline]
     pub fn set_group_name(&mut self, group_name: CheetahString) {
         self.group_name = group_name;
     }
@@ -238,6 +246,19 @@ impl SubscriptionGroupConfig {
     pub fn set_attributes(&mut self, attributes: HashMap<CheetahString, CheetahString>) {
         self.attributes = attributes;
     }
+
+    #[inline]
+    pub fn set_lite_bind_topic(&mut self, lite_bind_topic: Option<CheetahString>) {
+        let key = CheetahString::from_static_str(LITE_BIND_TOPIC_ATTRIBUTE_NAME);
+        match lite_bind_topic {
+            Some(value) if !value.is_empty() => {
+                self.attributes.insert(key, value);
+            }
+            _ => {
+                self.attributes.remove(&key);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -302,5 +323,21 @@ mod subscription_group_config_tests {
         assert_eq!(config.consume_timeout_minute(), 30);
         assert!(config.subscription_data_set().is_some());
         assert_eq!(config.attributes(), &HashMap::from([("key".into(), "value".into())]));
+    }
+
+    #[test]
+    fn lite_bind_topic_round_trips_through_attributes() {
+        let mut config = SubscriptionGroupConfig::default();
+
+        assert!(config.lite_bind_topic().is_none());
+
+        config.set_lite_bind_topic(Some("parent-topic".into()));
+        assert_eq!(
+            config.lite_bind_topic(),
+            Some(&CheetahString::from_static_str("parent-topic"))
+        );
+
+        config.set_lite_bind_topic(None);
+        assert!(config.lite_bind_topic().is_none());
     }
 }

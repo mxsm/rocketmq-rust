@@ -12,4 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod lite_subscription_registry;
 pub(crate) mod manager;

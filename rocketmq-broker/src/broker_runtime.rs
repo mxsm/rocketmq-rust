@@ -105,6 +105,7 @@ use crate::processor::client_manage_processor::ClientManageProcessor;
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
+use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
@@ -120,6 +121,7 @@ use crate::processor::BrokerProcessorType;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveSynchronize;
+use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
@@ -222,6 +224,7 @@ impl BrokerRuntime {
             broker_stats: None,
             schedule_message_service: None,
             timer_message_store: None,
+            lite_subscription_registry: Arc::new(LiteSubscriptionRegistry::default()),
             broker_outer_api,
             producer_manager,
             consumer_manager,
@@ -783,6 +786,13 @@ impl BrokerRuntime {
         broker_request_processor.register_processor(
             RequestCode::SetMessageRequestMode as i32,
             BrokerProcessorType::QueryAssignment(query_assignment_processor),
+        );
+
+        broker_request_processor.register_processor(
+            RequestCode::LiteSubscriptionCtl as i32,
+            BrokerProcessorType::LiteSubscriptionCtl(ArcMut::new(LiteSubscriptionCtlProcessor::new(
+                self.inner.clone(),
+            ))),
         );
 
         //EndTransactionProcessor
@@ -1486,6 +1496,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_stats: Option<BrokerStats<MS>>,
     schedule_message_service: Option<ArcMut<ScheduleMessageService<MS>>>,
     timer_message_store: Option<Arc<TimerMessageStore>>,
+    lite_subscription_registry: Arc<LiteSubscriptionRegistry>,
     broker_outer_api: BrokerOuterAPI,
     producer_manager: ProducerManager,
     consumer_manager: ConsumerManager,
@@ -1803,6 +1814,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn message_store(&self) -> Option<&ArcMut<MS>> {
         self.message_store.as_ref()
+    }
+
+    #[inline]
+    pub fn lite_subscription_registry(&self) -> &LiteSubscriptionRegistry {
+        self.lite_subscription_registry.as_ref()
     }
 
     #[inline]
@@ -3249,6 +3265,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::controller::replicas_manager::RegisterState;
+    use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::config::TopicConfig;
@@ -3264,19 +3281,26 @@ mod tests {
     use rocketmq_controller::ControllerConfig as TestControllerConfig;
     use rocketmq_controller::ControllerManager as TestControllerManager;
     use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
+    use rocketmq_remoting::base::response_future::ResponseFuture;
     use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
     use rocketmq_remoting::clients::RemotingClient;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::Channel;
+    use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::remoting::RemotingService;
     use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
     use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_remoting::runtime::processor::RequestProcessor;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
@@ -3372,6 +3396,19 @@ mod tests {
                 return base_port;
             }
         }
+    }
+
+    async fn create_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        std_stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
+        let connection = Connection::new(tcp_stream);
+        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
+        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        Channel::new(inner, local_addr, local_addr)
     }
 
     async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
@@ -3997,6 +4034,37 @@ mod tests {
             .expect("runtime should expose timer store");
 
         assert!(Arc::ptr_eq(&store_timer, &runtime_timer));
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn init_processor_routes_lite_subscription_ctl_requests_to_lite_processor() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-lite-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
+            .set_body(Bytes::from_static(b""));
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite subscription control should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::IllegalOperation);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }
