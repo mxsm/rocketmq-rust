@@ -52,7 +52,7 @@ hex    = "0.4"
 base64 = "0.22.1"
 
 # Cryptographic operations
-hmac = "0.13.0-rc.6"
+hmac = "0.13.0"
 sha1 = "0.11"
 
 # Optional: gRPC support
