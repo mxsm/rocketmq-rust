@@ -4,7 +4,7 @@
     "description": "The label for version current"
   },
   "sidebar.docsSidebar.category.Getting Started": {
-    "message": "快速开始",
+    "message": "入门指南",
     "description": "The label for category 'Getting Started' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Architecture": {

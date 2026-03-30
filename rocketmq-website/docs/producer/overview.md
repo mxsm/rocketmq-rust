@@ -112,7 +112,7 @@ producer.send_oneway(message).await?;
 
 By default, messages are distributed across queues:
 
-```
+```text
 Round-robin queue selection:
 
 Message 1 → Queue 0
@@ -279,4 +279,4 @@ RocketMQ-Rust exposes metrics for monitoring:
 
 - [Sending Messages](./sending-messages) - Advanced message sending techniques
 - [Transaction Messages](./transaction-messages) - Implement transactional messaging
-- [Configuration](../category/configuration) - Detailed configuration options
+- [Configuration](../configuration/overview) - Detailed configuration options

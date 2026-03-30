@@ -1,21 +1,21 @@
 ---
 sidebar_position: 3
-title: Transaction Messages
+title: 事务消息
 ---
 
-# Transaction Messages
+# 事务消息
 
-Transaction messages enable distributed transaction consistency between message sending and local database operations.
+事务消息用于保证“消息发送”和“本地数据库事务”在分布式场景下的一致性。
 
-## Overview
+## 概览
 
-Transaction messages ensure that:
+事务消息可以保证：
 
-1. Message sending and local transactions succeed or fail atomically
-2. Messages are delivered only after the local transaction commits
-3. System eventually reaches a consistent state
+1. 消息发送与本地事务具备原子一致语义
+2. 只有本地事务提交后，消息才会对消费者可见
+3. 系统最终可收敛到一致状态
 
-## Transaction Flow
+## 事务流程
 
 ```mermaid
 sequenceDiagram
@@ -46,7 +46,7 @@ sequenceDiagram
     end
 ```
 
-## Creating a Transaction Producer
+## 创建事务生产者
 
 ```rust
 use rocketmq::producer::TransactionProducer;
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Implementing Transaction Listener
+## 实现事务监听器
 
 ```rust
 use rocketmq::listener::TransactionListener;
@@ -76,16 +76,16 @@ struct OrderTransactionListener {
 }
 
 impl TransactionListener for OrderTransactionListener {
-    /// Execute local transaction
+    /// 执行本地事务
     async fn execute_local_transaction(
         &self,
         message: &Message,
         arg: &str,
     ) -> TransactionSendResult {
-        // Parse message to get order data
+        // 解析消息，获取订单数据
         let order: Order = serde_json::from_slice(message.get_body())?;
 
-        // Execute local transaction
+        // 执行本地事务
         match self.db_connection.create_order(&order).await {
             Ok(_) => {
                 println!("Order created successfully");
@@ -98,12 +98,12 @@ impl TransactionListener for OrderTransactionListener {
         }
     }
 
-    /// Check transaction status (called by broker on unknown status)
+    /// 检查事务状态（本地事务返回 Unknown 时由 broker 回查）
     async fn check_local_transaction(
         &self,
         msg_id: &str,
     ) -> TransactionSendResult {
-        // Check if order exists in database
+        // 检查数据库中是否存在对应订单
         match self.db_connection.get_order_by_msg_id(msg_id).await {
             Ok(Some(_)) => TransactionSendResult::Commit,
             Ok(None) => TransactionSendResult::Rollback,
@@ -113,20 +113,20 @@ impl TransactionListener for OrderTransactionListener {
 }
 ```
 
-## Sending Transaction Messages
+## 发送事务消息
 
 ```rust
 use rocketmq::model::Message;
 
-// Create transaction listener
+// 创建事务监听器
 let listener = OrderTransactionListener {
     db_connection: db_conn,
 };
 
-// Register listener
+// 注册监听器
 producer.set_transaction_listener(listener);
 
-// Prepare message
+// 构造消息
 let order = Order {
     id: "order_12345".to_string(),
     amount: 99.99,
@@ -138,17 +138,17 @@ let mut message = Message::new("OrderEvents".to_string(), body);
 message.set_tags("order_created");
 message.set_keys(&order.id);
 
-// Send transaction message
+// 发送事务消息
 let result = producer.send_transactional_message(message, &order.id).await?;
 
 println!("Transaction message sent: {:?}", result);
 ```
 
-## Transaction States
+## 事务状态
 
 ### Commit
 
-The local transaction succeeded, message should be delivered:
+本地事务成功，消息应被投递：
 
 ```rust
 async fn execute_local_transaction(
@@ -165,7 +165,7 @@ async fn execute_local_transaction(
 
 ### Rollback
 
-The local transaction failed, message should be discarded:
+本地事务失败，消息应被丢弃：
 
 ```rust
 async fn execute_local_transaction(
@@ -183,7 +183,7 @@ async fn execute_local_transaction(
 
 ### Unknown
 
-Transaction status is unclear, broker will check back later:
+事务状态不明确，Broker 稍后会回查：
 
 ```rust
 async fn execute_local_transaction(
@@ -199,16 +199,16 @@ async fn execute_local_transaction(
 }
 ```
 
-## Transaction Check
+## 事务回查
 
-The broker periodically checks transaction status when state is unknown:
+当状态为 Unknown 时，Broker 会周期性发起回查：
 
 ```rust
 async fn check_local_transaction(
     &self,
     msg_id: &str,
 ) -> TransactionSendResult {
-    // Query database for transaction status
+    // 查询数据库事务状态
     let tx_status = self.db_connection
         .get_transaction_status(msg_id)
         .await?;
@@ -221,9 +221,9 @@ async fn check_local_transaction(
 }
 ```
 
-## Common Patterns
+## 常见模式
 
-### Account Transfer
+### 账户转账
 
 ```rust
 struct TransferTransactionListener {
@@ -238,7 +238,7 @@ impl TransactionListener for TransferTransactionListener {
     ) -> TransactionSendResult {
         let transfer: Transfer = serde_json::from_slice(message.get_body())?;
 
-        // Execute transfer in local transaction
+        // 在本地事务中执行转账
         match self.db.transfer_funds(&transfer).await {
             Ok(_) => TransactionSendResult::Commit,
             Err(_) => TransactionSendResult::Rollback,
@@ -258,7 +258,7 @@ impl TransactionListener for TransferTransactionListener {
 }
 ```
 
-### Inventory Update
+### 库存扣减
 
 ```rust
 struct InventoryTransactionListener {
@@ -273,7 +273,7 @@ impl TransactionListener for InventoryTransactionListener {
     ) -> TransactionSendResult {
         let order: Order = serde_json::from_slice(message.get_body())?;
 
-        // Check and reserve inventory
+        // 校验并预占库存
         match self.db.reserve_inventory(&order.items).await {
             Ok(_) => TransactionSendResult::Commit,
             Err(_) => TransactionSendResult::Rollback,
@@ -292,40 +292,40 @@ impl TransactionListener for InventoryTransactionListener {
 }
 ```
 
-## Configuration
+## 配置示例
 
 ```rust
 let mut producer_option = ProducerOption::default();
 
-// Transaction check timeout (milliseconds)
+// 事务回查超时时间（毫秒）
 producer_option.set_transaction_check_timeout(3000);
 
-// Maximum number of check retries
+// 最大回查重试次数
 producer_option.set_transaction_check_max_retry(15);
 
-// Check interval (milliseconds)
+// 回查间隔（毫秒）
 producer_option.set_transaction_check_interval(60000);
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Keep transactions short**: Local transactions should complete quickly
-2. **Implement idempotency**: Ensure local transactions can be safely retried
-3. **Handle check logic**: Implement robust check logic for unknown states
-4. **Monitor transaction status**: Track transaction success/failure rates
-5. **Set appropriate timeouts**: Balance between consistency and performance
-6. **Use proper error handling**: Distinguish between transient and permanent errors
-7. **Log transaction outcomes**: Maintain audit trail for debugging
+1. **保持本地事务简短**：避免长事务导致堆积
+2. **实现幂等性**：保证事务可安全重试
+3. **完善回查逻辑**：正确处理 Unknown 状态
+4. **监控事务状态**：跟踪成功率与失败率
+5. **设置合理超时**：平衡一致性与吞吐性能
+6. **区分错误类型**：识别瞬时错误与永久错误
+7. **记录事务结果**：保留审计日志便于排障
 
-## Limitations
+## 局限性
 
-- Transaction messages add latency compared to normal messages
-- Requires additional database queries for check operations
-- Not suitable for high-frequency transactions
-- Broker resources are consumed during transaction checking
+- 事务消息相比普通消息会增加链路延迟
+- 回查机制会增加数据库查询压力
+- 不适合超高频、超低延迟事务场景
+- 回查期间会额外占用 Broker 资源
 
-## Next Steps
+## 下一步
 
-- [Configuration](../configuration) - Configure transaction settings
-- [Consumer Guide](../consumer/overview) - Learn about consuming transaction messages
-- [Troubleshooting](../faq/troubleshooting) - Debug transaction issues
+- [配置](../configuration) - 配置事务相关参数
+- [消费者指南](../consumer/overview) - 学习事务消息消费处理
+- [常见问题](../faq/troubleshooting) - 排查事务链路问题

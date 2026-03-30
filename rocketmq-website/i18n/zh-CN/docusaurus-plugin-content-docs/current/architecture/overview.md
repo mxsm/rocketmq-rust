@@ -257,4 +257,4 @@ RocketMQ-Rust 基于 Rust 所有权模型：
 
 - [消息模型](../architecture/message-model) - 深入理解消息组织与投递语义
 - [存储](../architecture/storage) - 了解持久化与索引机制
-- [配置](../category/configuration) - 学习部署与运行参数配置
+- [配置](../configuration/overview) - 学习部署与运行参数配置

@@ -88,7 +88,7 @@ docker run -d -p 10911:10911 -p 10909:10909 --name rmqbroker \
 
 - [快速开始](./quick-start) - 创建你的第一个生产者和消费者
 - [基本概念](./basic-concepts) - 理解 RocketMQ 的核心概念
-- [配置](../category/configuration) - 配置你的 RocketMQ 实例
+- [配置](../configuration/overview) - 配置你的 RocketMQ 实例
 
 ## 常见问题排查
 
@@ -111,4 +111,4 @@ cargo build
 
 ### 端口已被占用
 
-如果默认端口被占用，可以在 Broker 配置中调整端口。详情请参考[配置](../category/configuration)。
+如果默认端口被占用，可以在 Broker 配置中调整端口。详情请参考[配置](../configuration/overview)。

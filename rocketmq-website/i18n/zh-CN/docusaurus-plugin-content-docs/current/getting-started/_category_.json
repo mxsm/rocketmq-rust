@@ -1,8 +1,8 @@
 {
-  "label": "快速入门",
+  "label": "入门指南",
   "position": 2,
   "link": {
     "type": "generated-index",
-    "description": "了解如何快速开始使用 RocketMQ-Rust"
+    "description": "了解如何开始使用 RocketMQ-Rust"
   }
 }

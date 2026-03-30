@@ -167,8 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 恭喜你完成第一个 RocketMQ-Rust 应用！可以继续学习：
 
 - [基本概念](./basic-concepts) - 理解主题、消息与队列
-- [生产者指南](../category/producer) - 掌握生产者高级特性
-- [消费者指南](../category/consumer) - 掌握消费者高级特性
+- [生产者指南](../producer/overview) - 掌握生产者高级特性
+- [消费者指南](../consumer/overview) - 掌握消费者高级特性
 
 ## 常见问题
 

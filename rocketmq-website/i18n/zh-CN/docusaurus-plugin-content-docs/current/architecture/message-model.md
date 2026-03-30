@@ -265,5 +265,5 @@ RocketMQ 提供高可靠的持久化机制：
 ## 下一步
 
 - [存储](../architecture/storage) - 了解持久化实现
-- [生产者](../category/producer) - 学习生产者高级特性
-- [消费者](../category/consumer) - 学习消费者高级特性
+- [生产者](../producer/overview) - 学习生产者高级特性
+- [消费者](../consumer/overview) - 学习消费者高级特性

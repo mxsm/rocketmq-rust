@@ -1,15 +1,15 @@
 ---
 sidebar_position: 2
-title: Sending Messages
+title: 发送消息
 ---
 
-# Sending Messages
+# 发送消息
 
-Learn advanced techniques for sending messages with RocketMQ-Rust producers.
+本章介绍 RocketMQ-Rust 生产者的高级消息发送技巧。
 
-## Message Types
+## 消息类型
 
-### Basic Message
+### 基础消息
 
 ```rust
 use rocketmq::model::Message;
@@ -18,7 +18,7 @@ let message = Message::new("TopicTest".to_string(), b"Hello, RocketMQ!".to_vec()
 producer.send(message).await?;
 ```
 
-### Message with Tags
+### 带 Tag 的消息
 
 ```rust
 let mut message = Message::new("OrderEvents".to_string(), body);
@@ -26,7 +26,7 @@ message.set_tags("order_created");
 producer.send(message).await?;
 ```
 
-### Message with Keys
+### 带 Key 的消息
 
 ```rust
 let mut message = Message::new("OrderEvents".to_string(), body);
@@ -34,7 +34,7 @@ message.set_keys("order_12345");
 producer.send(message).await?;
 ```
 
-### Message with Properties
+### 带属性的消息
 
 ```rust
 let mut message = Message::new("OrderEvents".to_string(), body);
@@ -44,11 +44,11 @@ message.put_property("source", "mobile_app");
 producer.send(message).await?;
 ```
 
-## Send Strategies
+## 发送策略
 
-### Sequential Sending
+### 顺序发送
 
-Send messages in order:
+按顺序逐条发送消息：
 
 ```rust
 let messages = vec![
@@ -62,9 +62,9 @@ for msg in messages {
 }
 ```
 
-### Concurrent Sending
+### 并发发送
 
-Send messages concurrently:
+并发发送多条消息：
 
 ```rust
 use futures::future::join_all;
@@ -76,9 +76,9 @@ let send_futures = messages.into_iter()
 let results = join_all(send_futures).await;
 ```
 
-### Delayed Sending
+### 延迟发送
 
-Schedule messages for future delivery:
+将消息投递到未来时间点：
 
 ```rust
 let mut message = Message::new("DelayedTopic".to_string(), body);
@@ -87,23 +87,23 @@ message.set_delay_time_level(3);
 producer.send(message).await?;
 ```
 
-## Message Size Management
+## 消息大小管理
 
-### Large Messages
+### 大消息处理
 
-For messages larger than 4MB, use compression:
+对于大于 4MB 的消息，可启用压缩：
 
 ```rust
-// Enable compression
+// 启用压缩
 producer_option.set_compress_msg_body_over_threshold(4 * 1024);
 
-// Large message is compressed automatically
+// 大消息会自动压缩
 let large_body = vec![0u8; 5 * 1024 * 1024]; // 5MB
 let message = Message::new("TopicTest".to_string(), large_body);
 producer.send(message).await?;
 ```
 
-### Splitting Large Messages
+### 拆分大消息
 
 ```rust
 fn split_and_send(producer: &Producer, topic: &str, data: Vec<u8>, chunk_size: usize) -> Result<(), Error> {
@@ -123,9 +123,9 @@ fn split_and_send(producer: &Producer, topic: &str, data: Vec<u8>, chunk_size: u
 }
 ```
 
-## Error Handling
+## 错误处理
 
-### Retry on Failure
+### 失败重试
 
 ```rust
 async fn send_with_retry(
@@ -148,7 +148,7 @@ async fn send_with_retry(
 }
 ```
 
-### Fallback to Backup Queue
+### 回退到备用队列
 
 ```rust
 async fn send_with_fallback(
@@ -168,9 +168,9 @@ async fn send_with_fallback(
 }
 ```
 
-## Monitoring Sends
+## 发送监控
 
-### Track Send Results
+### 跟踪发送结果
 
 ```rust
 let mut success_count = 0;
@@ -192,7 +192,7 @@ for message in messages {
 println!("Success: {}, Failed: {}", success_count, failure_count);
 ```
 
-### Performance Monitoring
+### 性能监控
 
 ```rust
 use std::time::Instant;
@@ -210,9 +210,9 @@ println!("Sent {} messages in {:.2}s", messages.len(), elapsed.as_secs_f64());
 println!("Throughput: {:.2} msg/s", throughput);
 ```
 
-## Common Use Cases
+## 常见业务场景
 
-### Sending Order Events
+### 发送订单事件
 
 ```rust
 async fn send_order_event(
@@ -237,7 +237,7 @@ let order = Order { id: "12345", amount: 99.99 };
 send_order_event(&producer, "12345", "order_created", &order).await?;
 ```
 
-### Sending Metrics
+### 发送指标数据
 
 ```rust
 async fn send_metric(
@@ -260,7 +260,7 @@ async fn send_metric(
 }
 ```
 
-### Sending Logs
+### 发送日志
 
 ```rust
 async fn send_log(
@@ -284,19 +284,19 @@ async fn send_log(
 }
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Set meaningful keys**: Enable message tracking and querying
-2. **Use appropriate tags**: Facilitate message filtering
-3. **Handle failures gracefully**: Implement retry logic
-4. **Monitor performance**: Track success rates and latency
-5. **Batch when possible**: Use batch sending for high throughput
-6. **Validate message size**: Check size before sending
-7. **Use properties**: Store metadata in properties, not body
-8. **Implement idempotency**: Handle potential duplicate sends
+1. **设置有业务意义的 Key**：方便追踪与查询消息
+2. **合理使用 Tag**：便于消费端过滤
+3. **优雅处理失败**：实现重试与降级策略
+4. **持续监控性能**：关注成功率与延迟指标
+5. **优先批量发送**：在高吞吐场景提升效率
+6. **发送前校验消息大小**：避免超限失败
+7. **把元数据放入 properties**：避免污染消息体
+8. **实现幂等消费链路**：应对重复消息投递
 
-## Next Steps
+## 下一步
 
-- [Transaction Messages](./transaction-messages) - Implement transactional messaging
-- [Configuration](../configuration) - Configure producer settings
-- [Consumer Guide](../consumer/overview) - Learn about consuming messages
+- [事务消息](./transaction-messages) - 实现事务消息
+- [配置](../configuration) - 配置生产者相关参数
+- [消费者指南](../consumer/overview) - 了解消费者处理逻辑

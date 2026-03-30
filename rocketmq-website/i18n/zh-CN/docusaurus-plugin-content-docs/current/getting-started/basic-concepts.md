@@ -177,6 +177,6 @@ consumer_option.set_group_name("my_consumer_group");
 
 掌握基本概念后，你可以继续阅读：
 
-- [架构概览](../category/architecture) - 深入理解 RocketMQ 架构
-- [生产者指南](../category/producer) - 学习生产者高级特性
-- [消费者指南](../category/consumer) - 学习消费者高级特性
+- [架构概览](../architecture/overview) - 深入理解 RocketMQ 架构
+- [生产者指南](../producer/overview) - 学习生产者高级特性
+- [消费者指南](../consumer/overview) - 学习消费者高级特性

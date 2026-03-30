@@ -295,6 +295,6 @@ disk_space_warning_level_ratio = 90
 
 ## 下一步
 
-- [生产者](../category/producer) - 了解消息发送
-- [消费者](../category/consumer) - 了解消息消费
-- [配置](../category/configuration) - 配置存储参数
+- [生产者](../producer/overview) - 了解消息发送
+- [消费者](../consumer/overview) - 了解消息消费
+- [配置](../configuration/overview) - 配置存储参数
