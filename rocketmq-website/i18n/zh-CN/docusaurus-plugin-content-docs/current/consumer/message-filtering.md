@@ -1,30 +1,30 @@
 ---
 sidebar_position: 4
-title: Message Filtering
+title: 消息过滤
 ---
 
-# Message Filtering
+# 消息过滤
 
-RocketMQ provides powerful filtering capabilities to reduce unnecessary message processing.
+RocketMQ 提供了强大的消息过滤能力，用于减少无效消息处理。
 
-## Tag-based Filtering
+## 基于 Tag 的过滤
 
-### Basic Tag Filtering
+### 基础 Tag 过滤
 
-Subscribe to messages with specific tags:
+按指定 tags 订阅消息：
 
 ```rust
-// Subscribe to single tag
+// 订阅单个 tag
 consumer.subscribe("OrderEvents", "order_created").await?;
 
-// Subscribe to multiple tags
+// 订阅多个 tag
 consumer.subscribe("OrderEvents", "order_created || order_paid").await?;
 
-// Subscribe to all tags
+// 订阅全部 tag
 consumer.subscribe("OrderEvents", "*").await?;
 ```
 
-### Setting Tags on Producer
+### 生产者设置 Tag
 
 ```rust
 let mut message = Message::new("OrderEvents".to_string(), body);
@@ -32,44 +32,44 @@ message.set_tags("order_created");
 producer.send(message).await?;
 ```
 
-### Excluding Tags
+### 排除 Tag
 
 ```rust
-// Exclude specific tag
+// 排除指定 tag
 consumer.subscribe("OrderEvents", "!(order_cancelled)").await?;
 ```
 
-## SQL92 Expression Filtering
+## SQL92 表达式过滤
 
-### Enable SQL92 Filtering
+### 启用 SQL92 过滤
 
-SQL92 filtering must be enabled on the broker:
+需要在 Broker 端开启 SQL92 过滤能力：
 
 ```toml
 # broker.properties
 enablePropertyFilter=true
 ```
 
-### Using SQL92 Expressions
+### 使用 SQL92 表达式
 
 ```rust
-// Numeric comparison
+// 数值比较
 consumer.subscribe("OrderEvents", "amount > 100").await?;
 
-// String comparison
+// 字符串比较
 consumer.subscribe("OrderEvents", "region = 'us-west'").await?;
 
-// Logical operators
+// 逻辑运算
 consumer.subscribe("OrderEvents", "amount > 100 AND region = 'us-west'").await?;
 
-// Complex expressions
+// 复杂表达式
 consumer.subscribe(
     "OrderEvents",
     "(region = 'us-west' OR region = 'us-east') AND amount > 100"
 ).await?;
 ```
 
-### Setting Properties on Producer
+### 生产者设置属性
 
 ```rust
 let mut message = Message::new("OrderEvents".to_string(), body);
@@ -79,31 +79,31 @@ message.put_property("priority", "high");
 producer.send(message).await?;
 ```
 
-## SQL92 Syntax
+## SQL92 语法示例
 
-### Comparison Operators
+### 比较运算符
 
 ```rust
-// Equality
+// 等于
 "region = 'us-west'"
 
-// Inequality
+// 不等于
 "amount != 0"
 
-// Greater than
+// 大于
 "amount > 100"
 
-// Less than
+// 小于
 "amount < 1000"
 
-// Greater or equal
+// 大于等于
 "amount >= 100"
 
-// Less or equal
+// 小于等于
 "amount <= 1000"
 ```
 
-### Logical Operators
+### 逻辑运算符
 
 ```rust
 // AND
@@ -115,14 +115,14 @@ producer.send(message).await?;
 // NOT
 "NOT (region = 'us-west')"
 
-// Combination
+// 组合
 "(region = 'us-west' OR region = 'us-east') AND amount > 100"
 ```
 
-### Pattern Matching
+### 模式匹配
 
 ```rust
-// LIKE operator
+// LIKE 运算符
 "customer_id LIKE 'VIP%'"
 
 // IS NULL
@@ -132,35 +132,35 @@ producer.send(message).await?;
 "description IS NOT NULL"
 ```
 
-### BETWEEN Operator
+### BETWEEN 运算符
 
 ```rust
 // Between
 "amount BETWEEN 100 AND 1000"
 ```
 
-### IN Operator
+### IN 运算符
 
 ```rust
 // In list
 "region IN ('us-west', 'us-east', 'eu-west')"
 ```
 
-## Filter Performance
+## 过滤性能
 
-### Tag Filtering
+### Tag 过滤
 
-- **Performance**: Very fast, O(1) hash lookup
-- **Location**: Broker side
-- **Use case**: Simple categorization
+- **性能**：很高（接近 O(1) 哈希匹配）
+- **执行位置**：Broker 侧
+- **适用场景**：简单分类过滤
 
-### SQL92 Filtering
+### SQL92 过滤
 
-- **Performance**: Moderate, expression evaluation required
-- **Location**: Broker side
-- **Use case**: Complex filtering logic
+- **性能**：中等（需要表达式求值）
+- **执行位置**：Broker 侧
+- **适用场景**：复杂过滤逻辑
 
-### Client-side Filtering
+### 客户端过滤
 
 ```rust
 impl MessageListener for MyListener {
@@ -180,22 +180,22 @@ impl MessageListener for MyListener {
 }
 ```
 
-- **Performance**: Network overhead (all messages sent)
-- **Location**: Consumer side
-- **Use case**: Complex business logic
+- **性能**：网络开销较高（消息先到客户端再过滤）
+- **执行位置**：Consumer 侧
+- **适用场景**：复杂业务规则判断
 
-## Best Practices
+## 最佳实践
 
-1. **Use tag filtering when possible**: Most efficient method
-2. **Filter at broker side**: Reduces network traffic
-3. **Use meaningful tags**: Design tag hierarchy carefully
-4. **Set frequently filtered fields as message properties**: Helps SQL92 filtering
-5. **Avoid overly complex expressions**: Keep SQL92 simple
-6. **Consider client-side filtering**: For complex business logic
+1. **优先使用 Tag 过滤**：成本最低、性能最好
+2. **尽量在 Broker 侧过滤**：减少网络传输和客户端开销
+3. **设计有意义的 Tag 体系**：便于演进与治理
+4. **将常用过滤字段写入消息属性（properties）**：便于 SQL92 表达式过滤
+5. **避免过于复杂的表达式**：保持 SQL92 简洁
+6. **考虑放在客户端二次过滤**：复杂业务逻辑
 
-## Examples
+## 示例
 
-### Order Processing
+### 订单处理
 
 ```rust
 // Producer
@@ -212,7 +212,7 @@ consumer.subscribe(
 ).await?;
 ```
 
-### Log Aggregation
+### 日志聚合
 
 ```rust
 // Producer
@@ -222,14 +222,14 @@ message.put_property("service", &log.service);
 message.put_property("environment", &log.environment);
 producer.send(message).await?;
 
-// Consumer - Only errors from production
+// Consumer - 仅订阅生产环境 ERROR 日志
 consumer.subscribe(
     "ApplicationLogs",
     "ERROR AND environment = 'production'"
 ).await?;
 ```
 
-### Event Routing
+### 事件路由
 
 ```rust
 // Producer
@@ -238,15 +238,15 @@ message.set_tags(&event.event_type);
 message.put_property("user_tier", &user.tier);
 producer.send(message).await?;
 
-// Consumer - High priority events
+// Consumer - 高优先级事件
 consumer.subscribe(
     "UserEvents",
     "(login OR logout OR purchase) AND user_tier = 'premium'"
 ).await?;
 ```
 
-## Next Steps
+## 下一步
 
-- [Configuration](../configuration) - Configure filtering
-- [Producer Guide](../category/producer) - Setting message tags and properties
-- [Consumer Overview](./overview) - Consumption models and offset management
+- [配置](../configuration) - 配置过滤相关参数
+- [生产者指南](../producer/overview) - 设置消息标签与属性
+- [消费者概览](./overview) - 查看消费模型与位点管理

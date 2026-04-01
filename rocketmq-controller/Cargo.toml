@@ -88,9 +88,6 @@ opentelemetry-otlp = { version = "0.31", features = [
   "metrics",
 ], optional = true }
 
-# Time utilities
-chrono = "0.4"
-
 # Async trait support
 async-trait = "0.1"
 

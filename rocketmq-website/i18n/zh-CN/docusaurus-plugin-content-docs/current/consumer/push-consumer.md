@@ -5,9 +5,9 @@ title: Push Consumer
 
 # Push Consumer
 
-Push Consumer provides an event-driven approach to message consumption where messages are automatically delivered from the broker.
+Push Consumer 提供事件驱动的消费模式，消息会由 Broker 自动投递给消费者。
 
-## Creating a Push Consumer
+## 创建 Push Consumer
 
 ```rust
 use rocketmq::consumer::PushConsumer;
@@ -22,11 +22,11 @@ consumer.subscribe("TopicTest", "*").await?;
 consumer.start().await?;
 ```
 
-## Message Listeners
+## 消息监听器
 
-### Concurrent Message Listener
+### 并发消息监听器
 
-Messages are processed concurrently within a queue:
+同一队列内允许并发处理（由线程池调度）：
 
 ```rust
 use rocketmq::listener::MessageListenerConcurrently;
@@ -40,7 +40,7 @@ impl MessageListenerConcurrently for MyListener {
     ) -> ConsumeResult {
         for msg in messages {
             println!("Processing: {:?}", msg.get_msg_id());
-            // Process message
+            // 处理消息
         }
         ConsumeResult::Success
     }
@@ -49,9 +49,9 @@ impl MessageListenerConcurrently for MyListener {
 consumer.register_message_listener(Box::new(MyListener));
 ```
 
-### Ordered Message Listener
+### 顺序消息监听器
 
-Maintain strict ordering within a queue:
+在单队列内保证严格顺序消费：
 
 ```rust
 use rocketmq::listener::MessageListenerOrderly;
@@ -63,7 +63,7 @@ impl MessageListenerOrderly for OrderListener {
         &self,
         messages: Vec<MessageExt>,
     ) -> ConsumeResult {
-        // Messages are processed one by one in order
+        // 消息会按顺序逐条处理
         for msg in messages {
             process_in_order(msg);
         }
@@ -74,15 +74,15 @@ impl MessageListenerOrderly for OrderListener {
 consumer.register_message_listener(Box::new(OrderListener));
 ```
 
-## Subscription Patterns
+## 订阅模式
 
-### Single Topic
+### 单 Topic 订阅
 
 ```rust
 consumer.subscribe("TopicTest", "*").await?;
 ```
 
-### Multiple Topics
+### 多 Topic 订阅
 
 ```rust
 consumer.subscribe("TopicA", "*").await?;
@@ -90,81 +90,81 @@ consumer.subscribe("TopicB", "tag1 || tag2").await?;
 consumer.subscribe("TopicC", "region = 'us-west'").await?;
 ```
 
-### Tag Filtering
+### Tag 过滤订阅
 
 ```rust
-// Subscribe to specific tags
+// 订阅指定 tags
 consumer.subscribe("OrderEvents", "order_created || order_paid").await?;
 
-// Subscribe to all tags
+// 订阅所有 tags
 consumer.subscribe("OrderEvents", "*").await?;
 
-// Exclude tags
+// 排除 tags
 consumer.subscribe("OrderEvents", "!(order_cancelled)").await?;
 ```
 
-## Concurrency Configuration
+## 并发配置
 
 ```rust
-// Thread pool configuration
+// 线程池配置
 consumer_option.set_consume_thread_min(2);
 consumer_option.set_consume_thread_max(20);
 
-// Process queue size
+// 处理队列大小
 consumer_option.set_process_queue_size(64);
 
-// Pull batch size
+// 拉取批量
 consumer_option.set_pull_batch_size(32);
 
-// Pull interval (milliseconds)
+// 拉取间隔（毫秒）
 consumer_option.set_pull_interval(0);
 ```
 
-## Advanced Features
+## 高级特性
 
-### Pause and Resume
+### 暂停与恢复消费
 
 ```rust
-// Pause consumption
+// 暂停消费
 consumer.suspend();
 
-// Resume consumption
+// 恢复消费
 consumer.resume();
 ```
 
-### Message Selectors
+### 消息选择器
 
 ```rust
-// Use message selector to filter at broker side
+// 在 broker 侧使用 selector 过滤
 use rocketmq::filter::MessageSelector;
 
 let selector = MessageSelector::by_sql("amount > 100 AND region = 'us-west'");
 consumer.subscribe_with_selector("OrderEvents", selector).await?;
 ```
 
-### Offset Management
+### 位点管理
 
 ```rust
-// Set starting position
+// 设置起始消费位置
 consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
 
-// Reset offset to specific timestamp
+// 重置到指定时间
 consumer.seek_by_timestamp("TopicTest", 1699200000000).await?;
 
-// Reset offset to specific offset
+// 重置到指定 offset
 consumer.seek_to_offset("TopicTest", 0, 100).await?;
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Use appropriate thread pool size**: Match to your message processing complexity
-2. **Handle exceptions**: Return appropriate consume results
-3. **Monitor consumer lag**: Track how far behind you are
-4. **Implement idempotency**: Handle duplicate message processing
-5. **Use appropriate subscription filters**: Reduce unnecessary message delivery
+1. **合理设置线程池规模**：匹配消息处理复杂度
+2. **处理监听器异常**：返回正确消费结果
+3. **监控消费 lag**：及时发现堆积
+4. **实现幂等逻辑**：避免重复消费副作用
+5. **使用精准订阅过滤**：减少无效消息投递
 
-## Next Steps
+## 下一步
 
-- [Pull Consumer](./pull-consumer) - Learn about pull consumer
-- [Message Filtering](./message-filtering) - Advanced filtering techniques
-- [Configuration](../configuration) - Consumer configuration options
+- [Pull Consumer](./pull-consumer) - 了解 pull consumer
+- [消息过滤](./message-filtering) - 高级过滤策略
+- [配置](../configuration) - 消费者配置项

@@ -5,9 +5,9 @@ title: Pull Consumer
 
 # Pull Consumer
 
-Pull Consumer gives you full control over when and how messages are retrieved from the broker.
+Pull Consumer 让你完全控制何时、以何种方式从 Broker 拉取消息。
 
-## Creating a Pull Consumer
+## 创建 Pull Consumer
 
 ```rust
 use rocketmq::consumer::PullConsumer;
@@ -21,9 +21,9 @@ let consumer = PullConsumer::new(consumer_option);
 consumer.start().await?;
 ```
 
-## Pulling Messages
+## 拉取消息
 
-### Basic Pull
+### 基础拉取
 
 ```rust
 loop {
@@ -38,12 +38,12 @@ loop {
 }
 ```
 
-### Pull from Specific Queue
+### 从指定队列拉取
 
 ```rust
 use rocketmq::model::MessageQueue;
 
-// Get list of queues for a topic
+// 获取 topic 下所有队列
 let queues = consumer.fetch_subscribe_message_queues("TopicTest").await?;
 
 for queue in queues {
@@ -54,18 +54,18 @@ for queue in queues {
 }
 ```
 
-### Pull with Offset
+### 指定位点拉取
 
 ```rust
-// Pull from specific offset
+// 从指定 offset 开始拉取
 let messages = consumer
     .pull_from_offset(&queue, "*", 100, 32)
     .await?;
 ```
 
-## Offset Management
+## 位点管理
 
-### Manual Offset Tracking
+### 手动位点追踪
 
 ```rust
 struct OffsetTracker {
@@ -94,14 +94,14 @@ loop {
         process_message(msg);
     }
 
-    // Update offset after processing
+    // 处理成功后更新位点
     if let Some(next_offset) = result.next_begin_offset {
         tracker.update(&queue, next_offset);
     }
 }
 ```
 
-### Persistent Offset Storage
+### 持久化位点存储
 
 ```rust
 use std::collections::HashMap;
@@ -140,9 +140,9 @@ impl FileOffsetStore {
 }
 ```
 
-## Pull Strategies
+## 拉取策略
 
-### Sequential Pull
+### 顺序遍历拉取
 
 ```rust
 let queues = consumer.fetch_subscribe_message_queues("TopicTest").await?;
@@ -157,7 +157,7 @@ loop {
 }
 ```
 
-### Round-Robin Pull
+### 轮询拉取
 
 ```rust
 let queues = consumer.fetch_subscribe_message_queues("TopicTest").await?;
@@ -174,17 +174,17 @@ loop {
 }
 ```
 
-### Priority-Based Pull
+### 优先级拉取
 
 ```rust
 let high_priority_topic = "ImportantEvents";
 let low_priority_topic = "NormalEvents";
 
 loop {
-    // Prioritize high priority topic
+    // 优先拉取高优先级 topic
     let messages = consumer.pull(high_priority_topic, "*", 32).await?;
     if messages.is_empty() {
-        // Fall back to low priority topic
+        // 高优先级无消息时回退到低优先级
         let messages = consumer.pull(low_priority_topic, "*", 32).await?;
         for msg in messages {
             process_message(&msg);
@@ -197,9 +197,9 @@ loop {
 }
 ```
 
-## Error Handling
+## 错误处理
 
-### Handle Pull Exception
+### 拉取异常处理
 
 ```rust
 loop {
@@ -210,11 +210,11 @@ loop {
             }
         }
         Err(PullError::NoNewMessage) => {
-            // No new messages, wait and retry
+            // 无新消息，等待后重试
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         Err(PullError::OffsetIllegal) => {
-            // Reset offset
+            // 重置 offset
             consumer.seek_to_begin("TopicTest").await?;
         }
         Err(e) => {
@@ -225,9 +225,9 @@ loop {
 }
 ```
 
-## Performance Optimization
+## 性能优化
 
-### Batch Processing
+### 批处理
 
 ```rust
 let batch_size = 100;
@@ -244,7 +244,7 @@ loop {
 }
 ```
 
-### Parallel Processing
+### 并行处理
 
 ```rust
 use futures::stream::{StreamExt, TryStreamExt};
@@ -265,26 +265,26 @@ async fn pull_and_process(consumer: &PullConsumer, queue: &MessageQueue) -> Resu
 }
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Handle empty pulls**: Don't busy-wait when no messages are available
-2. **Commit offsets properly**: Ensure durability of consumer offsets
-3. **Use appropriate batch sizes**: Balance throughput and latency
-4. **Implement error handling**: Handle pull failures gracefully
-5. **Monitor pull rate**: Track pull performance and latency
+1. **处理空拉取**：无消息时避免 busy-wait
+2. **正确提交位点**：确保消费进度可恢复
+3. **设置合适批量大小**：平衡吞吐与延迟
+4. **完善错误处理**：优雅处理拉取失败
+5. **监控拉取速率**：持续优化消费性能
 
-## When to Use Pull Consumer
+## 适用场景
 
-Pull Consumer is ideal when:
+Pull Consumer 更适合：
 
-- You need fine-grained control over message consumption
-- You want to implement custom retry logic
-- You need to process messages in batches
-- You require explicit control over offset commits
-- You're implementing custom load balancing
+- 需要精细控制消费节奏
+- 需要自定义重试策略
+- 需要批量处理消息
+- 需要显式控制位点提交
+- 需要实现自定义负载策略
 
-## Next Steps
+## 下一步
 
-- [Push Consumer](./push-consumer) - Learn about push consumer
-- [Message Filtering](./message-filtering) - Advanced filtering techniques
-- [Configuration](../configuration) - Consumer configuration options
+- [Push Consumer](./push-consumer) - 了解 push consumer
+- [消息过滤](./message-filtering) - 高级过滤策略
+- [配置](../configuration) - 消费者配置项

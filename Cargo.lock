@@ -3715,7 +3715,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "cheetah-string",
- "chrono",
  "clap",
  "config",
  "criterion",

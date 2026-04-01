@@ -22,6 +22,7 @@ consumer.start().await?;
 ```
 
 **Benefits:**
+
 - Event-driven architecture
 - Automatic message pulling
 - Built-in thread pool for concurrent processing
@@ -46,6 +47,7 @@ loop {
 ```
 
 **Benefits:**
+
 - Full control over message pulling
 - Custom batch size
 - Explicit control over processing flow
@@ -168,13 +170,11 @@ Each message is consumed by only one consumer.
 
 ### Broadcasting
 
-Each consumer receives all messages:
+Every consumer in the group receives all messages:
 
 ```rust
 consumer_option.set_message_model(MessageModel::Broadcasting);
 ```
-
-Every consumer in the group receives all messages.
 
 ## Message Filtering
 
