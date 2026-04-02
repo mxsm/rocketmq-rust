@@ -257,16 +257,21 @@ impl Args {
         const DEFAULT_DOMAIN: &str = "jmenv.tbsite.net";
         const DEFAULT_SUBGROUP: &str = "nsaddr";
 
-        if let Some(domain) = properties.get("rmqAddressServerDomain") {
-            env::set_var("rocketmq.namesrv.domain", domain);
-        } else {
-            env::set_var("rocketmq.namesrv.domain", DEFAULT_DOMAIN);
-        }
+        // SAFETY: `set_var` modifies process-wide state.  This function is
+        // called once during broker startup, before worker threads are
+        // spawned, so there are no concurrent readers of the environment.
+        unsafe {
+            if let Some(domain) = properties.get("rmqAddressServerDomain") {
+                env::set_var("rocketmq.namesrv.domain", domain);
+            } else {
+                env::set_var("rocketmq.namesrv.domain", DEFAULT_DOMAIN);
+            }
 
-        if let Some(subgroup) = properties.get("rmqAddressServerSubGroup") {
-            env::set_var("rocketmq.namesrv.domain.subgroup", subgroup);
-        } else {
-            env::set_var("rocketmq.namesrv.domain.subgroup", DEFAULT_SUBGROUP);
+            if let Some(subgroup) = properties.get("rmqAddressServerSubGroup") {
+                env::set_var("rocketmq.namesrv.domain.subgroup", subgroup);
+            } else {
+                env::set_var("rocketmq.namesrv.domain.subgroup", DEFAULT_SUBGROUP);
+            }
         }
     }
 }

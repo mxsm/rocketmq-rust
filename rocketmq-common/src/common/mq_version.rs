@@ -643,6 +643,10 @@ impl RocketMqVersion {
         if value > max {
             value = max;
         }
+        // SAFETY: `RocketMqVersion` is `#[repr(u32)]` with contiguous
+        // auto-assigned discriminants starting at 0.  `value` is clamped to
+        // [0, HIGHER_VERSION], so every possible value corresponds to a valid
+        // enum variant.
         unsafe { std::mem::transmute::<u32, RocketMqVersion>(value) }
     }
 

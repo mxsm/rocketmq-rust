@@ -101,8 +101,15 @@ impl RequestResponseFuture {
     }
 
     pub fn put_response_message(&self, response_msg: Option<Box<dyn MessageTrait + Send>>) {
-        let raw = Box::into_raw(Box::new(response_msg));
-        self.response_msg.store(raw, Ordering::Release);
+        let new_raw = Box::into_raw(Box::new(response_msg));
+        // Swap in the new pointer and free any previous allocation to avoid a
+        // memory leak when the setter is called more than once.
+        let old_raw = self.response_msg.swap(new_raw, Ordering::AcqRel);
+        if !old_raw.is_null() {
+            // SAFETY: `old_raw` was created by `Box::into_raw` and is no
+            // longer referenced by `self.response_msg` after the swap.
+            drop(unsafe { Box::from_raw(old_raw) });
+        }
         self.notify.notify_waiters();
     }
 
@@ -140,17 +147,30 @@ impl RequestResponseFuture {
 
     #[inline]
     pub fn get_response_msg(&self) -> Option<Box<dyn MessageTrait + Send>> {
-        let raw = self.response_msg.load(Ordering::Acquire);
+        // SAFETY: Atomically swap out the stored pointer with null so that
+        // the caller takes unique ownership.  The pointer was created by
+        // `Box::into_raw` in `put_response_message` / `set_response_msg`
+        // and will never be aliased after the swap.
+        let raw = self.response_msg.swap(std::ptr::null_mut(), Ordering::AcqRel);
         if raw.is_null() {
             return None;
         }
+        // SAFETY: `raw` was created by `Box::into_raw(Box::new(…))` and has
+        // just been exclusively acquired via the atomic swap above.
         let response_msg = unsafe { Box::from_raw(raw) };
         *response_msg
     }
 
     pub fn set_response_msg(&self, response_msg: Box<dyn MessageTrait + Send>) {
-        let raw = Box::into_raw(Box::new(Some(response_msg)));
-        self.response_msg.store(raw, Ordering::Release);
+        let new_raw = Box::into_raw(Box::new(Some(response_msg)));
+        // Swap in the new pointer and free any previous allocation to avoid a
+        // memory leak when the setter is called more than once.
+        let old_raw = self.response_msg.swap(new_raw, Ordering::AcqRel);
+        if !old_raw.is_null() {
+            // SAFETY: `old_raw` was created by `Box::into_raw` and is no
+            // longer referenced by `self.response_msg` after the swap.
+            drop(unsafe { Box::from_raw(old_raw) });
+        }
     }
 
     pub async fn is_send_request_ok(&self) -> bool {
@@ -167,10 +187,16 @@ impl RequestResponseFuture {
 
     pub fn get_cause(&self) -> Option<Box<dyn Error + Send + Sync>> {
         //self.cause.lock().await.clone()
-        let raw = self.cause.load(Ordering::Acquire);
+        // SAFETY: Atomically swap out the stored pointer with null so that
+        // the caller takes unique ownership.  The pointer was created by
+        // `Box::into_raw` in `set_cause` and will never be aliased after the
+        // swap.
+        let raw = self.cause.swap(std::ptr::null_mut(), Ordering::AcqRel);
         if raw.is_null() {
             return None;
         }
+        // SAFETY: `raw` was created by `Box::into_raw(Box::new(…))` and has
+        // just been exclusively acquired via the atomic swap above.
         let cause = unsafe { Box::from_raw(raw) };
         Some(*cause)
     }
@@ -178,7 +204,36 @@ impl RequestResponseFuture {
     pub fn set_cause(&self, cause: Box<dyn Error + Send + Sync>) {
         /*let mut err = self.cause.lock().await;
          *err = Some(cause); */
-        let raw = Box::into_raw(Box::new(cause));
-        self.cause.store(raw, Ordering::Release);
+        let new_raw = Box::into_raw(Box::new(cause));
+        // Swap in the new pointer and free any previous allocation to avoid a
+        // memory leak when the setter is called more than once.
+        let old_raw = self.cause.swap(new_raw, Ordering::AcqRel);
+        if !old_raw.is_null() {
+            // SAFETY: `old_raw` was created by `Box::into_raw` and is no
+            // longer referenced by `self.cause` after the swap.
+            drop(unsafe { Box::from_raw(old_raw) });
+        }
+    }
+}
+
+impl Drop for RequestResponseFuture {
+    fn drop(&mut self) {
+        // Free any raw pointers that were never consumed by the getter methods
+        // to avoid memory leaks.
+        let msg_raw = self.response_msg.swap(std::ptr::null_mut(), Ordering::AcqRel);
+        if !msg_raw.is_null() {
+            // SAFETY: `msg_raw` was created by `Box::into_raw` in
+            // `put_response_message` / `set_response_msg` and is now
+            // exclusively owned by this Drop implementation.
+            drop(unsafe { Box::from_raw(msg_raw) });
+        }
+
+        let cause_raw = self.cause.swap(std::ptr::null_mut(), Ordering::AcqRel);
+        if !cause_raw.is_null() {
+            // SAFETY: `cause_raw` was created by `Box::into_raw` in
+            // `set_cause` and is now exclusively owned by this Drop
+            // implementation.
+            drop(unsafe { Box::from_raw(cause_raw) });
+        }
     }
 }

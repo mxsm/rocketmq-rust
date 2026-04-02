@@ -144,6 +144,9 @@ mod tests {
         let key = "HOME";
         let expected_value = "/home/user";
 
+        // SAFETY: Each test uses a unique key name, and tests that modify the
+        // environment are not marked `#[test]` with concurrent execution in
+        // mind.  The test binary runs serially for this module.
         unsafe {
             std::env::set_var(key, expected_value);
         }
@@ -184,6 +187,8 @@ mod tests {
     #[test]
     fn test_get_rocketmq_home_non_existing_variable() {
         // Set up
+        // SAFETY: Unique key (`ROCKETMQ_HOME_ENV`); no other test in this
+        // module reads this variable simultaneously.
         unsafe {
             std::env::remove_var(ROCKETMQ_HOME_ENV);
         }
@@ -212,6 +217,7 @@ mod tests {
         let initial_value = "initial_value";
         let new_value = "new_value";
 
+        // SAFETY: Unique key; no concurrent reader in these tests.
         unsafe {
             std::env::set_var(key, initial_value);
         }
@@ -235,12 +241,18 @@ mod tests {
 
     #[test]
     fn retrieves_env_variable_value() {
-        std::env::set_var("TEST_KEY", "test_value");
+        // SAFETY: Unique key "TEST_KEY"; no concurrent reader in these tests.
+        unsafe {
+            std::env::set_var("TEST_KEY", "test_value");
+        }
         assert_eq!(
             EnvUtils::get_property_or_default("TEST_KEY", "default_value"),
             "test_value"
         );
-        std::env::remove_var("TEST_KEY");
+        // SAFETY: Same key as above; cleanup after the assertion.
+        unsafe {
+            std::env::remove_var("TEST_KEY");
+        }
     }
 
     #[test]
@@ -253,9 +265,15 @@ mod tests {
 
     #[test]
     fn retrieves_env_variable_as_i32() {
-        std::env::set_var("TEST_INT_KEY", "42");
+        // SAFETY: Unique key "TEST_INT_KEY"; no concurrent reader in these tests.
+        unsafe {
+            std::env::set_var("TEST_INT_KEY", "42");
+        }
         assert_eq!(EnvUtils::get_property_as_i32("TEST_INT_KEY", 0), 42);
-        std::env::remove_var("TEST_INT_KEY");
+        // SAFETY: Same key as above; cleanup after the assertion.
+        unsafe {
+            std::env::remove_var("TEST_INT_KEY");
+        }
     }
 
     #[test]
@@ -265,9 +283,15 @@ mod tests {
 
     #[test]
     fn returns_default_when_env_variable_as_i32_invalid() {
-        std::env::set_var("INVALID_INT_KEY", "not_a_number");
+        // SAFETY: Unique key "INVALID_INT_KEY"; no concurrent reader in these tests.
+        unsafe {
+            std::env::set_var("INVALID_INT_KEY", "not_a_number");
+        }
         assert_eq!(EnvUtils::get_property_as_i32("INVALID_INT_KEY", 5), 5);
-        std::env::remove_var("INVALID_INT_KEY");
+        // SAFETY: Same key as above; cleanup after the assertion.
+        unsafe {
+            std::env::remove_var("INVALID_INT_KEY");
+        }
     }
 
     #[test]
@@ -278,9 +302,15 @@ mod tests {
 
     #[test]
     fn returns_default_when_env_variable_as_bool_invalid() {
-        std::env::set_var("INVALID_BOOL_KEY", "not_a_bool");
+        // SAFETY: Unique key "INVALID_BOOL_KEY"; no concurrent reader in these tests.
+        unsafe {
+            std::env::set_var("INVALID_BOOL_KEY", "not_a_bool");
+        }
         assert!(EnvUtils::get_property_as_bool("INVALID_BOOL_KEY", true));
         assert!(!EnvUtils::get_property_as_bool("INVALID_BOOL_KEY", false));
-        std::env::remove_var("INVALID_BOOL_KEY");
+        // SAFETY: Same key as above; cleanup after the assertion.
+        unsafe {
+            std::env::remove_var("INVALID_BOOL_KEY");
+        }
     }
 }
