@@ -1,48 +1,48 @@
 ---
 sidebar_position: 2
-title: Client Configuration
+title: 客户端配置
 ---
 
-# Client Configuration
+# 客户端配置
 
-Configure RocketMQ-Rust clients (producers and consumers) for optimal performance.
+本章介绍如何配置 RocketMQ-Rust 客户端（Producer 与 Consumer），以获得更好的稳定性和性能。
 
-## Producer Configuration
+## 生产者配置
 
-### Producer Basic Configuration
+### 生产者基础配置
 
 ```rust
 let mut producer_option = ProducerOption::default();
 
-// Required settings
+// 必填参数
 producer_option.set_name_server_addr("localhost:9876");
 producer_option.set_group_name("my_producer_group");
 
-// Optional settings
-producer_option.set_send_msg_timeout(3000); // milliseconds
+// 可选参数
+producer_option.set_send_msg_timeout(3000); // 毫秒
 producer_option.set_retry_times_when_send_failed(2);
 producer_option.set_max_message_size(4 * 1024 * 1024); // 4MB
 ```
 
-### Producer Advanced Configuration
+### 生产者高级配置
 
 ```rust
-// Compression
+// 压缩
 producer_option.set_compress_msg_body_over_threshold(4 * 1024); // 4KB
 
-// Retry settings
+// 重试
 producer_option.set_retry_times_when_send_failed(3);
 producer_option.set_retry_next_server(true);
 
-// Timeout settings
+// 超时
 producer_option.set_tcp_transport_try_lock_timeout(1000);
 producer_option.set_tcp_transport_connect_timeout(3000);
 
-// Connection pool
+// 连接池
 producer_option.set_client_channel_max_idle_time_seconds(120);
 ```
 
-### Producer Complete Example
+### 生产者完整示例
 
 ```rust
 use rocketmq::producer::Producer;
@@ -51,15 +51,15 @@ use rocketmq::conf::ProducerOption;
 fn create_producer() -> Producer {
     let mut producer_option = ProducerOption::default();
 
-    // Basic
+    // 基础参数
     producer_option.set_name_server_addr("localhost:9876");
     producer_option.set_group_name("order_producer");
 
-    // Performance
+    // 性能参数
     producer_option.set_compress_msg_body_over_threshold(4 * 1024);
     producer_option.set_max_message_size(4 * 1024 * 1024);
 
-    // Reliability
+    // 可靠性参数
     producer_option.set_send_msg_timeout(3000);
     producer_option.set_retry_times_when_send_failed(3);
     producer_option.set_retry_next_server(true);
@@ -68,40 +68,40 @@ fn create_producer() -> Producer {
 }
 ```
 
-## Consumer Configuration
+## 消费者配置
 
-### Consumer Basic Configuration
+### 消费者基础配置
 
 ```rust
 let mut consumer_option = ConsumerOption::default();
 
-// Required settings
+// 必填参数
 consumer_option.set_name_server_addr("localhost:9876");
 consumer_option.set_group_name("my_consumer_group");
 
-// Thread pool
+// 线程池
 consumer_option.set_consume_thread_min(2);
 consumer_option.set_consume_thread_max(10);
 ```
 
-### Consumer Advanced Configuration
+### 消费者高级配置
 
 ```rust
-// Offset management
+// 消费起点
 consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
 
-// Retry settings
+// 重试参数
 consumer_option.set_max_reconsume_times(3);
 
-// Message model
+// 消息模型
 consumer_option.set_message_model(MessageModel::Clustering);
 
-// Pull settings
+// 拉取参数
 consumer_option.set_pull_batch_size(32);
 consumer_option.set_pull_interval(0);
 ```
 
-### Consumer Complete Example
+### 消费者完整示例
 
 ```rust
 use rocketmq::consumer::PushConsumer;
@@ -110,61 +110,61 @@ use rocketmq::conf::ConsumerOption;
 fn create_consumer() -> PushConsumer {
     let mut consumer_option = ConsumerOption::default();
 
-    // Basic
+    // 基础参数
     consumer_option.set_name_server_addr("localhost:9876");
     consumer_option.set_group_name("order_consumer");
 
-    // Threading
+    // 线程参数
     consumer_option.set_consume_thread_min(2);
     consumer_option.set_consume_thread_max(10);
 
-    // Offset
+    // 位点参数
     consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
 
-    // Pull settings
+    // 拉取参数
     consumer_option.set_pull_batch_size(32);
     consumer_option.set_pull_interval(0);
 
-    // Retry
+    // 重试参数
     consumer_option.set_max_reconsume_times(3);
 
     PushConsumer::new(consumer_option)
 }
 ```
 
-## Configuration Options
+## 常用配置项
 
-### Producer Options
+### Producer 配置项
 
-| Option | Default | Description |
+| 选项 | 默认值 | 说明 |
 | -------- | --------- | ------------- |
-| `name_server_addr` | Required | Name server address |
-| `group_name` | Required | Producer group name |
-| `send_msg_timeout` | 3000 | Send timeout (ms) |
-| `retry_times_when_send_failed` | 2 | Retry count |
-| `max_message_size` | 4MB | Maximum message size |
-| `compress_msg_body_over_threshold` | 4KB | Compression threshold |
-| `retry_next_server` | false | Retry on next broker |
+| `name_server_addr` | 必填 | Name Server 地址 |
+| `group_name` | 必填 | 生产者组名称 |
+| `send_msg_timeout` | 3000 | 发送超时（毫秒） |
+| `retry_times_when_send_failed` | 2 | 发送失败重试次数 |
+| `max_message_size` | 4MB | 最大消息大小 |
+| `compress_msg_body_over_threshold` | 4KB | 压缩阈值 |
+| `retry_next_server` | false | 是否切换 Broker 重试 |
 
-### Consumer Options
+### Consumer 配置项
 
-| Option | Default | Description |
+| 选项 | 默认值 | 说明 |
 | -------- | --------- | ------------- |
-| `name_server_addr` | Required | Name server address |
-| `group_name` | Required | Consumer group name |
-| `consume_thread_min` | 1 | Min consume threads |
-| `consume_thread_max` | 10 | Max consume threads |
-| `pull_batch_size` | 32 | Messages per pull |
-| `pull_interval` | 0 | Pull interval (ms) |
-| `max_reconsume_times` | 16 | Max retry count |
-| `message_model` | Clustering | Clustering or Broadcasting |
+| `name_server_addr` | 必填 | Name Server 地址 |
+| `group_name` | 必填 | 消费者组名称 |
+| `consume_thread_min` | 1 | 最小消费线程数 |
+| `consume_thread_max` | 10 | 最大消费线程数 |
+| `pull_batch_size` | 32 | 单次拉取消息数 |
+| `pull_interval` | 0 | 拉取间隔（毫秒） |
+| `max_reconsume_times` | 16 | 最大重试次数 |
+| `message_model` | Clustering | 集群或广播模式 |
 
-## Environment Variables
+## 使用环境变量
 
 ```rust
 use std::env;
 
-// Read from environment
+// 从环境变量读取配置
 let name_server = env::var("ROCKETMQ_NAME_SERVER")
     .unwrap_or_else(|_| "localhost:9876".to_string());
 
@@ -175,7 +175,7 @@ producer_option.set_name_server_addr(&name_server);
 producer_option.set_group_name(&group_name);
 ```
 
-## Configuration File
+## 使用配置文件
 
 ```toml
 # rocketmq-client.toml
@@ -220,16 +220,16 @@ fn load_config(path: &str) -> Config {
 }
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Use sensible timeouts**: Balance between reliability and performance
-2. **Configure retries**: Set appropriate retry counts
-3. **Tune thread pools**: Match to your workload
-4. **Set message size limits**: Prevent oversized messages
-5. **Use compression**: For larger messages
-6. **Monitor performance**: Track success rates and latency
+1. **设置合理超时**：在可靠性与响应速度之间平衡。
+2. **配置重试策略**：避免瞬时故障导致消息丢失。
+3. **按负载调优线程池**：提升吞吐并避免资源浪费。
+4. **限制消息大小**：降低大消息对系统冲击。
+5. **启用压缩**：在大消息场景减少带宽占用。
+6. **持续观测指标**：关注成功率、延迟与重试率。
 
-## Next Steps
+## 下一步
 
-- [Broker Configuration](./broker-config) - Configure brokers
-- [Performance Tuning](./performance-tuning) - Optimize performance
+- [Broker 配置](./broker-config) - 配置 Broker 核心参数
+- [性能调优](./performance-tuning) - 优化性能

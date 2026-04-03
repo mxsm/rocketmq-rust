@@ -1,110 +1,110 @@
 ---
 sidebar_position: 3
-title: Performance Tuning
+title: 性能调优
 ---
 
-# Performance Tuning
+# 性能调优
 
-Optimize RocketMQ-Rust for maximum throughput and minimal latency.
+本章介绍如何对 RocketMQ-Rust 进行系统化调优，以获得更高吞吐和更低延迟。
 
-## Broker Tuning
+## Broker 调优
 
-### Thread Pool Configuration
+### 线程池配置
 
 ```toml
-# For high-throughput scenarios
+# 高吞吐场景
 sendMessageThreadPoolNums = 32
 pullMessageThreadPoolNums = 32
 
-# For low-latency scenarios
+# 低延迟场景
 sendMessageThreadPoolNums = 16
 pullMessageThreadPoolNums = 16
 ```
 
-### Flush Strategy
+### 刷盘策略
 
 ```toml
-# Maximum performance (may lose data on failure)
+# 极致性能（异常时可能丢失少量数据）
 flushDiskType = ASYNC_FLUSH
 flushCommitLogLeastPages = 0
 
-# Balanced performance
+# 平衡型配置
 flushDiskType = ASYNC_FLUSH
 flushCommitLogLeastPages = 4
 
-# Maximum reliability
+# 极致可靠性
 flushDiskType = SYNC_FLUSH
 flushCommitLogLeastPages = 0
 ```
 
-### Memory Configuration
+### 内存配置
 
 ```toml
-# Increase OS page cache (Linux)
+# 增加 OS Page Cache（Linux）
 # sysctl -w vm.dirty_bytes=4194304
 # sysctl -w vm.dirty_background_bytes=2097152
 ```
 
-## Producer Tuning
+## Producer 调优
 
-### Batch Size
+### 批量
 
 ```rust
-// Increase batch size for higher throughput
+// 增大消息上限（按实际需求设置）
 producer_option.set_max_message_size(4 * 1024 * 1024); // 4MB
 
-// Send multiple messages
+// 批量发送
 let messages: Vec<Message> = /* ... */;
 producer.send_batch(messages).await?;
 ```
 
-### Compression
+### 压缩
 
 ```rust
-// Enable compression for large messages
+// 大消息启用压缩
 producer_option.set_compress_msg_body_over_threshold(4 * 1024);
 ```
 
-### Connection Pool
+### 连接池
 
 ```rust
-// Increase connection idle time
+// 增大连接空闲时间
 producer_option.set_client_channel_max_idle_time_seconds(300);
 ```
 
-## Consumer Tuning
+## Consumer 调优
 
-### Thread Pool
+### 线程池
 
 ```rust
-// For CPU-intensive processing
+// CPU 密集型处理
 consumer_option.set_consume_thread_min(num_cpus::get() as i32);
 consumer_option.set_consume_thread_max(num_cpus::get() as i32 * 2);
 
-// For I/O-intensive processing
+// I/O 密集型处理
 consumer_option.set_consume_thread_min(num_cpus::get() as i32 * 2);
 consumer_option.set_consume_thread_max(num_cpus::get() as i32 * 4);
 ```
 
-### Pull Batch Size
+### 拉取批量
 
 ```rust
-// Increase for higher throughput
+// 提升吞吐
 consumer_option.set_pull_batch_size(64);
 consumer_option.set_pull_interval(0);
 ```
 
-### Process Queue
+### 处理队列阈值
 
 ```rust
-// Limit memory usage
+// 控制内存占用
 consumer_option.set_pull_threshold_for_all(10000);
 consumer_option.set_pull_threshold_for_queue(1000);
 ```
 
-## Network Tuning
+## 网络调优
 
-### TCP Buffer Sizes
+### TCP 缓冲区
 
 ```toml
 # broker.conf
@@ -112,36 +112,36 @@ clientSocketRcvBufSize = 262144
 clientSocketSndBufSize = 262144
 ```
 
-### Kernel Parameters
+### 内核参数
 
 ```bash
-# Linux kernel optimization
+# Linux 网络参数优化
 sysctl -w net.core.rmem_max=134217728
 sysctl -w net.core.wmem_max=134217728
 sysctl -w net.ipv4.tcp_rmem="4096 87380 67108864"
 sysctl -w net.ipv4.tcp_wmem="4096 65536 67108864"
 ```
 
-## JVM Tuning (for Java brokers)
+## JVM 调优（Java Broker 场景）
 
 ```bash
-# Heap size
+# 堆内存
 JAVA_OPT="${JAVA_OPT} -Xms8g -Xmx8g"
 
-# GC settings
+# GC 参数
 JAVA_OPT="${JAVA_OPT} -XX:+UseG1GC"
 JAVA_OPT="${JAVA_OPT} -XX:MaxGCPauseMillis=200"
 
-# Metaspace size
+# Metaspace 参数
 JAVA_OPT="${JAVA_OPT} -XX:MetaspaceSize=128m"
 JAVA_OPT="${JAVA_OPT} -XX:MaxMetaspaceSize=256m"
 ```
 
-## Disk I/O Tuning
+## 磁盘 I/O 调优
 
-### Use SSDs
+### 使用 SSD
 
-Commit logs on SSDs provide 5-10x better performance:
+将 CommitLog 放在 SSD 上通常会获得 5~10 倍性能提升：
 
 ```text
 Sequential Write (HDD):  ~100 MB/s
@@ -151,40 +151,40 @@ Random Read (HDD):       ~1 MB/s
 Random Read (SSD):       ~200 MB/s
 ```
 
-### Separate Storage
+### 存储分离
 
 ```toml
-# Commit log on fast disk
+# CommitLog 放在高速盘
 storePathCommitLog = /fast_disk/commitlog
 
-# Consume queue on separate disk
+# ConsumeQueue 放在另一块盘
 storePathConsumeQueue = /separate_disk/consumequeue
 ```
 
-### Filesystem
+### 文件系统建议
 
 ```bash
-# Use XFS or ext4
+# 使用 XFS 或 ext4
 mkfs.xfs /dev/sdb
 mount -t xfs /dev/sdb /data/rocketmq
 
-# Mount options
+# 挂载参数
 mount -t xfs -o noatime,nodiratime /dev/sdb /data/rocketmq
 ```
 
-## Monitoring
+## 监控
 
-### Key Metrics
+### 核心指标
 
-- **Send TPS**: Messages sent per second
-- **Consume TPS**: Messages consumed per second
-- **Send Latency**: Time to send message
-- **Consume Lag**: Messages waiting to be consumed
-- **Disk Usage**: Commit log and consume queue size
-- **CPU Usage**: Broker and client CPU utilization
-- **Memory Usage**: JVM and OS memory usage
+- **发送 TPS**：每秒发送消息数
+- **消费 TPS**：每秒消费消息数
+- **发送延迟**：消息发送耗时
+- **消费 lag**：消息堆积量
+- **磁盘使用率**：CommitLog/ConsumeQueue 空间占用
+- **CPU 使用率**：Broker 与客户端 CPU 占用
+- **内存使用率**：JVM 与 OS 内存占用
 
-### Monitoring Tools
+### 监控工具
 
 ```rust
 // RocketMQ-Rust metrics
@@ -197,18 +197,18 @@ println!("Avg Latency: {} ms", metrics.avg_latency);
 println!("Success Rate: {:.2}%", metrics.success_rate * 100.0);
 ```
 
-## Performance Benchmarks
+## 性能基准
 
-### Expected Performance
+### 预期表现
 
-| Scenario | Expected Throughput | Expected Latency |
+| 场景 | 预期吞吐 | 预期延迟 |
 | -------- | ----------------- | ---------------- |
-| Single Producer | 50K-100K msg/s | < 5ms |
-| Multiple Producers | 500K+ msg/s | < 10ms |
-| Single Consumer | 50K-100K msg/s | < 10ms |
-| Multiple Consumers | 500K+ msg/s | < 20ms |
+| 单生产者 | 50K-100K msg/s | < 5ms |
+| 多生产者 | 500K+ msg/s | < 10ms |
+| 单消费者 | 50K-100K msg/s | < 10ms |
+| 多消费者 | 500K+ msg/s | < 20ms |
 
-### Benchmark Script
+### benchmark 脚本
 
 ```rust
 use std::time::Instant;
@@ -234,41 +234,41 @@ async fn benchmark_producer(producer: &Producer, num_messages: usize) -> Result<
 }
 ```
 
-## Best Practices
+## 最佳实践
 
-1. **Use appropriate hardware**: SSDs for commit logs
-2. **Tune thread pools**: Match to your workload
-3. **Optimize network settings**: Increase buffer sizes
-4. **Monitor metrics**: Track performance continuously
-5. **Use compression**: For larger messages
-6. **Batch when possible**: Reduce round trips
-7. **Test before production**: Benchmark your workload
+1. **优先保证硬件基础**：CommitLog 场景建议使用 SSD。
+2. **线程池按业务画像调优**：避免盲目放大。
+3. **网络参数与缓冲区联动调优**：减少网络瓶颈。
+4. **持续观测关键指标**：用数据驱动参数调整。
+5. **大消息场景启用压缩**：降低带宽压力。
+6. **尽量批量发送**：减少 RPC 往返次数。
+7. **上线前做真实负载压测**：避免线上试错。
 
-## Troubleshooting
+## 故障排查
 
-### Low Throughput
+### 吞吐偏低
 
-- Check disk I/O performance
-- Increase thread pool sizes
-- Reduce flush frequency
-- Check network bandwidth
+- 检查磁盘 I/O 性能
+- 增大线程池规模
+- 调整刷盘频率
+- 检查网络带宽与丢包
 
-### High Latency
+### 延迟偏高
 
-- Check CPU usage
-- Reduce flush frequency
-- Optimize message processing
-- Check GC pauses (for Java brokers)
+- 检查 CPU 利用率
+- 调整刷盘策略
+- 优化业务处理逻辑
+- 检查 Java Broker 的 GC 暂停
 
-### Memory Issues
+### 内存问题
 
-- Limit process queue size
-- Increase JVM heap (if applicable)
-- Check for memory leaks
-- Monitor OS page cache
+- 限制处理队列大小
+- 增加 JVM 堆内存（如适用）
+- 排查内存泄漏
+- 监控 OS Page Cache 使用
 
-## Next Steps
+## 下一步
 
-- [Broker Configuration](./broker-config) - Broker settings
-- [Client Configuration](./client-config) - Client settings
-- [FAQ](../faq) - Common issues
+- [Broker 配置](./broker-config) - 调整 Broker 参数
+- [客户端配置](./client-config) - 调整 Producer 与 Consumer 参数
+- [常见问题](../faq) - 查看常见问题与排障建议

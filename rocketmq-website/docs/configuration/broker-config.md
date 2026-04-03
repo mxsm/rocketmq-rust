@@ -62,7 +62,7 @@ flushConsumeQueueThoroughInterval = 60000
 ### Thread Pool Settings
 
 ```toml
-# Send message thread pool
+# Send/Pull/Query message thread pool
 sendMessageThreadPoolNums = 16
 pullMessageThreadPoolNums = 16
 queryMessageThreadPoolNums = 8
@@ -83,7 +83,6 @@ clientSocketRcvBufSize = 131072
 clientSocketSndBufSize = 131072
 
 # OS page cache
-osPageCacheBusyTimeOutMills = 1000
 osPageCacheBusyTimeOutMills = 1000
 ```
 
