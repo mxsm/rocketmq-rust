@@ -1033,12 +1033,154 @@ fn consumer_compensation_for_request_source(request_source: RequestSource) -> (C
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::Channel;
+    use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_remoting::protocol::LanguageCode;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
     use super::*;
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::client::client_channel_info::ClientChannelInfo;
     use crate::client::consumer_group_info::ConsumerGroupInfo;
+    use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
+
+    fn temp_test_root(label: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("rocketmq-rust-pull-message-{}-{}", std::process::id(), label));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp test root");
+        path
+    }
+
+    async fn new_test_runtime(label: &str, enable_property_filter: bool) -> BrokerRuntime {
+        let temp_root = temp_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            enable_property_filter,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await);
+        runtime
+    }
+
+    fn new_processor(
+        inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
+    ) -> PullMessageProcessor<LocalFileMessageStore> {
+        let handler = ArcMut::new(DefaultPullMessageResultHandler::new(Arc::new(vec![]), inner.clone()));
+        PullMessageProcessor::new(handler, inner)
+    }
+
+    fn request_with_subscription(topic: &str, group: &str, expression: &str, version: i64) -> PullMessageRequestHeader {
+        PullMessageRequestHeader {
+            consumer_group: group.into(),
+            topic: topic.into(),
+            queue_id: 0,
+            queue_offset: 0,
+            max_msg_nums: 32,
+            sys_flag: PullSysFlag::build_sys_flag(false, false, true, false) as i32,
+            commit_offset: 0,
+            suspend_timeout_millis: 0,
+            sub_version: version,
+            subscription: Some(expression.into()),
+            expression_type: Some(ExpressionType::SQL92.into()),
+            ..Default::default()
+        }
+    }
+
+    fn request_without_subscription(topic: &str, group: &str, version: i64) -> PullMessageRequestHeader {
+        PullMessageRequestHeader {
+            consumer_group: group.into(),
+            topic: topic.into(),
+            queue_id: 0,
+            queue_offset: 0,
+            max_msg_nums: 32,
+            sys_flag: PullSysFlag::build_sys_flag(false, false, false, false) as i32,
+            commit_offset: 0,
+            suspend_timeout_millis: 0,
+            sub_version: version,
+            ..Default::default()
+        }
+    }
+
+    async fn new_client_channel_info(client_id: &str) -> ClientChannelInfo {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let server_addr = listener.local_addr().expect("listener local addr");
+        let accept = tokio::spawn(async move { listener.accept().await.expect("accept test stream").0 });
+        let stream = tokio::net::TcpStream::connect(server_addr)
+            .await
+            .expect("connect test stream");
+        let local_addr = stream.local_addr().expect("client local addr");
+        let remote_addr = stream.peer_addr().expect("client peer addr");
+        let server_stream = accept.await.expect("join accept task");
+        drop(server_stream);
+
+        let response_table = ArcMut::new(HashMap::new());
+        let channel_inner = ArcMut::new(ChannelInner::new(Connection::new(stream), response_table));
+        let channel = Channel::new(channel_inner, local_addr, remote_addr);
+        ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
+    }
+
+    async fn register_consumer_group_without_subscriptions(
+        inner: &ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
+        group: &str,
+        client_id: &str,
+    ) {
+        inner.consumer_manager().register_consumer_without_sub(
+            &group.into(),
+            new_client_channel_info(client_id).await,
+            ConsumeType::ConsumePassively,
+            MessageModel::Clustering,
+            ConsumeFromWhere::ConsumeFromLastOffset,
+            false,
+        );
+    }
+
+    fn inject_subscription(
+        inner: &ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
+        group: &str,
+        topic: &str,
+        expression: &str,
+        version: i64,
+    ) {
+        let group_info = inner
+            .consumer_manager()
+            .get_consumer_group_info(&group.into())
+            .expect("registered consumer group should exist");
+        group_info.get_subscription_table().insert(
+            topic.into(),
+            Arc::new(SubscriptionData {
+                topic: topic.into(),
+                sub_string: expression.into(),
+                expression_type: ExpressionType::SQL92.into(),
+                sub_version: version,
+                ..Default::default()
+            }),
+        );
+    }
 
     #[test]
     fn returns_true_for_proxy_pull_broadcast() {
@@ -1095,5 +1237,139 @@ mod tests {
         let (consume_type, message_model) = consumer_compensation_for_request_source(RequestSource::Unknown);
         assert_eq!(consume_type, ConsumeType::ConsumePassively);
         assert_eq!(message_model, MessageModel::Clustering);
+    }
+
+    #[test]
+    fn get_subscription_data_with_flag_builds_request_scoped_filter_data() {
+        let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let mut runtime = async_runtime.block_on(new_test_runtime("with-flag-builds-request-scoped", true));
+        let inner = runtime.inner_for_test().clone();
+        let processor = new_processor(inner.clone());
+        let request_header = request_with_subscription("topic-a", "group-a", "color = 'blue'", 11);
+
+        let result = match processor
+            .get_subscription_data_with_flag(&request_header, &RemotingCommand::create_response_command())
+        {
+            Ok(result) => result,
+            Err(_) => panic!("subscription with flag should parse"),
+        };
+
+        let filter_data = result
+            .consumer_filter_data
+            .expect("request scoped filter data should be returned");
+        assert!(filter_data.compiled_expression().is_some());
+        assert!(filter_data.bloom_filter_data().is_some());
+        assert!(inner
+            .consumer_filter_manager()
+            .get_consumer_filter_data(&"topic-a".into(), &"group-a".into())
+            .is_none());
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[test]
+    fn get_subscription_data_with_flag_reuses_registered_filter_data() {
+        let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let mut runtime = async_runtime.block_on(new_test_runtime("with-flag-reuses-registered", true));
+        let inner = runtime.inner_for_test().clone();
+        inner.consumer_filter_manager().register(
+            "group-a",
+            &std::collections::HashSet::from([SubscriptionData {
+                topic: "topic-a".into(),
+                sub_string: "color = 'blue'".into(),
+                expression_type: ExpressionType::SQL92.into(),
+                sub_version: 11,
+                ..Default::default()
+            }]),
+        );
+        let registered = inner
+            .consumer_filter_manager()
+            .get_consumer_filter_data(&"topic-a".into(), &"group-a".into())
+            .expect("registered filter data should exist");
+        let processor = new_processor(inner.clone());
+        let request_header = request_with_subscription("topic-a", "group-a", "color = 'blue'", 11);
+
+        let result = match processor
+            .get_subscription_data_with_flag(&request_header, &RemotingCommand::create_response_command())
+        {
+            Ok(result) => result,
+            Err(_) => panic!("subscription with flag should parse"),
+        };
+
+        let resolved = result
+            .consumer_filter_data
+            .expect("resolved filter data should be returned");
+        assert!(std::sync::Arc::ptr_eq(
+            registered.compiled_expression().as_ref().unwrap(),
+            resolved.compiled_expression().as_ref().unwrap()
+        ));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[test]
+    fn get_subscription_data_without_flag_returns_filter_data_not_exist_when_sql_filter_missing() {
+        let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let mut runtime = async_runtime.block_on(new_test_runtime("without-flag-filter-missing", true));
+        let inner = runtime.inner_for_test().clone();
+        async_runtime.block_on(register_consumer_group_without_subscriptions(
+            &inner, "group-a", "client-a",
+        ));
+        inject_subscription(&inner, "group-a", "topic-a", "color = 'blue'", 11);
+        let processor = new_processor(inner.clone());
+        let request_header = request_without_subscription("topic-a", "group-a", 11);
+        let mut response_header = PullMessageResponseHeader::default();
+
+        let response = match processor.get_subscription_data_without_flag(
+            &request_header,
+            &SubscriptionGroupConfig::new("group-a".into()),
+            &RemotingCommand::create_response_command(),
+            &mut response_header,
+        ) {
+            Ok(_) => panic!("missing consumer filter data should be rejected"),
+            Err(response) => response,
+        };
+
+        assert_eq!(response.code(), ResponseCode::FilterDataNotExist as i32);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[test]
+    fn get_subscription_data_without_flag_returns_filter_data_not_latest_when_filter_version_lags() {
+        let async_runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        let mut runtime = async_runtime.block_on(new_test_runtime("without-flag-filter-stale", true));
+        let inner = runtime.inner_for_test().clone();
+        async_runtime.block_on(register_consumer_group_without_subscriptions(
+            &inner, "group-a", "client-a",
+        ));
+        inject_subscription(&inner, "group-a", "topic-a", "color = 'blue'", 11);
+        inner.consumer_filter_manager().register(
+            "group-a",
+            &HashSet::from([SubscriptionData {
+                topic: "topic-a".into(),
+                sub_string: "color = 'blue'".into(),
+                expression_type: ExpressionType::SQL92.into(),
+                sub_version: 10,
+                ..Default::default()
+            }]),
+        );
+        let processor = new_processor(inner.clone());
+        let request_header = request_without_subscription("topic-a", "group-a", 11);
+        let mut response_header = PullMessageResponseHeader::default();
+
+        let response = match processor.get_subscription_data_without_flag(
+            &request_header,
+            &SubscriptionGroupConfig::new("group-a".into()),
+            &RemotingCommand::create_response_command(),
+            &mut response_header,
+        ) {
+            Ok(_) => panic!("stale consumer filter data should be rejected"),
+            Err(response) => response,
+        };
+
+        assert_eq!(response.code(), ResponseCode::FilterDataNotLatest as i32);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 }
