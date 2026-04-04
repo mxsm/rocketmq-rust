@@ -1581,11 +1581,96 @@ impl QueueLockManager {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_rust::ArcMut;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::pop::ack_msg::AckMsg;
 
     use super::*;
+    use crate::broker_runtime::BrokerRuntime;
+
+    fn temp_test_root(label: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("rocketmq-rust-pop-message-{}-{}", std::process::id(), label));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp test root");
+        path
+    }
+
+    async fn new_test_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = temp_test_root(label);
+        let broker_config = std::sync::Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = std::sync::Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await);
+        runtime
+    }
+
+    async fn create_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        std_stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
+        let connection = Connection::new(tcp_stream);
+        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
+        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        Channel::new(inner, local_addr, local_addr)
+    }
+
+    fn seed_topic_and_group(
+        inner: &mut ArcMut<crate::broker_runtime::BrokerRuntimeInner<LocalFileMessageStore>>,
+        topic: &str,
+        group: &str,
+    ) {
+        inner
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic, 1, 1)));
+
+        let mut config = SubscriptionGroupConfig::new(CheetahString::from_slice(group));
+        inner
+            .subscription_group_manager_mut()
+            .update_subscription_group_config(&mut config);
+    }
+
+    fn pop_request(topic: &str, group: &str, expression: Option<&str>) -> PopMessageRequestHeader {
+        PopMessageRequestHeader {
+            consumer_group: group.into(),
+            topic: topic.into(),
+            queue_id: 0,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 0,
+            born_time: current_millis(),
+            init_mode: ConsumeInitMode::MIN,
+            exp_type: expression.map(|_| CheetahString::from_static_str(ExpressionType::SQL92)),
+            exp: expression.map(CheetahString::from_slice),
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        }
+    }
 
     #[test]
     fn gen_ack_unique_id_formats_correctly() {
@@ -1696,6 +1781,61 @@ mod tests {
         let key = QueueLockManager::build_lock_key(&topic, &consumer_group, queue_id);
         let expected = "test_topic@test_group@1";
         assert_eq!(key, expected);
+    }
+
+    #[tokio::test]
+    async fn process_request_with_valid_sql_returns_polling_timeout_without_persisting_filter_data() {
+        let mut runtime = new_test_runtime("valid-sql-request-scoped").await;
+        let inner = runtime.inner_for_test();
+        seed_topic_and_group(inner, "topic-a", "group-a");
+
+        let mut processor = PopMessageProcessor::new(inner.clone());
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let request_header = pop_request("topic-a", "group-a", Some("color = 'blue'"));
+        let mut request = RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
+        request.make_custom_header_to_net();
+
+        let response = processor
+            ._process_request(channel, ctx, RequestCode::PopMessage, &mut request)
+            .await
+            .expect("pop request should succeed")
+            .expect("pop request should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::PollingTimeout);
+        assert!(inner
+            .consumer_filter_manager()
+            .get_consumer_filter_data(&"topic-a".into(), &"group-a".into())
+            .is_none());
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn process_request_with_invalid_sql_returns_subscription_parse_failed() {
+        let mut runtime = new_test_runtime("invalid-sql-parse-failed").await;
+        let inner = runtime.inner_for_test();
+        seed_topic_and_group(inner, "topic-a", "group-a");
+
+        let mut processor = PopMessageProcessor::new(inner.clone());
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let request_header = pop_request("topic-a", "group-a", Some("color ="));
+        let mut request = RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
+        request.make_custom_header_to_net();
+
+        let response = processor
+            ._process_request(channel, ctx, RequestCode::PopMessage, &mut request)
+            .await
+            .expect("invalid pop request should return an error response")
+            .expect("invalid pop request should return a response");
+
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::SubscriptionParseFailed
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]

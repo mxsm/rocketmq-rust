@@ -751,6 +751,7 @@ impl ConfigManager for ConsumerFilterManager {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
@@ -770,6 +771,18 @@ mod tests {
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
         )
+    }
+
+    fn temp_test_root(label: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rocketmq-rust-consumer-filter-manager-{}-{}",
+            std::process::id(),
+            label
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp test root");
+        path
     }
 
     fn sql_subscription(topic: &str, expression: &str, version: i64) -> SubscriptionData {
@@ -1313,5 +1326,106 @@ mod tests {
                 .unwrap(),
             Value::Boolean(true)
         );
+    }
+
+    #[test]
+    fn register_same_version_revives_dead_filter_data() {
+        let manager = new_manager();
+        let subscriptions = HashSet::from([sql_subscription("TopicTest", "color = 'blue'", 9)]);
+        manager.register("GroupTest", &subscriptions);
+        manager.unregister("GroupTest");
+
+        let dead = manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .expect("dead filter data should still exist before cleanup");
+        assert!(dead.is_dead());
+
+        manager.register("GroupTest", &subscriptions);
+
+        let revived = manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .expect("filter data should be revived");
+        assert!(!revived.is_dead());
+        assert_eq!(revived.client_version(), 9);
+        assert!(revived.compiled_expression().is_some());
+    }
+
+    #[test]
+    fn encode_pretty_cleans_filters_dead_for_more_than_24_hours() {
+        let manager = new_manager();
+        let subscriptions = HashSet::from([sql_subscription("TopicTest", "color = 'blue'", 9)]);
+        manager.register("GroupTest", &subscriptions);
+
+        {
+            let mut wrapper = manager.consumer_filter_wrapper.write();
+            let filter_data = wrapper
+                .filter_data_by_topic
+                .get_mut("TopicTest")
+                .and_then(|by_topic| by_topic.filter_data_map.get_mut("GroupTest"))
+                .expect("registered filter data should exist");
+            let dead_time = current_millis().saturating_sub(MS_24_HOUR + 1);
+            filter_data.set_born_time(dead_time.saturating_sub(1));
+            filter_data.set_dead_time(dead_time);
+        }
+
+        let encoded = manager.encode_pretty(false);
+        assert!(encoded.is_empty() || !encoded.contains("GroupTest"));
+        assert!(manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn persist_and_load_round_trip_restores_compiled_expression() {
+        let temp_root = temp_test_root("persist-load");
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let manager = ConsumerFilterManager::new(broker_config.clone(), message_store_config.clone());
+        manager.register(
+            "GroupTest",
+            &HashSet::from([sql_subscription("TopicTest", "color = 'blue'", 9)]),
+        );
+        manager.persist();
+
+        let restored = ConsumerFilterManager::new(broker_config, message_store_config);
+        assert!(restored.load());
+
+        let filter_data = restored
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .expect("loaded filter data should exist");
+        assert!(filter_data.is_dead());
+        assert!(filter_data.compiled_expression().is_some());
+
+        let mut context = MessageEvaluationContext::default();
+        context.put("color", "blue");
+        assert_eq!(
+            filter_data
+                .compiled_expression()
+                .as_ref()
+                .unwrap()
+                .evaluate(&context)
+                .expect("compiled expression should evaluate after load"),
+            Value::Boolean(true)
+        );
+
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 }
