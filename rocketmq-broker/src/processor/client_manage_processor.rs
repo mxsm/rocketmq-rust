@@ -510,7 +510,7 @@ mod tests {
         let processor = ClientManageProcessor::new(inner);
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
-            sub_string: "a > 1 AND color = 'blue'".into(),
+            sub_string: "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100".into(),
             expression_type: ExpressionType::SQL92.into(),
             ..Default::default()
         });

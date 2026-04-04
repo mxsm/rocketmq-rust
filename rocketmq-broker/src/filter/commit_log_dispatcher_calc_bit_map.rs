@@ -68,7 +68,7 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
                 continue;
             }
 
-            let context = MessageEvaluationContext::new(&request.properties_map);
+            let context = MessageEvaluationContext::new(request.properties_map.as_ref());
             let ret = filter_data.compiled_expression().as_ref().unwrap().evaluate(&context);
 
             debug!(

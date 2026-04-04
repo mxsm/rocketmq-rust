@@ -31,7 +31,7 @@ pub struct ConsumerFilterData {
     expression: Option<CheetahString>,
     expression_type: Option<CheetahString>,
     #[serde(skip)]
-    compiled_expression: Option<Arc<dyn Expression + Send + Sync + 'static>>,
+    compiled_expression: Option<Arc<dyn Expression + 'static>>,
     born_time: u64,
     dead_time: u64,
     bloom_filter_data: Option<BloomFilterData>,
@@ -103,12 +103,16 @@ impl ConsumerFilterData {
         self.client_version = client_version;
     }
 
-    pub fn compiled_expression(&self) -> &Option<Arc<dyn Expression + Send + Sync + 'static>> {
+    pub fn compiled_expression(&self) -> &Option<Arc<dyn Expression + 'static>> {
         &self.compiled_expression
     }
 
-    pub fn set_compiled_expression(&mut self, compiled_expression: Box<dyn Expression + Send + Sync + 'static>) {
+    pub fn set_compiled_expression(&mut self, compiled_expression: Box<dyn Expression + 'static>) {
         self.compiled_expression = Some(Arc::from(compiled_expression));
+    }
+
+    pub fn set_compiled_expression_arc(&mut self, compiled_expression: Arc<dyn Expression + 'static>) {
+        self.compiled_expression = Some(compiled_expression);
     }
 
     pub fn is_dead(&self) -> bool {

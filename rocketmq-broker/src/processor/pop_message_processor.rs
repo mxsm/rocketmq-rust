@@ -71,7 +71,6 @@ use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
-use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
@@ -347,7 +346,7 @@ where
                 &retry_subscription_data,
             );
             let message_filter = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-                let consumer_filter_data = ConsumerFilterManager::build(
+                let consumer_filter_data = self.broker_runtime_inner.consumer_filter_manager().resolve(
                     request_header.topic.clone(),
                     request_header.consumer_group.clone(),
                     request_header.exp.clone(),

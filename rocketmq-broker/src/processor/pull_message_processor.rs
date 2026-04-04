@@ -61,7 +61,6 @@ use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
-use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
@@ -304,7 +303,7 @@ where
             &subscription_data,
         );
         let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-            let consumer_filter_data = ConsumerFilterManager::build(
+            let consumer_filter_data = self.broker_runtime_inner.consumer_filter_manager().resolve(
                 request_header.topic.clone(),
                 request_header.consumer_group.clone(),
                 request_header.subscription.clone(),

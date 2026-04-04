@@ -148,14 +148,14 @@ impl MessageFilter for ExpressionMessageFilter {
             return true;
         }
 
-        let temp_properties = match (properties, msg_buffer) {
+        let decoded_properties = match (properties, msg_buffer) {
             (None, Some(bytes)) => {
                 let mut bytes_ = Bytes::copy_from_slice(bytes);
                 message_decoder::decode_properties(&mut bytes_)
             }
             _ => None,
         };
-        let context = MessageEvaluationContext::new(&temp_properties);
+        let context = MessageEvaluationContext::new(properties.or(decoded_properties.as_ref()));
         if let Some(filter) = real_filter_data.compiled_expression() {
             match filter.evaluate(&context) {
                 Ok(rocketmq_filter::expression::Value::Boolean(b)) => b,
@@ -170,6 +170,7 @@ impl MessageFilter for ExpressionMessageFilter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::collections::HashSet;
 
     use cheetah_string::CheetahString;
@@ -208,6 +209,62 @@ mod tests {
                 &CheetahString::from_slice("GroupTest"),
             )
             .unwrap();
+
+        let mut bits =
+            rocketmq_filter::utils::bits_array::BitsArray::create(manager.bloom_filter().unwrap().m() as usize);
+        manager
+            .bloom_filter()
+            .unwrap()
+            .hash_to(filter_data.bloom_filter_data().unwrap(), &mut bits)
+            .unwrap();
+
+        let cq_ext_unit = CqExtUnit::new(0, filter_data.born_time() as i64 + 1, Some(bits.bytes().to_vec()));
+        let filter = ExpressionMessageFilter::new(
+            Some(sql_subscription("TopicTest", "color = 'blue'")),
+            Some(filter_data.clone()),
+            Arc::new(manager.clone()),
+        );
+
+        assert!(filter.is_matched_by_consume_queue(None, Some(&cq_ext_unit)));
+
+        let miss = CqExtUnit::new(0, filter_data.born_time() as i64 + 1, Some(vec![0; bits.byte_length()]));
+        assert!(!filter.is_matched_by_consume_queue(None, Some(&miss)));
+    }
+
+    #[test]
+    fn commit_log_uses_provided_properties_without_decoding_buffer() {
+        let manager = new_manager();
+        let filter_data = manager
+            .resolve(
+                CheetahString::from_slice("TopicTest"),
+                CheetahString::from_slice("GroupTest"),
+                Some(CheetahString::from_slice("color = 'blue'")),
+                Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                11,
+            )
+            .expect("resolved request-scoped filter data should exist");
+        let filter = ExpressionMessageFilter::new(
+            Some(sql_subscription("TopicTest", "color = 'blue'")),
+            Some(filter_data),
+            Arc::new(manager),
+        );
+        let properties = HashMap::from([(CheetahString::from_slice("color"), CheetahString::from_slice("blue"))]);
+
+        assert!(filter.is_matched_by_commit_log(Some(&[]), Some(&properties)));
+    }
+
+    #[test]
+    fn request_scoped_sql_filter_data_still_uses_consume_queue_bloom_filtering() {
+        let manager = new_manager();
+        let filter_data = manager
+            .resolve(
+                CheetahString::from_slice("TopicTest"),
+                CheetahString::from_slice("GroupTest"),
+                Some(CheetahString::from_slice("color = 'blue'")),
+                Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                11,
+            )
+            .expect("resolved request-scoped filter data should exist");
 
         let mut bits =
             rocketmq_filter::utils::bits_array::BitsArray::create(manager.bloom_filter().unwrap().m() as usize);

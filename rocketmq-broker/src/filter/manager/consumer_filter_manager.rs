@@ -17,12 +17,16 @@ use std::str;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_filter::expression::Expression;
 use rocketmq_filter::filter::FilterFactory;
 use rocketmq_filter::utils::bloom_filter::BloomFilter;
+use rocketmq_filter::utils::bloom_filter_data::BloomFilterData;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -41,6 +45,8 @@ pub(crate) struct ConsumerFilterManager {
     message_store_config: Arc<MessageStoreConfig>,
     consumer_filter_wrapper: Arc<parking_lot::RwLock<ConsumerFilterWrapper>>,
     bloom_filter: Option<BloomFilter>,
+    compiled_expression_cache: Arc<DashMap<String, Arc<dyn Expression + 'static>>>,
+    failed_expression_cache: Arc<DashMap<String, String>>,
 }
 
 impl ConsumerFilterManager {
@@ -58,6 +64,8 @@ impl ConsumerFilterManager {
             message_store_config,
             consumer_filter_wrapper,
             bloom_filter: Some(bloom_filter),
+            compiled_expression_cache: Arc::new(DashMap::new()),
+            failed_expression_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -88,6 +96,39 @@ impl ConsumerFilterManager {
         consumer_filter_data.set_compiled_expression(compiled);
 
         Some(consumer_filter_data)
+    }
+
+    pub fn resolve(
+        &self,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expression: Option<CheetahString>,
+        type_: Option<CheetahString>,
+        client_version: u64,
+    ) -> Option<ConsumerFilterData> {
+        if ExpressionType::is_tag_type(type_.as_deref()) {
+            return None;
+        }
+
+        if let Some(existing) = self
+            .get_consumer_filter_data(&topic, &consumer_group)
+            .filter(|filter_data| !filter_data.is_dead())
+            .filter(|filter_data| filter_data.expression() == expression.as_ref())
+            .filter(|filter_data| filter_data.expression_type() == type_.as_ref())
+            .filter(|filter_data| filter_data.client_version() >= client_version)
+        {
+            return Some(existing);
+        }
+
+        let bloom_filter_data = self.generate_bloom_filter_data(consumer_group.as_str(), topic.as_str())?;
+        self.build_with_compiled_expression(
+            topic,
+            consumer_group,
+            expression,
+            type_,
+            client_version,
+            Some(bloom_filter_data),
+        )
     }
 
     pub fn register(&self, consumer_group: &str, subscriptions: &HashSet<SubscriptionData>) {
@@ -169,9 +210,8 @@ impl ConsumerFilterManager {
             return false;
         }
 
-        let bloom_filter_data = match self.bloom_filter.as_ref() {
-            Some(filter) => filter.generate(&format!("{consumer_group}#{topic}")),
-            None => return false,
+        let Some(bloom_filter_data) = self.generate_bloom_filter_data(consumer_group, topic) else {
+            return false;
         };
 
         let mut wrapper = self.consumer_filter_wrapper.write();
@@ -186,17 +226,17 @@ impl ConsumerFilterManager {
         let existing = by_topic.filter_data_map.get(consumer_group).cloned();
         match existing {
             None => {
-                let mut filter_data = match Self::build(
+                let filter_data = match self.build_with_compiled_expression(
                     CheetahString::from_slice(topic),
                     CheetahString::from_slice(consumer_group),
                     Some(CheetahString::from_slice(expression)),
                     Some(CheetahString::from_slice(type_)),
                     client_version,
+                    Some(bloom_filter_data.clone()),
                 ) {
                     Some(filter_data) => filter_data,
                     None => return false,
                 };
-                filter_data.set_bloom_filter_data(Some(bloom_filter_data));
                 by_topic.filter_data_map.insert(consumer_group.to_string(), filter_data);
                 true
             }
@@ -215,12 +255,13 @@ impl ConsumerFilterManager {
                     || old.bloom_filter_data() != Some(&bloom_filter_data);
 
                 if changed {
-                    let mut filter_data = match Self::build(
+                    let filter_data = match self.build_with_compiled_expression(
                         CheetahString::from_slice(topic),
                         CheetahString::from_slice(consumer_group),
                         Some(CheetahString::from_slice(expression)),
                         Some(CheetahString::from_slice(type_)),
                         client_version,
+                        Some(bloom_filter_data.clone()),
                     ) {
                         Some(filter_data) => filter_data,
                         None => {
@@ -228,7 +269,6 @@ impl ConsumerFilterManager {
                             return false;
                         }
                     };
-                    filter_data.set_bloom_filter_data(Some(bloom_filter_data));
                     by_topic.filter_data_map.insert(consumer_group.to_string(), filter_data);
                     true
                 } else {
@@ -244,6 +284,90 @@ impl ConsumerFilterManager {
         }
     }
 
+    fn generate_bloom_filter_data(&self, consumer_group: &str, topic: &str) -> Option<BloomFilterData> {
+        self.bloom_filter
+            .as_ref()
+            .map(|filter| filter.generate(&format!("{consumer_group}#{topic}")))
+    }
+
+    fn cache_key(expression_type: &str, expression: &str) -> String {
+        format!("{expression_type}\u{0}{expression}")
+    }
+
+    fn clear_compile_caches(&self) {
+        self.compiled_expression_cache.clear();
+        self.failed_expression_cache.clear();
+    }
+
+    #[cfg(test)]
+    fn cached_expression_count(&self) -> usize {
+        self.compiled_expression_cache.len()
+    }
+
+    #[cfg(test)]
+    fn cached_compile_failure_count(&self) -> usize {
+        self.failed_expression_cache.len()
+    }
+
+    fn compile_with_cache(&self, expression_type: &str, expression: &str) -> Option<Arc<dyn Expression + 'static>> {
+        let cache_key = Self::cache_key(expression_type, expression);
+        if self.failed_expression_cache.contains_key(&cache_key) {
+            return None;
+        }
+        match self.compiled_expression_cache.entry(cache_key) {
+            Entry::Occupied(entry) => Some(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                let Some(filter) = FilterFactory::instance().get(expression_type) else {
+                    self.failed_expression_cache
+                        .insert(entry.key().clone(), format!("unknown filter type: {expression_type}"));
+                    return None;
+                };
+                let compiled = match filter.compile(expression) {
+                    Ok(compiled) => Arc::<dyn Expression + 'static>::from(compiled),
+                    Err(error) => {
+                        self.failed_expression_cache
+                            .insert(entry.key().clone(), error.to_string());
+                        return None;
+                    }
+                };
+                self.failed_expression_cache.remove(entry.key());
+                entry.insert(compiled.clone());
+                Some(compiled)
+            }
+        }
+    }
+
+    fn build_with_compiled_expression(
+        &self,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expression: Option<CheetahString>,
+        type_: Option<CheetahString>,
+        client_version: u64,
+        bloom_filter_data: Option<BloomFilterData>,
+    ) -> Option<ConsumerFilterData> {
+        if ExpressionType::is_tag_type(type_.as_deref()) {
+            return None;
+        }
+
+        let expression_text = expression.as_ref().filter(|value| !value.is_empty())?;
+        let expression_type = type_.as_ref()?;
+        let compiled = self.compile_with_cache(expression_type.as_str(), expression_text.as_str())?;
+
+        let mut consumer_filter_data = ConsumerFilterData::default();
+        consumer_filter_data.set_topic(topic);
+        consumer_filter_data.set_consumer_group(consumer_group);
+        consumer_filter_data.set_born_time(current_millis());
+        consumer_filter_data.set_dead_time(0);
+        consumer_filter_data.set_expression(expression);
+        consumer_filter_data.set_expression_type(type_);
+        consumer_filter_data.set_client_version(client_version);
+        consumer_filter_data.set_bloom_filter_data(bloom_filter_data);
+        consumer_filter_data.set_compiled_expression_arc(compiled);
+
+        Some(consumer_filter_data)
+    }
+
     fn compile_filter_data(&self, filter_data: &mut ConsumerFilterData) -> bool {
         let Some(expression) = filter_data.expression() else {
             return false;
@@ -251,13 +375,10 @@ impl ConsumerFilterManager {
         let Some(expression_type) = filter_data.expression_type() else {
             return false;
         };
-        let Some(filter) = FilterFactory::instance().get(expression_type.as_str()) else {
+        let Some(compiled) = self.compile_with_cache(expression_type.as_str(), expression.as_str()) else {
             return false;
         };
-        let Ok(compiled) = filter.compile(expression.as_str()) else {
-            return false;
-        };
-        filter_data.set_compiled_expression(compiled);
+        filter_data.set_compiled_expression_arc(compiled);
         true
     }
 
@@ -283,6 +404,7 @@ impl ConfigManager for ConsumerFilterManager {
     }
 
     fn stop(&mut self) -> bool {
+        self.clear_compile_caches();
         true
     }
 
@@ -345,9 +467,19 @@ impl ConfigManager for ConsumerFilterManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
     use super::*;
+    use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_filter::expression::EvaluationContext;
+    use rocketmq_filter::expression::EvaluationError;
+    use rocketmq_filter::expression::Expression;
     use rocketmq_filter::expression::MessageEvaluationContext;
+    use rocketmq_filter::expression::Value as ExprValue;
     use rocketmq_filter::expression::Value;
+    use rocketmq_filter::filter::Filter;
+    use rocketmq_filter::filter::FilterError;
 
     fn new_manager() -> ConsumerFilterManager {
         ConsumerFilterManager::new(
@@ -371,14 +503,18 @@ mod tests {
         let filter_data = ConsumerFilterManager::build(
             CheetahString::from_slice("TopicTest"),
             CheetahString::from_slice("GroupTest"),
-            Some(CheetahString::from_slice("color = 'blue'")),
+            Some(CheetahString::from_slice(
+                "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100",
+            )),
             Some(CheetahString::from_static_str(ExpressionType::SQL92)),
             7,
         )
         .expect("SQL filter should be built");
 
         let mut context = MessageEvaluationContext::default();
-        context.put("color", "blue");
+        context.put("region", "sh");
+        context.put("name", "rocketmq-rust");
+        context.put("score", "99");
 
         assert_eq!(
             filter_data
@@ -407,6 +543,186 @@ mod tests {
 
         assert!(filter_data.compiled_expression().is_some());
         assert!(filter_data.bloom_filter_data().is_some());
+    }
+
+    #[test]
+    fn resolve_reuses_registered_filter_data_for_matching_subscription() {
+        let manager = new_manager();
+        let subscriptions = HashSet::from([sql_subscription("TopicTest", "color = 'blue'", 9)]);
+        manager.register("GroupTest", &subscriptions);
+
+        let registered = manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .expect("registered filter data should exist");
+
+        let resolved = manager
+            .resolve(
+                CheetahString::from_slice("TopicTest"),
+                CheetahString::from_slice("GroupTest"),
+                Some(CheetahString::from_slice("color = 'blue'")),
+                Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                9,
+            )
+            .expect("resolved filter data should exist");
+
+        assert!(resolved.bloom_filter_data().is_some());
+        assert!(std::sync::Arc::ptr_eq(
+            registered.compiled_expression().as_ref().unwrap(),
+            resolved.compiled_expression().as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn resolve_builds_request_scoped_filter_data_with_bloom_and_cached_expression() {
+        let manager = new_manager();
+
+        let first = manager
+            .resolve(
+                CheetahString::from_slice("TopicTest"),
+                CheetahString::from_slice("GroupTest"),
+                Some(CheetahString::from_slice("color = 'blue'")),
+                Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                9,
+            )
+            .expect("resolved filter data should exist");
+        let second = manager
+            .resolve(
+                CheetahString::from_slice("TopicTest"),
+                CheetahString::from_slice("GroupTest"),
+                Some(CheetahString::from_slice("color = 'blue'")),
+                Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                10,
+            )
+            .expect("resolved filter data should exist");
+
+        assert!(manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .is_none());
+        assert!(first.bloom_filter_data().is_some());
+        assert!(second.bloom_filter_data().is_some());
+        assert!(std::sync::Arc::ptr_eq(
+            first.compiled_expression().as_ref().unwrap(),
+            second.compiled_expression().as_ref().unwrap()
+        ));
+    }
+
+    #[derive(Debug)]
+    struct FailingFilter {
+        filter_type: String,
+        compile_count: Arc<AtomicUsize>,
+    }
+
+    impl Filter for FailingFilter {
+        fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+            self.compile_count.fetch_add(1, Ordering::Relaxed);
+            Err(FilterError::new("expected test compile failure"))
+        }
+
+        fn of_type(&self) -> &str {
+            self.filter_type.as_str()
+        }
+    }
+
+    #[derive(Debug)]
+    struct LiteralTrueExpression;
+
+    impl std::fmt::Display for LiteralTrueExpression {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "true")
+        }
+    }
+
+    impl Expression for LiteralTrueExpression {
+        fn evaluate(&self, _context: &dyn EvaluationContext) -> Result<ExprValue, EvaluationError> {
+            Ok(ExprValue::Boolean(true))
+        }
+    }
+
+    #[derive(Debug)]
+    struct PassingFilter {
+        filter_type: String,
+    }
+
+    impl Filter for PassingFilter {
+        fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+            Ok(Box::new(LiteralTrueExpression))
+        }
+
+        fn of_type(&self) -> &str {
+            self.filter_type.as_str()
+        }
+    }
+
+    #[test]
+    fn resolve_negative_cache_avoids_recompiling_same_invalid_expression() {
+        let filter_type = format!("COUNT_FAIL_{}", current_millis());
+        let compile_count = Arc::new(AtomicUsize::new(0));
+        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(FailingFilter {
+            filter_type: filter_type.clone(),
+            compile_count: compile_count.clone(),
+        }));
+
+        let manager = new_manager();
+        let first = manager.resolve(
+            CheetahString::from_slice("TopicTest"),
+            CheetahString::from_slice("GroupTest"),
+            Some(CheetahString::from_slice("bad expression")),
+            Some(CheetahString::from_string(filter_type.clone())),
+            9,
+        );
+        let second = manager.resolve(
+            CheetahString::from_slice("TopicTest"),
+            CheetahString::from_slice("GroupTest"),
+            Some(CheetahString::from_slice("bad expression")),
+            Some(CheetahString::from_string(filter_type.clone())),
+            10,
+        );
+
+        assert!(first.is_none());
+        assert!(second.is_none());
+        assert_eq!(compile_count.load(Ordering::Relaxed), 1);
+        assert_eq!(manager.cached_compile_failure_count(), 1);
+
+        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(filter_type.as_str());
+    }
+
+    #[test]
+    fn stop_clears_compile_caches() {
+        let passing_type = format!("COUNT_PASS_{}", current_millis());
+        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(PassingFilter {
+            filter_type: passing_type.clone(),
+        }));
+
+        let mut manager = new_manager();
+        let _ = manager.resolve(
+            CheetahString::from_slice("TopicTest"),
+            CheetahString::from_slice("GroupTest"),
+            Some(CheetahString::from_slice("ok")),
+            Some(CheetahString::from_string(passing_type.clone())),
+            9,
+        );
+        let _ = manager.resolve(
+            CheetahString::from_slice("TopicTest"),
+            CheetahString::from_slice("GroupTest"),
+            Some(CheetahString::from_slice("bad")),
+            Some(CheetahString::from_string("UNKNOWN_FILTER_TYPE".to_string())),
+            10,
+        );
+
+        assert_eq!(manager.cached_expression_count(), 1);
+        assert_eq!(manager.cached_compile_failure_count(), 1);
+
+        assert!(manager.stop());
+        assert_eq!(manager.cached_expression_count(), 0);
+        assert_eq!(manager.cached_compile_failure_count(), 0);
+
+        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(passing_type.as_str());
     }
 
     #[test]
