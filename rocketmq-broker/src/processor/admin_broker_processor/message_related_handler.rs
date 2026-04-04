@@ -19,23 +19,31 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
+use rocketmq_filter::utils::bits_array::BitsArray;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::consume_queue_data::ConsumeQueueData;
+use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_remoting::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
 use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::filter::MessageFilter;
+use serde::Serialize;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
 pub(super) struct MessageRelatedHandler<MS: MessageStore> {
@@ -160,6 +168,121 @@ where
                     .set_remark("Put message back to RMQ_SYS_TRANS_HALF_TOPIC failed."),
             ))
         }
+    }
+
+    pub async fn query_consume_queue(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header = request.decode_command_custom_header::<QueryConsumeQueueRequestHeader>()?;
+        let response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
+        let Some(message_store) = self.broker_runtime_inner.message_store() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("message store is none"),
+            ));
+        };
+        let Some(consume_queue) = message_store.get_consume_queue(&request_header.topic, request_header.queue_id)
+        else {
+            return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
+                "{}@{} is not exist!",
+                request_header.queue_id, request_header.topic
+            ))));
+        };
+
+        let mut body = QueryConsumeQueueResponseBody {
+            max_queue_index: consume_queue.get_max_offset_in_queue(),
+            min_queue_index: consume_queue.get_min_offset_in_queue(),
+            ..Default::default()
+        };
+
+        let mut message_filter = None;
+        if let Some(consumer_group) = request_header
+            .consumer_group
+            .as_ref()
+            .filter(|consumer_group| !consumer_group.is_empty())
+        {
+            let subscription_data = self
+                .broker_runtime_inner
+                .consumer_manager()
+                .find_subscription_data(consumer_group, &request_header.topic);
+            body.subscription_data = subscription_data.clone();
+            if let Some(subscription_data) = subscription_data {
+                let consumer_filter_data = self
+                    .broker_runtime_inner
+                    .consumer_filter_manager()
+                    .get_consumer_filter_data(&request_header.topic, consumer_group);
+                body.filter_data = Some(match consumer_filter_data.as_ref() {
+                    Some(consumer_filter_data) => {
+                        CheetahString::from_string(consumer_filter_data.serialize_json_pretty()?)
+                    }
+                    None => CheetahString::from_static_str("null"),
+                });
+                message_filter = Some(ExpressionMessageFilter::new(
+                    Some(subscription_data),
+                    consumer_filter_data,
+                    std::sync::Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
+                ));
+            } else {
+                body.filter_data = Some(CheetahString::from_string(format!(
+                    "{}@{} is not online!",
+                    consumer_group, request_header.topic
+                )));
+            }
+        }
+
+        let Some(iter) = consume_queue.iterate_from(request_header.index) else {
+            return Ok(Some(response.set_remark(format!(
+                "Index {} of {}@{} is not exist!",
+                request_header.index, request_header.queue_id, request_header.topic
+            ))));
+        };
+
+        let mut queue_data = Vec::new();
+        for cq_unit in iter {
+            if cq_unit.queue_offset - request_header.index >= request_header.count as i64 {
+                break;
+            }
+
+            let mut one = ConsumeQueueData {
+                physic_offset: cq_unit.pos,
+                physic_size: cq_unit.size,
+                tags_code: cq_unit.tags_code,
+                ..Default::default()
+            };
+
+            if cq_unit.cq_ext_unit.is_none() && cq_unit.is_tags_code_valid() {
+                queue_data.push(one);
+                continue;
+            }
+
+            if let Some(cq_ext_unit) = cq_unit.cq_ext_unit.as_ref() {
+                one.extend_data_json = Some(CheetahString::from_string(serialize_cq_ext_unit(cq_ext_unit)?));
+                if let Some(filter_bit_map) = cq_ext_unit.filter_bit_map() {
+                    one.bit_map = Some(CheetahString::from_string(
+                        BitsArray::from_bytes(filter_bit_map)?.to_string(),
+                    ));
+                }
+                if let Some(message_filter) = message_filter.as_ref() {
+                    one.eval =
+                        message_filter.is_matched_by_consume_queue(Some(cq_ext_unit.tags_code()), Some(cq_ext_unit));
+                }
+            } else {
+                one.msg = Some(CheetahString::from_string(format!(
+                    "Cq extend not exist!addr: {}",
+                    one.tags_code
+                )));
+            }
+
+            queue_data.push(one);
+        }
+
+        body.queue_data = Some(queue_data);
+        Ok(Some(response.set_body(body.encode()?)))
     }
 
     async fn rewrite_request_for_static_topic(
@@ -296,6 +419,29 @@ fn to_half_message_ext_broker_inner(msg_ext: &MessageExt) -> MessageExtBrokerInn
     inner
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SerializableCqExtUnit<'a> {
+    size: i16,
+    tags_code: i64,
+    msg_store_time: i64,
+    bit_map_size: i16,
+    filter_bit_map: Option<&'a [u8]>,
+}
+
+fn serialize_cq_ext_unit(
+    cq_ext_unit: &rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit,
+) -> rocketmq_error::RocketMQResult<String> {
+    serde_json::to_string(&SerializableCqExtUnit {
+        size: cq_ext_unit.size(),
+        tags_code: cq_ext_unit.tags_code(),
+        msg_store_time: cq_ext_unit.msg_store_time(),
+        bit_map_size: cq_ext_unit.bit_map_size(),
+        filter_bit_map: cq_ext_unit.filter_bit_map(),
+    })
+    .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -303,19 +449,30 @@ mod tests {
 
     use bytes::Bytes;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
     use rocketmq_remoting::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
+    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::LanguageCode;
+    use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_rust::ArcMut;
+    use rocketmq_store::base::dispatch_request::DispatchRequest;
     use rocketmq_store::base::message_store::MessageStore;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
+    use crate::client::client_channel_info::ClientChannelInfo;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -402,6 +559,96 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         assert!(inner.message_store().unwrap().get_max_phy_offset() > max_phy_offset_before_resume);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn query_consume_queue_returns_queue_data_and_online_subscription() {
+        let mut runtime = new_test_runtime("query-consume-queue").await;
+        let mut inner = runtime.inner_for_test().clone();
+        inner
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues("topic-a", 1, 1)));
+        inner
+            .message_store_mut()
+            .as_mut()
+            .unwrap()
+            .start()
+            .await
+            .expect("start message store");
+        let register_channel = create_test_channel().await;
+        let client_channel_info = ClientChannelInfo::new(
+            register_channel.clone(),
+            CheetahString::from_static_str("client-a"),
+            LanguageCode::RUST,
+            100,
+        );
+        inner.consumer_manager().register_consumer(
+            &CheetahString::from_static_str("group-a"),
+            client_channel_info,
+            ConsumeType::ConsumePassively,
+            MessageModel::Clustering,
+            rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere::ConsumeFromLastOffset,
+            std::collections::HashSet::from([SubscriptionData {
+                topic: CheetahString::from_static_str("topic-a"),
+                sub_string: CheetahString::from_static_str("*"),
+                ..Default::default()
+            }]),
+            false,
+        );
+
+        let mut consume_queue = inner
+            .message_store()
+            .unwrap()
+            .find_consume_queue(&CheetahString::from_static_str("topic-a"), 0)
+            .expect("consume queue should exist");
+        consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+            topic: CheetahString::from_static_str("topic-a"),
+            queue_id: 0,
+            commit_log_offset: 128,
+            msg_size: Bytes::from_static(b"message-a").len() as i32,
+            store_timestamp: 1,
+            consume_queue_offset: 0,
+            success: true,
+            ..Default::default()
+        });
+
+        let mut handler = MessageRelatedHandler::new(inner.clone());
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::QueryConsumeQueue,
+            QueryConsumeQueueRequestHeader {
+                topic: CheetahString::from_static_str("topic-a"),
+                queue_id: 0,
+                index: 0,
+                count: 1,
+                consumer_group: Some(CheetahString::from_static_str("group-a")),
+                rpc: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let mut response = handler
+            .query_consume_queue(channel, ctx, RequestCode::QueryConsumeQueue, &mut request)
+            .await
+            .expect("query consume queue should succeed")
+            .expect("query consume queue should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = QueryConsumeQueueResponseBody::decode(
+            response
+                .take_body()
+                .expect("query consume queue response should contain body")
+                .as_ref(),
+        )
+        .expect("decode query consume queue body");
+        assert_eq!(body.max_queue_index, 1);
+        assert_eq!(body.min_queue_index, 0);
+        assert_eq!(body.filter_data, Some(CheetahString::from_static_str("null")));
+        assert_eq!(body.subscription_data.expect("subscription data").topic, "topic-a");
+        assert_eq!(body.queue_data.expect("queue data").len(), 1);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

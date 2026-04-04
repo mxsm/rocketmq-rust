@@ -15,8 +15,11 @@
 use std::fmt;
 
 use cheetah_string::CheetahString;
+use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupForbidden {
     topic: CheetahString,
     group: CheetahString,

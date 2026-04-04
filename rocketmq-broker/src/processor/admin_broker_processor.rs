@@ -19,9 +19,11 @@ use crate::processor::admin_broker_processor::broker_config_request_handler::Bro
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::broker_stats_handler::BrokerStatsHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::create_acl_request_handler::CreateAclRequestHandler;
 use crate::processor::admin_broker_processor::create_user_request_handler::CreateUserRequestHandler;
 use crate::processor::admin_broker_processor::delete_acl_request_handler::DeleteAclRequestHandler;
 use crate::processor::admin_broker_processor::delete_user_request_handler::DeleteUserRequestHandler;
+use crate::processor::admin_broker_processor::get_acl_request_handler::GetAclRequestHandler;
 use crate::processor::admin_broker_processor::get_broker_ha_status_handler::GetBrokerHaStatusHandler;
 use crate::processor::admin_broker_processor::get_user_request_handler::GetUserRequestHandler;
 use crate::processor::admin_broker_processor::list_acl_request_handler::ListAclRequestHandler;
@@ -34,6 +36,7 @@ use crate::processor::admin_broker_processor::producer_request_handler::Producer
 use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler::ResetMasterFlushOffsetHandler;
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
+use crate::processor::admin_broker_processor::update_acl_request_handler::UpdateAclRequestHandler;
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
@@ -53,9 +56,11 @@ mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod broker_stats_handler;
 mod consumer_request_handler;
+mod create_acl_request_handler;
 mod create_user_request_handler;
 mod delete_acl_request_handler;
 mod delete_user_request_handler;
+mod get_acl_request_handler;
 mod get_broker_ha_status_handler;
 mod get_user_request_handler;
 mod list_acl_request_handler;
@@ -68,6 +73,7 @@ mod producer_request_handler;
 mod reset_master_flusg_offset_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
+mod update_acl_request_handler;
 mod update_broker_ha_handler;
 mod update_cold_data_flow_ctr_group_config;
 mod update_user_request_handler;
@@ -89,8 +95,11 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
     producer_request_handler: ProducerRequestHandler<MS>,
+    create_acl_request_handler: CreateAclRequestHandler<MS>,
     create_user_request_handler: CreateUserRequestHandler<MS>,
+    get_acl_request_handler: GetAclRequestHandler<MS>,
     update_user_request_handler: UpdateUserRequestHandler<MS>,
+    update_acl_request_handler: UpdateAclRequestHandler<MS>,
     delete_user_request_handler: DeleteUserRequestHandler<MS>,
     list_users_request_handler: ListUsersRequestHandler<MS>,
     get_user_request_handler: GetUserRequestHandler<MS>,
@@ -140,10 +149,16 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
+        let create_acl_request_handler =
+            CreateAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
         let create_user_request_handler =
             CreateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let get_acl_request_handler =
+            GetAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
         let update_user_request_handler =
             UpdateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let update_acl_request_handler =
+            UpdateAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
         let delete_user_request_handler =
             DeleteUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
         let list_users_request_handler =
@@ -173,8 +188,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             notify_broker_role_change_handler,
             message_related_handler,
             producer_request_handler,
+            create_acl_request_handler,
             create_user_request_handler,
+            get_acl_request_handler,
             update_user_request_handler,
+            update_acl_request_handler,
             delete_user_request_handler,
             list_users_request_handler,
             get_user_request_handler,
@@ -403,9 +421,17 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::GetBrokerConsumeStats => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::QueryConsumeQueue => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::QueryConsumeQueue => {
+                self.message_related_handler
+                    .query_consume_queue(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::CheckRocksdbCqWriteProgress => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::UpdateAndGetGroupForbidden => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::UpdateAndGetGroupForbidden => {
+                self.subscription_group_handler
+                    .update_and_get_group_forbidden(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetSubscriptionGroupConfig => {
                 self.subscription_group_handler
                     .get_subscription_group_config(channel, ctx, request_code, request)
@@ -481,14 +507,26 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .list_users(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::AuthCreateAcl => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::AuthUpdateAcl => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::AuthCreateAcl => {
+                self.create_acl_request_handler
+                    .create_acl(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::AuthUpdateAcl => {
+                self.update_acl_request_handler
+                    .update_acl(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::AuthDeleteAcl => {
                 self.delete_acl_request_handler
                     .delete_acl(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::AuthGetAcl => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::AuthGetAcl => {
+                self.get_acl_request_handler
+                    .get_acl(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::AuthListAcl => {
                 self.list_acl_request_handler
                     .list_acl(channel, ctx, request_code, request)

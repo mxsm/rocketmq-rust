@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -22,7 +23,9 @@ use rocketmq_remoting::protocol::body::subscription_group_list::SubscriptionGrou
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
+use rocketmq_remoting::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -223,6 +226,55 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         }
         Ok(Some(RemotingCommand::create_response_command()))
     }
+
+    pub async fn update_and_get_group_forbidden(
+        &mut self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header = request.decode_command_custom_header::<UpdateGroupForbiddenRequestHeader>()?;
+        info!(
+            "AdminBrokerProcessor#updateAndGetGroupForbidden called by {} for object {}@{} readable={:?}",
+            channel.remote_address(),
+            request_header.group,
+            request_header.topic,
+            request_header.readable
+        );
+
+        if let Some(readable) = request_header.readable {
+            if readable {
+                self.broker_runtime_inner
+                    .subscription_group_manager_mut()
+                    .clear_forbidden(
+                        &request_header.group,
+                        &request_header.topic,
+                        PermName::INDEX_PERM_READ as i32,
+                    );
+            } else {
+                self.broker_runtime_inner
+                    .subscription_group_manager_mut()
+                    .set_forbidden(
+                        &request_header.group,
+                        &request_header.topic,
+                        PermName::INDEX_PERM_READ as i32,
+                    );
+            }
+        }
+
+        let readable = !self.broker_runtime_inner.subscription_group_manager().get_forbidden(
+            &request_header.group,
+            &request_header.topic,
+            PermName::INDEX_PERM_READ as i32,
+        );
+        let body = GroupForbidden::new(request_header.topic, request_header.group, Some(readable));
+        Ok(Some(
+            RemotingCommand::create_response_command()
+                .set_code(ResponseCode::Success)
+                .set_body(body.encode()?),
+        ))
+    }
 }
 
 fn validate_group_name(group_name: &str) -> Option<String> {
@@ -263,6 +315,7 @@ mod tests {
     use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_rust::ArcMut;
@@ -410,6 +463,50 @@ mod tests {
         assert!(!inner
             .consumer_offset_manager()
             .has_offset_reset("group-a", "topic-a", 0));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn update_and_get_group_forbidden_updates_readable_flag() {
+        let mut runtime = new_test_runtime("group-forbidden").await;
+        let inner = runtime.inner_for_test().clone();
+        let mut handler = SubscriptionGroupHandler::new(inner.clone());
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateAndGetGroupForbidden,
+            UpdateGroupForbiddenRequestHeader {
+                group: CheetahString::from_static_str("group-a"),
+                topic: CheetahString::from_static_str("topic-a"),
+                readable: Some(false),
+                topic_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut response = handler
+            .update_and_get_group_forbidden(channel, ctx, RequestCode::UpdateAndGetGroupForbidden, &mut request)
+            .await
+            .expect("update and get group forbidden should succeed")
+            .expect("update and get group forbidden should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = GroupForbidden::decode(
+            response
+                .take_body()
+                .expect("group forbidden response should contain body")
+                .as_ref(),
+        )
+        .expect("decode group forbidden body");
+        assert_eq!(body.group(), &CheetahString::from_static_str("group-a"));
+        assert_eq!(body.topic(), &CheetahString::from_static_str("topic-a"));
+        assert_eq!(body.readable(), Some(false));
+        assert!(inner.subscription_group_manager().get_forbidden(
+            &CheetahString::from_static_str("group-a"),
+            &CheetahString::from_static_str("topic-a"),
+            PermName::INDEX_PERM_READ as i32,
+        ));
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

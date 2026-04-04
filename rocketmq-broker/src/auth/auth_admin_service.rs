@@ -8,9 +8,11 @@ use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
 use rocketmq_auth::authentication::provider::LocalAuthenticationMetadataProvider;
 use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
 use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::authorization::model::acl::Acl;
 use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::ProviderRegistry;
+use rocketmq_common::common::action::Action;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
@@ -109,6 +111,26 @@ impl AuthAdminService {
         Ok(acls.iter().map(AclConverter::convert_acl).collect())
     }
 
+    pub async fn create_acl(&self, acl: Acl) -> RocketMQResult<()> {
+        self.upsert_acl(acl).await
+    }
+
+    pub async fn update_acl(&self, acl: Acl) -> RocketMQResult<()> {
+        self.upsert_acl(acl).await
+    }
+
+    pub async fn get_acl(&self, subject: &str) -> RocketMQResult<Option<AclInfo>> {
+        let subject = SubjectRef::parse(subject)?;
+        self.ensure_subject_exists(&subject).await?;
+
+        let acl = self
+            .authorization_provider
+            .get_acl(&subject)
+            .await
+            .map_err(map_authz_error)?;
+        Ok(acl.as_ref().map(AclConverter::convert_acl))
+    }
+
     pub async fn delete_acl(&self, subject: &str, resource: Option<&str>) -> RocketMQResult<()> {
         let subject = SubjectRef::parse(subject)?;
         let Some(resource_key) = resource.filter(|resource| !resource.trim().is_empty()) else {
@@ -176,6 +198,47 @@ impl AuthAdminService {
         }
         Ok(())
     }
+
+    async fn upsert_acl(&self, acl: Acl) -> RocketMQResult<()> {
+        validate_acl(&acl)?;
+        let subject = SubjectRef::parse(acl.subject_key())?;
+        self.ensure_subject_exists(&subject).await?;
+
+        let existing_acl = self
+            .authorization_provider
+            .get_acl(&subject)
+            .await
+            .map_err(map_authz_error)?;
+        match existing_acl {
+            Some(mut existing_acl) => {
+                existing_acl.update_policies(acl.policies().clone());
+                self.authorization_provider
+                    .update_acl(existing_acl)
+                    .await
+                    .map_err(map_authz_error)
+            }
+            None => self
+                .authorization_provider
+                .create_acl(acl)
+                .await
+                .map_err(map_authz_error),
+        }
+    }
+
+    async fn ensure_subject_exists(&self, subject: &SubjectRef) -> RocketMQResult<()> {
+        match subject.subject_type() {
+            SubjectType::User => {
+                let username = subject.name();
+                if self.authentication_provider.get_user(username).await.is_err() {
+                    return Err(RocketMQError::illegal_argument(format!(
+                        "The subject of {} is not exist.",
+                        subject.subject_key()
+                    )));
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 fn map_authz_error(error: rocketmq_auth::authorization::provider::AuthorizationError) -> RocketMQError {
@@ -185,6 +248,7 @@ fn map_authz_error(error: rocketmq_auth::authorization::provider::AuthorizationE
 #[derive(Clone)]
 struct SubjectRef {
     subject_key: String,
+    subject_name: String,
     subject_type: SubjectType,
 }
 
@@ -211,8 +275,13 @@ impl SubjectRef {
 
         Ok(Self {
             subject_key: format!("{}:{}", subject_type.name(), subject_name),
+            subject_name: subject_name.to_string(),
             subject_type,
         })
+    }
+
+    fn name(&self) -> &str {
+        &self.subject_name
     }
 }
 
@@ -226,8 +295,45 @@ impl Subject for SubjectRef {
     }
 }
 
+fn validate_acl(acl: &Acl) -> RocketMQResult<()> {
+    if acl.policies().is_empty() {
+        return Err(RocketMQError::illegal_argument("The policies is empty."));
+    }
+
+    for policy in acl.policies() {
+        if policy.entries().is_empty() {
+            return Err(RocketMQError::illegal_argument("The policy entries is empty."));
+        }
+
+        for entry in policy.entries() {
+            if entry.resource().resource_key().is_none() {
+                return Err(RocketMQError::illegal_argument("The resource is null."));
+            }
+            if entry.actions().is_empty() {
+                return Err(RocketMQError::illegal_argument("The actions is empty."));
+            }
+            if entry.actions().contains(&Action::Any) {
+                return Err(RocketMQError::illegal_argument("The actions can not be Any."));
+            }
+            if let Some(environment) = entry.environment() {
+                if environment
+                    .source_ips()
+                    .iter()
+                    .any(|source_ip| source_ip.trim().is_empty())
+                {
+                    return Err(RocketMQError::illegal_argument("The source ip is empty."));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use cheetah_string::CheetahString;
     use rocketmq_auth::authentication::enums::user_status::UserStatus;
     use rocketmq_auth::authorization::enums::decision::Decision;
@@ -238,8 +344,13 @@ mod tests {
     use super::*;
 
     fn test_auth_config() -> AuthConfig {
+        let millis = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_millis();
+        let path = std::env::temp_dir().join(format!("rocketmq-rust-auth-admin-service-{millis}.json"));
         AuthConfig {
-            auth_config_path: CheetahString::from_static_str("target/test-auth-admin-service"),
+            auth_config_path: CheetahString::from_string(path.to_string_lossy().into_owned()),
             ..AuthConfig::default()
         }
     }
@@ -332,5 +443,47 @@ mod tests {
             .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].subject, Some(CheetahString::from_static_str("User:alice")));
+    }
+
+    #[tokio::test]
+    async fn create_update_and_get_acl_round_trip() {
+        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        service.create_user(user).await.unwrap();
+
+        service
+            .create_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("topic-a")],
+                    vec![Action::Pub],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .unwrap();
+        service
+            .update_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("topic-b")],
+                    vec![Action::Sub],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let acl = service.get_acl("User:alice").await.unwrap().unwrap();
+        assert_eq!(acl.subject, Some(CheetahString::from_static_str("User:alice")));
+        let policies = acl.policies.expect("policies should exist");
+        assert_eq!(policies.len(), 1);
+        let entries = policies[0].entries.as_ref().expect("entries should exist");
+        assert_eq!(entries.len(), 2);
     }
 }
