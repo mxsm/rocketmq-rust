@@ -747,22 +747,11 @@ where
                     )),
             ));
         }
-        match RequestSource::parse_integer(request_header.request_source) {
-            RequestSource::ProxyForBroadcast => {
-                unimplemented!("ProxyForBroadcast not implement")
-            }
-            RequestSource::ProxyForStream => {
-                unimplemented!("ProxyForStream not implement")
-            }
-            _ => self
-                .broker_runtime_inner
-                .consumer_manager()
-                .compensate_basic_consumer_info(
-                    request_header.consumer_group.as_ref(),
-                    ConsumeType::ConsumePassively,
-                    MessageModel::Clustering,
-                ),
-        }
+        let (consume_type, message_model) =
+            consumer_compensation_for_request_source(RequestSource::parse_integer(request_header.request_source));
+        self.broker_runtime_inner
+            .consumer_manager()
+            .compensate_basic_consumer_info(request_header.consumer_group.as_ref(), consume_type, message_model);
         let has_subscription_flag = PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
 
         // Get subscription data and consumer filter data using helper methods
@@ -1035,6 +1024,14 @@ pub(crate) fn is_broadcast(proxy_pull_broadcast: bool, consumer_group_info: Opti
         })
 }
 
+fn consumer_compensation_for_request_source(request_source: RequestSource) -> (ConsumeType, MessageModel) {
+    match request_source {
+        RequestSource::ProxyForBroadcast => (ConsumeType::ConsumePassively, MessageModel::Broadcasting),
+        RequestSource::ProxyForStream => (ConsumeType::ConsumeActively, MessageModel::Clustering),
+        _ => (ConsumeType::ConsumePassively, MessageModel::Clustering),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -1078,5 +1075,26 @@ mod tests {
     fn returns_false_when_no_consumer_group_info_provided() {
         let result = is_broadcast(false, None);
         assert!(!result, "Should return false when no consumer group info is provided");
+    }
+
+    #[test]
+    fn proxy_for_broadcast_compensates_broadcasting_passive_consumer() {
+        let (consume_type, message_model) = consumer_compensation_for_request_source(RequestSource::ProxyForBroadcast);
+        assert_eq!(consume_type, ConsumeType::ConsumePassively);
+        assert_eq!(message_model, MessageModel::Broadcasting);
+    }
+
+    #[test]
+    fn proxy_for_stream_compensates_clustering_active_consumer() {
+        let (consume_type, message_model) = consumer_compensation_for_request_source(RequestSource::ProxyForStream);
+        assert_eq!(consume_type, ConsumeType::ConsumeActively);
+        assert_eq!(message_model, MessageModel::Clustering);
+    }
+
+    #[test]
+    fn unknown_request_source_falls_back_to_passive_clustering() {
+        let (consume_type, message_model) = consumer_compensation_for_request_source(RequestSource::Unknown);
+        assert_eq!(consume_type, ConsumeType::ConsumePassively);
+        assert_eq!(message_model, MessageModel::Clustering);
     }
 }
