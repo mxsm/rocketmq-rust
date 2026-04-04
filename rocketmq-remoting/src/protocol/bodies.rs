@@ -113,6 +113,7 @@ pub mod request {
 pub mod query {
     pub use super::super::body::query_assignment_response_body::QueryAssignmentResponseBody;
     pub use super::super::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    pub use super::super::body::query_correction_offset_body::QueryCorrectionOffsetBody;
 }
 
 // High Availability (HA) Bodies

@@ -137,6 +137,7 @@ pub mod admin {
     pub use super::super::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     pub use super::super::header::delete_topic_request_header::DeleteTopicRequestHeader;
     pub use super::super::header::get_all_topic_config_response_header::GetAllTopicConfigResponseHeader;
+    pub use super::super::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
     pub use super::super::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
     pub use super::super::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
     pub use super::super::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
@@ -152,6 +153,7 @@ pub mod transaction {
 pub mod offset {
     pub use super::super::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
     pub use super::super::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    pub use super::super::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
     pub use super::super::header::reset_offset_request_header::ResetOffsetRequestHeader;
     pub use super::super::header::search_offset_request_header::SearchOffsetRequestHeader;
     pub use super::super::header::search_offset_response_header::SearchOffsetResponseHeader;

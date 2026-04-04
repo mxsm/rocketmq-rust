@@ -22,7 +22,7 @@ use super::consume_stats::ConsumeStats;
 
 #[derive(Serialize, Deserialize)]
 pub struct ConsumeStatsList {
-    #[serde(rename = "consume_stats_list")]
+    #[serde(rename = "consumeStatsList")]
     pub consume_stats_list: Vec<HashMap<CheetahString, Vec<ConsumeStats>>>,
 
     #[serde(rename = "brokerAddr")]
@@ -56,7 +56,7 @@ mod tests {
             total_inflight_diff: 1,
         };
         let serialized = serde_json::to_string(&consume_status_list).unwrap();
-        println!("{}", serialized);
+        assert!(serialized.contains("\"consumeStatsList\""));
         let deserialized: ConsumeStatsList = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.broker_addr.unwrap(), CheetahString::from("addr"));
         assert_eq!(deserialized.total_diff, 2);

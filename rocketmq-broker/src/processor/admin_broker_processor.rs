@@ -416,8 +416,16 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_consumer_running_info(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::QueryCorrectionOffset => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::ConsumeMessageDirectly => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::QueryCorrectionOffset => {
+                self.consumer_request_handler
+                    .query_correction_offset(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::ConsumeMessageDirectly => {
+                self.consumer_request_handler
+                    .consume_message_directly(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::CloneGroupOffset => {
                 self.consumer_request_handler
                     .clone_group_offset(channel, ctx, request_code, request)
@@ -428,13 +436,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .view_broker_stats_data(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::GetBrokerConsumeStats => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetBrokerConsumeStats => {
+                self.consumer_request_handler
+                    .get_broker_consume_stats(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::QueryConsumeQueue => {
                 self.message_related_handler
                     .query_consume_queue(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::CheckRocksdbCqWriteProgress => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::CheckRocksdbCqWriteProgress => {
+                self.offset_request_handler
+                    .check_rocksdb_cq_write_progress(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateAndGetGroupForbidden => {
                 self.subscription_group_handler
                     .update_and_get_group_forbidden(channel, ctx, request_code, request)
@@ -459,7 +475,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_topic_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateAndCreateStaticTopic => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::UpdateAndCreateStaticTopic => {
+                self.topic_request_handler
+                    .update_and_create_static_topic(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::NotifyMinBrokerIdChange => {
                 self.notify_min_broker_handler
                     .notify_min_broker_id_change(channel, ctx, request_code, request)

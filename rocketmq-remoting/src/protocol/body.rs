@@ -58,6 +58,7 @@ pub mod query_assignment_request_body;
 pub mod query_assignment_response_body;
 pub mod query_consume_queue_response_body;
 pub mod query_consume_time_span_body;
+pub mod query_correction_offset_body;
 pub mod query_subscription_response_body;
 pub mod queue_time_span;
 pub mod request;

@@ -176,6 +176,29 @@ impl TopicQueueMappingManager {
         self.topic_queue_mapping_table.get(topic).as_deref().cloned()
     }
 
+    pub fn update_topic_queue_mapping(&self, mut topic_queue_mapping_detail: TopicQueueMappingDetail) {
+        let topic = topic_queue_mapping_detail
+            .topic_queue_mapping_info
+            .topic
+            .clone()
+            .unwrap_or_default();
+        if topic.is_empty() {
+            return;
+        }
+
+        if topic_queue_mapping_detail.topic_queue_mapping_info.bname.is_none() {
+            topic_queue_mapping_detail.topic_queue_mapping_info.bname = Some(self.broker_config.broker_name().clone());
+        }
+        if topic_queue_mapping_detail.hosted_queues.is_none() {
+            topic_queue_mapping_detail.hosted_queues = Some(std::collections::HashMap::new());
+        }
+
+        self.topic_queue_mapping_table
+            .insert(topic, ArcMut::new(topic_queue_mapping_detail));
+        self.data_version.lock().next_version();
+        self.persist();
+    }
+
     pub fn delete(&self, topic: &CheetahString) {
         let old = self.topic_queue_mapping_table.remove(topic);
         match old {
@@ -276,5 +299,24 @@ mod tests {
         manager.delete(&CheetahString::from_static_str("existing_topic"));
 
         assert!(manager.get_topic_queue_mapping("existing_topic").is_none());
+    }
+
+    #[test]
+    fn update_topic_queue_mapping_inserts_detail_and_defaults_broker_name() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = TopicQueueMappingManager::new(broker_config.clone());
+        let mut detail = TopicQueueMappingDetail::default();
+        detail.topic_queue_mapping_info.topic = Some(CheetahString::from_static_str("static-topic"));
+
+        manager.update_topic_queue_mapping(detail);
+
+        let mapping = manager
+            .get_topic_queue_mapping("static-topic")
+            .expect("mapping should exist after update");
+        assert_eq!(
+            mapping.topic_queue_mapping_info.bname.as_deref(),
+            Some(broker_config.broker_name().as_str())
+        );
+        assert!(mapping.hosted_queues.is_some());
     }
 }

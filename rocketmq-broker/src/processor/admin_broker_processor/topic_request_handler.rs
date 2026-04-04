@@ -176,6 +176,112 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
+    pub async fn update_and_create_static_topic(
+        &mut self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_response_command();
+        let request_header = request.decode_command_custom_header::<CreateTopicRequestHeader>()?;
+        info!(
+            "Broker receive request to update or create static topic={}, caller address={}",
+            request_header.topic,
+            channel.remote_address()
+        );
+
+        let Some(body) = request.body() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("topic queue mapping detail is missing"),
+            ));
+        };
+        let mut topic_queue_mapping_detail = match serde_json::from_slice::<TopicQueueMappingDetail>(body.as_ref()) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark(format!("decode TopicQueueMappingDetail failed: {error}")),
+                ));
+            }
+        };
+
+        let topic = request_header.topic.clone();
+        let result = TopicValidator::validate_topic(topic.as_str());
+        if !result.valid() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark(result.remark().clone()),
+            ));
+        }
+        if self
+            .broker_runtime_inner
+            .broker_config()
+            .validate_system_topic_when_update_topic
+            && TopicValidator::is_system_topic(topic.as_str())
+        {
+            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                format!("The topic[{}] is conflict with system topic.", topic.as_str()),
+            )));
+        }
+
+        let attributes = match AttributeParser::parse_to_map(
+            request_header
+                .attributes
+                .clone()
+                .unwrap_or(CheetahString::empty())
+                .as_str(),
+        ) {
+            Ok(value) => value.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            Err(err) => {
+                return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(err)));
+            }
+        };
+
+        let topic_config = ArcMut::new(TopicConfig {
+            topic_name: Some(topic.clone()),
+            read_queue_nums: request_header.read_queue_nums as u32,
+            write_queue_nums: request_header.write_queue_nums as u32,
+            perm: request_header.perm as u32,
+            topic_filter_type: TopicFilterType::from(request_header.topic_filter_type.as_str()),
+            topic_sys_flag: request_header.topic_sys_flag.unwrap_or_default() as u32,
+            order: request_header.order,
+            attributes,
+        });
+        self.broker_runtime_inner
+            .topic_config_manager_mut()
+            .update_topic_config(topic_config.clone());
+
+        topic_queue_mapping_detail.topic_queue_mapping_info.topic = Some(topic.clone());
+        if topic_queue_mapping_detail.topic_queue_mapping_info.total_queues <= 0 {
+            topic_queue_mapping_detail.topic_queue_mapping_info.total_queues = request_header.write_queue_nums;
+        }
+        if topic_queue_mapping_detail.topic_queue_mapping_info.bname.is_none() {
+            topic_queue_mapping_detail.topic_queue_mapping_info.bname =
+                Some(self.broker_runtime_inner.broker_config().broker_name().clone());
+        }
+        self.broker_runtime_inner
+            .topic_queue_mapping_manager()
+            .update_topic_queue_mapping(topic_queue_mapping_detail);
+
+        BrokerRuntimeInner::<MS>::register_increment_broker_data(
+            self.broker_runtime_inner.clone(),
+            vec![topic_config],
+            self.broker_runtime_inner
+                .topic_config_manager()
+                .data_version()
+                .as_ref()
+                .clone(),
+        )
+        .await;
+
+        Ok(Some(response.set_code(ResponseCode::Success)))
+    }
+
     pub async fn update_and_create_topic_list(
         &mut self,
         channel: Channel,
@@ -587,5 +693,134 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .as_mut()
             .unwrap()
             .delete_topics(vec![topic]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
+    use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::Channel;
+    use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::RemotingSerializable;
+    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_rust::ArcMut;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    use super::*;
+    use crate::broker_runtime::BrokerRuntime;
+
+    fn temp_test_root(label: &str) -> std::path::PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_millis();
+        std::env::temp_dir().join(format!("rocketmq-rust-admin-topic-{label}-{millis}"))
+    }
+
+    async fn new_test_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = temp_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await);
+        runtime
+    }
+
+    async fn create_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        std_stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
+        let connection = Connection::new(tcp_stream);
+        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
+        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        Channel::new(inner, local_addr, local_addr)
+    }
+
+    #[tokio::test]
+    async fn update_and_create_static_topic_persists_mapping_detail() {
+        let mut runtime = new_test_runtime("static-topic").await;
+        let inner = runtime.inner_for_test().clone();
+        let mut handler = TopicRequestHandler::new(inner.clone());
+
+        let detail = TopicQueueMappingDetail {
+            topic_queue_mapping_info:
+                rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo {
+                    topic: Some(CheetahString::from_static_str("static-topic")),
+                    scope: Some(CheetahString::from_static_str(METADATA_SCOPE_GLOBAL)),
+                    total_queues: 1,
+                    bname: Some(inner.broker_config().broker_name().clone()),
+                    epoch: 1,
+                    dirty: false,
+                    curr_id_map: None,
+                },
+            hosted_queues: Some(HashMap::new()),
+        };
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateAndCreateStaticTopic,
+            CreateTopicRequestHeader {
+                topic: CheetahString::from_static_str("static-topic"),
+                default_topic: CheetahString::from_static_str("TBW102"),
+                read_queue_nums: 1,
+                write_queue_nums: 1,
+                perm: 6,
+                topic_filter_type: CheetahString::from_static_str("SINGLE_TAG"),
+                topic_sys_flag: Some(0),
+                order: false,
+                attributes: None,
+                force: Some(true),
+                topic_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+        request.set_body_mut_ref(detail.encode().expect("encode topic queue mapping detail"));
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+
+        let response = handler
+            .update_and_create_static_topic(channel, ctx, RequestCode::UpdateAndCreateStaticTopic, &mut request)
+            .await
+            .expect("update and create static topic should succeed")
+            .expect("update and create static topic should return response");
+
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::Success,
+            "remark={:?}",
+            response.remark()
+        );
+        assert!(inner
+            .topic_config_manager()
+            .select_topic_config(&CheetahString::from_static_str("static-topic"))
+            .is_some());
+        let mapping = inner
+            .topic_queue_mapping_manager()
+            .get_topic_queue_mapping("static-topic")
+            .expect("mapping detail should be persisted");
+        assert_eq!(mapping.topic_queue_mapping_info.topic.as_deref(), Some("static-topic"));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 }

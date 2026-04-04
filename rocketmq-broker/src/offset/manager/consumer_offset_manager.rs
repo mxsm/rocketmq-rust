@@ -230,6 +230,63 @@ where
         -1
     }
 
+    pub fn query_offsets(&self, group: &CheetahString, topic: &CheetahString) -> Option<HashMap<i32, i64>> {
+        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
+        self.consumer_offset_wrapper
+            .offset_table
+            .read()
+            .get(key.as_str())
+            .cloned()
+    }
+
+    pub fn query_min_offset_in_all_group(
+        &self,
+        topic: &CheetahString,
+        filter_groups: Option<&CheetahString>,
+    ) -> HashMap<i32, i64> {
+        let excluded_groups = filter_groups
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|group| !group.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+
+        let Some(message_store) = self.message_store.as_ref() else {
+            return HashMap::new();
+        };
+
+        let mut queue_min_offset = HashMap::new();
+        for (topic_group, offsets) in self.consumer_offset_wrapper.offset_table.read().iter() {
+            let parts: Vec<&str> = topic_group.split(TOPIC_GROUP_SEPARATOR).collect();
+            if parts.len() != 2 || parts[0] != topic {
+                continue;
+            }
+
+            let group = parts[1];
+            if excluded_groups.contains(group) {
+                continue;
+            }
+
+            for (&queue_id, &offset) in offsets.iter() {
+                let min_offset = message_store.get_min_offset_in_queue(topic, queue_id);
+                if offset < min_offset {
+                    continue;
+                }
+
+                queue_min_offset
+                    .entry(queue_id)
+                    .and_modify(|current: &mut i64| *current = (*current).min(offset))
+                    .or_insert(offset);
+            }
+        }
+
+        queue_min_offset
+    }
+
     pub fn which_topic_by_consumer(&self, group: &CheetahString) -> HashSet<CheetahString> {
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut topics = HashSet::new();
@@ -554,5 +611,19 @@ mod tests {
         manager.clone_offset(&src_group, &dest_group, &topic);
 
         assert_eq!(manager.query_offset(&dest_group, &topic, 0), 32);
+    }
+
+    #[test]
+    fn query_offsets_returns_full_queue_map() {
+        let manager = new_manager();
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 1, 24);
+
+        let offsets = manager.query_offsets(&group, &topic).expect("offset map should exist");
+        assert_eq!(offsets.get(&0), Some(&12));
+        assert_eq!(offsets.get(&1), Some(&24));
     }
 }
