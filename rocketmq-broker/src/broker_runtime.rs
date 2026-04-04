@@ -221,7 +221,7 @@ impl BrokerRuntime {
                 None,
             ),
             subscription_group_manager: None,
-            consumer_filter_manager: Some(ConsumerFilterManager::new(broker_config, message_store_config)),
+            consumer_filter_manager: Some(ConsumerFilterManager::new(broker_config, message_store_config.clone())),
 
             consumer_order_info_manager: None,
             message_store: None,
@@ -251,8 +251,10 @@ impl BrokerRuntime {
             pop_inflight_message_counter,
             replicas_manager: None,
             broker_fast_failure: BrokerFastFailure,
-            cold_data_pull_request_hold_service: None,
-            cold_data_cg_ctr_service: None,
+            cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
+            cold_data_cg_ctr_service: Some(ColdDataCgCtrService::new(
+                message_store_config.cold_data_flow_control_enable,
+            )),
             is_schedule_service_start: Arc::new(Default::default()),
             is_transaction_check_service_start: Arc::new(Default::default()),
             client_housekeeping_service: None,

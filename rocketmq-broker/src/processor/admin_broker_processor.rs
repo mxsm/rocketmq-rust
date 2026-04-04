@@ -259,8 +259,16 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_cold_data_flow_ctr_group_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::RemoveColdDataFlowCtrConfig => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::GetColdDataFlowCtrInfo => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::RemoveColdDataFlowCtrConfig => {
+                self.update_cold_data_flow_ctr_group_config_request_handler
+                    .remove_cold_data_flow_ctr_group_config(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetColdDataFlowCtrInfo => {
+                self.update_cold_data_flow_ctr_group_config_request_handler
+                    .get_cold_data_flow_ctr_info(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::SetCommitlogReadMode => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::SearchOffsetByTimestamp => {
                 self.message_related_handler
