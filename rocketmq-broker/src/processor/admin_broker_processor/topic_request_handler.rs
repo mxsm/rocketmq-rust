@@ -548,6 +548,29 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         Ok(Some(response))
     }
 
+    pub async fn clean_unused_topic(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let retain_topics = self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .topic_config_table_hash_map()
+            .keys()
+            .map(|topic| topic.to_string())
+            .collect();
+        self.broker_runtime_inner
+            .message_store()
+            .unwrap()
+            .clean_unused_topic(&retain_topics);
+        Ok(Some(
+            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
+        ))
+    }
+
     fn delete_topic_in_broker(&mut self, topic: &CheetahString) {
         self.broker_runtime_inner
             .topic_config_manager()

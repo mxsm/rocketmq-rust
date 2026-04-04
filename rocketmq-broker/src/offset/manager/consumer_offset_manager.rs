@@ -120,20 +120,35 @@ where
     }
 
     pub fn clean_offset_by_topic(&self, topic: &CheetahString) {
-        let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
-        let mut keys_to_remove = Vec::new();
+        self.remove_keys_matching(|key| {
+            let arrays: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
+            arrays.len() == 2 && arrays[0] == topic
+        });
+    }
 
-        for (topic_at_group, _) in offset_table.iter() {
-            if topic_at_group.contains(topic.as_str()) {
-                let arrays: Vec<&str> = topic_at_group.split(TOPIC_GROUP_SEPARATOR).collect();
-                if arrays.len() == 2 && arrays[0] == topic {
-                    keys_to_remove.push(topic_at_group.clone());
-                }
-            }
-        }
-        for key in keys_to_remove {
-            offset_table.remove(&key);
-        }
+    pub fn clean_offset_by_group(&self, group: &CheetahString) {
+        self.remove_keys_matching(|key| {
+            let arrays: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
+            arrays.len() == 2 && arrays[1] == group
+        });
+    }
+
+    pub fn clear_pull_offset(&self, group: &CheetahString, topic: &CheetahString) {
+        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        self.consumer_offset_wrapper.pull_offset_table.write().remove(&key);
+    }
+
+    pub fn clone_offset(&self, src_group: &CheetahString, dest_group: &CheetahString, topic: &CheetahString) {
+        let src_key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{src_group}"));
+        let Some(offsets) = self.consumer_offset_wrapper.offset_table.read().get(&src_key).cloned() else {
+            return;
+        };
+
+        let dest_key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{dest_group}"));
+        self.consumer_offset_wrapper
+            .offset_table
+            .write()
+            .insert(dest_key, offsets);
     }
 
     pub fn which_group_by_topic(&self, topic: &str) -> HashSet<CheetahString> {
@@ -234,6 +249,33 @@ where
 
     pub fn data_version(&self) -> ArcMut<DataVersion> {
         self.consumer_offset_wrapper.data_version.clone()
+    }
+
+    fn remove_keys_matching<F>(&self, predicate: F)
+    where
+        F: Fn(&CheetahString) -> bool,
+    {
+        let keys_to_remove: Vec<CheetahString> = self
+            .consumer_offset_wrapper
+            .offset_table
+            .read()
+            .keys()
+            .filter(|key| predicate(key))
+            .cloned()
+            .collect();
+
+        if keys_to_remove.is_empty() {
+            return;
+        }
+
+        let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
+        let mut reset_offset_table = self.consumer_offset_wrapper.reset_offset_table.write();
+        let mut pull_offset_table = self.consumer_offset_wrapper.pull_offset_table.write();
+        for key in keys_to_remove {
+            offset_table.remove(&key);
+            reset_offset_table.remove(&key);
+            pull_offset_table.remove(&key);
+        }
     }
 }
 
@@ -417,5 +459,100 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
 
         const FIELDS: &[&str] = &["dataVersion", "offsetTable", "resetOffsetTable", "pullOffsetTable"];
         deserializer.deserialize_struct("ConsumerOffsetWrapper", FIELDS, ConsumerOffsetWrapperVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+
+    use super::ConsumerOffsetManager;
+
+    fn new_manager() -> ConsumerOffsetManager<LocalFileMessageStore> {
+        ConsumerOffsetManager::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+            None,
+        )
+    }
+
+    #[test]
+    fn clean_offset_by_group_removes_all_related_tables() {
+        let manager = new_manager();
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+        let other_group = CheetahString::from_static_str("group-b");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 10);
+        manager.assign_reset_offset(&topic, &group, 0, 5);
+        manager.commit_pull_offset(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 10911)),
+            &group,
+            &topic,
+            0,
+            12,
+        );
+        manager.commit_offset("127.0.0.1:10911".into(), &other_group, &topic, 0, 20);
+
+        manager.clean_offset_by_group(&group);
+
+        assert_eq!(manager.query_offset(&group, &topic, 0), -1);
+        assert!(!manager.has_offset_reset(group.as_str(), topic.as_str(), 0));
+        assert!(!manager
+            .offset_table()
+            .read()
+            .contains_key(&CheetahString::from_static_str("topic-a@group-a")));
+        assert!(manager
+            .offset_table()
+            .read()
+            .contains_key(&CheetahString::from_static_str("topic-a@group-b")));
+    }
+
+    #[test]
+    fn clear_pull_offset_removes_only_target_entry() {
+        let manager = new_manager();
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+        let other_topic = CheetahString::from_static_str("topic-b");
+
+        manager.commit_pull_offset(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 10911)),
+            &group,
+            &topic,
+            0,
+            12,
+        );
+        manager.commit_pull_offset(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 10911)),
+            &group,
+            &other_topic,
+            0,
+            24,
+        );
+
+        manager.clear_pull_offset(&group, &topic);
+
+        let pull_offsets = manager.consumer_offset_wrapper.pull_offset_table.read();
+        assert!(!pull_offsets.contains_key(&CheetahString::from_static_str("topic-a@group-a")));
+        assert!(pull_offsets.contains_key(&CheetahString::from_static_str("topic-b@group-a")));
+    }
+
+    #[test]
+    fn clone_offset_copies_source_offsets_to_destination_group() {
+        let manager = new_manager();
+        let topic = CheetahString::from_static_str("topic-a");
+        let src_group = CheetahString::from_static_str("group-src");
+        let dest_group = CheetahString::from_static_str("group-dest");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &src_group, &topic, 0, 32);
+
+        manager.clone_offset(&src_group, &dest_group, &topic);
+
+        assert_eq!(manager.query_offset(&dest_group, &topic, 0), 32);
     }
 }

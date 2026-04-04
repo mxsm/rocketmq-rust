@@ -317,6 +317,11 @@ impl BrokerRuntime {
         &mut self.inner
     }
 
+    #[cfg(test)]
+    pub(crate) fn init_processor_for_test(&mut self) {
+        let _ = self.init_processor();
+    }
+
     pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
         self.inner.topic_config_manager().select_topic_config(topic)
     }

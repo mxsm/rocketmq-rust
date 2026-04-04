@@ -259,7 +259,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_min_offset(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::GetEarliestMsgStoreTime => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetEarliestMsgStoreTime => {
+                self.offset_request_handler
+                    .get_earliest_msg_store_time(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetBrokerRuntimeInfo => {
                 self.broker_config_request_handler
                     .get_broker_runtime_info(channel, ctx, request_code, request)
@@ -280,13 +284,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_and_create_subscription_group(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateAndCreateSubscriptionGroupList => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::UpdateAndCreateSubscriptionGroupList => {
+                self.subscription_group_handler
+                    .update_and_create_subscription_group_list(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetAllSubscriptionGroupConfig => {
                 self.offset_request_handler
                     .get_all_subscription_group_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::DeleteSubscriptionGroup => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::DeleteSubscriptionGroup => {
+                self.subscription_group_handler
+                    .delete_subscription_group(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetTopicStatsInfo => {
                 self.topic_request_handler
                     .get_topic_stats_info(channel, ctx, request_code, request)
@@ -318,9 +330,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_all_delay_offset(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::GetAllMessageRequestMode => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::InvokeBrokerToResetOffset => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::InvokeBrokerToGetConsumerStatus => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetAllMessageRequestMode => {
+                self.consumer_request_handler
+                    .get_all_message_request_mode(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::InvokeBrokerToResetOffset => {
+                self.consumer_request_handler
+                    .invoke_broker_to_reset_offset(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::InvokeBrokerToGetConsumerStatus => {
+                self.consumer_request_handler
+                    .invoke_broker_to_get_consumer_status(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::QueryTopicConsumeByWho => {
                 self.topic_request_handler
                     .query_topic_consume_by_who(channel, ctx, request_code, request)
@@ -331,16 +355,36 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .query_topics_by_consumer(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::QuerySubscriptionByConsumer => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::QueryConsumeTimeSpan => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::QuerySubscriptionByConsumer => {
+                self.consumer_request_handler
+                    .query_subscription_by_consumer(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::QueryConsumeTimeSpan => {
+                self.consumer_request_handler
+                    .query_consume_time_span(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetSystemTopicListFromBroker => {
                 self.topic_request_handler
                     .get_system_topic_list_from_broker(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::CleanExpiredConsumequeue => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::DeleteExpiredCommitlog => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::CleanUnusedTopic => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::CleanExpiredConsumequeue => {
+                self.offset_request_handler
+                    .clean_expired_consumequeue(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::DeleteExpiredCommitlog => {
+                self.offset_request_handler
+                    .delete_expired_commitlog(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::CleanUnusedTopic => {
+                self.topic_request_handler
+                    .clean_unused_topic(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetConsumerRunningInfo => {
                 self.consumer_request_handler
                     .get_consumer_running_info(channel, ctx, request_code, request)
@@ -348,7 +392,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             }
             RequestCode::QueryCorrectionOffset => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::ConsumeMessageDirectly => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::CloneGroupOffset => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::CloneGroupOffset => {
+                self.consumer_request_handler
+                    .clone_group_offset(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::ViewBrokerStatsData => {
                 self.broker_stats_handler
                     .view_broker_stats_data(channel, ctx, request_code, request)
@@ -367,7 +415,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::DeleteAclConfig => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::GetBrokerClusterAclInfo => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::UpdateGlobalWhiteAddrsConfig => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::ResumeCheckHalfMessage => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::ResumeCheckHalfMessage => {
+                self.message_related_handler
+                    .resume_check_half_message(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetTopicConfig => {
                 self.topic_request_handler
                     .get_topic_config(channel, ctx, request_code, request)

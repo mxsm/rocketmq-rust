@@ -60,6 +60,7 @@ use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::running::running_stats::RunningStats;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::system_clock::SystemClock;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
@@ -328,6 +329,48 @@ impl LocalFileMessageStore {
             return None;
         }
         self.topic_config_table.get(topic).as_deref().cloned()
+    }
+
+    fn delete_topics_inner(&self, delete_topics: &[CheetahString]) -> i32 {
+        if delete_topics.is_empty() {
+            return 0;
+        }
+
+        let mut consume_queue_store = self.consume_queue_store.clone();
+        let mut delete_count = 0;
+        for topic in delete_topics {
+            let queue_table = consume_queue_store.find_consume_queue_map(topic);
+            if queue_table.is_none() {
+                continue;
+            }
+            let queue_table = queue_table.unwrap();
+            for (queue_id, consume_queue) in queue_table {
+                consume_queue_store.destroy_queue(consume_queue.as_ref().deref());
+                consume_queue_store.remove_topic_queue_table(topic, queue_id);
+            }
+            let consume_queue_table = consume_queue_store.get_consume_queue_table();
+            consume_queue_table.lock().remove(topic);
+
+            if self.broker_config.auto_delete_unused_stats {
+                if let Some(broker_stats_manager) = self.broker_stats_manager.as_ref() {
+                    broker_stats_manager.on_topic_deleted(topic);
+                }
+            }
+
+            let root_dir = self.message_store_config.store_path_root_dir.as_str();
+            let consume_queue_dir = PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
+            let consume_queue_ext_dir = PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
+            let batch_consume_queue_dir =
+                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
+
+            util_all::delete_empty_directory(consume_queue_dir);
+            util_all::delete_empty_directory(consume_queue_ext_dir);
+            util_all::delete_empty_directory(batch_consume_queue_dir);
+            info!("DeleteTopic: Topic has been destroyed, topic={}", topic);
+            delete_count += 1;
+        }
+
+        delete_count
     }
 
     fn prepare_lmq_dispatch(&self, msg: &mut MessageExtBrokerInner) {
@@ -1587,50 +1630,46 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
-        if delete_topics.is_empty() {
-            return 0;
-        }
-        let mut delete_count = 0;
-        for topic in delete_topics {
-            let queue_table = self.consume_queue_store.find_consume_queue_map(topic);
-            if queue_table.is_none() {
-                continue;
-            }
-            let queue_table = queue_table.unwrap();
-            for (queue_id, consume_queue) in queue_table {
-                self.consume_queue_store.destroy_queue(consume_queue.as_ref().deref());
-                self.consume_queue_store.remove_topic_queue_table(topic, queue_id);
-            }
-            // remove topic from cq table
-            let consume_queue_table = self.consume_queue_store.get_consume_queue_table();
-            consume_queue_table.lock().remove(topic);
-
-            if self.broker_config.auto_delete_unused_stats {
-                self.broker_stats_manager.as_ref().unwrap().on_topic_deleted(topic);
-            }
-
-            let root_dir = self.message_store_config.store_path_root_dir.as_str();
-            let consume_queue_dir = PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
-            let consume_queue_ext_dir = PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
-            let batch_consume_queue_dir =
-                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
-
-            util_all::delete_empty_directory(consume_queue_dir);
-            util_all::delete_empty_directory(consume_queue_ext_dir);
-            util_all::delete_empty_directory(batch_consume_queue_dir);
-            info!("DeleteTopic: Topic has been destroyed, topic={}", topic);
-            delete_count += 1;
-        }
-
-        delete_count
+        let delete_topics = delete_topics.into_iter().cloned().collect::<Vec<_>>();
+        self.delete_topics_inner(&delete_topics)
     }
 
     fn clean_unused_topic(&self, retain_topics: &HashSet<String>) -> i32 {
-        todo!()
+        let topics_to_delete = self
+            .consume_queue_store
+            .get_consume_queue_table()
+            .lock()
+            .keys()
+            .filter(|topic| {
+                !retain_topics.contains(topic.as_str())
+                    && !TopicValidator::is_system_topic(topic.as_str())
+                    && !is_lmq(Some(topic.as_str()))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.delete_topics_inner(&topics_to_delete)
     }
 
     fn clean_expired_consumer_queue(&self) {
-        todo!()
+        let min_commit_log_offset = self.get_min_phy_offset();
+        let consume_queue_store = self.consume_queue_store.clone();
+        let clean_expired = move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("clean expired consumer queue runtime should build");
+            runtime.block_on(async move {
+                consume_queue_store.clean_expired(min_commit_log_offset).await;
+            });
+        };
+
+        if Handle::try_current().is_ok() {
+            thread::spawn(clean_expired)
+                .join()
+                .expect("clean expired consumer queue thread should complete");
+        } else {
+            clean_expired();
+        }
     }
 
     fn check_in_mem_by_consume_offset(
@@ -2713,18 +2752,37 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
     use super::LocalFileMessageStore;
     use crate::base::message_store::MessageStore;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+
+    fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
 
     #[test]
     fn set_message_store_arc_initializes_timer_message_store_when_timer_wheel_enabled() {
@@ -2749,5 +2807,44 @@ mod tests {
         store.set_message_store_arc(store_clone);
 
         assert!(store.get_timer_message_store().is_some());
+    }
+
+    #[test]
+    fn clean_unused_topic_deletes_only_non_retained_non_system_non_lmq_topics() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let deletable_topic = CheetahString::from_static_str("delete-me");
+        let retained_topic = CheetahString::from_static_str("retain-me");
+        let system_topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC);
+        let lmq_topic = CheetahString::from_static_str("%LMQ%lite-group");
+
+        store
+            .consume_queue_store
+            .find_or_create_consume_queue(&deletable_topic, 0);
+        store
+            .consume_queue_store
+            .find_or_create_consume_queue(&retained_topic, 0);
+        store.consume_queue_store.find_or_create_consume_queue(&system_topic, 0);
+        store.consume_queue_store.find_or_create_consume_queue(&lmq_topic, 0);
+
+        let mut retain_topics = HashSet::new();
+        retain_topics.insert(retained_topic.to_string());
+
+        let deleted_count = store.clean_unused_topic(&retain_topics);
+
+        assert_eq!(deleted_count, 1);
+        assert!(store
+            .consume_queue_store
+            .find_consume_queue_map(&deletable_topic)
+            .is_none());
+        assert!(store
+            .consume_queue_store
+            .find_consume_queue_map(&retained_topic)
+            .is_some());
+        assert!(store
+            .consume_queue_store
+            .find_consume_queue_map(&system_topic)
+            .is_some());
+        assert!(store.consume_queue_store.find_consume_queue_map(&lmq_topic).is_some());
     }
 }
