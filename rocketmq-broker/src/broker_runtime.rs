@@ -198,8 +198,9 @@ impl BrokerRuntime {
             broker_config.get_broker_addr().into(),
         );
         let producer_manager = ProducerManager::new();
+        let consumer_filter_manager = ConsumerFilterManager::new(broker_config.clone(), message_store_config.clone());
         let consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static> =
-            Arc::new(DefaultConsumerIdsChangeListener {});
+            Arc::new(DefaultConsumerIdsChangeListener::new(consumer_filter_manager.clone()));
         let consumer_manager =
             ConsumerManager::new_with_broker_stats(consumer_ids_change_listener.clone(), broker_config.clone());
 
@@ -221,7 +222,7 @@ impl BrokerRuntime {
                 None,
             ),
             subscription_group_manager: None,
-            consumer_filter_manager: Some(ConsumerFilterManager::new(broker_config, message_store_config.clone())),
+            consumer_filter_manager: Some(consumer_filter_manager),
 
             consumer_order_info_manager: None,
             message_store: None,

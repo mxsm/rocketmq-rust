@@ -76,7 +76,49 @@ impl MessageFilter for ExpressionMessageFilter {
             }
             subscription_data.code_set.contains(&(tags_code.unwrap() as i32))
         } else {
-            unimplemented!("SQL92 expression type is not supported yet.")
+            let Some(filter_data) = self.consumer_filter_data.as_ref() else {
+                return true;
+            };
+
+            if filter_data.expression().is_none()
+                || filter_data.expression_type().is_none()
+                || filter_data.compiled_expression().is_none()
+                || filter_data.bloom_filter_data().is_none()
+            {
+                return true;
+            }
+
+            let Some(cq_ext_unit) = cq_ext_unit else {
+                return true;
+            };
+
+            if !filter_data.is_msg_in_live(cq_ext_unit.msg_store_time() as u64) {
+                return true;
+            }
+
+            let Some(filter_bit_map) = cq_ext_unit.filter_bit_map() else {
+                return true;
+            };
+
+            if !self.bloom_data_valid
+                || filter_bit_map.len() * u8::BITS as usize
+                    != filter_data.bloom_filter_data().unwrap().bit_num() as usize
+            {
+                return true;
+            }
+
+            let Ok(bits_array) = rocketmq_filter::utils::bits_array::BitsArray::from_bytes(filter_bit_map) else {
+                return true;
+            };
+
+            self.consumer_filter_manager
+                .bloom_filter()
+                .and_then(|bloom_filter| {
+                    bloom_filter
+                        .is_hit(filter_data.bloom_filter_data().unwrap(), &bits_array)
+                        .ok()
+                })
+                .unwrap_or(true)
         }
     }
 
@@ -123,5 +165,68 @@ impl MessageFilter for ExpressionMessageFilter {
         } else {
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::filter::MessageFilter;
+
+    use super::*;
+
+    fn new_manager() -> ConsumerFilterManager {
+        ConsumerFilterManager::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        )
+    }
+
+    fn sql_subscription(topic: &str, expression: &str) -> SubscriptionData {
+        SubscriptionData {
+            topic: CheetahString::from_slice(topic),
+            sub_string: CheetahString::from_slice(expression),
+            expression_type: CheetahString::from_static_str(ExpressionType::SQL92),
+            sub_version: 11,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sql_consume_queue_path_checks_bloom_bitmap() {
+        let manager = new_manager();
+        let subscriptions = HashSet::from([sql_subscription("TopicTest", "color = 'blue'")]);
+        manager.register("GroupTest", &subscriptions);
+
+        let filter_data = manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .unwrap();
+
+        let mut bits =
+            rocketmq_filter::utils::bits_array::BitsArray::create(manager.bloom_filter().unwrap().m() as usize);
+        manager
+            .bloom_filter()
+            .unwrap()
+            .hash_to(filter_data.bloom_filter_data().unwrap(), &mut bits)
+            .unwrap();
+
+        let cq_ext_unit = CqExtUnit::new(0, filter_data.born_time() as i64 + 1, Some(bits.bytes().to_vec()));
+        let filter = ExpressionMessageFilter::new(
+            Some(sql_subscription("TopicTest", "color = 'blue'")),
+            Some(filter_data.clone()),
+            Arc::new(manager.clone()),
+        );
+
+        assert!(filter.is_matched_by_consume_queue(None, Some(&cq_ext_unit)));
+
+        let miss = CqExtUnit::new(0, filter_data.born_time() as i64 + 1, Some(vec![0; bits.byte_length()]));
+        assert!(!filter.is_matched_by_consume_queue(None, Some(&miss)));
     }
 }

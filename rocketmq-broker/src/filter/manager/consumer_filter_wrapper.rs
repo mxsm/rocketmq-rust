@@ -22,12 +22,12 @@ use crate::filter::consumer_filter_data::ConsumerFilterData;
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerFilterWrapper {
-    filter_data_by_topic: HashMap<String /* Topic */, FilterDataMapByTopic>,
+    pub(crate) filter_data_by_topic: HashMap<String /* Topic */, FilterDataMapByTopic>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FilterDataMapByTopic {
-    filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
-    topic: String,
+    pub(crate) filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
+    pub(crate) topic: String,
 }

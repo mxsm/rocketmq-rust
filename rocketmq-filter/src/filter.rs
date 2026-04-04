@@ -82,6 +82,7 @@
 mod filter_factory;
 mod filter_spi;
 mod filter_sql_filter;
+mod sql_runtime;
 
 pub use filter_factory::FilterFactory;
 pub use filter_spi::Filter;

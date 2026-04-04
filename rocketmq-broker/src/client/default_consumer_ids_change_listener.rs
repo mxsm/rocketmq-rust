@@ -13,19 +13,92 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashSet;
 
-use tracing::warn;
+use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 
 use crate::client::consumer_group_event::ConsumerGroupEvent;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
+use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 
-#[derive(Default)]
-pub struct DefaultConsumerIdsChangeListener {}
+#[derive(Clone)]
+pub struct DefaultConsumerIdsChangeListener {
+    consumer_filter_manager: ConsumerFilterManager,
+}
+
+impl DefaultConsumerIdsChangeListener {
+    pub fn new(consumer_filter_manager: ConsumerFilterManager) -> Self {
+        Self {
+            consumer_filter_manager,
+        }
+    }
+}
 
 impl ConsumerIdsChangeListener for DefaultConsumerIdsChangeListener {
-    fn handle(&self, _event: ConsumerGroupEvent, _group: &str, _args: &[&dyn Any]) {}
+    fn handle(&self, event: ConsumerGroupEvent, group: &str, args: &[&dyn Any]) {
+        match event {
+            ConsumerGroupEvent::Register => {
+                let Some(subscriptions) = args
+                    .first()
+                    .and_then(|argument| argument.downcast_ref::<HashSet<SubscriptionData>>())
+                else {
+                    return;
+                };
+                self.consumer_filter_manager.register(group, subscriptions);
+            }
+            ConsumerGroupEvent::Unregister => {
+                self.consumer_filter_manager.unregister(group);
+            }
+            ConsumerGroupEvent::Change | ConsumerGroupEvent::ClientRegister | ConsumerGroupEvent::ClientUnregister => {}
+        }
+    }
 
-    fn shutdown(&self) {
-        warn!("DefaultConsumerIdsChangeListener shutdown not implemented");
+    fn shutdown(&self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    use super::*;
+
+    #[test]
+    fn register_event_populates_consumer_filter_manager() {
+        let manager = ConsumerFilterManager::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let listener = DefaultConsumerIdsChangeListener::new(manager.clone());
+        let subscriptions = HashSet::from([SubscriptionData {
+            topic: CheetahString::from_slice("TopicTest"),
+            sub_string: CheetahString::from_slice("color = 'blue'"),
+            expression_type: CheetahString::from_static_str(ExpressionType::SQL92),
+            sub_version: 3,
+            ..Default::default()
+        }]);
+
+        listener.handle(ConsumerGroupEvent::Register, "GroupTest", &[&subscriptions as &dyn Any]);
+
+        assert!(manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .is_some());
+
+        listener.handle(ConsumerGroupEvent::Unregister, "GroupTest", &[]);
+        assert!(manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .unwrap()
+            .is_dead());
     }
 }

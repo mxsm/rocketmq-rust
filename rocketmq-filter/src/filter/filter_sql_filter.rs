@@ -41,6 +41,7 @@ use rocketmq_common::common::filter::expression_type::ExpressionType;
 use crate::expression::Expression;
 use crate::filter::filter_spi::Filter;
 use crate::filter::filter_spi::FilterError;
+use crate::filter::sql_runtime;
 
 /// SQL-92 expression filter implementation.
 ///
@@ -90,8 +91,8 @@ impl SqlFilter {
 }
 
 impl Filter for SqlFilter {
-    fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
-        unimplemented!("SQL-92 expression compilation is not yet implemented");
+    fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+        sql_runtime::compile_expression(expr)
     }
 
     fn of_type(&self) -> &str {
@@ -101,7 +102,14 @@ impl Filter for SqlFilter {
 
 #[cfg(test)]
 mod tests {
+    use ahash::RandomState;
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
     use super::*;
+    use crate::expression::MessageEvaluationContext;
+    use crate::expression::Value;
 
     #[test]
     fn test_sql_filter_of_type() {
@@ -120,5 +128,27 @@ mod tests {
         let filter = SqlFilter::new();
         let cloned = filter.clone();
         assert_eq!(filter.of_type(), cloned.of_type());
+    }
+
+    #[test]
+    fn test_sql_filter_compile_and_evaluate() {
+        let filter = SqlFilter::new();
+        let expression = filter
+            .compile("color = 'blue' AND retries >= 3")
+            .expect("SQL92 expression should compile");
+
+        let mut properties = HashMap::with_hasher(RandomState::default());
+        properties.insert(CheetahString::from_slice("color"), CheetahString::from_slice("blue"));
+        properties.insert(CheetahString::from_slice("retries"), CheetahString::from_slice("3"));
+        let context = MessageEvaluationContext::from_properties(properties);
+
+        assert_eq!(expression.evaluate(&context).unwrap(), Value::Boolean(true));
+    }
+
+    #[test]
+    fn test_sql_filter_rejects_invalid_expression() {
+        let filter = SqlFilter::new();
+
+        assert!(filter.compile("color = ").is_err());
     }
 }

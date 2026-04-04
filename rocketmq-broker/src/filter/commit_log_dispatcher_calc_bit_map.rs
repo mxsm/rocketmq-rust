@@ -99,3 +99,62 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_store::base::dispatch_request::DispatchRequest;
+
+    use super::*;
+    use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    #[test]
+    fn dispatch_sets_bitmap_for_matching_sql_filter() {
+        let broker_config = Arc::new(BrokerConfig {
+            enable_calc_filter_bit_map: true,
+            ..BrokerConfig::default()
+        });
+        let manager = ConsumerFilterManager::new(broker_config.clone(), Arc::new(MessageStoreConfig::default()));
+        let subscriptions = HashSet::from([SubscriptionData {
+            topic: CheetahString::from_slice("TopicTest"),
+            sub_string: CheetahString::from_slice("color = 'blue'"),
+            expression_type: CheetahString::from_static_str(ExpressionType::SQL92),
+            sub_version: 1,
+            ..Default::default()
+        }]);
+        manager.register("GroupTest", &subscriptions);
+
+        let dispatcher = CommitLogDispatcherCalcBitMap::new(broker_config, manager.clone());
+        let mut request = DispatchRequest {
+            topic: CheetahString::from_slice("TopicTest"),
+            properties_map: Some(HashMap::from([(
+                CheetahString::from_slice("color"),
+                CheetahString::from_slice("blue"),
+            )])),
+            ..Default::default()
+        };
+
+        dispatcher.dispatch(&mut request);
+
+        let filter_data = manager
+            .get_consumer_filter_data(
+                &CheetahString::from_slice("TopicTest"),
+                &CheetahString::from_slice("GroupTest"),
+            )
+            .unwrap();
+        let bits =
+            rocketmq_filter::utils::bits_array::BitsArray::from_bytes(request.bit_map.as_ref().unwrap()).unwrap();
+
+        assert!(manager
+            .bloom_filter()
+            .unwrap()
+            .is_hit(filter_data.bloom_filter_data().unwrap(), &bits)
+            .unwrap());
+    }
+}

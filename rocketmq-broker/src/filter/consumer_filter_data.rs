@@ -31,7 +31,7 @@ pub struct ConsumerFilterData {
     expression: Option<CheetahString>,
     expression_type: Option<CheetahString>,
     #[serde(skip)]
-    compiled_expression: Option<Arc<Box<dyn Expression + Send + Sync + 'static>>>,
+    compiled_expression: Option<Arc<dyn Expression + Send + Sync + 'static>>,
     born_time: u64,
     dead_time: u64,
     bloom_filter_data: Option<BloomFilterData>,
@@ -103,8 +103,25 @@ impl ConsumerFilterData {
         self.client_version = client_version;
     }
 
-    pub fn compiled_expression(&self) -> &Option<Arc<Box<dyn Expression + Send + Sync + 'static>>> {
+    pub fn compiled_expression(&self) -> &Option<Arc<dyn Expression + Send + Sync + 'static>> {
         &self.compiled_expression
+    }
+
+    pub fn set_compiled_expression(&mut self, compiled_expression: Box<dyn Expression + Send + Sync + 'static>) {
+        self.compiled_expression = Some(Arc::from(compiled_expression));
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.dead_time >= self.born_time
+    }
+
+    pub fn how_long_after_death(&self) -> Option<u64> {
+        self.is_dead()
+            .then(|| rocketmq_common::TimeUtils::current_millis().saturating_sub(self.dead_time))
+    }
+
+    pub fn is_msg_in_live(&self, msg_store_time: u64) -> bool {
+        msg_store_time > self.born_time
     }
 }
 

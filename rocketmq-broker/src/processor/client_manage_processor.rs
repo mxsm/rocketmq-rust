@@ -504,6 +504,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_client_config_accepts_valid_property_filter_when_enabled() {
+        let mut runtime = new_test_runtime("check-client-filter-enabled-valid", true).await;
+        let inner = runtime.inner_for_test().clone();
+        let processor = ClientManageProcessor::new(inner);
+        let mut request = check_request(SubscriptionData {
+            topic: "topic-a".into(),
+            sub_string: "a > 1 AND color = 'blue'".into(),
+            expression_type: ExpressionType::SQL92.into(),
+            ..Default::default()
+        });
+
+        let response = processor
+            .check_client_config(&mut request)
+            .expect("check client config should succeed")
+            .expect("processor should return response");
+
+        assert_eq!(
+            RemotingResponseCode::from(response.code()),
+            RemotingResponseCode::Success
+        );
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn check_client_config_rejects_invalid_property_filter_when_enabled() {
+        let mut runtime = new_test_runtime("check-client-filter-enabled-invalid", true).await;
+        let inner = runtime.inner_for_test().clone();
+        let processor = ClientManageProcessor::new(inner);
+        let mut request = check_request(SubscriptionData {
+            topic: "topic-a".into(),
+            sub_string: "a >".into(),
+            expression_type: ExpressionType::SQL92.into(),
+            ..Default::default()
+        });
+
+        let response = processor
+            .check_client_config(&mut request)
+            .expect("check client config should succeed")
+            .expect("processor should return response");
+
+        assert_eq!(
+            RemotingResponseCode::from(response.code()),
+            RemotingResponseCode::SubscriptionParseFailed
+        );
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
     async fn heart_beat_v2_without_sub_registers_consumer_and_marks_sub_change() {
         let mut runtime = new_test_runtime("heartbeat-v2-without-sub", false).await;
         let inner = runtime.inner_for_test().clone();

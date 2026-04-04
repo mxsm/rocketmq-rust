@@ -348,8 +348,8 @@ where
             );
             let message_filter = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
                 let consumer_filter_data = ConsumerFilterManager::build(
-                    request_header.consumer_group.clone(),
                     request_header.topic.clone(),
+                    request_header.consumer_group.clone(),
                     request_header.exp.clone(),
                     request_header.exp_type.clone(),
                     current_millis(),

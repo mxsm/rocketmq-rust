@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::Hasher;
-
-use ahash::AHasher;
 use rocketmq_error::FilterError;
 use rocketmq_error::RocketMQResult;
+use std::convert::TryInto;
 
 use crate::utils::bits_array::BitsArray;
 use crate::utils::bloom_filter_data::BloomFilterData;
@@ -102,7 +100,7 @@ impl BloomFilter {
     pub fn calc_bit_positions(&self, s: &str) -> Vec<i32> {
         let mut bit_positions = vec![0i32; self.k as usize];
 
-        // Use AHash for best performance and security
+        // Match Java RocketMQ exactly: Hashing.murmur3_128().hashString(str, UTF_8).asLong()
         let hash64 = Self::hash_string(s);
 
         let hash1 = hash64 as i32;
@@ -215,12 +213,98 @@ impl BloomFilter {
         }
     }
 
-    /// Hash string using AHash (fastest Rust hash, DoS resistant).
+    /// Hash string using MurmurHash3 x64 128, matching the Java implementation.
     #[inline]
     fn hash_string(s: &str) -> u64 {
-        let mut hasher = AHasher::default();
-        hasher.write(s.as_bytes());
-        hasher.finish()
+        let (h1, _) = Self::murmur3_x64_128(s.as_bytes(), 0);
+        h1
+    }
+
+    fn murmur3_x64_128(bytes: &[u8], seed: u32) -> (u64, u64) {
+        const C1: u64 = 0x87c3_7b91_1142_53d5;
+        const C2: u64 = 0x4cf5_ad43_2745_937f;
+
+        let mut h1 = seed as u64;
+        let mut h2 = seed as u64;
+
+        let block_count = bytes.len() / 16;
+        for index in 0..block_count {
+            let offset = index * 16;
+            let mut k1 = u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("slice is exactly 8 bytes"));
+            let mut k2 = u64::from_le_bytes(
+                bytes[offset + 8..offset + 16]
+                    .try_into()
+                    .expect("slice is exactly 8 bytes"),
+            );
+
+            k1 = k1.wrapping_mul(C1);
+            k1 = k1.rotate_left(31);
+            k1 = k1.wrapping_mul(C2);
+            h1 ^= k1;
+
+            h1 = h1.rotate_left(27);
+            h1 = h1.wrapping_add(h2);
+            h1 = h1.wrapping_mul(5).wrapping_add(0x52dc_e729);
+
+            k2 = k2.wrapping_mul(C2);
+            k2 = k2.rotate_left(33);
+            k2 = k2.wrapping_mul(C1);
+            h2 ^= k2;
+
+            h2 = h2.rotate_left(31);
+            h2 = h2.wrapping_add(h1);
+            h2 = h2.wrapping_mul(5).wrapping_add(0x3849_5ab5);
+        }
+
+        let tail = &bytes[block_count * 16..];
+        let mut k1 = 0u64;
+        let mut k2 = 0u64;
+
+        for (index, byte) in tail.iter().enumerate() {
+            if index < 8 {
+                k1 |= (*byte as u64) << (index * 8);
+            } else {
+                k2 |= (*byte as u64) << ((index - 8) * 8);
+            }
+        }
+
+        if tail.len() > 8 {
+            k2 = k2.wrapping_mul(C2);
+            k2 = k2.rotate_left(33);
+            k2 = k2.wrapping_mul(C1);
+            h2 ^= k2;
+        }
+
+        if !tail.is_empty() {
+            k1 = k1.wrapping_mul(C1);
+            k1 = k1.rotate_left(31);
+            k1 = k1.wrapping_mul(C2);
+            h1 ^= k1;
+        }
+
+        h1 ^= bytes.len() as u64;
+        h2 ^= bytes.len() as u64;
+
+        h1 = h1.wrapping_add(h2);
+        h2 = h2.wrapping_add(h1);
+
+        h1 = Self::fmix64(h1);
+        h2 = Self::fmix64(h2);
+
+        h1 = h1.wrapping_add(h2);
+        h2 = h2.wrapping_add(h1);
+
+        (h1, h2)
+    }
+
+    #[inline]
+    fn fmix64(mut value: u64) -> u64 {
+        value ^= value >> 33;
+        value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        value ^= value >> 33;
+        value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        value ^= value >> 33;
+        value
     }
 
     /// Calculate log base m of n: log_m(n)
@@ -302,6 +386,12 @@ mod tests {
         // Same input should produce same positions
         let positions2 = filter.calc_bit_positions("test_key");
         assert_eq!(positions, positions2);
+    }
+
+    #[test]
+    fn test_empty_string_matches_java_zero_hash() {
+        let filter = BloomFilter::create_by_fn(10, 100).unwrap();
+        assert_eq!(filter.calc_bit_positions(""), vec![0; filter.k() as usize]);
     }
 
     #[test]
