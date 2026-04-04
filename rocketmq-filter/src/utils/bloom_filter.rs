@@ -182,6 +182,27 @@ impl BloomFilter {
         self.is_hit_positions(filter_data.bit_pos(), bits)
     }
 
+    /// Check if BloomFilterData might be in the set using a raw byte slice.
+    ///
+    /// This avoids constructing a temporary [`BitsArray`] on hot consume-queue paths.
+    pub fn is_hit_bytes(&self, filter_data: &BloomFilterData, bits: &[u8]) -> RocketMQResult<bool> {
+        if !self.is_valid(Some(filter_data)) {
+            return Err(FilterError::bit_length_too_small().into());
+        }
+
+        self.check_bytes(bits)?;
+        for &pos in filter_data.bit_pos() {
+            let bit_pos = pos as usize;
+            let byte_index = bit_pos / 8;
+            let bit_mask = 1u8 << (bit_pos % 8);
+            if bits[byte_index] & bit_mask == 0 {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     /// Check if positions would result in a false positive.
     ///
     /// Returns true if all positions are already occupied.
@@ -198,6 +219,14 @@ impl BloomFilter {
     #[inline]
     fn check(&self, bits: &BitsArray) -> RocketMQResult<()> {
         if bits.bit_length() != self.m as usize {
+            return Err(FilterError::bit_length_too_small().into());
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn check_bytes(&self, bits: &[u8]) -> RocketMQResult<()> {
+        if bits.len() * 8 != self.m as usize {
             return Err(FilterError::bit_length_too_small().into());
         }
         Ok(())
@@ -407,6 +436,20 @@ mod tests {
 
         // Should not hit (most likely)
         assert!(!filter.is_hit_str("key2", &bits).unwrap());
+    }
+
+    #[test]
+    fn test_is_hit_bytes_matches_bits_array_behavior() {
+        let filter = BloomFilter::create_by_fn(10, 100).unwrap();
+        let filter_data = filter.generate("key1");
+        let mut bits = BitsArray::create(filter.m() as usize);
+        filter.hash_to(&filter_data, &mut bits).unwrap();
+
+        assert_eq!(
+            filter.is_hit(&filter_data, &bits).unwrap(),
+            filter.is_hit_bytes(&filter_data, bits.bytes()).unwrap()
+        );
+        assert!(!filter.is_hit_bytes(&filter.generate("key2"), bits.bytes()).unwrap());
     }
 
     #[test]

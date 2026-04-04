@@ -30,11 +30,56 @@ pub mod send_message_constants;
 // Re-export types needed for benchmarking
 #[doc(hidden)]
 pub mod bench_support {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::filter::expression_type::ExpressionType;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
     pub use crate::client::client_channel_info::ClientChannelInfo;
     pub use crate::client::consumer_group_event::ConsumerGroupEvent;
     pub use crate::client::consumer_group_info::ConsumerGroupInfo;
     pub use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
     pub use crate::client::manager::consumer_manager::ConsumerManager;
+    pub use crate::filter::manager::consumer_filter_manager::ConsumerFilterManagerStatsSnapshot;
+
+    pub struct ConsumerFilterBenchHarness {
+        manager: crate::filter::manager::consumer_filter_manager::ConsumerFilterManager,
+    }
+
+    impl Default for ConsumerFilterBenchHarness {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl ConsumerFilterBenchHarness {
+        pub fn new() -> Self {
+            Self {
+                manager: crate::filter::manager::consumer_filter_manager::ConsumerFilterManager::new(
+                    Arc::new(BrokerConfig::default()),
+                    Arc::new(MessageStoreConfig::default()),
+                ),
+            }
+        }
+
+        pub fn resolve_sql(&self, topic: &str, group: &str, expression: &str, client_version: u64) -> bool {
+            self.manager
+                .resolve(
+                    CheetahString::from_slice(topic),
+                    CheetahString::from_slice(group),
+                    Some(CheetahString::from_slice(expression)),
+                    Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                    client_version,
+                )
+                .is_some()
+        }
+
+        pub fn stats_snapshot(&self) -> ConsumerFilterManagerStatsSnapshot {
+            self.manager.stats_snapshot()
+        }
+    }
 }
 
 pub(crate) mod broker;

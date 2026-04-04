@@ -40,3 +40,8 @@ dashmap         = "6.1"
 
 [dev-dependencies]
 serde_json.workspace = true
+criterion            = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name    = "sql_filter_benchmark"
+harness = false

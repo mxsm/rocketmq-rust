@@ -3774,6 +3774,7 @@ version = "0.8.0"
 dependencies = [
  "ahash 0.8.12",
  "cheetah-string",
+ "criterion",
  "dashmap",
  "rocketmq-common",
  "rocketmq-error",

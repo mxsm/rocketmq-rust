@@ -107,15 +107,11 @@ impl MessageFilter for ExpressionMessageFilter {
                 return true;
             }
 
-            let Ok(bits_array) = rocketmq_filter::utils::bits_array::BitsArray::from_bytes(filter_bit_map) else {
-                return true;
-            };
-
             self.consumer_filter_manager
                 .bloom_filter()
                 .and_then(|bloom_filter| {
                     bloom_filter
-                        .is_hit(filter_data.bloom_filter_data().unwrap(), &bits_array)
+                        .is_hit_bytes(filter_data.bloom_filter_data().unwrap(), filter_bit_map)
                         .ok()
                 })
                 .unwrap_or(true)

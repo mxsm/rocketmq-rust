@@ -29,8 +29,7 @@ impl<'a> MessageEvaluationContext<'a> {
 
 impl<'a> EvaluationContext for MessageEvaluationContext<'a> {
     fn get(&self, name: &str) -> Option<&CheetahString> {
-        self.properties
-            .and_then(|props| props.get(&CheetahString::from_slice(name)))
+        self.properties.and_then(|props| props.get(name))
     }
 
     fn key_values(&self) -> Option<HashMap<CheetahString, CheetahString>> {
