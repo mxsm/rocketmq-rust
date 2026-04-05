@@ -339,11 +339,14 @@ impl CommitLog {
     }
 
     pub fn shutdown(&mut self) {
-        error!("shutdown commit log unimplemented");
+        self.flush();
+        self.flush_manager.shutdown();
     }
 
     pub fn destroy(&mut self) {
-        error!("destroy commit log unimplemented");
+        self.shutdown();
+        self.mapped_file_queue.destroy();
+        self.mapped_file_queue.set_committed_where(0);
     }
 
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
@@ -2051,18 +2054,21 @@ fn is_mapped_file_matched_recover(
 }
 
 impl Swappable for CommitLog {
-    fn swap_map(&self, _reserve_num: i32, _force_swap_interval_ms: i64, _normal_swap_interval_ms: i64) {
-        todo!()
+    fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
+        self.mapped_file_queue
+            .swap_map(reserve_num, force_swap_interval_ms, normal_swap_interval_ms);
     }
 
-    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
-        todo!()
+    fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
+        self.mapped_file_queue.clean_swapped_map(force_clean_swap_interval_ms);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use super::*;
@@ -2168,5 +2174,57 @@ mod tests {
         assert_eq!(store.get_confirm_offset(), 6);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_pending_commitlog_data() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-commitlog-shutdown-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        assert_eq!(store.get_commit_log().get_flushed_where(), 0);
+        assert_eq!(store.get_commit_log().get_max_offset(), 4);
+
+        store.get_commit_log_mut().shutdown();
+
+        assert_eq!(store.get_commit_log().get_flushed_where(), 4);
+        assert_eq!(
+            store.get_commit_log().get_flushed_where(),
+            store.get_commit_log().get_max_offset()
+        );
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn destroy_removes_commitlog_files_and_resets_offsets() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-commitlog-destroy-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        let commitlog_dir = PathBuf::from(store.get_message_store_config().get_store_path_commit_log());
+        assert!(commitlog_dir.exists());
+        assert!(!store.get_commit_log().is_mapped_files_empty());
+
+        store.get_commit_log_mut().destroy();
+
+        assert!(store.get_commit_log().is_mapped_files_empty());
+        assert_eq!(store.get_commit_log().get_flushed_where(), 0);
+        assert_eq!(store.get_commit_log().get_max_offset(), 0);
+        assert!(!commitlog_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 }

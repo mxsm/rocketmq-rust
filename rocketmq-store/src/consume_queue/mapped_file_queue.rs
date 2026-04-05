@@ -408,7 +408,7 @@ impl MappedFileQueue {
     }
 
     #[inline]
-    pub(crate) fn delete_expired_file(&mut self, files: Vec<Arc<DefaultMappedFile>>) {
+    pub(crate) fn delete_expired_file(&self, files: Vec<Arc<DefaultMappedFile>>) {
         let mut files = files;
         let current_files = self.mapped_files.load();
         if !files.is_empty() {
@@ -488,7 +488,7 @@ impl MappedFileQueue {
     ///
     /// # Returns
     /// Number of files deleted
-    pub fn delete_expired_file_by_offset(&mut self, offset: i64, unit_size: i32) -> i32 {
+    pub fn delete_expired_file_by_offset(&self, offset: i64, unit_size: i32) -> i32 {
         let mfs = (**self.mapped_files.load()).clone();
         let mut files = Vec::new();
         let mut delete_count = 0;

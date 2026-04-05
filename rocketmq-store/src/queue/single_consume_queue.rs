@@ -734,34 +734,39 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
     #[inline]
     fn delete_expired_file(&self, min_commit_log_pos: i64) -> i32 {
-        todo!()
+        self.mapped_file_queue
+            .delete_expired_file_by_offset(min_commit_log_pos, CQ_STORE_UNIT_SIZE)
     }
 
     #[inline]
     fn roll_next_file(&self, next_begin_offset: i64) -> i64 {
-        todo!()
+        let units_per_file = self.mapped_file_size as i64 / CQ_STORE_UNIT_SIZE as i64;
+        next_begin_offset + units_per_file - next_begin_offset % units_per_file
     }
 
     #[inline]
     fn is_first_file_available(&self) -> bool {
-        todo!()
+        self.mapped_file_queue
+            .get_first_mapped_file()
+            .is_some_and(|mapped_file| mapped_file.is_available())
     }
 
     #[inline]
     fn is_first_file_exist(&self) -> bool {
-        todo!()
+        self.mapped_file_queue.get_first_mapped_file().is_some()
     }
 }
 
 impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
     #[inline]
     fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
-        todo!()
+        self.mapped_file_queue
+            .swap_map(reserve_num, force_swap_interval_ms, normal_swap_interval_ms);
     }
 
     #[inline]
-    fn clean_swapped_map(&self, _force_clean_swap_interval_ms: i64) {
-        todo!()
+    fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
+        self.mapped_file_queue.clean_swapped_map(force_clean_swap_interval_ms);
     }
 }
 
@@ -795,22 +800,34 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get_earliest_unit_and_store_time(&self) -> Option<(CqUnit, i64)> {
-        todo!()
+        let min_offset = self.get_min_offset_in_queue();
+        self.get_cq_unit_and_store_time(min_offset)
     }
 
     #[inline]
     fn get_earliest_unit(&self) -> Option<CqUnit> {
-        todo!()
+        self.get(self.get_min_offset_in_queue())
     }
 
     #[inline]
     fn get_latest_unit(&self) -> Option<CqUnit> {
-        todo!()
+        let max_offset = self.get_max_offset_in_queue();
+        if max_offset <= self.get_min_offset_in_queue() {
+            return None;
+        }
+        self.get(max_offset - 1)
     }
 
     #[inline]
     fn get_last_offset(&self) -> i64 {
-        todo!()
+        let max_offset_in_queue = self.get_max_offset_in_queue();
+        if max_offset_in_queue <= self.get_min_offset_in_queue() {
+            return -1;
+        }
+
+        self.get(max_offset_in_queue - 1)
+            .map(|cq_unit| cq_unit.pos + cq_unit.size as i64)
+            .unwrap_or(-1)
     }
 
     #[inline]
@@ -825,12 +842,12 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get_message_total_in_queue(&self) -> i64 {
-        todo!()
+        self.get_max_offset_in_queue() - self.get_min_offset_in_queue()
     }
 
     #[inline]
     fn get_offset_in_queue_by_time(&self, timestamp: i64) -> i64 {
-        todo!()
+        self.get_offset_in_queue_by_time_with_boundary(timestamp, BoundaryType::Lower)
     }
 
     #[inline]
@@ -850,7 +867,12 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get_total_size(&self) -> i64 {
-        todo!()
+        self.mapped_file_queue
+            .get_mapped_files()
+            .load()
+            .iter()
+            .map(|mapped_file| mapped_file.get_file_size() as i64)
+            .sum()
     }
 
     #[inline]
@@ -1078,7 +1100,33 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn estimate_message_count(&self, from: i64, to: i64, filter: &dyn MessageFilter) -> i64 {
-        todo!()
+        let start = from.max(self.get_min_offset_in_queue());
+        let end = to.min(self.get_max_offset_in_queue() - 1);
+        if end < start {
+            return 0;
+        }
+
+        let mut count = 0;
+        for index in start..=end {
+            let Some(cq_unit) = self.get(index) else {
+                continue;
+            };
+
+            if !filter.is_matched_by_consume_queue(Some(cq_unit.tags_code), cq_unit.cq_ext_unit.as_ref()) {
+                continue;
+            }
+
+            let matched_commit_log = self
+                .message_store
+                .get_commit_log()
+                .get_message(cq_unit.pos, cq_unit.size)
+                .map(|buffer| filter.is_matched_by_commit_log(Some(buffer.get_buffer()), None))
+                .unwrap_or_else(|| filter.is_matched_by_commit_log(None, None));
+            if matched_commit_log {
+                count += 1;
+            }
+        }
+        count
     }
 
     #[inline]
@@ -1172,5 +1220,114 @@ impl Iterator for ConsumeQueueIterator {
                 Some(cq_unit)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_rust::ArcMut;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::base::dispatch_request::DispatchRequest;
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use crate::store_path_config_helper::get_store_path_consume_queue;
+
+    fn new_test_store(
+        temp_dir: &tempfile::TempDir,
+        mapped_file_size_consume_queue: usize,
+    ) -> ArcMut<LocalFileMessageStore> {
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                mapped_file_size_consume_queue,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
+
+    fn new_test_consume_queue(
+        temp_dir: &tempfile::TempDir,
+        topic: &CheetahString,
+        mapped_file_size_consume_queue: usize,
+    ) -> ConsumeQueue<LocalFileMessageStore> {
+        let store = new_test_store(temp_dir, mapped_file_size_consume_queue);
+        ConsumeQueue::new(
+            topic.clone(),
+            0,
+            CheetahString::from_string(get_store_path_consume_queue(
+                store.get_message_store_config().store_path_root_dir.as_str(),
+            )),
+            mapped_file_size_consume_queue as i32,
+            store,
+        )
+    }
+
+    #[test]
+    fn delete_expired_file_removes_shutdown_rolled_file() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-delete-expired-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (2 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64)] {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                store_timestamp: 1000 + queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        assert_eq!(consume_queue.mapped_file_queue.get_mapped_files_size(), 2);
+        let first_file = consume_queue
+            .mapped_file_queue
+            .get_first_mapped_file()
+            .expect("first mapped file");
+        first_file.shutdown(0);
+
+        assert_eq!(consume_queue.delete_expired_file(64), 1);
+        assert_eq!(consume_queue.mapped_file_queue.get_mapped_files_size(), 1);
+    }
+
+    #[test]
+    fn swap_methods_delegate_without_panicking() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-swap-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (2 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64), (3, 96)] {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                store_timestamp: 2000 + queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        consume_queue.swap_map(3, 0, 0);
+        consume_queue.clean_swapped_map(0);
+        assert_eq!(consume_queue.mapped_file_queue.get_mapped_files_size(), 2);
     }
 }

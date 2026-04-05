@@ -2102,7 +2102,9 @@ impl MessageStore for LocalFileMessageStore {
         to: i64,
         filter: &dyn MessageFilter,
     ) -> i64 {
-        todo!()
+        self.get_consume_queue(topic, queue_id)
+            .map(|logic_queue| logic_queue.estimate_message_count(from, to, filter))
+            .unwrap_or(0)
     }
 
     fn recover_topic_queue_table(&mut self) {
@@ -2922,6 +2924,7 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::sync::Arc;
     use std::thread;
@@ -2943,10 +2946,14 @@ mod tests {
     use super::LocalFileMessageStore;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_result::PutMessageResult;
+    use crate::base::message_status_enum::PutMessageStatus;
     use crate::base::message_store::MessageStore;
     use crate::base::store_checkpoint::StoreCheckpoint;
+    use crate::config::flush_disk_type::FlushDiskType;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::filter::MessageFilter;
     use crate::hook::put_message_hook::PutMessageHook;
+    use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use crate::store_path_config_helper::get_store_checkpoint;
 
@@ -3140,6 +3147,40 @@ mod tests {
     }
 
     #[test]
+    fn consume_queue_reports_basic_runtime_metadata() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("consume-queue-metadata-topic");
+
+        store
+            .consume_queue_store
+            .put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 1,
+                commit_log_offset: 123,
+                msg_size: 32,
+                consume_queue_offset: 0,
+                store_timestamp: 5678,
+                success: true,
+                ..DispatchRequest::default()
+            });
+
+        let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 1);
+        let expected_roll = store.message_store_config_ref().get_mapped_file_size_consume_queue() as i64
+            / consume_queue.get_unit_size() as i64;
+
+        assert_eq!(consume_queue.get_message_total_in_queue(), 1);
+        assert_eq!(consume_queue.get_last_offset(), 155);
+        assert_eq!(consume_queue.roll_next_file(1), expected_roll);
+        assert!(consume_queue.is_first_file_exist());
+        assert!(consume_queue.is_first_file_available());
+        assert_eq!(
+            consume_queue.get_total_size(),
+            store.message_store_config_ref().get_mapped_file_size_consume_queue() as i64
+        );
+    }
+
+    #[test]
     fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk() {
         let temp_dir = tempdir().unwrap();
         let mut store = ArcMut::new(LocalFileMessageStore::new(
@@ -3194,5 +3235,82 @@ mod tests {
         }
 
         store.flush_consume_queue_service.shutdown();
+    }
+
+    #[tokio::test]
+    async fn default_local_path_supports_consume_queue_time_queries_and_estimation() {
+        struct MatchAllFilter;
+
+        impl MessageFilter for MatchAllFilter {
+            fn is_matched_by_consume_queue(
+                &self,
+                _tags_code: Option<i64>,
+                _cq_ext_unit: Option<&crate::consume_queue::cq_ext_unit::CqExtUnit>,
+            ) -> bool {
+                true
+            }
+
+            fn is_matched_by_commit_log(
+                &self,
+                _msg_buffer: Option<&[u8]>,
+                _properties: Option<&HashMap<CheetahString, CheetahString>>,
+            ) -> bool {
+                true
+            }
+        }
+
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        let topic = CheetahString::from_static_str("consume-queue-time-query-topic");
+
+        let mut first = MessageExtBrokerInner::default();
+        first.set_topic(topic.clone());
+        first.message_ext_inner.set_queue_id(0);
+        first.set_body(Bytes::from_static(b"first-body"));
+
+        let first_result = store.put_message(first).await;
+        assert_eq!(first_result.put_message_status(), PutMessageStatus::PutOk);
+
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let mut second = MessageExtBrokerInner::default();
+        second.set_topic(topic.clone());
+        second.message_ext_inner.set_queue_id(0);
+        second.set_body(Bytes::from_static(b"second-body"));
+
+        let second_result = store.put_message(second).await;
+        assert_eq!(second_result.put_message_status(), PutMessageStatus::PutOk);
+
+        store.reput_once().await;
+
+        let first_store_time = store.get_message_store_timestamp(&topic, 0, 0);
+        let second_store_time = store.get_message_store_timestamp(&topic, 0, 1);
+
+        assert!(first_store_time > 0);
+        assert!(second_store_time >= first_store_time);
+        assert_eq!(store.get_earliest_message_time(&topic, 0), first_store_time);
+        assert_eq!(store.get_offset_in_queue_by_time(&topic, 0, first_store_time), 0);
+
+        let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
+        assert_eq!(
+            consume_queue.get_offset_in_queue_by_time(second_store_time),
+            if second_store_time == first_store_time { 0 } else { 1 }
+        );
+        assert_eq!(store.estimate_message_count(&topic, 0, 0, 1, &MatchAllFilter), 2);
+
+        let latest = consume_queue.get_latest_unit().expect("latest cq unit");
+        assert_eq!(latest.queue_offset, 1);
     }
 }
