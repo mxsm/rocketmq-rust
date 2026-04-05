@@ -1561,6 +1561,12 @@ impl CommitLog {
         self.mapped_file_queue.get_flushed_where()
     }
 
+    #[inline]
+    pub fn flush(&self) -> i64 {
+        self.mapped_file_queue.flush(0);
+        self.mapped_file_queue.get_flushed_where()
+    }
+
     pub fn get_min_offset(&self) -> i64 {
         match self.mapped_file_queue.get_first_mapped_file() {
             None => -1,
@@ -1581,6 +1587,37 @@ impl CommitLog {
 
     pub fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
         self.get_data_with_option(offset, offset == 0)
+    }
+
+    pub fn get_last_file_from_offset(&self) -> i64 {
+        self.mapped_file_queue
+            .get_last_mapped_file()
+            .filter(|mapped_file| mapped_file.is_available())
+            .map(|mapped_file| mapped_file.get_file_from_offset() as i64)
+            .unwrap_or(-1)
+    }
+
+    pub fn get_last_mapped_file(&mut self, start_offset: i64) -> bool {
+        self.mapped_file_queue
+            .get_last_mapped_file_mut_start_offset(start_offset as u64, true)
+            .is_some()
+    }
+
+    pub fn reset_offset(&mut self, offset: i64) -> bool {
+        self.mapped_file_queue.reset_offset(offset)
+    }
+
+    pub fn set_mapped_file_queue_offset(&self, phy_offset: i64) {
+        self.mapped_file_queue.set_flushed_where(phy_offset);
+        self.mapped_file_queue.set_committed_where(phy_offset);
+    }
+
+    pub fn is_mapped_files_empty(&self) -> bool {
+        self.mapped_file_queue.is_mapped_files_empty()
+    }
+
+    pub fn truncate_dirty_files(&mut self, offset_to_truncate: i64) {
+        self.mapped_file_queue.truncate_dirty_files(offset_to_truncate);
     }
 
     pub fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {

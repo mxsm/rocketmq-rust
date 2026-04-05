@@ -130,7 +130,7 @@ use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
-    put_message_hook_list: Vec<BoxedPutMessageHook>,
+    put_message_hook_list: Vec<Arc<dyn PutMessageHook + Send + Sync>>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     commit_log: ArcMut<CommitLog>,
 
@@ -1298,11 +1298,13 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
-        todo!()
+        self.get_consume_queue(topic, queue_id)
+            .and_then(|consume_queue| consume_queue.get(consume_queue_offset).map(|cq_unit| cq_unit.pos))
+            .unwrap_or_default()
     }
 
     fn get_offset_in_queue_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> i64 {
-        todo!()
+        self.get_offset_in_queue_by_time_with_boundary(topic, queue_id, timestamp, BoundaryType::Lower)
     }
 
     fn get_offset_in_queue_by_time_with_boundary(
@@ -1627,7 +1629,18 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn slave_fall_behind_much(&self) -> i64 {
-        todo!()
+        if self.ha_service.is_none()
+            || self.message_store_config.duplication_enable
+            || self.message_store_config.enable_dledger_commit_log
+        {
+            warn!("haService is None or duplication/dledger commit log is enabled");
+            -1
+        } else {
+            match self.ha_service.as_ref() {
+                Some(ha_service) => self.commit_log.get_max_offset() - ha_service.get_push_to_slave_max_offset(),
+                None => -1,
+            }
+        }
     }
 
     fn delete_topics(&mut self, delete_topics: Vec<&CheetahString>) -> i32 {
@@ -1703,7 +1716,8 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool {
-        todo!()
+        let commit_log_offset = self.get_commit_log_offset_in_queue(topic, queue_id, consume_offset);
+        commit_log_offset >= self.commit_log.get_min_offset()
     }
 
     #[inline]
@@ -1712,15 +1726,15 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn flush(&self) -> i64 {
-        todo!()
+        self.commit_log.flush()
     }
 
     fn get_flushed_where(&self) -> i64 {
-        todo!()
+        self.commit_log.get_flushed_where()
     }
 
     fn reset_write_offset(&self, phy_offset: i64) -> bool {
-        todo!()
+        self.commit_log.mut_from_ref().reset_offset(phy_offset)
     }
 
     fn get_confirm_offset(&self) -> i64 {
@@ -1782,7 +1796,7 @@ impl MessageStore for LocalFileMessageStore {
         result: &AppendMessageResult,
         commit_log_file: &MF,
     ) {
-        todo!()
+        let _ = (msg, result, commit_log_file);
     }
 
     fn on_commit_log_dispatch<MF: MappedFile>(
@@ -1793,11 +1807,16 @@ impl MessageStore for LocalFileMessageStore {
         is_recover: bool,
         is_file_end: bool,
     ) -> Result<(), StoreError> {
-        todo!()
+        let _ = (commit_log_file, is_recover);
+        if do_dispatch && !is_file_end {
+            let mut request = dispatch_request.clone();
+            self.dispatcher.dispatch(&mut request);
+        }
+        Ok(())
     }
 
     fn finish_commit_log_dispatch(&self) {
-        todo!()
+        // Local file mode dispatches consume queue/index updates immediately.
     }
 
     fn get_message_store_config(&self) -> &MessageStoreConfig {
@@ -1805,7 +1824,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_store_stats_service(&self) -> Arc<StoreStatsService> {
-        todo!()
+        self.store_stats_service.clone()
     }
 
     fn get_store_checkpoint(&self) -> &StoreCheckpoint {
@@ -1817,7 +1836,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_system_clock(&self) -> Arc<SystemClock> {
-        todo!()
+        Arc::new(SystemClock)
     }
 
     fn get_commit_log(&self) -> &CommitLog {
@@ -1849,11 +1868,11 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_transient_store_pool(&self) -> Arc<TransientStorePool> {
-        todo!()
+        Arc::new(self.transient_store_pool.clone())
     }
 
     fn get_allocate_mapped_file_service(&self) -> Arc<AllocateMappedFileService> {
-        todo!()
+        self.allocate_mapped_file_service.clone()
     }
 
     fn truncate_dirty_logic_files(&self, phy_offset: i64) {
@@ -1873,15 +1892,22 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn is_sync_master(&self) -> bool {
-        todo!()
+        self.message_store_config.broker_role == BrokerRole::SyncMaster
     }
 
     fn assign_offset(&self, msg: &mut MessageExtBrokerInner) -> Result<(), StoreError> {
-        todo!()
+        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
+        if tran_type == MessageSysFlag::TRANSACTION_NOT_TYPE || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE {
+            self.consume_queue_store.assign_queue_offset(msg);
+        }
+        Ok(())
     }
 
     fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
-        todo!()
+        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
+        if tran_type == MessageSysFlag::TRANSACTION_NOT_TYPE || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE {
+            self.consume_queue_store.increase_queue_offset(msg, message_num);
+        }
     }
 
     fn get_master_store_in_process<M: MessageStore>(&self) -> Option<Arc<M>> {
@@ -1893,7 +1919,17 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool {
-        todo!()
+        let Some(result) = self.commit_log.get_message(offset, size) else {
+            return false;
+        };
+        let Some(bytes) = result.get_bytes_ref() else {
+            return false;
+        };
+        if bytes.len() < size as usize {
+            return false;
+        }
+        byte_buffer.extend_from_slice(&bytes[..size as usize]);
+        true
     }
 
     fn set_alive_replica_num_in_group(&self, alive_replica_nums: i32) {
@@ -1923,7 +1959,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_broker_init_max_offset(&self) -> i64 {
-        todo!()
+        self.broker_init_max_offset.load(Ordering::SeqCst)
     }
 
     fn set_master_flushed_offset(&self, master_flushed_offset: i64) {
@@ -1946,15 +1982,44 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn truncate_files(&self, offset_to_truncate: i64) -> Result<bool, StoreError> {
-        todo!()
+        if offset_to_truncate >= self.get_max_phy_offset() {
+            info!(
+                "no need to truncate files, truncate offset is {}, max physical offset is {}",
+                offset_to_truncate,
+                self.get_max_phy_offset()
+            );
+            return Ok(true);
+        }
+
+        if !self.is_offset_aligned(offset_to_truncate) {
+            error!("offset {} is not aligned, truncate failed", offset_to_truncate);
+            return Ok(false);
+        }
+
+        self.consume_queue_store.truncate_dirty(offset_to_truncate);
+        self.commit_log.mut_from_ref().truncate_dirty_files(offset_to_truncate);
+        let mut consume_queue_store = self.consume_queue_store.clone();
+        consume_queue_store.recover_offset_table(self.commit_log.get_min_offset());
+        Ok(true)
     }
 
     fn is_offset_aligned(&self, offset: i64) -> bool {
-        todo!()
+        let Some(mapped_buffer_result) = self.get_commit_log_data(offset) else {
+            return true;
+        };
+        let Some(mut bytes) = mapped_buffer_result.get_bytes() else {
+            return true;
+        };
+        self.check_message_and_return_size(&mut bytes, true, false, false)
+            .success
     }
 
     fn get_put_message_hook_list(&self) -> Vec<Arc<dyn PutMessageHook>> {
-        todo!()
+        self.put_message_hook_list
+            .iter()
+            .cloned()
+            .map(|hook| hook as Arc<dyn PutMessageHook>)
+            .collect()
     }
 
     fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>) {
@@ -1966,19 +2031,19 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_last_file_from_offset(&self) -> i64 {
-        todo!()
+        self.commit_log.get_last_file_from_offset()
     }
 
     fn get_last_mapped_file(&self, start_offset: i64) -> bool {
-        todo!()
+        self.commit_log.mut_from_ref().get_last_mapped_file(start_offset)
     }
 
     fn set_physical_offset(&self, phy_offset: i64) {
-        todo!()
+        self.commit_log.set_mapped_file_queue_offset(phy_offset);
     }
 
     fn is_mapped_files_empty(&self) -> bool {
-        todo!()
+        self.commit_log.is_mapped_files_empty()
     }
 
     fn get_state_machine_version(&self) -> i64 {
@@ -1992,7 +2057,15 @@ impl MessageStore for LocalFileMessageStore {
         check_dup_info: bool,
         read_body: bool,
     ) -> DispatchRequest {
-        todo!()
+        commit_log::check_message_and_return_size(
+            bytes,
+            check_crc,
+            check_dup_info,
+            read_body,
+            &self.message_store_config,
+            self.max_delay_level,
+            self.delay_level_table_ref(),
+        )
     }
     #[inline]
     fn remain_transient_store_buffer_numbs(&self) -> i32 {
@@ -2051,7 +2124,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_put_message_hook(&mut self, put_message_hook: BoxedPutMessageHook) {
-        self.put_message_hook_list.push(put_message_hook);
+        self.put_message_hook_list.push(Arc::from(put_message_hook));
     }
 
     fn get_ha_service(&self) -> Option<&GeneralHAService> {
@@ -2764,17 +2837,24 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
+    use bytes::Bytes;
+    use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
     use super::LocalFileMessageStore;
+    use crate::base::dispatch_request::DispatchRequest;
+    use crate::base::message_result::PutMessageResult;
     use crate::base::message_store::MessageStore;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::hook::put_message_hook::PutMessageHook;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
@@ -2855,5 +2935,114 @@ mod tests {
             .find_consume_queue_map(&system_topic)
             .is_some());
         assert!(store.consume_queue_store.find_consume_queue_map(&lmq_topic).is_some());
+    }
+
+    #[test]
+    fn get_commit_log_offset_in_queue_returns_consume_queue_entry_position() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("offset-topic");
+
+        store
+            .consume_queue_store
+            .put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 1,
+                commit_log_offset: 123,
+                msg_size: 32,
+                consume_queue_offset: 0,
+                success: true,
+                ..DispatchRequest::default()
+            });
+
+        assert_eq!(store.get_commit_log_offset_in_queue(&topic, 1, 0), 123);
+    }
+
+    #[test]
+    fn assign_offset_and_increase_offset_delegate_to_consume_queue_store() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("assign-offset-topic");
+
+        let mut first = MessageExtBrokerInner::default();
+        first.set_topic(topic.clone());
+        first.message_ext_inner.set_queue_id(2);
+        first.set_body(Bytes::from_static(b"first"));
+
+        store.assign_offset(&mut first).unwrap();
+        assert_eq!(first.queue_offset(), 0);
+
+        store.increase_offset(&first, 1);
+
+        let mut second = MessageExtBrokerInner::default();
+        second.set_topic(topic);
+        second.message_ext_inner.set_queue_id(2);
+        second.set_body(Bytes::from_static(b"second"));
+
+        store.assign_offset(&mut second).unwrap();
+        assert_eq!(second.queue_offset(), 1);
+    }
+
+    #[test]
+    fn commit_log_accessors_copy_data_and_allow_offset_reset() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        let payload = b"rust";
+
+        assert!(store.is_mapped_files_empty());
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let appended = runtime
+            .block_on(store.append_to_commit_log(0, payload, 0, payload.len() as i32))
+            .unwrap();
+
+        assert!(appended);
+        assert!(!store.is_mapped_files_empty());
+        assert_eq!(store.get_last_file_from_offset(), 0);
+        assert!(store.get_last_mapped_file(0));
+
+        let mut buffer = BytesMut::new();
+        assert!(store.get_data(0, payload.len() as i32, &mut buffer));
+        assert_eq!(buffer.as_ref(), payload);
+
+        let flushed_where = store.flush();
+        assert!(flushed_where >= payload.len() as i64);
+        assert_eq!(store.get_flushed_where(), flushed_where);
+
+        assert!(store.reset_write_offset(2));
+
+        let mut truncated = BytesMut::new();
+        assert!(!store.get_data(0, payload.len() as i32, &mut truncated));
+
+        let mut remaining = BytesMut::new();
+        assert!(store.get_data(0, 2, &mut remaining));
+        assert_eq!(remaining.as_ref(), &payload[..2]);
+    }
+
+    #[test]
+    fn get_put_message_hook_list_returns_registered_hooks() {
+        struct TestHook;
+
+        impl PutMessageHook for TestHook {
+            fn hook_name(&self) -> &'static str {
+                "test-hook"
+            }
+
+            fn execute_before_put_message(&self, _msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
+                None
+            }
+        }
+
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        store.set_put_message_hook(Box::new(TestHook));
+
+        let hooks = store.get_put_message_hook_list();
+
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].hook_name(), "test-hook");
     }
 }
