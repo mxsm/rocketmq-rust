@@ -221,12 +221,12 @@ impl LocalFileMessageStore {
             put_message_hook_list: vec![],
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
-            commit_log,
+            commit_log: commit_log.clone(),
             compaction_service: Default::default(),
             store_checkpoint: Some(store_checkpoint.clone()),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
             alive_replica_num_in_group: Arc::new(AtomicI32::new(1)),
-            index_service,
+            index_service: index_service.clone(),
             allocate_mapped_file_service: Arc::new(AllocateMappedFileService::new()),
             consume_queue_store: consume_queue_store.clone(),
             dispatcher,
@@ -245,9 +245,19 @@ impl LocalFileMessageStore {
                 reader_handle: None,
                 dispatcher_handle: None,
             },
-            clean_commit_log_service: Arc::new(CleanCommitLogService {}),
-            correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
-            clean_consume_queue_service: Arc::new(CleanConsumeQueueService {}),
+            clean_commit_log_service: Arc::new(CleanCommitLogService::new(
+                message_store_config.clone(),
+                commit_log.clone(),
+            )),
+            correct_logic_offset_service: Arc::new(CorrectLogicOffsetService::new(
+                commit_log.clone(),
+                consume_queue_store.clone(),
+            )),
+            clean_consume_queue_service: Arc::new(CleanConsumeQueueService::new(
+                commit_log.clone(),
+                consume_queue_store.clone(),
+                index_service.clone(),
+            )),
             broker_stats_manager,
             message_arriving_listener: None,
             notify_message_arrive_in_batch,
@@ -2779,31 +2789,135 @@ impl ReputMessageServiceInner {
     }
 }
 
-struct CleanCommitLogService {}
+struct CleanCommitLogService {
+    message_store_config: Arc<MessageStoreConfig>,
+    commit_log: ArcMut<CommitLog>,
+    manual_delete_requests: AtomicI32,
+}
 
 impl CleanCommitLogService {
+    fn new(message_store_config: Arc<MessageStoreConfig>, commit_log: ArcMut<CommitLog>) -> Self {
+        Self {
+            message_store_config,
+            commit_log,
+            manual_delete_requests: AtomicI32::new(0),
+        }
+    }
+
     fn run(&self) {
-        error!("clean commit log service run unimplemented!")
+        let expired_time = (self.message_store_config.file_reserved_time as i64)
+            .saturating_mul(60)
+            .saturating_mul(60)
+            .saturating_mul(1000);
+        let clean_immediately = self.manual_delete_requests.swap(0, Ordering::SeqCst) > 0;
+        let delete_count = self.commit_log.mut_from_ref().delete_expired_files_by_time(
+            expired_time,
+            self.message_store_config.delete_commit_log_files_interval as i32,
+            self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
+            clean_immediately,
+            self.message_store_config.delete_file_batch_max as i32,
+        );
+        if delete_count > 0 {
+            info!(
+                "clean commit log service deleted {} expired commitlog file(s), clean_immediately={}",
+                delete_count, clean_immediately
+            );
+        }
+
+        let _ = self
+            .commit_log
+            .mut_from_ref()
+            .retry_delete_first_file(self.message_store_config.redelete_hanged_file_interval as i64);
     }
 
     fn execute_delete_files_manually(&self) {
-        error!("execute delete files manually unimplemented!")
+        self.manual_delete_requests.fetch_add(1, Ordering::SeqCst);
     }
 }
 
-struct CleanConsumeQueueService {}
+struct CleanConsumeQueueService {
+    commit_log: ArcMut<CommitLog>,
+    consume_queue_store: ConsumeQueueStore,
+    index_service: IndexService,
+}
 
 impl CleanConsumeQueueService {
+    fn new(commit_log: ArcMut<CommitLog>, consume_queue_store: ConsumeQueueStore, index_service: IndexService) -> Self {
+        Self {
+            commit_log,
+            consume_queue_store,
+            index_service,
+        }
+    }
+
     fn run(&self) {
-        error!("clean consume queue service run unimplemented!")
+        let min_commit_log_offset = self.commit_log.get_min_offset();
+        if min_commit_log_offset < 0 {
+            return;
+        }
+
+        let consume_queue_table = self.consume_queue_store.get_consume_queue_table().lock().clone();
+        for queue_table in consume_queue_table.values() {
+            for consume_queue in queue_table.values() {
+                let consume_queue = &***consume_queue;
+                let _ = self
+                    .consume_queue_store
+                    .delete_expired_file(consume_queue, min_commit_log_offset);
+                self.consume_queue_store
+                    .correct_min_offset(consume_queue, min_commit_log_offset);
+            }
+        }
+
+        self.index_service
+            .delete_expired_file(min_commit_log_offset.max(0) as u64);
+
+        let consume_queue_store = self.consume_queue_store.clone();
+        let clean_expired = move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("clean consume queue runtime should build");
+            runtime.block_on(async move {
+                consume_queue_store.clean_expired(min_commit_log_offset).await;
+            });
+        };
+
+        if Handle::try_current().is_ok() {
+            thread::spawn(clean_expired)
+                .join()
+                .expect("clean consume queue thread should complete");
+        } else {
+            clean_expired();
+        }
     }
 }
 
-struct CorrectLogicOffsetService {}
+struct CorrectLogicOffsetService {
+    commit_log: ArcMut<CommitLog>,
+    consume_queue_store: ConsumeQueueStore,
+}
 
 impl CorrectLogicOffsetService {
+    fn new(commit_log: ArcMut<CommitLog>, consume_queue_store: ConsumeQueueStore) -> Self {
+        Self {
+            commit_log,
+            consume_queue_store,
+        }
+    }
+
     fn run(&self) {
-        error!("correct logic offset service run unimplemented!")
+        let min_commit_log_offset = self.commit_log.get_min_offset();
+        if min_commit_log_offset < 0 {
+            return;
+        }
+
+        let consume_queue_table = self.consume_queue_store.get_consume_queue_table().lock().clone();
+        for queue_table in consume_queue_table.values() {
+            for consume_queue in queue_table.values() {
+                self.consume_queue_store
+                    .correct_min_offset(&***consume_queue, min_commit_log_offset);
+            }
+        }
     }
 }
 
@@ -2981,11 +3095,16 @@ mod tests {
     use crate::store_path_config_helper::get_store_checkpoint;
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+        new_configured_test_store(temp_dir, MessageStoreConfig::default())
+    }
+
+    fn new_configured_test_store(
+        temp_dir: &tempfile::TempDir,
+        mut message_store_config: MessageStoreConfig,
+    ) -> ArcMut<LocalFileMessageStore> {
+        message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                ..MessageStoreConfig::default()
-            }),
+            Arc::new(message_store_config),
             Arc::new(BrokerConfig::default()),
             Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
             None,
@@ -2997,20 +3116,13 @@ mod tests {
     }
 
     fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+        new_configured_test_store(
+            temp_dir,
+            MessageStoreConfig {
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
-        store
+            },
+        )
     }
 
     fn decode_cq_bytes(bytes: Bytes) -> (i64, i32, i64) {
@@ -3491,5 +3603,218 @@ mod tests {
             .expect("reput offset should exist")
             .load(Ordering::SeqCst);
         assert_eq!(reput_from_offset, 164);
+    }
+
+    #[tokio::test]
+    async fn clean_commit_log_service_run_deletes_expired_files_and_advances_min_offset() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+
+        assert_eq!(store.get_min_phy_offset(), 0);
+        assert_eq!(store.get_last_file_from_offset(), 64);
+
+        store.clean_commit_log_service.run();
+
+        assert_eq!(store.get_min_phy_offset(), 64);
+        assert_eq!(store.get_last_file_from_offset(), 64);
+        assert_eq!(store.get_commit_log().get_max_offset(), 96);
+    }
+
+    #[tokio::test]
+    async fn correct_logic_offset_service_run_updates_min_offset_after_commitlog_cleanup() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                mapped_file_size_consume_queue: 40,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+
+        let topic = CheetahString::from_static_str("correct-logic-offset-topic");
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    consume_queue_offset: queue_offset,
+                    ..Default::default()
+                });
+        }
+
+        let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
+        assert_eq!(consume_queue.get_min_offset_in_queue(), 0);
+
+        store.clean_commit_log_service.run();
+        assert_eq!(store.get_min_phy_offset(), 64);
+
+        store.correct_logic_offset_service.run();
+
+        let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
+        assert_eq!(consume_queue.get_min_offset_in_queue(), 2);
+        assert_eq!(consume_queue.get_message_total_in_queue(), 1);
+    }
+
+    #[tokio::test]
+    async fn clean_consume_queue_service_run_cleans_files_and_removes_fully_expired_queue() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                mapped_file_size_consume_queue: 40,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+
+        let active_topic = CheetahString::from_static_str("active-clean-topic");
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: active_topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    consume_queue_offset: queue_offset,
+                    ..Default::default()
+                });
+        }
+
+        let expired_topic = CheetahString::from_static_str("expired-clean-topic");
+        store
+            .consume_queue_store
+            .put_message_position_info_wrapper(&DispatchRequest {
+                topic: expired_topic.clone(),
+                queue_id: 0,
+                commit_log_offset: 0,
+                msg_size: 32,
+                consume_queue_offset: 0,
+                ..Default::default()
+            });
+
+        store.clean_commit_log_service.run();
+        assert_eq!(store.get_min_phy_offset(), 64);
+
+        store.clean_consume_queue_service.run();
+
+        let active_consume_queue = store.consume_queue_store.find_or_create_consume_queue(&active_topic, 0);
+        assert_eq!(active_consume_queue.get_min_offset_in_queue(), 2);
+        assert_eq!(active_consume_queue.get_message_total_in_queue(), 1);
+        assert!(store
+            .consume_queue_store
+            .find_consume_queue_map(&expired_topic)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn clean_expired_removes_trimmed_queue_directly() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                mapped_file_size_consume_queue: 40,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+
+        let expired_topic = CheetahString::from_static_str("expired-clean-direct-topic");
+        store
+            .consume_queue_store
+            .put_message_position_info_wrapper(&DispatchRequest {
+                topic: expired_topic.clone(),
+                queue_id: 0,
+                commit_log_offset: 0,
+                msg_size: 32,
+                consume_queue_offset: 0,
+                ..Default::default()
+            });
+
+        store.clean_commit_log_service.run();
+        store.correct_logic_offset_service.run();
+
+        let expired_consume_queue = store
+            .consume_queue_store
+            .find_or_create_consume_queue(&expired_topic, 0);
+        assert_eq!(expired_consume_queue.get_min_offset_in_queue(), 1);
+        assert_eq!(expired_consume_queue.get_message_total_in_queue(), 0);
+
+        store.consume_queue_store.clean_expired(64).await;
+
+        assert!(store
+            .consume_queue_store
+            .find_consume_queue_map(&expired_topic)
+            .is_none());
     }
 }

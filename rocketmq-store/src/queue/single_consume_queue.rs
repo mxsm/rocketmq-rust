@@ -31,7 +31,6 @@ use rocketmq_common::common::mix_all::is_lmq;
 use rocketmq_common::common::mix_all::LMQ_QUEUE_ID;
 use rocketmq_common::common::mix_all::MULTI_DISPATCH_QUEUE_SPLITTER;
 use rocketmq_rust::ArcMut;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -882,7 +881,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn correct_min_offset(&self, min_commit_log_offset: i64) {
-        if min_commit_log_offset >= self.mapped_file_queue.get_max_offset() {
+        if self.get_max_physic_offset() < 0 {
             info!(
                 "ConsumeQueue[Topic={}, queue-id={}] contains no valid entries",
                 self.topic, self.queue_id
@@ -904,11 +903,12 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             result.mapped_file = Some(last_mapped_file.clone());
         }
         if let Some(last_record) = last_record {
+            let last_record_pos = (last_record.start_offset - last_mapped_file.get_file_from_offset()) as usize;
             let mut bytes = last_record
                 .mapped_file
                 .as_ref()
                 .unwrap()
-                .get_bytes(last_record.start_offset as usize, last_record.size as usize)
+                .get_bytes(last_record_pos, last_record.size as usize)
                 .unwrap();
             let commit_log_offset = bytes.get_i64();
             if commit_log_offset < min_commit_log_offset {
@@ -926,85 +926,33 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             }
         }
 
-        let mapped_file = self.mapped_file_queue.get_first_mapped_file();
         let mut min_ext_addr = 1i64;
-        if let Some(mapped_file) = mapped_file {
-            // Search from previous min logical offset. Typically, a consume queue file segment
-            // contains 300,000 entries searching from previous position saves
-            // significant amount of comparisons and IOs
-            let mut intact = true; // Assume previous value is still valid
-            let mut start = self.min_logic_offset.load(Ordering::Acquire) - mapped_file.get_file_from_offset() as i64;
-            if start < 0 {
-                intact = false;
-                start = 0;
-            }
-            if start > mapped_file.get_file_size() as i64 {
-                error!(
-                    "[Bug][InconsistentState] ConsumeQueue file {} should have been deleted",
-                    mapped_file.get_file_name()
-                );
-                return;
-            }
-            let result = mapped_file.select_mapped_buffer_with_position(start as i32);
-            if result.is_none() {
-                warn!(
-                    "[Bug] Failed to scan consume queue entries from file on correcting min offset: {}",
-                    mapped_file.get_file_name()
-                );
-                return;
-            }
-            let mut result = result.unwrap();
-            result.mapped_file = Some(mapped_file);
-            if result.size == 0 {
-                debug!(
-                    "ConsumeQueue[topic={}, queue-id={}] contains no valid entries",
-                    self.topic, self.queue_id
-                );
-                return;
-            }
-            let mapped = result.mapped_file.as_ref().unwrap();
-            let commit_log_offset = mapped.get_bytes(result.start_offset as usize, 8).unwrap().get_i64();
-            if intact && commit_log_offset >= min_commit_log_offset {
-                info!(
-                    "Abort correction as previous min-offset points to {}, which is greater than {}",
-                    commit_log_offset, min_commit_log_offset
-                );
-                return;
-            }
-            let mut low = 0;
-            let mut high = result.size - CQ_STORE_UNIT_SIZE;
-            loop {
-                if high - low <= CQ_STORE_UNIT_SIZE {
+        let mapped_files = self.mapped_file_queue.get_mapped_files().load().clone();
+        for mapped_file in mapped_files.iter() {
+            let read_position = mapped_file.get_read_position();
+            let mut pos = 0;
+            while pos + CQ_STORE_UNIT_SIZE <= read_position {
+                let Some(mut bytes) = mapped_file.get_bytes(pos as usize, CQ_STORE_UNIT_SIZE as usize) else {
                     break;
-                }
-                let mid = (low + high) / 2 / CQ_STORE_UNIT_SIZE * CQ_STORE_UNIT_SIZE;
-                let commit_log_offset = mapped.get_bytes(mid as usize, 8).unwrap().get_i64();
-
-                match commit_log_offset.cmp(&min_commit_log_offset) {
-                    std::cmp::Ordering::Greater => high = mid,
-                    std::cmp::Ordering::Equal => {
-                        low = mid;
-                        high = mid;
-                        break;
-                    }
-                    std::cmp::Ordering::Less => low = mid,
-                }
-            }
-            let mut i = low;
-            while i <= high {
-                let offset_py = mapped.get_bytes(i as usize, 8).unwrap().get_i64();
-                let tags_code = mapped.get_bytes((i + 12) as usize, 8).unwrap().get_i64();
-                if offset_py >= min_commit_log_offset {
-                    self.min_logic_offset.store(
-                        mapped.get_file_from_offset() as i64 + i as i64 + start,
-                        Ordering::SeqCst,
-                    );
+                };
+                let offset_py = bytes.get_i64();
+                let size = bytes.get_i32();
+                let tags_code = bytes.get_i64();
+                if offset_py >= min_commit_log_offset && size > 0 {
+                    self.min_logic_offset
+                        .store(mapped_file.get_file_from_offset() as i64 + pos as i64, Ordering::SeqCst);
                     if ConsumeQueue::<MS>::is_ext_addr(tags_code) {
                         min_ext_addr = tags_code;
                     }
-                    break;
+                    if self.is_ext_read_enable() {
+                        self.consume_queue_ext
+                            .as_ref()
+                            .unwrap()
+                            .truncate_by_min_address(min_ext_addr);
+                    }
+                    return;
                 }
-                i += CQ_STORE_UNIT_SIZE;
+                pos += CQ_STORE_UNIT_SIZE;
             }
         }
 

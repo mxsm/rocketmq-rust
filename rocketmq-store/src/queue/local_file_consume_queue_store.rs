@@ -236,6 +236,9 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                     for queue_id in queue_ids {
                         if let Some(consume_queue) = queue_table.get(&queue_id) {
                             let max_cl_offset_in_queue = consume_queue.get_max_physic_offset();
+                            let message_total_in_queue = consume_queue.get_message_total_in_queue();
+                            let queue_trimmed_to_empty =
+                                message_total_in_queue <= 0 && consume_queue.get_min_offset_in_queue() > 0;
 
                             if max_cl_offset_in_queue == -1 {
                                 tracing::warn!(
@@ -246,14 +249,16 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                                     consume_queue.get_max_physic_offset(),
                                     consume_queue.get_min_logic_offset()
                                 );
-                            } else if max_cl_offset_in_queue < min_commit_log_offset {
+                            } else if max_cl_offset_in_queue < min_commit_log_offset || queue_trimmed_to_empty {
                                 tracing::info!(
                                     "cleanExpiredConsumerQueue: {} {} consumer queue destroyed, minCommitLogOffset: \
-                                     {} maxCLOffsetInConsumeQueue: {}",
+                                     {} maxCLOffsetInConsumeQueue: {} messageTotalInQueue: {} minOffsetInQueue: {}",
                                     topic,
                                     queue_id,
                                     min_commit_log_offset,
-                                    max_cl_offset_in_queue
+                                    max_cl_offset_in_queue,
+                                    message_total_in_queue,
+                                    consume_queue.get_min_offset_in_queue()
                                 );
 
                                 queues_to_remove.push(queue_id);
@@ -283,13 +288,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         }
 
         // Now destroy queues and remove from offset table (outside the lock)
-        for (topic, queue_id, consume_queue) in queues_to_destroy {
+        for (topic, queue_id, mut consume_queue) in queues_to_destroy {
             // Remove from topic queue table
             self.inner.queue_offset_operator.remove(&topic, queue_id);
 
-            // Destroy the queue
-            let consume_queue_ref = &**consume_queue.as_ref();
-            self.destroy_queue(consume_queue_ref);
+            // Destroy the removed queue instance directly to avoid re-creating it via get_life_cycle.
+            consume_queue.destroy();
         }
     }
 
