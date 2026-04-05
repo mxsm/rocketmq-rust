@@ -1,282 +1,282 @@
 ---
 sidebar_position: 3
-title: Troubleshooting
+title: 故障排查
 ---
 
-# Troubleshooting
+# 故障排查
 
-Advanced debugging techniques for RocketMQ-Rust.
+本页介绍 RocketMQ-Rust 的高级调试与诊断方法。
 
-## Enable Debug Logging
+## 启用调试日志
 
 ```rust
-// Set RUST_LOG environment variable
+// 设置 RUST_LOG 环境变量
 // export RUST_LOG=rocketmq=debug,rocketmq_client=debug
 
-// Or in code
+// 或在代码中初始化日志
 use log::debug;
 
 fn main() {
     env_logger::init();
-    // Your code
+    // 你的代码
 }
 ```
 
-## Common Debugging Scenarios
+## 常见调试场景
 
-### Message Not Appearing in Queue
+### 消息未进入队列
 
-**Check**:
+**检查项**：
 
-1. Was message sent successfully?
+1. 消息是否发送成功：
 
     ```rust
     let result = producer.send(message).await?;
     println!("Send result: {:?}", result);
     ```
 
-2. Does topic exist?
+2. Topic 是否存在：
 
     ```bash
     sh mqadmin topicList -n localhost:9876
     ```
 
-3. Check broker logs:
+3. 查看 Broker 日志：
 
     ```bash
     tail -f ~/logs/rocketmqlogs/broker.log
     ```
 
-### Consumer Not Processing Messages
+### Consumer 不处理消息
 
-**Check**:
+**检查项**：
 
-1. Is consumer started?
+1. Consumer 是否启动：
 
     ```rust
     consumer.start().await?;
     println!("Consumer started");
     ```
 
-2. Check subscription:
+2. 订阅是否正确：
 
     ```rust
-    // Verify correct topic and subscription expression
+    // 检查 topic 与订阅表达式
     consumer.subscribe("TopicTest", "*").await?;
     ```
 
-3. Check consumer status:
+3. 查看消费进度：
 
     ```bash
-    # Use RocketMQ admin tools
+    # 使用 RocketMQ 管理工具
     sh mqadmin consumerProgress -n localhost:9876 -g my_consumer_group
     ```
 
-## Using RocketMQ Admin Tools
+## RocketMQ 管理工具
 
-### Check Cluster Status
+### 查看集群状态
 
 ```bash
-# List all clusters
+# 列出所有集群
 sh mqadmin clusterList -n localhost:9876
 
-# List all brokers
+# 列出所有 broker
 sh mqadmin brokerList -n localhost:9876
 
-# List all topics
+# 列出所有 topic
 sh mqadmin topicList -n localhost:9876
 ```
 
-### Check Topic Status
+### 查看 Topic 状态
 
 ```bash
-# Get topic info
+# topic 状态
 sh mqadmin topicStatus -n localhost:9876 -t TopicTest
 
-# Get topic route
+# topic 路由
 sh mqadmin topicRoute -n localhost:9876 -t TopicTest
 ```
 
-### Check Consumer Status
+### 查看消费者状态
 
 ```bash
-# Consumer progress
+# 消费者进度
 sh mqadmin consumerProgress -n localhost:9876 -g my_consumer_group
 
-# Consumer connection
+# 消费者连接
 sh mqadmin consumerConnection -n localhost:9876 -g my_consumer_group
 
-# Consumer offset
+# 消费者位点
 sh mqadmin getConsumerOffset -n localhost:9876 -g my_consumer_group -t TopicTest
 ```
 
-### Reset Consumer Offset
+### 重置消费位点
 
 ```bash
-# Reset to specific timestamp
+# 重置到指定时间戳
 sh mqadmin resetOffsetByTime -n localhost:9876 -g my_consumer_group -t TopicTest -timestamp 1699200000000
 
-# Reset to earliest
+# 重置到最早位点
 sh mqadmin resetOffsetByTime -n localhost:9876 -g my_consumer_group -t TopicTest -timestamp 0
 ```
 
-## Monitoring with JMX (for Java Brokers)
+## JMX 监控（Java Broker 场景）
 
 ```bash
-# Enable JMX
+# 启用 JMX
 JAVA_OPT="${JAVA_OPT} -Dcom.sun.management.jmxremote"
 JAVA_OPT="${JAVA_OPT} -Dcom.sun.management.jmxremote.port=9999"
 JAVA_OPT="${JAVA_OPT} -Dcom.sun.management.jmxremote.authenticate=false"
 JAVA_OPT="${JAVA_OPT} -Dcom.sun.management.jmxremote.ssl=false"
 ```
 
-Connect with JConsole or VisualVM to monitor:
+可通过 JConsole 或 VisualVM 观察：
 
-- Memory usage
-- Thread pools
-- Message queues
-- Consumer lag
+- 内存使用
+- 线程池状态
+- 消息队列状态
+- 消费堆积情况
 
-## Network Debugging
+## 网络排查
 
-### Test Connectivity
+### 连通性测试
 
 ```bash
-# Test name server connection
+# 测试 Name Server 连接
 telnet localhost 9876
 
-# Test broker connection
+# 测试 Broker 连接
 telnet localhost 10911
 
-# Check DNS resolution
+# DNS 解析
 nslookup broker_hostname
 
-# Check network latency
+# 网络时延
 ping broker_hostname
 ```
 
-### Capture Network Traffic
+### 抓包分析
 
 ```bash
-# Capture traffic on port 9876
+# 抓取 9876 端口流量
 tcpdump -i any port 9876 -w name_server.pcap
 
-# Capture traffic on port 10911
+# 抓取 10911 端口流量
 tcpdump -i any port 10911 -w broker.pcap
 ```
 
-## Disk Issues
+## 磁盘问题
 
-### Check Disk Usage
+### 检查磁盘状态
 
 ```bash
-# Check disk space
+# 磁盘空间
 df -h
 
-# Check disk I/O
+# 磁盘 I/O
 iostat -x 1
 
-# Check commit log size
+# CommitLog 占用
 du -sh /path/to/rocketmq/store/commitlog
 ```
 
-### Monitor File Descriptors
+### 文件句柄监控
 
 ```bash
-# Check open files
+# 查看打开文件数
 lsof -p $(pidof java)
 
-# Increase file descriptor limit
+# 提升文件句柄限制
 ulimit -n 65536
 ```
 
-## Memory Issues
+## 内存问题
 
-### Check Memory Usage
+### 检查内存占用
 
 ```bash
-# Check RSS (Resident Set Size)
+# 查看 RSS
 ps aux | grep java
 
-# Check JVM heap (for Java broker)
+# 查看 JVM 堆（Java broker）
 jmap -heap <pid>
 
-# Check for memory leaks
+# 排查内存泄漏
 jmap -histo:live <pid> | head -20
 ```
 
-## Thread Dumps
+## 线程转储
 
-### Get Thread Dump
+### 获取线程 Dump
 
 ```bash
-# For Java broker
+# Java broker
 jstack <pid> > thread_dump.txt
 
-# Analyze for deadlocks
+# 检查死锁
 jstack <pid> | grep -A 10 "Found one Java-level deadlock"
 ```
 
-## Common Error Messages
+## 常见错误信息
 
 ### `No route info of this topic`
 
-**Cause**: Topic doesn't exist or broker not registered
+**原因**：Topic 不存在或 Broker 未注册。
 
-**Solution**:
+**解决方案**：
 
 ```bash
-# Create topic
+# 创建 topic
 sh mqadmin updateTopic -n localhost:9876 -t TopicTest -c DefaultCluster
 ```
 
 ### `The consumer group not online`
 
-**Cause**: Consumer not started or disconnected
+**原因**：Consumer 未启动或已断连。
 
-**Solution**:
+**解决方案**：
 
 ```rust
-// Ensure consumer is started
+// 确保 consumer 已启动
 consumer.start().await?;
 ```
 
 ### `The broker is not available`
 
-**Cause**: Broker down or network issue
+**原因**：Broker 宕机或网络异常。
 
-**Solution**:
+**解决方案**：
 
 ```bash
-# Check broker status
+# 查看 broker 列表
 sh mqadmin brokerList -n localhost:9876
 
-# Start broker if needed
+# 必要时启动 broker
 sh mqbroker -n localhost:9876
 ```
 
-## Debugging Tools
+## 调试工具
 
-### Log Analyzer
+### 日志分析
 
 ```bash
-# Analyze broker logs for errors
+# 查看 broker 错误日志
 grep "ERROR" ~/logs/rocketmqlogs/broker.log | tail -100
 
-# Analyze consumer logs
+# 查看 consumer 错误日志
 grep "ERROR" ~/logs/rocketmqfiles/consumer.log | tail -100
 ```
 
-### Message Tracing
+### 消息追踪
 
-Enable message trace:
+启用消息追踪：
 
 ```rust
 producer_option.set_enable_msg_trace(true);
 consumer_option.set_enable_msg_trace(true);
 ```
 
-Query messages by ID or key:
+按 ID 或 Key 查询消息：
 
 ```bash
 sh mqadmin queryMsgById -n localhost:9876 -i <msg_id>
@@ -284,22 +284,22 @@ sh mqadmin queryMsgById -n localhost:9876 -i <msg_id>
 sh mqadmin queryMsgByKey -n localhost:9876 -t TopicTest -k <key>
 ```
 
-## Performance Profiling
+## 性能分析
 
-### Rust Code Profiling
+### Rust 代码性能分析
 
 ```bash
-# Install profiler
+# 安装 flamegraph
 cargo install flamegraph
 
-# Generate flame graph
+# 生成火焰图
 cargo flamegraph --bin my_app
 
-# Analyze output
-# flamegraph.svg will be generated
+# 分析输出
+# 输出文件为 flamegraph.svg
 ```
 
-### Message Processing Time
+### 消费处理耗时分析
 
 ```rust
 use std::time::Instant;
@@ -320,18 +320,18 @@ impl MessageListener for MyListener {
 }
 ```
 
-## Getting Help
+## 获取帮助
 
-If you're still stuck:
+如果仍无法定位问题：
 
-1. **Check logs**: Review broker and client logs
-2. **Admin tools**: Use RocketMQ admin commands
-3. **GitHub Issues**: Search existing issues
-4. **Mailing List**: Ask on RocketMQ mailing list
-5. **Stack Overflow**: Search with `rocketmq` tag
+1. **先看日志**：Broker 与客户端日志是第一手信息。
+2. **结合管理命令**：核验 Topic、路由、位点与消费组状态。
+3. **搜索 GitHub Issues**：定位是否已有已知问题。
+4. **邮件列表求助**：提供最小复现与关键日志。
+5. **Stack Overflow 提问**：带上 `rocketmq` 标签。
 
-## Next Steps
+## 下一步
 
-- [Common Issues](./common-issues) - Frequent problems
-- [Performance FAQ](./performance) - Performance issues
-- [Configuration](../configuration) - Configuration reference
+- [常见问题](./common-issues) - 高频问题速查
+- [性能 FAQ](./performance) - 性能问题定位
+- [配置概览](../configuration) - 核对配置项
