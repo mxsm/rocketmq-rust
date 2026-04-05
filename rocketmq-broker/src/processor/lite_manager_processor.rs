@@ -375,14 +375,26 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
         };
 
         let dispatcher = self.broker_runtime_inner.lite_event_dispatcher();
+        let (max_event_count, dispatch_delay_millis) = self.lite_dispatch_policy(&group);
         if let Some(client_id) = client_id.filter(|client_id| !client_id.is_empty()) {
             let lmq_names = self.dispatchable_lmq_for_client(&client_id, &group, &bind_topic);
             if !lmq_names.is_empty() {
-                dispatcher.do_full_dispatch(&client_id, &group, &lmq_names);
+                dispatcher.do_full_dispatch_with_limit(
+                    &client_id,
+                    &group,
+                    &lmq_names,
+                    max_event_count,
+                    dispatch_delay_millis,
+                );
             }
         } else {
             let dispatch_map = self.dispatchable_lmq_by_group(&group, &bind_topic);
-            dispatcher.do_full_dispatch_by_group(&group, &dispatch_map);
+            dispatcher.do_full_dispatch_by_group_with_limit(
+                &group,
+                &dispatch_map,
+                max_event_count,
+                dispatch_delay_millis,
+            );
         }
 
         Ok(Some(
@@ -589,6 +601,19 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
             lite_topics = lite_topics.into_iter().take(max_count as usize).collect();
         }
         lite_topics.into_iter().map(CheetahString::from_string).collect()
+    }
+
+    fn lite_dispatch_policy(&self, group: &CheetahString) -> (usize, u64) {
+        let broker_config = self.broker_runtime_inner.broker_config();
+        let max_event_count = self
+            .broker_runtime_inner
+            .subscription_group_manager()
+            .find_subscription_group_config(group)
+            .map(|config| config.max_client_event_count())
+            .filter(|count| *count > 0)
+            .unwrap_or(broker_config.max_client_event_count)
+            .max(1) as usize;
+        (max_event_count, broker_config.lite_event_full_dispatch_delay_time)
     }
 
     fn validate_consumer_group(

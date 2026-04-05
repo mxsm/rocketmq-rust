@@ -35,6 +35,7 @@ pub mod empty_header;
 pub mod end_transaction_request_header;
 pub mod exchange_ha_info_request_header;
 pub mod exchange_ha_info_response_header;
+pub mod export_rocksdb_config_to_json_request_header;
 pub mod extra_info_util;
 pub mod get_acl_request_header;
 pub mod get_all_topic_config_response_header;

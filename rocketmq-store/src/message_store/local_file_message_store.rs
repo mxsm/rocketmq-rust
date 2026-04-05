@@ -123,6 +123,7 @@ use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
 use crate::timer::timer_message_store::TimerMessageStore;
+use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 
 ///Using local files to store message data, which is also the default method.
@@ -1829,6 +1830,14 @@ impl MessageStore for LocalFileMessageStore {
 
     fn get_commit_log_mut(&mut self) -> &mut CommitLog {
         self.commit_log.as_mut()
+    }
+
+    fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError> {
+        let data_read_ahead_enable = read_ahead_mode == MADV_NORMAL;
+        Arc::make_mut(&mut self.message_store_config).data_read_ahead_enable = data_read_ahead_enable;
+        self.commit_log.set_data_read_ahead_enable(data_read_ahead_enable);
+        self.commit_log.scan_file_and_set_read_mode(read_ahead_mode);
+        Ok(())
     }
 
     fn get_running_flags(&self) -> &RunningFlags {

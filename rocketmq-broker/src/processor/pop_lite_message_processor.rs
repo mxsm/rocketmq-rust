@@ -104,6 +104,19 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
         self.consumer_order_info_manager.clear_block(topic, group, 0);
     }
 
+    fn lite_dispatch_policy(&self, group: &CheetahString) -> (usize, u64) {
+        let broker_config = self.broker_runtime_inner.broker_config();
+        let max_event_count = self
+            .broker_runtime_inner
+            .subscription_group_manager()
+            .find_subscription_group_config(group)
+            .map(|config| config.max_client_event_count())
+            .filter(|count| *count > 0)
+            .unwrap_or(broker_config.max_client_event_count)
+            .max(1) as usize;
+        (max_event_count, broker_config.lite_event_full_dispatch_delay_time)
+    }
+
     fn pre_check(&self, request_header: &PopLiteMessageRequestHeader) -> Option<(ResponseCode, CheetahString)> {
         if request_header.client_id.is_empty() {
             return Some((
@@ -470,10 +483,13 @@ impl<MS: MessageStore> RequestProcessor for PopLiteMessageProcessor<MS> {
         let (body, requeue_events, fetched_count, order_count_info) =
             self.pop_from_events(&request_header, pending_events).await;
         if !requeue_events.is_empty() {
-            dispatcher.do_full_dispatch(
+            let (max_event_count, dispatch_delay_millis) = self.lite_dispatch_policy(&request_header.consumer_group);
+            dispatcher.do_full_dispatch_with_limit(
                 &request_header.client_id,
                 &request_header.consumer_group,
                 &requeue_events,
+                max_event_count,
+                dispatch_delay_millis,
             );
         }
 

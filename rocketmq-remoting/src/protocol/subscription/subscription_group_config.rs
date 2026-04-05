@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
 use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
+use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME;
 use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME;
 use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
 use rocketmq_common::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
@@ -190,6 +191,16 @@ impl SubscriptionGroupConfig {
         self.attributes
             .get(&CheetahString::from_static_str(LITE_SUB_MODEL_ATTRIBUTE_NAME))
             .is_some_and(|value| value == "Exclusive")
+    }
+
+    #[inline]
+    pub fn max_client_event_count(&self) -> i32 {
+        self.attributes
+            .get(&CheetahString::from_static_str(
+                LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME,
+            ))
+            .and_then(|value| value.parse::<i32>().ok())
+            .unwrap_or(-1)
     }
 
     #[inline]
@@ -385,6 +396,7 @@ mod subscription_group_config_tests {
 
         assert_eq!(config.lite_sub_client_quota(), 2000);
         assert!(!config.lite_sub_exclusive());
+        assert_eq!(config.max_client_event_count(), -1);
         assert!(!config.reset_offset_in_exclusive_mode());
         assert!(!config.reset_offset_on_unsubscribe());
     }
@@ -402,6 +414,10 @@ mod subscription_group_config_tests {
                 CheetahString::from_static_str("Exclusive"),
             ),
             (
+                CheetahString::from_static_str(LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("256"),
+            ),
+            (
                 CheetahString::from_static_str(LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME),
                 CheetahString::from_static_str("true"),
             ),
@@ -413,6 +429,7 @@ mod subscription_group_config_tests {
 
         assert_eq!(config.lite_sub_client_quota(), 128);
         assert!(config.lite_sub_exclusive());
+        assert_eq!(config.max_client_event_count(), 256);
         assert!(config.reset_offset_in_exclusive_mode());
         assert!(config.reset_offset_on_unsubscribe());
     }

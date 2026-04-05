@@ -41,6 +41,7 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::MessageFilter;
 use serde::Serialize;
+use std::time::Duration;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -285,6 +286,35 @@ where
         Ok(Some(response.set_body(body.encode()?)))
     }
 
+    pub async fn pop_rollback(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_response_command();
+        let Some(pop_message_processor) = self.broker_runtime_inner.pop_message_processor().cloned() else {
+            return Ok(Some(response.set_code(ResponseCode::Success)));
+        };
+
+        let pop_buffer_merge_service = pop_message_processor.pop_buffer_merge_service().clone();
+        pop_buffer_merge_service.shutdown();
+        match pop_buffer_merge_service.wait_for_shutdown(Duration::from_secs(5)).await {
+            Ok(()) => {
+                crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService::start(
+                    pop_buffer_merge_service,
+                );
+                Ok(Some(response.set_code(ResponseCode::Success)))
+            }
+            Err(error) => Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(error.to_string()),
+            )),
+        }
+    }
+
     async fn rewrite_request_for_static_topic(
         &mut self,
         request_header: &SearchOffsetRequestHeader,
@@ -457,6 +487,7 @@ mod tests {
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
     use rocketmq_remoting::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -649,6 +680,52 @@ mod tests {
         assert_eq!(body.filter_data, Some(CheetahString::from_static_str("null")));
         assert_eq!(body.subscription_data.expect("subscription data").topic, "topic-a");
         assert_eq!(body.queue_data.expect("queue data").len(), 1);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn pop_rollback_drains_pop_buffer_and_restarts_service() {
+        let mut runtime = new_test_runtime("pop-rollback").await;
+        runtime.init_processor_for_test();
+        let inner = runtime.inner_for_test().clone();
+        let pop_message_processor = inner
+            .pop_message_processor()
+            .cloned()
+            .expect("pop message processor should exist");
+        pop_message_processor.mut_from_ref().start();
+
+        let service = pop_message_processor.pop_buffer_merge_service().clone();
+        service
+            .mut_from_ref()
+            .add_ck_mock(
+                CheetahString::from_static_str("group-a"),
+                CheetahString::from_static_str("topic-a"),
+                0,
+                1,
+                60_000,
+                rocketmq_common::TimeUtils::current_millis() as u64,
+                0,
+                1,
+                inner.broker_config().broker_name().clone(),
+            )
+            .await;
+        assert!(service.get_offset_total_size().await > 0);
+
+        let mut handler = MessageRelatedHandler::new(inner.clone());
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader::default());
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .pop_rollback(channel, ctx, RequestCode::PopRollback, &mut request)
+            .await
+            .expect("pop rollback should succeed")
+            .expect("pop rollback should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(service.get_offset_total_size().await, 0);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

@@ -4961,6 +4961,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trigger_lite_dispatch_respects_broker_max_client_event_count_fallback() {
+        let mut runtime = new_lite_test_runtime("trigger-lite-dispatch-max-client-event-count").await;
+        seed_lite_query_state(&mut runtime);
+        seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
+        let mut broker_config = runtime.inner_for_test().broker_config().clone();
+        broker_config.max_client_event_count = 1;
+        runtime.inner_for_test().set_broker_config(broker_config);
+
+        let (mut processor, _) = runtime.init_processor();
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let header = TriggerLiteDispatchRequestHeader {
+            group: CheetahString::from_static_str("group-a"),
+            client_id: Some(CheetahString::from_static_str("client-1")),
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, header);
+        request.make_custom_header_to_net();
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("lite manager should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+        let pending_events = runtime
+            .inner
+            .lite_event_dispatcher()
+            .pending_events(&CheetahString::from_static_str("client-1"));
+        assert_eq!(pending_events.len(), 1);
+        assert!(pending_events[0].ends_with("child-a") || pending_events[0].ends_with("child-b"));
+
+        let drained_events = runtime
+            .inner
+            .lite_event_dispatcher()
+            .take_pending_events(&CheetahString::from_static_str("client-1"));
+        assert_eq!(drained_events.len(), 2);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
     async fn pop_lite_message_without_events_returns_polling_timeout() {
         let mut runtime = new_lite_test_runtime("pop-lite-route").await;
         seed_lite_query_state(&mut runtime);

@@ -86,6 +86,9 @@ use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::store_error::StoreError;
+use crate::utils::ffi::madvise;
+use crate::utils::ffi::MADV_NORMAL;
+use crate::utils::ffi::MADV_RANDOM;
 
 // Message's MAGIC CODE daa320a7
 pub const MESSAGE_MAGIC_CODE: i32 = -626843481;
@@ -1690,6 +1693,38 @@ impl CommitLog {
 
     pub fn sync_broker_role(&mut self, broker_role: BrokerRole) {
         Arc::make_mut(&mut self.message_store_config).broker_role = broker_role;
+    }
+
+    pub fn set_data_read_ahead_enable(&mut self, enabled: bool) {
+        Arc::make_mut(&mut self.message_store_config).data_read_ahead_enable = enabled;
+    }
+
+    pub fn is_data_read_ahead_enable(&self) -> bool {
+        self.message_store_config.data_read_ahead_enable
+    }
+
+    pub fn scan_file_and_set_read_mode(&self, read_ahead_mode: i32) -> usize {
+        if read_ahead_mode != MADV_NORMAL && read_ahead_mode != MADV_RANDOM {
+            return 0;
+        }
+
+        let mapped_files = self.mapped_file_queue.get_mapped_files().load();
+        let mut updated = 0;
+        for mapped_file in mapped_files.iter() {
+            let mmap = mapped_file.get_mapped_file();
+            let result = madvise(mmap.as_ptr(), mmap.len(), read_ahead_mode);
+            if result == 0 {
+                updated += 1;
+            } else {
+                warn!(
+                    "failed to apply read mode {} for {}: result={}",
+                    read_ahead_mode,
+                    mapped_file.get_file_name(),
+                    result
+                );
+            }
+        }
+        updated
     }
 }
 

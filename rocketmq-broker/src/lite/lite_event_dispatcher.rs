@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -23,15 +24,78 @@ use dashmap::DashMap;
 use rocketmq_common::TimeUtils::current_millis;
 use tokio::sync::mpsc::UnboundedSender;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct ClientEventState {
     group: CheetahString,
+    events: VecDeque<CheetahString>,
+    event_set: HashSet<CheetahString>,
+    max_event_count: usize,
+}
+
+impl Default for ClientEventState {
+    fn default() -> Self {
+        Self {
+            group: CheetahString::new(),
+            events: VecDeque::new(),
+            event_set: HashSet::new(),
+            max_event_count: usize::MAX,
+        }
+    }
+}
+
+impl ClientEventState {
+    fn set_limit(&mut self, max_event_count: usize) {
+        self.max_event_count = normalize_limit(max_event_count);
+    }
+
+    fn offer(&mut self, event: CheetahString) -> bool {
+        if self.event_set.contains(&event) {
+            return true;
+        }
+        if self.events.len() >= self.max_event_count {
+            return false;
+        }
+        self.event_set.insert(event.clone());
+        self.events.push_back(event);
+        true
+    }
+
+    fn drain(&mut self) -> Vec<CheetahString> {
+        let drained = self.events.drain(..).collect::<Vec<_>>();
+        self.event_set.clear();
+        drained
+    }
+
+    fn pending_events(&self) -> Vec<CheetahString> {
+        self.events.iter().cloned().collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct DeferredDispatchState {
+    group: CheetahString,
     events: BTreeSet<CheetahString>,
+    due_time: u64,
+    delay_millis: u64,
+    max_event_count: usize,
+}
+
+fn normalize_limit(max_event_count: usize) -> usize {
+    if max_event_count == 0 {
+        usize::MAX
+    } else {
+        max_event_count
+    }
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct LiteEventDispatcher {
     client_events: Arc<DashMap<CheetahString, ClientEventState>>,
+    deferred_dispatches: Arc<DashMap<CheetahString, DeferredDispatchState>>,
     client_last_access_time: Arc<DashMap<CheetahString, u64>>,
     wakeup_sender: Arc<Mutex<Option<UnboundedSender<CheetahString>>>>,
 }
@@ -62,18 +126,58 @@ impl LiteEventDispatcher {
         group: &CheetahString,
         lmq_names: &HashSet<CheetahString>,
     ) -> usize {
+        self.do_full_dispatch_with_limit(client_id, group, lmq_names, usize::MAX, 0)
+    }
+
+    pub(crate) fn do_full_dispatch_with_limit(
+        &self,
+        client_id: &CheetahString,
+        group: &CheetahString,
+        lmq_names: &HashSet<CheetahString>,
+        max_event_count: usize,
+        full_dispatch_delay_millis: u64,
+    ) -> usize {
+        let now = current_millis();
+        self.scan(now);
         self.touch_client(client_id);
         if lmq_names.is_empty() {
             return 0;
         }
 
+        let deferred_snapshot = self
+            .deferred_dispatches
+            .get(client_id)
+            .map(|entry| entry.events.clone())
+            .unwrap_or_default();
+        let mut overflow = BTreeSet::new();
+        let ordered_lmq_names = lmq_names.iter().cloned().collect::<BTreeSet<_>>();
         let inserted = {
             let mut entry = self.client_events.entry(client_id.clone()).or_default();
             entry.group = group.clone();
+            entry.set_limit(max_event_count);
             let original_len = entry.events.len();
-            entry.events.extend(lmq_names.iter().cloned());
+            for lmq_name in ordered_lmq_names {
+                if entry.event_set.contains(&lmq_name) || deferred_snapshot.contains(&lmq_name) {
+                    continue;
+                }
+                if !entry.offer(lmq_name.clone()) {
+                    overflow.insert(lmq_name);
+                }
+            }
             entry.events.len().saturating_sub(original_len)
         };
+
+        if !overflow.is_empty() {
+            self.schedule_deferred_dispatch(
+                client_id,
+                group,
+                &overflow,
+                now.saturating_add(full_dispatch_delay_millis),
+                full_dispatch_delay_millis,
+                max_event_count,
+            );
+        }
+
         if inserted > 0 {
             self.notify_client(client_id);
         }
@@ -85,24 +189,152 @@ impl LiteEventDispatcher {
         group: &CheetahString,
         dispatch_map: &HashMap<CheetahString, HashSet<CheetahString>>,
     ) -> usize {
+        self.do_full_dispatch_by_group_with_limit(group, dispatch_map, usize::MAX, 0)
+    }
+
+    pub(crate) fn do_full_dispatch_by_group_with_limit(
+        &self,
+        group: &CheetahString,
+        dispatch_map: &HashMap<CheetahString, HashSet<CheetahString>>,
+        max_event_count: usize,
+        full_dispatch_delay_millis: u64,
+    ) -> usize {
         dispatch_map
             .iter()
-            .map(|(client_id, lmq_names)| self.do_full_dispatch(client_id, group, lmq_names))
+            .map(|(client_id, lmq_names)| {
+                self.do_full_dispatch_with_limit(
+                    client_id,
+                    group,
+                    lmq_names,
+                    max_event_count,
+                    full_dispatch_delay_millis,
+                )
+            })
             .sum()
     }
 
     pub(crate) fn pending_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
+        self.scan(current_millis());
         self.client_events
             .get(client_id)
-            .map(|entry| entry.events.iter().cloned().collect())
+            .map(|entry| entry.pending_events())
             .unwrap_or_default()
     }
 
     pub(crate) fn take_pending_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
+        let now = current_millis();
+        self.scan(now);
+        self.touch_client(client_id);
+
+        let mut drained = self.drain_client_events(client_id);
+        if self.promote_deferred_events(client_id, now, true) > 0 {
+            drained.extend(self.drain_client_events(client_id));
+        }
+        self.cleanup_client_state(client_id);
+        drained
+    }
+
+    fn scan(&self, now: u64) {
+        let due_clients = self
+            .deferred_dispatches
+            .iter()
+            .filter(|entry| entry.due_time <= now)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+
+        for client_id in due_clients {
+            self.promote_deferred_events(&client_id, now, false);
+            self.cleanup_client_state(&client_id);
+        }
+    }
+
+    fn drain_client_events(&self, client_id: &CheetahString) -> Vec<CheetahString> {
         self.client_events
-            .remove(client_id)
-            .map(|(_, entry)| entry.events.into_iter().collect())
+            .get_mut(client_id)
+            .map(|mut entry| entry.drain())
             .unwrap_or_default()
+    }
+
+    fn promote_deferred_events(&self, client_id: &CheetahString, now: u64, force: bool) -> usize {
+        let Some(snapshot) = self
+            .deferred_dispatches
+            .get(client_id)
+            .map(|entry| entry.value().clone())
+        else {
+            return 0;
+        };
+        if !force && snapshot.due_time > now {
+            return 0;
+        }
+
+        let mut state = snapshot;
+        let inserted = {
+            let mut entry = self.client_events.entry(client_id.clone()).or_default();
+            entry.group = state.group.clone();
+            entry.set_limit(state.max_event_count);
+            let mut promoted = 0;
+            let candidates = state.events.iter().cloned().collect::<Vec<_>>();
+            for lmq_name in candidates {
+                if entry.event_set.contains(&lmq_name) {
+                    state.events.remove(&lmq_name);
+                    continue;
+                }
+                if entry.offer(lmq_name.clone()) {
+                    state.events.remove(&lmq_name);
+                    promoted += 1;
+                } else {
+                    break;
+                }
+            }
+            promoted
+        };
+
+        if state.events.is_empty() {
+            self.deferred_dispatches.remove(client_id);
+        } else {
+            state.due_time = now.saturating_add(state.delay_millis);
+            self.deferred_dispatches.insert(client_id.clone(), state);
+        }
+
+        if inserted > 0 {
+            self.notify_client(client_id);
+        }
+        inserted
+    }
+
+    fn schedule_deferred_dispatch(
+        &self,
+        client_id: &CheetahString,
+        group: &CheetahString,
+        lmq_names: &BTreeSet<CheetahString>,
+        due_time: u64,
+        delay_millis: u64,
+        max_event_count: usize,
+    ) {
+        let mut entry = self.deferred_dispatches.entry(client_id.clone()).or_default();
+        entry.group = group.clone();
+        entry.delay_millis = delay_millis;
+        entry.max_event_count = normalize_limit(max_event_count);
+        entry.due_time = if entry.events.is_empty() {
+            due_time
+        } else {
+            entry.due_time.min(due_time)
+        };
+        entry.events.extend(lmq_names.iter().cloned());
+    }
+
+    fn cleanup_client_state(&self, client_id: &CheetahString) {
+        let has_deferred = self
+            .deferred_dispatches
+            .get(client_id)
+            .is_some_and(|entry| !entry.events.is_empty());
+        let should_remove = self
+            .client_events
+            .get(client_id)
+            .is_some_and(|entry| entry.is_empty() && !has_deferred);
+        if should_remove {
+            self.client_events.remove(client_id);
+        }
     }
 
     fn notify_client(&self, client_id: &CheetahString) {
@@ -166,6 +398,38 @@ mod tests {
             vec![CheetahString::from_static_str("%LMQ%$parent$child-a")]
         );
         assert_eq!(dispatcher.event_map_size(), 0);
+    }
+
+    #[test]
+    fn bounded_dispatch_defers_overflow_and_releases_it_on_consume() {
+        let dispatcher = LiteEventDispatcher::default();
+        let client_id = CheetahString::from_static_str("client-a");
+        let group = CheetahString::from_static_str("group-a");
+        let lmq_names = HashSet::from([
+            CheetahString::from_static_str("%LMQ%$parent$child-a"),
+            CheetahString::from_static_str("%LMQ%$parent$child-b"),
+            CheetahString::from_static_str("%LMQ%$parent$child-c"),
+        ]);
+
+        let inserted = dispatcher.do_full_dispatch_with_limit(&client_id, &group, &lmq_names, 2, 10_000);
+
+        assert_eq!(inserted, 2);
+        assert_eq!(
+            dispatcher.pending_events(&client_id),
+            vec![
+                CheetahString::from_static_str("%LMQ%$parent$child-a"),
+                CheetahString::from_static_str("%LMQ%$parent$child-b"),
+            ]
+        );
+        assert_eq!(
+            dispatcher.take_pending_events(&client_id),
+            vec![
+                CheetahString::from_static_str("%LMQ%$parent$child-a"),
+                CheetahString::from_static_str("%LMQ%$parent$child-b"),
+                CheetahString::from_static_str("%LMQ%$parent$child-c"),
+            ]
+        );
+        assert!(dispatcher.pending_events(&client_id).is_empty());
     }
 
     #[tokio::test]

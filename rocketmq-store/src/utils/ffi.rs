@@ -15,10 +15,10 @@
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
-pub(crate) const MADV_NORMAL: i32 = 0;
-pub(crate) const MADV_RANDOM: i32 = 1;
-pub(crate) const MADV_WILLNEED: i32 = 3;
-pub(crate) const MADV_DONTNEED: i32 = 4;
+pub const MADV_NORMAL: i32 = 0;
+pub const MADV_RANDOM: i32 = 1;
+pub const MADV_WILLNEED: i32 = 3;
+pub const MADV_DONTNEED: i32 = 4;
 
 #[inline]
 pub fn get_page_size() -> usize {

@@ -269,7 +269,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_cold_data_flow_ctr_info(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::SetCommitlogReadMode => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::SetCommitlogReadMode => {
+                self.broker_config_request_handler
+                    .set_commitlog_read_mode(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::SearchOffsetByTimestamp => {
                 self.message_related_handler
                     .search_offset_by_timestamp(channel, ctx, request_code, request)
@@ -451,6 +455,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .check_rocksdb_cq_write_progress(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::ExportRocksdbConfigToJson => {
+                self.broker_config_request_handler
+                    .export_rocksdb_config_to_json(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateAndGetGroupForbidden => {
                 self.subscription_group_handler
                     .update_and_get_group_forbidden(channel, ctx, request_code, request)
@@ -461,13 +470,30 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_subscription_group_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateAndCreateAclConfig => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::DeleteAclConfig => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::GetBrokerClusterAclInfo => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::UpdateGlobalWhiteAddrsConfig => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::UpdateAndCreateAclConfig => Ok(get_legacy_acl_cmd_response(
+                request_code,
+                "legacy ACL config API is deprecated; use AuthCreateAcl/AuthUpdateAcl instead",
+            )),
+            RequestCode::DeleteAclConfig => Ok(get_legacy_acl_cmd_response(
+                request_code,
+                "legacy ACL config API is deprecated; use AuthDeleteAcl instead",
+            )),
+            RequestCode::GetBrokerClusterAclInfo => Ok(get_legacy_acl_cmd_response(
+                request_code,
+                "legacy broker ACL cluster info API is deprecated; use AuthListAcl instead",
+            )),
+            RequestCode::UpdateGlobalWhiteAddrsConfig => Ok(get_legacy_acl_cmd_response(
+                request_code,
+                "global white address config API is not supported in the current auth runtime",
+            )),
             RequestCode::ResumeCheckHalfMessage => {
                 self.message_related_handler
                     .resume_check_half_message(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::PopRollback => {
+                self.message_related_handler
+                    .pop_rollback(channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetTopicConfig => {
@@ -560,6 +586,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .list_acl(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::SwitchTimerEngine => {
+                self.broker_config_request_handler
+                    .switch_timer_engine(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Ok(get_unknown_cmd_response(request_code)),
         }
     }
@@ -575,4 +606,40 @@ fn get_unknown_cmd_response(request_code: RequestCode) -> Option<RemotingCommand
         ResponseCode::RequestCodeNotSupported,
         format!(" request type {} not supported", request_code.to_i32()),
     ))
+}
+
+fn get_legacy_acl_cmd_response(request_code: RequestCode, remark: &str) -> Option<RemotingCommand> {
+    warn!(
+        "legacy acl request type {:?}-{} is deprecated: {}",
+        request_code,
+        request_code.to_i32(),
+        remark
+    );
+    Some(RemotingCommand::create_response_command_with_code_remark(
+        ResponseCode::RequestCodeNotSupported,
+        remark,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_acl_responses_are_explicitly_deprecated() {
+        let response = get_legacy_acl_cmd_response(
+            RequestCode::UpdateAndCreateAclConfig,
+            "legacy ACL config API is deprecated; use AuthCreateAcl/AuthUpdateAcl instead",
+        )
+        .expect("legacy acl response should exist");
+
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        assert!(response
+            .remark()
+            .expect("legacy acl response should carry remark")
+            .contains("deprecated"));
+    }
 }

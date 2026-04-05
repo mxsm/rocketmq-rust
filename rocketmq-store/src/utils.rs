@@ -12,5 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod ffi;
+pub mod ffi;
 pub(crate) mod store_util;

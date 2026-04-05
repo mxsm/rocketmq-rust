@@ -203,6 +203,10 @@ mod defaults {
         false
     }
 
+    pub fn max_client_event_count() -> i32 {
+        100
+    }
+
     pub fn lite_event_full_dispatch_delay_time() -> u64 {
         10_000
     }
@@ -720,6 +724,9 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::enable_lite_pop_log")]
     pub enable_lite_pop_log: bool,
 
+    #[serde(default = "defaults::max_client_event_count")]
+    pub max_client_event_count: i32,
+
     #[serde(default = "defaults::lite_event_full_dispatch_delay_time")]
     pub lite_event_full_dispatch_delay_time: u64,
 
@@ -1033,6 +1040,7 @@ impl Default for BrokerConfig {
             lite_subscription_check_timeout_mills: defaults::lite_subscription_check_timeout_mills(),
             max_lite_subscription_count: defaults::max_lite_subscription_count(),
             enable_lite_pop_log: defaults::enable_lite_pop_log(),
+            max_client_event_count: defaults::max_client_event_count(),
             lite_event_full_dispatch_delay_time: defaults::lite_event_full_dispatch_delay_time(),
             lite_lag_latency_collect_enable: defaults::lite_lag_latency_collect_enable(),
             lite_lag_latency_metrics_enable: defaults::lite_lag_latency_metrics_enable(),
@@ -1309,6 +1317,10 @@ impl BrokerConfig {
         );
         properties.insert("enableLitePopLog".into(), self.enable_lite_pop_log.to_string().into());
         properties.insert(
+            "maxClientEventCount".into(),
+            self.max_client_event_count.to_string().into(),
+        );
+        properties.insert(
             "liteEventFullDispatchDelayTime".into(),
             self.lite_event_full_dispatch_delay_time.to_string().into(),
         );
@@ -1458,6 +1470,7 @@ mod tests {
         assert_eq!(config.lite_subscription_check_timeout_mills, 180_000);
         assert_eq!(config.max_lite_subscription_count, 100_000);
         assert!(!config.enable_lite_pop_log);
+        assert_eq!(config.max_client_event_count, 100);
         assert_eq!(config.lite_event_full_dispatch_delay_time, 10_000);
         assert!(!config.lite_lag_latency_collect_enable);
         assert!(!config.lite_lag_latency_metrics_enable);
@@ -1505,6 +1518,10 @@ mod tests {
         assert_eq!(
             properties.get("enableLitePopLog").map(|value| value.as_str()),
             Some("false")
+        );
+        assert_eq!(
+            properties.get("maxClientEventCount").map(|value| value.as_str()),
+            Some("100")
         );
         assert_eq!(
             properties

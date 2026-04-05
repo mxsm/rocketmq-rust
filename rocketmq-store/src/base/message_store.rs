@@ -421,6 +421,9 @@ pub trait MessageStoreInner: Sync + 'static {
 
     fn get_commit_log_mut(&mut self) -> &mut CommitLog;
 
+    /// Update commitlog read mode and synchronize any cached store config snapshots.
+    fn set_commitlog_read_mode(&mut self, read_ahead_mode: i32) -> Result<(), StoreError>;
+
     /// Get running flags
     fn get_running_flags(&self) -> &RunningFlags;
 

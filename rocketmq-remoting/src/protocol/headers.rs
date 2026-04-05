@@ -136,6 +136,7 @@ pub mod admin {
     pub use super::super::header::create_topic_request_header::CreateTopicRequestHeader;
     pub use super::super::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     pub use super::super::header::delete_topic_request_header::DeleteTopicRequestHeader;
+    pub use super::super::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     pub use super::super::header::get_all_topic_config_response_header::GetAllTopicConfigResponseHeader;
     pub use super::super::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
     pub use super::super::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
