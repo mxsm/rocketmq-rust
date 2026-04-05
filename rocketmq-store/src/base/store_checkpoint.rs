@@ -14,7 +14,6 @@
 
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -87,18 +86,13 @@ impl StoreCheckpoint {
 
     #[inline]
     pub fn flush(&self) -> std::io::Result<()> {
-        let mut buffer = &mut self.mmap.lock()[..8];
-        buffer.write_all(self.physic_msg_timestamp.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
-        buffer.write_all(self.logics_msg_timestamp.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
-        buffer.write_all(self.index_msg_timestamp.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
-        buffer.write_all(
-            self.master_flushed_offset
-                .load(Ordering::Relaxed)
-                .to_be_bytes()
-                .as_ref(),
-        )?;
-        buffer.write_all(self.confirm_phy_offset.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
-        self.mmap.lock().flush()?;
+        let mut mmap = self.mmap.lock();
+        mmap[0..8].copy_from_slice(&self.physic_msg_timestamp.load(Ordering::Relaxed).to_be_bytes());
+        mmap[8..16].copy_from_slice(&self.logics_msg_timestamp.load(Ordering::Relaxed).to_be_bytes());
+        mmap[16..24].copy_from_slice(&self.index_msg_timestamp.load(Ordering::Relaxed).to_be_bytes());
+        mmap[24..32].copy_from_slice(&self.master_flushed_offset.load(Ordering::Relaxed).to_be_bytes());
+        mmap[32..40].copy_from_slice(&self.confirm_phy_offset.load(Ordering::Relaxed).to_be_bytes());
+        mmap.flush()?;
         Ok(())
     }
 

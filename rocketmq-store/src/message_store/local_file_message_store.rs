@@ -31,6 +31,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -222,12 +223,12 @@ impl LocalFileMessageStore {
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log,
             compaction_service: Default::default(),
-            store_checkpoint: Some(store_checkpoint),
+            store_checkpoint: Some(store_checkpoint.clone()),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
             alive_replica_num_in_group: Arc::new(AtomicI32::new(1)),
             index_service,
             allocate_mapped_file_service: Arc::new(AllocateMappedFileService::new()),
-            consume_queue_store,
+            consume_queue_store: consume_queue_store.clone(),
             dispatcher,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
@@ -238,7 +239,7 @@ impl LocalFileMessageStore {
                 new_message_notify: Arc::new(Notify::new()),
                 pending_messages: Arc::new(AtomicI64::new(0)),
                 reput_from_offset: None,
-                message_store_config,
+                message_store_config: message_store_config.clone(),
                 dispatch_tx: None,
                 inner: None,
                 reader_handle: None,
@@ -256,7 +257,11 @@ impl LocalFileMessageStore {
             transient_store_pool,
             message_store_arc: None,
             ha_service: None,
-            flush_consume_queue_service: FlushConsumeQueueService,
+            flush_consume_queue_service: FlushConsumeQueueService::new(
+                message_store_config.clone(),
+                consume_queue_store.clone(),
+                store_checkpoint,
+            ),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
         }
@@ -2780,15 +2785,98 @@ impl CorrectLogicOffsetService {
     }
 }
 
-struct FlushConsumeQueueService;
+struct FlushConsumeQueueService {
+    message_store_config: Arc<MessageStoreConfig>,
+    consume_queue_store: ConsumeQueueStore,
+    store_checkpoint: Arc<StoreCheckpoint>,
+    worker_handle: parking_lot::Mutex<Option<thread::JoinHandle<()>>>,
+    shutdown_tx: parking_lot::Mutex<Option<mpsc::Sender<()>>>,
+}
 
 impl FlushConsumeQueueService {
+    fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        consume_queue_store: ConsumeQueueStore,
+        store_checkpoint: Arc<StoreCheckpoint>,
+    ) -> Self {
+        Self {
+            message_store_config,
+            consume_queue_store,
+            store_checkpoint,
+            worker_handle: parking_lot::Mutex::new(None),
+            shutdown_tx: parking_lot::Mutex::new(None),
+        }
+    }
+
+    fn flush_once(consume_queue_store: &ConsumeQueueStore, store_checkpoint: &StoreCheckpoint, flush_least_pages: i32) {
+        let consume_queue_table = consume_queue_store.get_consume_queue_table().lock().clone();
+        for consume_queue_table in consume_queue_table.values() {
+            for consume_queue in consume_queue_table.values() {
+                let _ = consume_queue_store.flush(&***consume_queue, flush_least_pages);
+            }
+        }
+
+        if let Err(error) = store_checkpoint.flush() {
+            error!("flush consume queue service failed to flush store checkpoint: {error}");
+        }
+    }
+
     fn start(&self) {
-        error!("flush consume queue service start unimplemented!")
+        let mut worker_handle = self.worker_handle.lock();
+        if worker_handle.is_some() {
+            return;
+        }
+
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        *self.shutdown_tx.lock() = Some(shutdown_tx);
+
+        let message_store_config = self.message_store_config.clone();
+        let consume_queue_store = self.consume_queue_store.clone();
+        let store_checkpoint = self.store_checkpoint.clone();
+
+        *worker_handle = Some(
+            thread::Builder::new()
+                .name("flush-consume-queue".to_string())
+                .spawn(move || {
+                    let interval = message_store_config.flush_interval_consume_queue.max(1) as u64;
+                    let thorough_interval = message_store_config.flush_consume_queue_thorough_interval as u64;
+                    let default_least_pages = message_store_config.flush_consume_queue_least_pages as i32;
+                    let mut last_thorough_flush_timestamp = current_millis();
+
+                    loop {
+                        let now = current_millis();
+                        let flush_least_pages =
+                            if thorough_interval == 0 || now >= last_thorough_flush_timestamp + thorough_interval {
+                                last_thorough_flush_timestamp = now;
+                                0
+                            } else {
+                                default_least_pages
+                            };
+
+                        Self::flush_once(&consume_queue_store, &store_checkpoint, flush_least_pages);
+
+                        match shutdown_rx.recv_timeout(Duration::from_millis(interval)) {
+                            Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        }
+                    }
+
+                    Self::flush_once(&consume_queue_store, &store_checkpoint, 0);
+                })
+                .unwrap(),
+        );
     }
 
     fn shutdown(&self) {
-        error!("flush consume queue service run unimplemented!")
+        if let Some(shutdown_tx) = self.shutdown_tx.lock().take() {
+            let _ = shutdown_tx.send(());
+        }
+
+        if let Some(worker_handle) = self.worker_handle.lock().take() {
+            if worker_handle.join().is_err() {
+                error!("flush consume queue service thread panicked during shutdown");
+            }
+        }
     }
 }
 
@@ -2836,6 +2924,9 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
 mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+    use std::time::Instant;
 
     use bytes::Bytes;
     use bytes::BytesMut;
@@ -2853,9 +2944,11 @@ mod tests {
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_result::PutMessageResult;
     use crate::base::message_store::MessageStore;
+    use crate::base::store_checkpoint::StoreCheckpoint;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::hook::put_message_hook::PutMessageHook;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+    use crate::store_path_config_helper::get_store_checkpoint;
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
         let mut store = ArcMut::new(LocalFileMessageStore::new(
@@ -3044,5 +3137,62 @@ mod tests {
 
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].hook_name(), "test-hook");
+    }
+
+    #[test]
+    fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                flush_interval_consume_queue: 10,
+                flush_consume_queue_thorough_interval: 10,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+
+        let expected_timestamp = 4321i64;
+        store
+            .consume_queue_store
+            .put_message_position_info_wrapper(&DispatchRequest {
+                topic: CheetahString::from_static_str("flush-cq-service-topic"),
+                queue_id: 0,
+                commit_log_offset: 128,
+                msg_size: 32,
+                consume_queue_offset: 0,
+                store_timestamp: expected_timestamp,
+                success: true,
+                ..DispatchRequest::default()
+            });
+
+        let checkpoint_path = get_store_checkpoint(store.message_store_config_ref().store_path_root_dir.as_str());
+        assert_eq!(
+            StoreCheckpoint::new(&checkpoint_path).unwrap().logics_msg_timestamp(),
+            0
+        );
+
+        store.flush_consume_queue_service.start();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let checkpoint = StoreCheckpoint::new(&checkpoint_path).unwrap();
+            if checkpoint.logics_msg_timestamp() == expected_timestamp as u64 {
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "flush consume queue service did not persist checkpoint in time"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        store.flush_consume_queue_service.shutdown();
     }
 }

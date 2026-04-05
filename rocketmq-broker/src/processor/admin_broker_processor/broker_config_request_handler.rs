@@ -842,10 +842,12 @@ mod tests {
 
         let channel = create_test_channel().await;
         let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
-        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(
-            "enableLiteEventMode=false\nmaxLiteSubscriptionCount=5\nmaxClientEventCount=7\\
-             nliteEventFullDispatchDelayTime=1234",
-        );
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
+            "enableLiteEventMode=false\n",
+            "maxLiteSubscriptionCount=5\n",
+            "maxClientEventCount=7\n",
+            "liteEventFullDispatchDelayTime=1234",
+        ));
 
         let response = handler
             .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfig, &mut request)

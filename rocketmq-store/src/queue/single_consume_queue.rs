@@ -714,7 +714,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
     #[inline]
     fn flush(&self, flush_least_pages: i32) -> bool {
-        todo!()
+        self.mapped_file_queue.flush(flush_least_pages)
     }
 
     #[inline]
