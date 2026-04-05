@@ -121,6 +121,26 @@ fn generate_key(msg: &MessageExtBrokerInner) -> String {
     message_encoder_pool::generate_key_with_pool(msg)
 }
 
+fn parse_property_crc(properties_map: &HashMap<CheetahString, CheetahString>) -> Result<Option<u32>, ()> {
+    let Some(crc_32) = properties_map.get(&CheetahString::from_static_str(MessageConst::PROPERTY_CRC32)) else {
+        return Ok(None);
+    };
+
+    let mut expected_crc = 0u32;
+    for ch in crc_32.chars().rev() {
+        if !ch.is_ascii_digit() {
+            return Err(());
+        }
+
+        expected_crc = expected_crc
+            .checked_mul(10)
+            .and_then(|value| value.checked_add((ch as u8 - b'0') as u32))
+            .ok_or(())?;
+    }
+
+    Ok(Some(expected_crc))
+}
+
 pub fn get_cq_type(
     topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
@@ -1624,7 +1644,40 @@ impl CommitLog {
     }
 
     pub fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
-        unimplemented!("get_bulk_data not implemented")
+        if size <= 0 {
+            return Some(Vec::new());
+        }
+
+        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log as i64;
+        let mut current_offset = offset;
+        let mut remaining = size as usize;
+        let mut results = Vec::new();
+
+        while remaining > 0 {
+            let mapped_file = self
+                .mapped_file_queue
+                .find_mapped_file_by_offset(current_offset, current_offset == offset)?;
+            let pos = (current_offset % mapped_file_size) as i32;
+            let mut result = mapped_file.select_mapped_buffer_with_position(pos)?;
+            result.mapped_file = Some(mapped_file);
+
+            let readable = result.size.max(0) as usize;
+            if readable == 0 {
+                return None;
+            }
+
+            let take = readable.min(remaining);
+            if take < readable {
+                result.bytes = result.bytes.as_ref().map(|bytes| bytes.slice(..take));
+                result.size = take as i32;
+            }
+
+            results.push(result);
+            current_offset += take as i64;
+            remaining -= take;
+        }
+
+        Some(results)
     }
 
     pub fn get_data_with_option(
@@ -1777,6 +1830,11 @@ pub fn check_message_and_return_size(
     max_delay_level: i32,
     delay_level_table: &BTreeMap<i32 /* level */, i64 /* delay timeMillis */>,
 ) -> DispatchRequest {
+    let original_message = if check_crc && message_store_config.force_verify_prop_crc {
+        Some(bytes.clone())
+    } else {
+        None
+    };
     // Total size
     let total_size = bytes.get_i32();
 
@@ -1920,20 +1978,47 @@ pub fn check_message_and_return_size(
     };
 
     if check_crc && message_store_config.force_verify_prop_crc {
-        let mut expected_crc = -1i32;
-        if !properties_map.is_empty() {
-            let crc_32 = properties_map.get(&CheetahString::from_static_str(MessageConst::PROPERTY_CRC32));
-            if let Some(crc_32) = crc_32 {
-                expected_crc = 0;
-                for ch in crc_32.chars().rev() {
-                    let num = (ch as u8 - b'0') as i32;
-                    expected_crc *= 10;
-                    expected_crc += num;
+        match parse_property_crc(&properties_map) {
+            Ok(Some(expected_crc)) => {
+                if total_size < CRC32_RESERVED_LEN {
+                    warn!(
+                        "property CRC check failed because total size {} is smaller than reserved CRC length {}",
+                        total_size, CRC32_RESERVED_LEN
+                    );
+                    return DispatchRequest {
+                        msg_size: -1,
+                        success: false,
+                        ..Default::default()
+                    };
+                }
+
+                let check_size = total_size as usize - CRC32_RESERVED_LEN as usize;
+                let current_crc = crc32(
+                    &original_message
+                        .as_ref()
+                        .expect("property CRC verification requires original message bytes")[..check_size],
+                );
+                if current_crc != expected_crc {
+                    warn!(
+                        "property CRC check failed. expectedCRC={}, currentCRC={}",
+                        expected_crc, current_crc
+                    );
+                    return DispatchRequest {
+                        msg_size: -1,
+                        success: false,
+                        ..Default::default()
+                    };
                 }
             }
-        }
-        if expected_crc > 0 {
-            unimplemented!("check_crc not implemented")
+            Ok(None) => {}
+            Err(()) => {
+                warn!("property CRC check failed because the CRC property is malformed");
+                return DispatchRequest {
+                    msg_size: -1,
+                    success: false,
+                    ..Default::default()
+                };
+            }
         }
     }
 
@@ -2066,6 +2151,7 @@ impl Swappable for CommitLog {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
     use std::path::PathBuf;
@@ -2074,15 +2160,35 @@ mod tests {
     use super::*;
     use crate::base::message_store::MessageStore;
     use crate::config::message_store_config::MessageStoreConfig;
+    use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use bytes::BufMut;
+    use bytes::Bytes;
+    use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::CRC32Utils::crc32;
+    use rocketmq_common::MessageDecoder::create_crc32;
     use rocketmq_common::TimeUtils::current_millis;
 
     fn new_test_message_store(
         root: &Path,
+        broker_role: BrokerRole,
+        all_ack_in_sync_state_set: bool,
+    ) -> ArcMut<LocalFileMessageStore> {
+        new_test_message_store_with_config(
+            root,
+            MessageStoreConfig::default(),
+            broker_role,
+            all_ack_in_sync_state_set,
+        )
+    }
+
+    fn new_test_message_store_with_config(
+        root: &Path,
+        mut message_store_config: MessageStoreConfig,
         broker_role: BrokerRole,
         all_ack_in_sync_state_set: bool,
     ) -> ArcMut<LocalFileMessageStore> {
@@ -2091,13 +2197,11 @@ mod tests {
             enable_controller_mode: true,
             ..BrokerConfig::default()
         });
-        let message_store_config = Arc::new(MessageStoreConfig {
-            enable_controller_mode: true,
-            broker_role,
-            all_ack_in_sync_state_set,
-            store_path_root_dir: root.to_string_lossy().into_owned().into(),
-            ..MessageStoreConfig::default()
-        });
+        message_store_config.enable_controller_mode = true;
+        message_store_config.broker_role = broker_role;
+        message_store_config.all_ack_in_sync_state_set = all_ack_in_sync_state_set;
+        message_store_config.store_path_root_dir = root.to_string_lossy().into_owned().into();
+        let message_store_config = Arc::new(message_store_config);
         let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             message_store_config,
@@ -2109,6 +2213,46 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|window| window == needle)
+    }
+
+    fn build_message_with_property_crc(body: &[u8], topic: &str) -> Bytes {
+        let total_size = MessageExtEncoder::cal_msg_length(
+            MessageVersion::V1,
+            0,
+            body.len() as i32,
+            topic.len() as i32,
+            CRC32_RESERVED_LEN,
+        ) as usize;
+        let crc_start = total_size - CRC32_RESERVED_LEN as usize;
+        let mut encoded = BytesMut::with_capacity(total_size);
+        encoded.put_i32(total_size as i32);
+        encoded.put_i32(MESSAGE_MAGIC_CODE);
+        encoded.put_i32(0);
+        encoded.put_i32(0);
+        encoded.put_i32(0);
+        encoded.put_i64(0);
+        encoded.put_i64(0);
+        encoded.put_i32(0);
+        encoded.put_i64(0);
+        encoded.put_bytes(0, 8);
+        encoded.put_i64(0);
+        encoded.put_bytes(0, 8);
+        encoded.put_i32(0);
+        encoded.put_i64(0);
+        encoded.put_i32(body.len() as i32);
+        encoded.extend_from_slice(body);
+        encoded.put_u8(topic.len() as u8);
+        encoded.extend_from_slice(topic.as_bytes());
+        encoded.put_i16(CRC32_RESERVED_LEN as i16);
+        encoded.put_bytes(0, CRC32_RESERVED_LEN as usize);
+
+        let property_crc = crc32(&encoded[..crc_start]);
+        create_crc32(&mut encoded[crc_start..total_size], property_crc);
+        encoded.freeze()
     }
 
     #[tokio::test]
@@ -2224,6 +2368,100 @@ mod tests {
         assert_eq!(store.get_commit_log().get_flushed_where(), 0);
         assert_eq!(store.get_commit_log().get_max_offset(), 0);
         assert!(!commitlog_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn check_message_and_return_size_verifies_property_crc_when_enabled() {
+        let message_store_config = Arc::new(MessageStoreConfig {
+            enabled_append_prop_crc: true,
+            force_verify_prop_crc: true,
+            ..MessageStoreConfig::default()
+        });
+        let body = Bytes::from_static(b"phase3-prop-crc-body");
+        let delay_level_table = BTreeMap::new();
+        let encoded = build_message_with_property_crc(body.as_ref(), "prop-crc-topic");
+
+        let mut valid_bytes = encoded.clone();
+        let dispatch_request = check_message_and_return_size(
+            &mut valid_bytes,
+            true,
+            false,
+            false,
+            &message_store_config,
+            0,
+            &delay_level_table,
+        );
+        assert!(dispatch_request.success);
+        assert_eq!(dispatch_request.msg_size as usize, encoded.len());
+
+        let mut corrupted = encoded.to_vec();
+        let body_pos = find_subslice(&corrupted, body.as_ref()).expect("body bytes should exist in encoded message");
+        corrupted[body_pos] ^= 0x01;
+        let mut corrupted_bytes = Bytes::from(corrupted);
+        let dispatch_request = check_message_and_return_size(
+            &mut corrupted_bytes,
+            true,
+            false,
+            false,
+            &message_store_config,
+            0,
+            &delay_level_table,
+        );
+        assert!(!dispatch_request.success);
+        assert_eq!(dispatch_request.msg_size, -1);
+    }
+
+    #[tokio::test]
+    async fn get_bulk_data_returns_segments_across_mapped_files() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-commitlog-bulk-data-{}", current_millis()));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 16,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        store.init().await.expect("init message store");
+
+        let first = *b"0123456789ABCDEF";
+        let second = *b"ghijklmnopqrstuv";
+        assert!(store
+            .get_commit_log_mut()
+            .append_data(0, &first, 0, first.len() as i32)
+            .await
+            .expect("append first chunk"));
+        assert!(store
+            .get_commit_log_mut()
+            .append_data(first.len() as i64, &second, 0, second.len() as i32)
+            .await
+            .expect("append second chunk"));
+
+        let segments = store
+            .get_commit_log()
+            .get_bulk_data(12, 8)
+            .expect("bulk data across mapped files");
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].start_offset, 12);
+        assert_eq!(segments[0].size, 4);
+        assert_eq!(segments[1].start_offset, 16);
+        assert_eq!(segments[1].size, 4);
+
+        let combined: Vec<u8> = segments
+            .iter()
+            .flat_map(|segment| {
+                segment
+                    .get_bytes_ref()
+                    .expect("segment bytes")
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(combined, b"CDEFghij");
 
         let _ = fs::remove_dir_all(temp_root);
     }

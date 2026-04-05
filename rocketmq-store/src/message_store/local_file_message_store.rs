@@ -669,7 +669,27 @@ impl LocalFileMessageStore {
     }
 
     fn do_recheck_reput_offset_from_cq(&self) {
-        error!("do_recheck_reput_offset_from_cq called, not implemented yet");
+        let Some(reput_from_offset) = self.reput_message_service.reput_from_offset.as_ref() else {
+            return;
+        };
+
+        let cq_reput_from_offset = self.consume_queue_store.get_max_phy_offset_in_consume_queue_global();
+        let commit_log_min_offset = self.commit_log.get_min_offset();
+        let commit_log_confirm_offset = self.commit_log.get_confirm_offset();
+        let normalized_from_cq = if cq_reput_from_offset < 0 {
+            commit_log_min_offset
+        } else {
+            cq_reput_from_offset.max(commit_log_min_offset)
+        };
+        let target_reput_from_offset = normalized_from_cq.min(commit_log_confirm_offset);
+        let previous_reput_from_offset = reput_from_offset.swap(target_reput_from_offset, Ordering::SeqCst);
+
+        if previous_reput_from_offset != target_reput_from_offset {
+            info!(
+                "rechecked reputFromOffset from {} to {} using consume queue max physical offset {}",
+                previous_reput_from_offset, target_reput_from_offset, cq_reput_from_offset
+            );
+        }
     }
 
     pub fn get_message_store_config(&self) -> Arc<MessageStoreConfig> {
@@ -2924,8 +2944,10 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Buf;
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
@@ -2946,6 +2968,7 @@ mod tests {
     use super::LocalFileMessageStore;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_result::PutMessageResult;
+    use crate::base::message_status_enum::GetMessageStatus;
     use crate::base::message_status_enum::PutMessageStatus;
     use crate::base::message_store::MessageStore;
     use crate::base::store_checkpoint::StoreCheckpoint;
@@ -2971,6 +2994,31 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
+
+    fn decode_cq_bytes(bytes: Bytes) -> (i64, i32, i64) {
+        let mut bytes = bytes;
+        let commit_log_offset = bytes.get_i64();
+        let msg_size = bytes.get_i32();
+        let tags_code = bytes.get_i64();
+        (commit_log_offset, msg_size, tags_code)
     }
 
     #[test]
@@ -3260,19 +3308,7 @@ mod tests {
         }
 
         let temp_dir = tempdir().unwrap();
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-                flush_disk_type: FlushDiskType::AsyncFlush,
-                ..MessageStoreConfig::default()
-            }),
-            Arc::new(BrokerConfig::default()),
-            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
-            None,
-            false,
-        ));
-        let store_clone = store.clone();
-        store.set_message_store_arc(store_clone);
+        let mut store = new_async_flush_test_store(&temp_dir);
         let topic = CheetahString::from_static_str("consume-queue-time-query-topic");
 
         let mut first = MessageExtBrokerInner::default();
@@ -3312,5 +3348,148 @@ mod tests {
 
         let latest = consume_queue.get_latest_unit().expect("latest cq unit");
         assert_eq!(latest.queue_offset, 1);
+    }
+
+    #[tokio::test]
+    async fn local_file_consume_queue_store_range_query_and_get_return_encoded_units() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("local-cq-store-range-query-topic");
+
+        for (queue_offset, commit_log_offset, tags_code) in [(0_i64, 100_i64, 11_i64), (1, 132, 22), (2, 164, 33)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    tags_code,
+                    consume_queue_offset: queue_offset,
+                    store_timestamp: 1000 + queue_offset,
+                    success: true,
+                    ..DispatchRequest::default()
+                });
+        }
+
+        let batch = store.consume_queue_store.range_query(&topic, 0, 1, 2).await;
+        assert_eq!(batch.len(), 2);
+        assert_eq!(decode_cq_bytes(batch[0].clone()), (132, 32, 22));
+        assert_eq!(decode_cq_bytes(batch[1].clone()), (164, 32, 33));
+
+        let single = store.consume_queue_store.get(&topic, 0, 0).await;
+        assert_eq!(decode_cq_bytes(single), (100, 32, 11));
+    }
+
+    #[tokio::test]
+    async fn get_message_returns_dispatched_messages_after_reput() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("get-message-after-reput-topic");
+        let group = CheetahString::from_static_str("test-group");
+
+        for body in [Bytes::from_static(b"first-body"), Bytes::from_static(b"second-body")] {
+            let mut msg = MessageExtBrokerInner::default();
+            msg.set_topic(topic.clone());
+            msg.message_ext_inner.set_queue_id(0);
+            msg.set_body(body);
+
+            let result = store.put_message(msg).await;
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+
+        store.reput_once().await;
+
+        let result = store
+            .get_message(&group, &topic, 0, 0, 32, None)
+            .await
+            .expect("get message result");
+
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(result.message_count(), 2);
+        assert_eq!(result.message_queue_offset(), &vec![0, 1]);
+        assert_eq!(result.next_begin_offset(), 2);
+        assert_eq!(result.min_offset(), 0);
+        assert_eq!(result.max_offset(), 2);
+        assert_eq!(result.message_mapped_list().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn query_message_returns_indexed_message_after_reput() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("query-message-after-reput-topic");
+        let key = CheetahString::from_static_str("lookup-key");
+
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(topic.clone());
+        msg.message_ext_inner.set_queue_id(0);
+        msg.set_body(Bytes::from_static(b"query-body"));
+        msg.set_keys(key.clone());
+
+        let put_result = store.put_message(msg).await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+
+        store.reput_once().await;
+
+        let result = store
+            .query_message(&topic, &key, 10, 0, i64::MAX)
+            .await
+            .expect("query message result");
+
+        assert_eq!(result.message_maped_list.len(), 1);
+        assert!(result.buffer_total_size > 0);
+        assert!(result.index_last_update_timestamp > 0);
+        assert!(result.get_message_data().is_some());
+    }
+
+    #[test]
+    fn do_recheck_reput_offset_from_cq_rewinds_to_dispatched_commitlog_offset() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                enable_controller_mode: true,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig {
+                enable_controller_mode: true,
+                ..BrokerConfig::default()
+            }),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        let topic = CheetahString::from_static_str("recheck-reput-offset-topic");
+
+        store.set_confirm_offset(256);
+        store.reput_message_service.set_reput_from_offset(256);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 100_i64), (1, 132_i64)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    consume_queue_offset: queue_offset,
+                    store_timestamp: 1000 + queue_offset,
+                    success: true,
+                    ..DispatchRequest::default()
+                });
+        }
+
+        store.do_recheck_reput_offset_from_cq();
+
+        let reput_from_offset = store
+            .reput_message_service
+            .reput_from_offset
+            .as_ref()
+            .expect("reput offset should exist")
+            .load(Ordering::SeqCst);
+        assert_eq!(reput_from_offset, 164);
     }
 }

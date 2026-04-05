@@ -21,7 +21,9 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use bytes::BufMut;
 use bytes::Bytes;
+use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use futures_util::future::join_all;
 use rocketmq_common::common::attribute::cq_type::CQType;
@@ -43,6 +45,7 @@ use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::single_consume_queue::ConsumeQueue;
+use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 use crate::queue::ArcConsumeQueue;
 use crate::queue::ConsumeQueueTable;
 use crate::queue::CqUnit;
@@ -69,6 +72,20 @@ impl Inner {
 }
 
 impl ConsumeQueueStore {
+    fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
+        let table = self.inner.consume_queue_table.lock();
+        let queue_table = table.get(topic)?;
+        queue_table.get(&queue_id).cloned()
+    }
+
+    fn encode_cq_unit(cq_unit: &CqUnit) -> Bytes {
+        let mut bytes = BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize);
+        bytes.put_i64(cq_unit.pos);
+        bytes.put_i32(cq_unit.size);
+        bytes.put_i64(cq_unit.tags_code);
+        bytes.freeze()
+    }
+
     #[inline]
     pub fn new(message_store_config: Arc<MessageStoreConfig>, broker_config: Arc<BrokerConfig>) -> Self {
         Self {
@@ -331,17 +348,23 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn range_query(&self, topic: &CheetahString, queue_id: i32, start_index: i64, num: i32) -> Vec<Bytes> {
-        // This method is primarily for RocksDB mode
-        // For LocalFile mode, use ConsumeQueue's iterateFrom method instead
-        tracing::warn!("range_query is not supported in LocalFile mode, use ConsumeQueue iterateFrom instead");
-        Vec::new()
+        let Some(consume_queue) = self.find_consume_queue(topic, queue_id) else {
+            return Vec::new();
+        };
+        let Some(iter) = consume_queue.iterate_from_with_count(start_index, num) else {
+            return Vec::new();
+        };
+
+        iter.take(num.max(0) as usize)
+            .map(|cq_unit| Self::encode_cq_unit(&cq_unit))
+            .collect()
     }
 
     async fn get(&self, topic: &CheetahString, queue_id: i32, start_index: i64) -> Bytes {
-        // This method is primarily for RocksDB mode
-        // For LocalFile mode, use ConsumeQueue's get method instead
-        tracing::warn!("get is not supported in LocalFile mode, use ConsumeQueue get method instead");
-        Bytes::new()
+        self.find_consume_queue(topic, queue_id)
+            .and_then(|consume_queue| consume_queue.get(start_index))
+            .map(|cq_unit| Self::encode_cq_unit(&cq_unit))
+            .unwrap_or_default()
     }
 
     fn get_consume_queue_table(&self) -> Arc<ConsumeQueueTable> {
