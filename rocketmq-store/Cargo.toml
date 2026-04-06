@@ -130,6 +130,10 @@ name    = "commitlog_load_bench"
 harness = false
 
 [[bench]]
+name    = "commit_log_performance"
+harness = false
+
+[[bench]]
 name              = "io_uring_performance"
 harness           = false
 required-features = ["io_uring"]

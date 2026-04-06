@@ -419,6 +419,51 @@ async fn receive_message_integration_streams_delivery_message_and_status() {
     );
 }
 
+#[tokio::test]
+async fn spawn_runtime_retries_when_initial_candidate_port_is_occupied() {
+    let occupied_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied test port");
+    let occupied_addr = occupied_listener.local_addr().expect("discover occupied test port");
+
+    let fallback_probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fallback test port");
+    let fallback_addr = fallback_probe.local_addr().expect("discover fallback test port");
+    drop(fallback_probe);
+    let route_service = Arc::new(RecordingRouteService::default());
+
+    let (listen_addr, shutdown_tx, server_task) = spawn_runtime_with_candidates(
+        Arc::new(ClusterServiceManager::with_services(
+            route_service.clone(),
+            Arc::new(NormalMetadataService),
+            Arc::new(DefaultAssignmentService),
+            Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
+        )),
+        [occupied_addr, fallback_addr],
+    )
+    .await;
+
+    assert_eq!(listen_addr, fallback_addr);
+
+    let mut client = connect_with_retry(listen_addr).await;
+    let response = client
+        .query_route(route_request("TopicA"))
+        .await
+        .expect("query route should succeed on fallback address")
+        .into_inner();
+    assert_eq!(
+        response.status.as_ref().map(|status| status.code),
+        Some(v2::Code::Ok as i32)
+    );
+    assert_eq!(route_service.observed().len(), 1);
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
 async fn spawn_runtime(
     service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
 ) -> (
@@ -426,10 +471,45 @@ async fn spawn_runtime(
     oneshot::Sender<()>,
     tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
 ) {
-    let port_probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local port probe");
-    let listen_addr = port_probe.local_addr().expect("discover local addr");
-    drop(port_probe);
+    spawn_runtime_with_candidates(service_manager, (0..16).map(|_| reserve_loopback_addr())).await
+}
 
+async fn spawn_runtime_with_candidates<I>(
+    service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
+    listen_addrs: I,
+) -> (
+    SocketAddr,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
+)
+where
+    I: IntoIterator<Item = SocketAddr>,
+{
+    let mut last_bind_error = None;
+    for listen_addr in listen_addrs {
+        let (shutdown_tx, mut server_task) = spawn_runtime_on_addr(service_manager.clone(), listen_addr);
+
+        match wait_for_server_ready(listen_addr, &mut server_task).await {
+            Ok(()) => return (listen_addr, shutdown_tx, server_task),
+            Err(startup_error) if is_address_in_use_startup_error(&startup_error) => {
+                last_bind_error = Some(startup_error);
+            }
+            Err(startup_error) => {
+                panic!("proxy runtime failed to start on {listen_addr}: {startup_error}");
+            }
+        }
+    }
+
+    panic!("proxy runtime failed to bind after retries: {last_bind_error:?}");
+}
+
+fn spawn_runtime_on_addr(
+    service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
+    listen_addr: SocketAddr,
+) -> (
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
+) {
     let runtime = ProxyRuntime::builder(ProxyConfig {
         grpc: GrpcConfig {
             listen_addr: listen_addr.to_string(),
@@ -449,7 +529,55 @@ async fn spawn_runtime(
             .await
     });
 
-    (listen_addr, shutdown_tx, server_task)
+    (shutdown_tx, server_task)
+}
+
+async fn wait_for_server_ready(
+    listen_addr: SocketAddr,
+    server_task: &mut tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
+) -> Result<(), String> {
+    for _ in 0..20 {
+        if server_task.is_finished() {
+            let result = server_task.await.expect("server task should join during startup");
+            return match result {
+                Ok(()) => Err(format!("proxy runtime exited before becoming ready on {listen_addr}")),
+                Err(error) => Err(error.to_string()),
+            };
+        }
+
+        if tokio::net::TcpStream::connect(listen_addr).await.is_ok() {
+            tokio::task::yield_now().await;
+            if server_task.is_finished() {
+                let result = server_task.await.expect("server task should join during startup");
+                return match result {
+                    Ok(()) => Err(format!("proxy runtime exited before becoming ready on {listen_addr}")),
+                    Err(error) => Err(error.to_string()),
+                };
+            }
+            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    Err(format!(
+        "timed out waiting for proxy runtime to accept connections on {listen_addr}"
+    ))
+}
+
+fn reserve_loopback_addr() -> SocketAddr {
+    let port_probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local port probe");
+    let listen_addr = port_probe.local_addr().expect("discover local addr");
+    drop(port_probe);
+    listen_addr
+}
+
+fn is_address_in_use_startup_error(startup_error: &str) -> bool {
+    startup_error.contains("failed to bind")
+        && (startup_error.contains("Address already in use")
+            || startup_error.contains("(os error 48)")
+            || startup_error.contains("(os error 98)")
+            || startup_error.contains("(os error 10048)"))
 }
 
 async fn connect_with_retry(addr: SocketAddr) -> MessagingServiceClient<tonic::transport::Channel> {

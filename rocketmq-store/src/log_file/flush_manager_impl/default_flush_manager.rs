@@ -203,25 +203,32 @@ impl GroupCommitService {
             loop {
                 match rx_in.recv().await {
                     None => {}
-                    Some(mut request) => {
-                        let mut flush_ok = mapped_file_queue.get_flushed_where() >= request.next_offset;
-                        for i in 0..1000 {
+                    Some(first_request) => {
+                        let mut requests = vec![first_request];
+                        while let Ok(request) = rx_in.try_recv() {
+                            requests.push(request);
+                        }
+
+                        let target_offset = requests.iter().map(|request| request.next_offset).max().unwrap_or(0);
+                        let mut flush_ok = mapped_file_queue.get_flushed_where() >= target_offset;
+                        for _ in 0..1000 {
                             if flush_ok {
                                 break;
                             }
                             mapped_file_queue.flush(0);
-                            flush_ok = mapped_file_queue.get_flushed_where() >= request.next_offset;
+                            flush_ok = mapped_file_queue.get_flushed_where() >= target_offset;
                             if flush_ok {
                                 break;
                             }
                             time::sleep(time::Duration::from_millis(1)).await;
                         }
-                        request.flush_ok = Some(if flush_ok {
-                            PutMessageStatus::PutOk
-                        } else {
-                            PutMessageStatus::FlushDiskTimeout
-                        });
-                        let _ = tx_out.send(request).await;
+
+                        let flushed_where = mapped_file_queue.get_flushed_where();
+                        complete_group_commit_batch(&mut requests, flushed_where);
+
+                        for request in requests {
+                            let _ = tx_out.send(request).await;
+                        }
                     }
                 }
             }
@@ -231,6 +238,16 @@ impl GroupCommitService {
     pub fn wakeup(&self) {}
 
     pub fn shutdown(&mut self) {}
+}
+
+fn complete_group_commit_batch(requests: &mut [GroupCommitRequest], flushed_where: i64) {
+    for request in requests {
+        request.flush_ok = Some(if flushed_where >= request.next_offset {
+            PutMessageStatus::PutOk
+        } else {
+            PutMessageStatus::FlushDiskTimeout
+        });
+    }
 }
 
 struct FlushRealTimeService {
@@ -336,5 +353,20 @@ impl CommitRealTimeService {
 
     pub fn set_flush_manager(&mut self, flush_manager: WeakArcMut<DefaultFlushManager>) {
         self.flush_manager = Some(flush_manager);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_group_commit_batch_marks_each_request_by_final_flushed_offset() {
+        let mut requests = vec![GroupCommitRequest::new(64, 5_000), GroupCommitRequest::new(96, 5_000)];
+
+        complete_group_commit_batch(&mut requests, 80);
+
+        assert_eq!(requests[0].flush_ok, Some(PutMessageStatus::PutOk));
+        assert_eq!(requests[1].flush_ok, Some(PutMessageStatus::FlushDiskTimeout));
     }
 }
