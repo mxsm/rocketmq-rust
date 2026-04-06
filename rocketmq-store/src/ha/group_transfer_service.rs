@@ -209,8 +209,8 @@ impl ServiceTask for GroupTransferServiceInner {
     async fn run(&self, context: &ServiceContext) {
         while !context.is_stopped() {
             context.wait_for_running(std::time::Duration::from_millis(10)).await;
-            self.do_wait_transfer().await;
             self.on_wait_end().await;
+            self.do_wait_transfer().await;
         }
     }
 

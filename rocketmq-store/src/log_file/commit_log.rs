@@ -950,6 +950,7 @@ impl CommitLog {
             return PutMessageStatus::UnknownError;
         }
         match response.wait_for_result_with_timeout().await {
+            Ok(PutMessageStatus::FlushDiskTimeout) => PutMessageStatus::FlushSlaveTimeout,
             Ok(status) => status,
             Err(e) => {
                 error!("Failed to wait for HA result: {:?}", e);
