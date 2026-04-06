@@ -77,9 +77,10 @@ Name Server 是轻量级注册中心，主要提供：
 
 **典型操作：**
 
-```rust
-// 客户端向 name server 查询 broker 地址
-let broker_addrs = name_server.lookup_broker("TopicTest").await?;
+```text
+// 伪代码流程：
+// 客户端向 NameServer 查询 TopicTest 路由
+// NameServer 返回 Broker/Queue 路由信息
 ```
 
 ### 2. Broker
@@ -257,4 +258,4 @@ RocketMQ-Rust 基于 Rust 所有权模型：
 
 - [消息模型](../architecture/message-model) - 深入理解消息组织与投递语义
 - [存储](../architecture/storage) - 了解持久化与索引机制
-- [配置](../configuration/overview) - 学习部署与运行参数配置
+- [Broker 配置](../configuration/broker-config) - 学习部署与运行参数配置

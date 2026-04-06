@@ -76,26 +76,31 @@ git checkout -b feature/your-feature-name
 1. **Write code**: Follow the coding standards
 2. **Add tests**: Ensure test coverage
 3. **Format code**: Use rustfmt
-```bash
-cargo fmt
-```
+
+    ```bash
+    cargo fmt
+    ```
+
 4. **Run linter**: Use clippy
-```bash
-cargo clippy -- -D warnings
-```
+
+    ```bash
+    cargo clippy -- -D warnings
+    ```
+
 5. **Run tests**: Ensure all tests pass
-```bash
-cargo test --all
-```
+
+    ```bash
+    cargo test --all
+    ```
 
 ### Committing Changes
 
 Use clear commit messages:
 
-```
+```text
 feat: Add transaction message support
 
-- Implement TransactionProducer
+- Implement TransactionMQProducer
 - Add transaction listener trait
 - Add unit tests for transaction messages
 
@@ -103,6 +108,7 @@ Closes #123
 ```
 
 Commit message format:
+
 - `feat:` New feature
 - `fix:` Bug fix
 - `docs:` Documentation changes
@@ -114,9 +120,10 @@ Commit message format:
 ### Submitting Pull Request
 
 1. **Push to your fork**:
-```bash
-git push origin feature/your-feature-name
-```
+
+    ```bash
+    git push origin feature/your-feature-name
+    ```
 
 2. **Create pull request**: On GitHub
 
@@ -175,10 +182,13 @@ use crate::model::Message;
 /// # Examples
 ///
 /// ```rust
-/// use rocketmq::producer::Producer;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let producer = Producer::new();
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
 /// producer.start().await?;
 /// # Ok(())
 /// # }
@@ -238,10 +248,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message() {
-        let producer = Producer::new();
+        let mut producer = DefaultMQProducer::builder()
+            .producer_group("example_group")
+            .name_server_addr("localhost:9876")
+            .build();
         producer.start().await.unwrap();
 
-        let message = Message::new("TestTopic".to_string(), b"Test".to_vec());
+        let message = Message::builder()
+            .topic("TestTopic")
+            .body("Test")
+            .build()
+            .unwrap();
         let result = producer.send(message).await;
 
         assert!(result.is_ok());
@@ -268,9 +285,14 @@ cargo doc --no-deps --open
 /// # Examples
 ///
 /// ```
-/// use rocketmq::producer::Producer;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+/// use rocketmq_common::common::message::message_single::Message;
 ///
-/// let producer = Producer::new();
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
+/// let message = Message::builder().topic("TopicTest").body("hello").build().unwrap();
 /// ```
 ///
 /// # Errors

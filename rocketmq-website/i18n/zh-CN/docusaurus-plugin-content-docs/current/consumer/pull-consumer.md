@@ -1,197 +1,143 @@
 ---
 sidebar_position: 3
-title: Pull Consumer
+title: 拉取消费者
 ---
 
-# Pull Consumer
+# 拉取消费者
 
-Pull Consumer 让你完全控制何时、以何种方式从 Broker 拉取消息。
+RocketMQ-Rust 中的拉取模式由 `DefaultLitePullConsumer` 提供。它支持按需轮询、手动分配队列和显式管理消费位点。
 
-## 创建 Pull Consumer
+## 创建拉取消费者
 
 ```rust
-use rocketmq::consumer::PullConsumer;
-use rocketmq::conf::ConsumerOption;
+use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
+use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
+use rocketmq_error::RocketMQResult;
 
-let mut consumer_option = ConsumerOption::default();
-consumer_option.set_name_server_addr("localhost:9876");
-consumer_option.set_group_name("my_consumer_group");
+#[tokio::main]
+async fn main() -> RocketMQResult<()> {
+    let consumer = DefaultLitePullConsumer::builder()
+        .consumer_group("my_consumer_group")
+        .name_server_addr("localhost:9876")
+        .auto_commit(true)
+        .build();
 
-let consumer = PullConsumer::new(consumer_option);
-consumer.start().await?;
+    consumer.start().await?;
+    consumer.subscribe_with_expression("TopicTest", "*").await?;
+
+    Ok(())
+}
 ```
 
 ## 拉取消息
 
-### 基础拉取
+### 基础轮询
 
 ```rust
 loop {
-    let messages = consumer.pull("TopicTest", "*", 32).await?;
+    let messages = consumer.poll_with_timeout(1_000).await;
 
     for msg in messages {
         println!("Received: {:?}", msg);
         process_message(&msg);
     }
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
 }
 ```
 
-### 从指定队列拉取
+### 手动提交位点
 
 ```rust
-use rocketmq::model::MessageQueue;
+use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
+use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
 
-// 获取 topic 下所有队列
-let queues = consumer.fetch_subscribe_message_queues("TopicTest").await?;
+let consumer = DefaultLitePullConsumer::builder()
+    .consumer_group("manual_commit_group")
+    .name_server_addr("localhost:9876")
+    .auto_commit(false)
+    .build();
 
-for queue in queues {
-    let messages = consumer.pull_from(&queue, "*", 32).await?;
-    for msg in messages {
-        process_message(&msg);
-    }
-}
-```
-
-### 指定位点拉取
-
-```rust
-// 从指定 offset 开始拉取
-let messages = consumer
-    .pull_from_offset(&queue, "*", 100, 32)
-    .await?;
-```
-
-## 位点管理
-
-### 手动位点追踪
-
-```rust
-struct OffsetTracker {
-    offsets: HashMap<MessageQueue, u64>,
-}
-
-impl OffsetTracker {
-    fn update(&mut self, queue: &MessageQueue, offset: u64) {
-        self.offsets.insert(queue.clone(), offset);
-    }
-
-    fn get(&self, queue: &MessageQueue) -> Option<u64> {
-        self.offsets.get(queue).copied()
-    }
-}
-
-let mut tracker = OffsetTracker::new();
+consumer.start().await?;
+consumer.subscribe("TopicTest").await?;
 
 loop {
-    let queue = select_queue();
-    let offset = tracker.get(&queue).unwrap_or(0);
-
-    let result = consumer.pull_from_offset(&queue, "*", offset, 32).await?;
-
-    for msg in &result.messages {
+    let messages = consumer.poll_with_timeout(1_000).await;
+    for msg in &messages {
         process_message(msg);
     }
 
-    // 处理成功后更新位点
-    if let Some(next_offset) = result.next_begin_offset {
-        tracker.update(&queue, next_offset);
+    if !messages.is_empty() {
+        consumer.commit_all().await?;
     }
 }
 ```
 
-### 持久化位点存储
+## 队列分配与位点控制
+
+### 分配指定队列
 
 ```rust
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Write};
+use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
 
-struct FileOffsetStore {
-    file_path: String,
-    offsets: HashMap<String, u64>,
+let queues = consumer.fetch_message_queues("TopicTest").await?;
+consumer.assign(queues).await;
+```
+
+### 从指定 offset 开始消费
+
+```rust
+use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
+
+let queues = consumer.assignment().await?;
+if let Some(queue) = queues.iter().next() {
+    consumer.seek(queue, 100).await?;
 }
+```
 
-impl FileOffsetStore {
-    fn load(&mut self) -> std::io::Result<()> {
-        if let Ok(mut file) = File::open(&self.file_path) {
-            let mut contents = String::new();
-            file.read_to_string(&mut contents)?;
-            for line in contents.lines() {
-                let parts: Vec<&str> = line.split('=').collect();
-                if parts.len() == 2 {
-                    let key = parts[0].to_string();
-                    let offset = parts[1].parse().unwrap();
-                    self.offsets.insert(key, offset);
-                }
-            }
-        }
-        Ok(())
-    }
+### 按时间戳回溯
 
-    fn save(&self) -> std::io::Result<()> {
-        let mut file = File::create(&self.file_path)?;
-        for (key, offset) in &self.offsets {
-            writeln!(file, "{}={}", key, offset)?;
-        }
-        Ok(())
-    }
+```rust
+use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
+
+let queues = consumer.assignment().await?;
+if let Some(queue) = queues.iter().next() {
+    let offset = consumer.offset_for_timestamp(queue, 1_699_200_000_000).await?;
+    consumer.seek(queue, offset).await?;
 }
 ```
 
 ## 拉取策略
 
-### 顺序遍历拉取
+### 顺序处理
 
 ```rust
-let queues = consumer.fetch_subscribe_message_queues("TopicTest").await?;
-
 loop {
-    for queue in &queues {
-        let messages = consumer.pull_from(queue, "*", 32).await?;
-        for msg in messages {
-            process_message(&msg);
-        }
-    }
-}
-```
-
-### 轮询拉取
-
-```rust
-let queues = consumer.fetch_subscribe_message_queues("TopicTest").await?;
-let mut index = 0;
-
-loop {
-    let queue = &queues[index % queues.len()];
-    index += 1;
-
-    let messages = consumer.pull_from(queue, "*", 32).await?;
+    let messages = consumer.poll_with_timeout(1_000).await;
     for msg in messages {
         process_message(&msg);
     }
 }
 ```
 
-### 优先级拉取
+### 按主题优先级处理
 
 ```rust
-let high_priority_topic = "ImportantEvents";
-let low_priority_topic = "NormalEvents";
+consumer.subscribe_with_expression("ImportantEvents", "*").await?;
+consumer.subscribe_with_expression("NormalEvents", "*").await?;
 
 loop {
-    // 优先拉取高优先级 topic
-    let messages = consumer.pull(high_priority_topic, "*", 32).await?;
-    if messages.is_empty() {
-        // 高优先级无消息时回退到低优先级
-        let messages = consumer.pull(low_priority_topic, "*", 32).await?;
-        for msg in messages {
-            process_message(&msg);
+    let messages = consumer.poll_with_timeout(200).await;
+
+    let mut processed = false;
+    for msg in &messages {
+        if msg.topic().as_str().contains("ImportantEvents") {
+            process_message(msg);
+            processed = true;
         }
-    } else {
-        for msg in messages {
-            process_message(&msg);
+    }
+
+    if !processed {
+        for msg in &messages {
+            process_message(msg);
         }
     }
 }
@@ -199,27 +145,18 @@ loop {
 
 ## 错误处理
 
-### 拉取异常处理
-
 ```rust
 loop {
-    match consumer.pull("TopicTest", "*", 32).await {
-        Ok(messages) => {
-            for msg in messages {
-                process_message(&msg);
-            }
-        }
-        Err(PullError::NoNewMessage) => {
-            // 无新消息，等待后重试
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        Err(PullError::OffsetIllegal) => {
-            // 重置 offset
-            consumer.seek_to_begin("TopicTest").await?;
-        }
-        Err(e) => {
-            eprintln!("Pull failed: {:?}", e);
-            tokio::time::sleep(Duration::from_secs(1)).await;
+    let messages = consumer.poll_with_timeout(500).await;
+
+    if messages.is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        continue;
+    }
+
+    for msg in messages {
+        if let Err(e) = process_message_safe(&msg) {
+            eprintln!("Process failed: {:?}", e);
         }
     }
 }
@@ -227,7 +164,7 @@ loop {
 
 ## 性能优化
 
-### 批处理
+### 批量处理
 
 ```rust
 let batch_size = 100;
@@ -236,55 +173,53 @@ loop {
     let mut batch = Vec::with_capacity(batch_size);
 
     while batch.len() < batch_size {
-        let messages = consumer.pull("TopicTest", "*", 32).await?;
+        let messages = consumer.poll_with_timeout(100).await;
+        if messages.is_empty() {
+            break;
+        }
         batch.extend(messages);
     }
 
-    process_batch(batch);
+    if !batch.is_empty() {
+        process_batch(batch);
+    }
 }
 ```
 
 ### 并行处理
 
 ```rust
-use futures::stream::{StreamExt, TryStreamExt};
+let messages = consumer.poll_with_timeout(1_000).await;
 
-async fn pull_and_process(consumer: &PullConsumer, queue: &MessageQueue) -> Result<(), Error> {
-    let messages = consumer.pull_from(queue, "*", 32).await?;
+let handles: Vec<_> = messages
+    .into_iter()
+    .map(|msg| tokio::spawn(async move { process_message(msg) }))
+    .collect();
 
-    let processed = futures::stream::iter(messages)
-        .map(|msg| tokio::spawn(async move { process_message(msg) }))
-        .collect::<Vec<_>>()
-        .await;
-
-    for result in processed {
-        result??;
-    }
-
-    Ok(())
+for handle in handles {
+    let _ = handle.await;
 }
 ```
 
 ## 最佳实践
 
-1. **处理空拉取**：无消息时避免 busy-wait
-2. **正确提交位点**：确保消费进度可恢复
-3. **设置合适批量大小**：平衡吞吐与延迟
-4. **完善错误处理**：优雅处理拉取失败
-5. **监控拉取速率**：持续优化消费性能
+1. 对空轮询做退避，避免忙等。
+2. 需要严格一致性时使用 `auto_commit(false)` + `commit_all()`。
+3. 保持拉取循环轻量，把重处理下沉到工作任务。
+4. 使用 `seek` 与 `offset_for_timestamp` 支持回放与恢复。
+5. 批量大小应基于真实流量和延迟目标调优。
 
-## 适用场景
+## 何时使用拉取消费者
 
-Pull Consumer 更适合：
+适用于以下场景：
 
-- 需要精细控制消费节奏
-- 需要自定义重试策略
-- 需要批量处理消息
-- 需要显式控制位点提交
-- 需要实现自定义负载策略
+- 需要精确控制消费节奏。
+- 需要手动提交位点。
+- 需要自定义批处理或回放逻辑。
+- 需要显式队列分配与位点跳转。
 
 ## 下一步
 
-- [Push Consumer](./push-consumer) - 了解 push consumer
-- [消息过滤](./message-filtering) - 高级过滤策略
-- [配置](../configuration) - 消费者配置项
+- [推消费者](./push-consumer) - 了解推模式消费
+- [消息过滤](./message-filtering) - 学习高级过滤能力
+- [客户端配置](../configuration/client-config) - 查看消费者配置项

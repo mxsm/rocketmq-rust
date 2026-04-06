@@ -195,10 +195,11 @@ RocketMQ supports different flush strategies to balance performance and reliabil
 - **Performance**: Lower
 - **Reliability**: No message loss
 
-```rust
-// Configure flush mode
-let mut broker_config = BrokerConfig::default();
-broker_config.set_flush_disk_type(FlushDiskType::SYNC_FLUSH);
+```text
+Pseudo configuration flow:
+1. Build broker storage config
+2. Set flush mode to SYNC_FLUSH for stronger durability
+3. Apply config and restart/reload broker
 ```
 
 ## File Deletion
@@ -213,24 +214,21 @@ Files are deleted when any of these conditions are met:
 2. **Time-based**: Files older than default (72 hours)
 3. **Manual**: Triggered by admin command
 
-```rust
-// Configure retention policy
-let mut broker_config = BrokerConfig::default();
-broker_config.set_delete_when(DeleteWhen::DiskFull);
-broker_config.set_file_reserved_time(72); // hours
+```text
+Pseudo retention policy:
+- delete_when = DiskFull
+- file_reserved_time = 72h
 ```
 
 ## Memory Mapping
 
 ConsumeQueue and IndexFile use memory-mapped files for fast access:
 
-```rust
-// Memory-mapped file I/O
-let mmap = unsafe { MmapOptions::new().map(&file)? };
-
-// Access memory directly
-let offset = mmap.read_u64(offset_position)?;
-let size = mmap.read_u32(size_position)?;
+```text
+Pseudo mmap flow:
+1. Create memory map from file descriptor
+2. Read offset and size fields from mapped region
+3. Use offset/size to locate message bytes
 ```
 
 ### Benefits

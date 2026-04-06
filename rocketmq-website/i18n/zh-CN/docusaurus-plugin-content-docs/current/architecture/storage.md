@@ -194,10 +194,11 @@ RocketMQ 支持多种刷盘策略，用于平衡性能与可靠性。
 - **性能**：低于异步刷盘
 - **可靠性**：更高，可避免刷盘前丢失
 
-```rust
-// 配置刷盘模式
-let mut broker_config = BrokerConfig::default();
-broker_config.set_flush_disk_type(FlushDiskType::SYNC_FLUSH);
+```text
+伪配置流程：
+1. 构建 Broker 存储配置
+2. 将刷盘模式设置为 SYNC_FLUSH（更强可靠性）
+3. 应用配置并重启或热加载
 ```
 
 ## 文件删除
@@ -212,24 +213,21 @@ RocketMQ 会自动清理过期文件以释放磁盘空间。
 2. **时间过期**：超过保留时间（默认 72 小时）
 3. **手动触发**：通过管理命令清理
 
-```rust
-// 配置保留策略
-let mut broker_config = BrokerConfig::default();
-broker_config.set_delete_when(DeleteWhen::DiskFull);
-broker_config.set_file_reserved_time(72); // hours
+```text
+伪保留策略：
+- delete_when = DiskFull
+- file_reserved_time = 72h
 ```
 
 ## 内存映射
 
 ConsumeQueue 与 IndexFile 使用 mmap 提升读取效率：
 
-```rust
-// Memory-mapped file I/O
-let mmap = unsafe { MmapOptions::new().map(&file)? };
-
-// 直接访问内存
-let offset = mmap.read_u64(offset_position)?;
-let size = mmap.read_u32(size_position)?;
+```text
+伪 mmap 流程：
+1. 从文件描述符创建内存映射
+2. 从映射区域读取 offset 与 size 字段
+3. 根据 offset/size 定位消息字节内容
 ```
 
 ### 优势
@@ -297,4 +295,4 @@ disk_space_warning_level_ratio = 90
 
 - [生产者](../producer/overview) - 了解消息发送
 - [消费者](../consumer/overview) - 了解消息消费
-- [配置](../configuration/overview) - 配置存储参数
+- [Broker 配置](../configuration/broker-config) - 配置存储参数

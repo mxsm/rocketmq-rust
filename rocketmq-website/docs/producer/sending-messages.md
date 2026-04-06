@@ -5,42 +5,58 @@ title: Sending Messages
 
 # Sending Messages
 
-Learn advanced techniques for sending messages with RocketMQ-Rust producers.
+This page covers practical sending patterns using `DefaultMQProducer` and `MQProducer`.
 
 ## Message Types
 
 ### Basic Message
 
 ```rust
-use rocketmq::model::Message;
+use rocketmq_common::common::message::message_single::Message;
 
-let message = Message::new("TopicTest".to_string(), b"Hello, RocketMQ!".to_vec());
+let message = Message::builder()
+    .topic("TopicTest")
+    .body("Hello, RocketMQ!")
+    .build()?;
+
 producer.send(message).await?;
 ```
 
 ### Message with Tags
 
 ```rust
-let mut message = Message::new("OrderEvents".to_string(), body);
-message.set_tags("order_created");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body(body)
+    .tags("order_created")
+    .build()?;
+
 producer.send(message).await?;
 ```
 
 ### Message with Keys
 
 ```rust
-let mut message = Message::new("OrderEvents".to_string(), body);
-message.set_keys("order_12345");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body(body)
+    .key("order_12345")
+    .build()?;
+
 producer.send(message).await?;
 ```
 
 ### Message with Properties
 
 ```rust
-let mut message = Message::new("OrderEvents".to_string(), body);
-message.put_property("region", "us-west");
-message.put_property("priority", "high");
-message.put_property("source", "mobile_app");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body(body)
+    .raw_property("region", "us-west")?
+    .raw_property("priority", "high")?
+    .raw_property("source", "mobile_app")?
+    .build()?;
+
 producer.send(message).await?;
 ```
 
@@ -48,15 +64,7 @@ producer.send(message).await?;
 
 ### Sequential Sending
 
-Send messages in order:
-
 ```rust
-let messages = vec![
-    create_message("Step 1"),
-    create_message("Step 2"),
-    create_message("Step 3"),
-];
-
 for msg in messages {
     producer.send(msg).await?;
 }
@@ -64,26 +72,26 @@ for msg in messages {
 
 ### Concurrent Sending
 
-Send messages concurrently:
-
 ```rust
 use futures::future::join_all;
 
-let send_futures = messages.into_iter()
+let tasks = messages
+    .into_iter()
     .map(|msg| producer.send(msg))
     .collect::<Vec<_>>();
 
-let results = join_all(send_futures).await;
+let results = join_all(tasks).await;
 ```
 
 ### Delayed Sending
 
-Schedule messages for future delivery:
-
 ```rust
-let mut message = Message::new("DelayedTopic".to_string(), body);
-// Delay level 1 = 1s, 2 = 5s, 3 = 10s, etc.
-message.set_delay_time_level(3);
+let message = Message::builder()
+    .topic("DelayedTopic")
+    .body(body)
+    .delay_level(3) // 1=1s, 2=5s, 3=10s ...
+    .build()?;
+
 producer.send(message).await?;
 ```
 
@@ -91,32 +99,45 @@ producer.send(message).await?;
 
 ### Large Messages
 
-For messages larger than 4MB, use compression:
-
 ```rust
-// Enable compression
-producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("my_group")
+    .name_server_addr("localhost:9876")
+    .compress_msg_body_over_howmuch(4 * 1024)
+    .build();
 
-// Large message is compressed automatically
-let large_body = vec![0u8; 5 * 1024 * 1024]; // 5MB
-let message = Message::new("TopicTest".to_string(), large_body);
+let large_body = vec![0u8; 5 * 1024 * 1024];
+let message = Message::builder()
+    .topic("TopicTest")
+    .body(large_body)
+    .build()?;
+
 producer.send(message).await?;
 ```
 
 ### Splitting Large Messages
 
 ```rust
-fn split_and_send(producer: &Producer, topic: &str, data: Vec<u8>, chunk_size: usize) -> Result<(), Error> {
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+
+async fn split_and_send(
+    producer: &mut DefaultMQProducer,
+    topic: &str,
+    data: Vec<u8>,
+    chunk_size: usize,
+) -> rocketmq_error::RocketMQResult<()> {
     let chunks: Vec<_> = data.chunks(chunk_size).collect();
-    let total_chunks = chunks.len();
+    let total = chunks.len();
 
     for (i, chunk) in chunks.iter().enumerate() {
-        let mut message = Message::new(topic.to_string(), chunk.to_vec());
-        message.put_property("chunk_index", i.to_string());
-        message.put_property("total_chunks", total_chunks.to_string());
-        message.put_property("message_id", unique_id());
+        let message = Message::builder()
+            .topic(topic)
+            .body_slice(chunk)
+            .key(format!("chunk-{i}-{total}"))
+            .build()?;
 
-        producer.send(message.clone()).await?;
+        producer.send(message).await?;
     }
 
     Ok(())
@@ -128,11 +149,15 @@ fn split_and_send(producer: &Producer, topic: &str, data: Vec<u8>, chunk_size: u
 ### Retry on Failure
 
 ```rust
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::producer::send_result::SendResult;
+
 async fn send_with_retry(
-    producer: &Producer,
+    producer: &mut DefaultMQProducer,
     message: Message,
     max_retries: u32,
-) -> Result<SendResult, Error> {
+) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
     let mut retry_count = 0;
 
     loop {
@@ -140,7 +165,8 @@ async fn send_with_retry(
             Ok(result) => return Ok(result),
             Err(e) if retry_count < max_retries => {
                 retry_count += 1;
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+                eprintln!("retry {} after error: {}", retry_count, e);
             }
             Err(e) => return Err(e),
         }
@@ -148,20 +174,19 @@ async fn send_with_retry(
 }
 ```
 
-### Fallback to Backup Queue
+### Fallback Topic
 
 ```rust
 async fn send_with_fallback(
-    producer: &Producer,
+    producer: &mut DefaultMQProducer,
     message: Message,
     fallback_topic: &str,
-) -> Result<SendResult, Error> {
+) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
     match producer.send(message.clone()).await {
         Ok(result) => Ok(result),
         Err(_) => {
-            let mut fallback_message = message.clone();
-            fallback_message.set_topic(fallback_topic.to_string());
-            fallback_message.put_property("original_topic", message.get_topic());
+            let mut fallback_message = message;
+            fallback_message.set_topic(fallback_topic.into());
             producer.send(fallback_message).await
         }
     }
@@ -170,44 +195,21 @@ async fn send_with_fallback(
 
 ## Monitoring Sends
 
-### Track Send Results
-
 ```rust
 let mut success_count = 0;
 let mut failure_count = 0;
 
 for message in messages {
     match producer.send(message).await {
-        Ok(result) => {
-            success_count += 1;
-            println!("Sent: {}, offset: {}", result.msg_id, result.queue_offset);
-        }
+        Ok(_) => success_count += 1,
         Err(e) => {
             failure_count += 1;
-            eprintln!("Failed: {:?}", e);
+            eprintln!("Failed: {}", e);
         }
     }
 }
 
 println!("Success: {}, Failed: {}", success_count, failure_count);
-```
-
-### Performance Monitoring
-
-```rust
-use std::time::Instant;
-
-let start = Instant::now();
-
-for message in messages {
-    producer.send(message).await?;
-}
-
-let elapsed = start.elapsed();
-let throughput = messages.len() as f64 / elapsed.as_secs_f64();
-
-println!("Sent {} messages in {:.2}s", messages.len(), elapsed.as_secs_f64());
-println!("Throughput: {:.2} msg/s", throughput);
 ```
 
 ## Common Use Cases
@@ -216,45 +218,21 @@ println!("Throughput: {:.2} msg/s", throughput);
 
 ```rust
 async fn send_order_event(
-    producer: &Producer,
+    producer: &mut DefaultMQProducer,
     order_id: &str,
     event_type: &str,
     order_data: &Order,
-) -> Result<SendResult, Error> {
+) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
     let body = serde_json::to_vec(order_data)?;
 
-    let mut message = Message::new("OrderEvents".to_string(), body);
-    message.set_tags(event_type);
-    message.set_keys(order_id);
-    message.put_property("event_type", event_type);
-    message.put_property("timestamp", Utc::now().to_rfc3339());
-
-    producer.send(message).await
-}
-
-// Usage
-let order = Order { id: "12345", amount: 99.99 };
-send_order_event(&producer, "12345", "order_created", &order).await?;
-```
-
-### Sending Metrics
-
-```rust
-async fn send_metric(
-    producer: &Producer,
-    metric_name: &str,
-    value: f64,
-    tags: Vec<(&str, &str)>,
-) -> Result<SendResult, Error> {
-    let metric_data = MetricData {
-        name: metric_name.to_string(),
-        value,
-        timestamp: Utc::now(),
-        tags,
-    };
-
-    let body = serde_json::to_vec(&metric_data)?;
-    let message = Message::new("Metrics".to_string(), body);
+    let message = Message::builder()
+        .topic("OrderEvents")
+        .body(body)
+        .tags(event_type)
+        .key(order_id)
+        .raw_property("event_type", event_type)?
+        .raw_property("timestamp", chrono::Utc::now().to_rfc3339())?
+        .build()?;
 
     producer.send(message).await
 }
@@ -264,39 +242,32 @@ async fn send_metric(
 
 ```rust
 async fn send_log(
-    producer: &Producer,
+    producer: &mut DefaultMQProducer,
     level: &str,
-    message: &str,
-    context: HashMap<String, String>,
-) -> Result<SendResult, Error> {
-    let log_entry = LogEntry {
-        level: level.to_string(),
-        message: message.to_string(),
-        timestamp: Utc::now(),
-        context,
-    };
+    message_text: &str,
+) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+    let message = Message::builder()
+        .topic("Logs")
+        .body(message_text)
+        .tags(level)
+        .build()?;
 
-    let body = serde_json::to_vec(&log_entry)?;
-    let mut msg = Message::new("Logs".to_string(), body);
-    msg.set_tags(level);
-
-    producer.send(msg).await
+    producer.send(message).await
 }
 ```
 
 ## Best Practices
 
-1. **Set meaningful keys**: Enable message tracking and querying
-2. **Use appropriate tags**: Facilitate message filtering
-3. **Handle failures gracefully**: Implement retry logic
-4. **Monitor performance**: Track success rates and latency
-5. **Batch when possible**: Use batch sending for high throughput
-6. **Validate message size**: Check size before sending
-7. **Use properties**: Store metadata in properties, not body
-8. **Implement idempotency**: Handle potential duplicate sends
+1. Set meaningful keys to simplify tracing and deduplication.
+2. Use tags for coarse filtering and properties for rich metadata.
+3. Apply retry with bounded attempts and visible logging.
+4. Track send success rate and latency continuously.
+5. Use batch sending when throughput is more important than per-message latency.
+6. Validate payload size before send.
+7. Keep producer-side schemas stable and versioned.
 
 ## Next Steps
 
 - [Transaction Messages](./transaction-messages) - Implement transactional messaging
-- [Configuration](../configuration) - Configure producer settings
+- [Client Configuration](../configuration/client-config) - Configure producer settings
 - [Consumer Guide](../consumer/overview) - Learn about consuming messages

@@ -5,73 +5,86 @@ title: Push Consumer
 
 # Push Consumer
 
-Push Consumer provides an event-driven approach to message consumption where messages are automatically delivered from the broker.
+Push consumption in RocketMQ-Rust is implemented by `DefaultMQPushConsumer`. The client pulls messages in the background and dispatches them to your listener callbacks.
 
 ## Creating a Push Consumer
 
 ```rust
-use rocketmq::consumer::PushConsumer;
-use rocketmq::conf::ConsumerOption;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+use rocketmq_error::RocketMQResult;
 
-let mut consumer_option = ConsumerOption::default();
-consumer_option.set_name_server_addr("localhost:9876");
-consumer_option.set_group_name("my_consumer_group");
+#[tokio::main]
+async fn main() -> RocketMQResult<()> {
+    let mut consumer = DefaultMQPushConsumer::builder()
+        .consumer_group("my_consumer_group")
+        .name_server_addr("localhost:9876")
+        .consume_thread_min(2)
+        .consume_thread_max(20)
+        .build();
 
-let consumer = PushConsumer::new(consumer_option);
-consumer.subscribe("TopicTest", "*").await?;
-consumer.start().await?;
+    consumer.subscribe("TopicTest", "*").await?;
+    consumer.start().await?;
+
+    Ok(())
+}
 ```
 
 ## Message Listeners
 
 ### Concurrent Message Listener
 
-Messages are processed concurrently within a queue:
-
 ```rust
-use rocketmq::listener::MessageListenerConcurrently;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_error::RocketMQResult;
 
 struct MyListener;
 
 impl MessageListenerConcurrently for MyListener {
     fn consume_message(
         &self,
-        messages: Vec<MessageExt>,
-    ) -> ConsumeResult {
+        messages: &[&MessageExt],
+        _context: &ConsumeConcurrentlyContext,
+    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
         for msg in messages {
-            println!("Processing: {:?}", msg.get_msg_id());
-            // Process message
+            println!("Processing: {:?}", msg.msg_id());
         }
-        ConsumeResult::Success
+        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
 }
 
-consumer.register_message_listener(Box::new(MyListener));
+consumer.register_message_listener_concurrently(MyListener);
 ```
 
 ### Ordered Message Listener
 
-Maintain strict ordering within a queue:
-
 ```rust
-use rocketmq::listener::MessageListenerOrderly;
+use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
+use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
+use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_error::RocketMQResult;
 
 struct OrderListener;
 
 impl MessageListenerOrderly for OrderListener {
     fn consume_message(
         &self,
-        messages: Vec<MessageExt>,
-    ) -> ConsumeResult {
-        // Messages are processed one by one in order
+        messages: &[&MessageExt],
+        context: &mut ConsumeOrderlyContext,
+    ) -> RocketMQResult<ConsumeOrderlyStatus> {
         for msg in messages {
             process_in_order(msg);
         }
-        ConsumeResult::Success
+        context.set_auto_commit(true);
+        Ok(ConsumeOrderlyStatus::Success)
     }
 }
 
-consumer.register_message_listener(Box::new(OrderListener));
+consumer.register_message_listener_orderly(OrderListener);
 ```
 
 ## Subscription Patterns
@@ -87,84 +100,64 @@ consumer.subscribe("TopicTest", "*").await?;
 ```rust
 consumer.subscribe("TopicA", "*").await?;
 consumer.subscribe("TopicB", "tag1 || tag2").await?;
-consumer.subscribe("TopicC", "region = 'us-west'").await?;
-```
-
-### Tag Filtering
-
-```rust
-// Subscribe to specific tags
-consumer.subscribe("OrderEvents", "order_created || order_paid").await?;
-
-// Subscribe to all tags
-consumer.subscribe("OrderEvents", "*").await?;
-
-// Exclude tags
-consumer.subscribe("OrderEvents", "!(order_cancelled)").await?;
-```
-
-## Concurrency Configuration
-
-```rust
-// Thread pool configuration
-consumer_option.set_consume_thread_min(2);
-consumer_option.set_consume_thread_max(20);
-
-// Process queue size
-consumer_option.set_process_queue_size(64);
-
-// Pull batch size
-consumer_option.set_pull_batch_size(32);
-
-// Pull interval (milliseconds)
-consumer_option.set_pull_interval(0);
-```
-
-## Advanced Features
-
-### Pause and Resume
-
-```rust
-// Pause consumption
-consumer.suspend();
-
-// Resume consumption
-consumer.resume();
 ```
 
 ### Message Selectors
 
 ```rust
-// Use message selector to filter at broker side
-use rocketmq::filter::MessageSelector;
+use rocketmq_client_rust::consumer::message_selector::MessageSelector;
 
 let selector = MessageSelector::by_sql("amount > 100 AND region = 'us-west'");
-consumer.subscribe_with_selector("OrderEvents", selector).await?;
+consumer
+    .subscribe_with_selector("OrderEvents", Some(selector))
+    .await?;
 ```
 
-### Offset Management
+## Concurrency Configuration
 
 ```rust
-// Set starting position
-consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("my_consumer_group")
+    .name_server_addr("localhost:9876")
+    .consume_thread_min(2)
+    .consume_thread_max(20)
+    .pull_batch_size(32)
+    .pull_interval(0)
+    .pull_threshold_for_queue(1024)
+    .pull_threshold_for_topic(10_000)
+    .build();
+```
 
-// Reset offset to specific timestamp
-consumer.seek_by_timestamp("TopicTest", 1699200000000).await?;
+## Offset Position
 
-// Reset offset to specific offset
-consumer.seek_to_offset("TopicTest", 0, 100).await?;
+```rust
+use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("my_consumer_group")
+    .name_server_addr("localhost:9876")
+    .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
+    .build();
+```
+
+## Pause and Resume
+
+```rust
+consumer.suspend().await;
+// ...
+consumer.resume().await;
 ```
 
 ## Best Practices
 
-1. **Use appropriate thread pool size**: Match to your message processing complexity
-2. **Handle exceptions**: Return appropriate consume results
-3. **Monitor consumer lag**: Track how far behind you are
-4. **Implement idempotency**: Handle duplicate message processing
-5. **Use appropriate subscription filters**: Reduce unnecessary message delivery
+1. Size consume threads according to your business handler complexity.
+2. Use concurrent listener for throughput, orderly listener for strict ordering.
+3. Keep listener logic idempotent to handle retries.
+4. Tune `pull_batch_size` and pull thresholds under real load.
+5. Prefer server-side filtering to reduce unnecessary network transfer.
 
 ## Next Steps
 
 - [Pull Consumer](./pull-consumer) - Learn about pull consumer
 - [Message Filtering](./message-filtering) - Advanced filtering techniques
-- [Configuration](../configuration) - Consumer configuration options
+- [Client Configuration](../configuration/client-config) - Consumer configuration options

@@ -28,7 +28,12 @@ title: 常见问题
 2. 检查 Name Server 地址：
 
     ```rust
-    producer_option.set_name_server_addr("localhost:9876");
+    use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+
+    let producer = DefaultMQProducer::builder()
+        .producer_group("check_group")
+        .name_server_addr("localhost:9876")
+        .build();
     ```
 
 3. 检查防火墙规则：
@@ -85,21 +90,21 @@ title: 常见问题
 
     ```rust
     // 确保消费组正确
-    consumer_option.set_group_name("correct_consumer_group");
+    consumer.set_consumer_group("correct_consumer_group");
     ```
 
 3. 检查消息模型：
 
     ```rust
     // 确认是集群还是广播模式
-    consumer_option.set_message_model(MessageModel::Clustering);
+    consumer.set_message_model(MessageModel::Clustering);
     ```
 
 4. 检查消费起点：
 
     ```rust
     // 可能从最新位点开始，导致历史消息不可见
-    consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset);
+    consumer.set_consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset);
     ```
 
 ### 重复消息（Duplicate Messages）
@@ -139,28 +144,33 @@ impl IdempotentProcessor {
 1. 增大批量参数：
 
     ```rust
-    producer_option.set_max_message_size(4 * 1024 * 1024);
-    consumer_option.set_pull_batch_size(64);
+    producer.set_max_message_size(4 * 1024 * 1024);
+    consumer.set_pull_batch_size(64);
     ```
 
 2. 启用压缩：
 
     ```rust
-    producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+    producer.set_compress_msg_body_over_howmuch(4 * 1024);
     ```
 
 3. 调整线程池：
 
     ```rust
-    consumer_option.set_consume_thread_min(10);
-    consumer_option.set_consume_thread_max(20);
+    consumer.set_consume_thread_min(10);
+    consumer.set_consume_thread_max(20);
     ```
 
 4. 使用异步发送：
 
     ```rust
-    producer.send_async(message, |result| {
-        // 处理结果
+    producer.send_with_callback(message, |result, error| {
+        if let Some(send_result) = result {
+            println!("Sent: {:?}", send_result);
+        }
+        if let Some(err) = error {
+            eprintln!("Send failed: {}", err);
+        }
     }).await?;
     ```
 
@@ -182,7 +192,7 @@ impl IdempotentProcessor {
 
     ```rust
     // 对大消息启用压缩
-    producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+    producer.set_compress_msg_body_over_howmuch(4 * 1024);
     ```
 
 3. 检查网络延迟：
@@ -212,14 +222,14 @@ impl IdempotentProcessor {
 1. 限制处理队列阈值：
 
     ```rust
-    consumer_option.set_pull_threshold_for_all(10000);
-    consumer_option.set_pull_threshold_for_queue(1000);
+    consumer.set_pull_threshold_for_topic(10000);
+    consumer.set_pull_threshold_for_queue(1000);
     ```
 
 2. 降低拉取批量：
 
     ```rust
-    consumer_option.set_pull_batch_size(32);
+    consumer.set_pull_batch_size(32);
     ```
 
 3. 优化消费逻辑：
@@ -251,14 +261,22 @@ impl IdempotentProcessor {
 
     ```rust
     // 处理后不要长期持有消息对象
-    impl MessageListener for MyListener {
-        fn consume_message(&self, messages: Vec<MessageExt>) -> ConsumeResult {
-            for msg in messages {
+    consumer.register_message_listener_concurrently(|messages, _ctx| {
+        for msg in messages {
                 process_message(&msg);
                 // 不要把 msg 放入长期存活的数据结构
-            }
-            ConsumeResult::Success
         }
+        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+    });
+    ```
+
+    ```rust
+    use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+    use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+
+    fn process_message(_msg: &&MessageExt) {
+        // 业务处理
     }
     ```
 
@@ -337,4 +355,4 @@ impl IdempotentProcessor {
 
 - [性能 FAQ](./performance) - 性能相关问题
 - [故障排查](./troubleshooting) - 高级调试方法
-- [配置概览](../configuration) - 查看配置选项
+- [Broker 配置](../configuration/broker-config) - 查看配置选项

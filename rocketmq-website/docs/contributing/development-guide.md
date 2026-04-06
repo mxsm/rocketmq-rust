@@ -20,6 +20,7 @@ Detailed guide for developing RocketMQ-Rust.
 **VS Code**:
 
 Install extensions:
+
 - rust-analyzer
 - CodeLLDB (debugger)
 - Even Better TOML
@@ -66,7 +67,7 @@ cargo test --all
 
 RocketMQ-Rust is a workspace-based project with multiple crates. Here's the high-level structure:
 
-```
+```tree
 rocketmq-rust/
 ├── rocketmq/              # Core library (utilities, scheduling, concurrency)
 ├── rocketmq-auth/         # Authentication and authorization
@@ -171,7 +172,7 @@ pub mod producer_impl;
 pub mod transaction_producer;
 
 pub use producer::Producer;
-pub use transaction_producer::TransactionProducer;
+pub use transaction_producer::TransactionMQProducer;
 ```
 
 ### Error Handling
@@ -205,9 +206,13 @@ mod tests {
 
     #[test]
     fn test_message_creation() {
-        let msg = Message::new("Test".to_string(), vec![1, 2, 3]);
-        assert_eq!(msg.get_topic(), "Test");
-        assert_eq!(msg.get_body(), &vec![1, 2, 3]);
+    let msg = Message::builder()
+      .topic("Test")
+      .body(vec![1, 2, 3])
+      .build()
+      .unwrap();
+    assert_eq!(msg.topic().as_str(), "Test");
+    assert_eq!(msg.body().unwrap().to_vec(), vec![1, 2, 3]);
     }
 }
 ```
@@ -218,10 +223,17 @@ mod tests {
 // tests/integration_test.rs
 #[tokio::test]
 async fn test_producer_send() {
-    let producer = Producer::new();
+  let mut producer = DefaultMQProducer::builder()
+    .producer_group("example_group")
+    .name_server_addr("localhost:9876")
+    .build();
     producer.start().await.unwrap();
 
-    let message = Message::new("TestTopic".to_string(), b"Test".to_vec());
+  let message = Message::builder()
+    .topic("TestTopic")
+    .body("Test")
+    .build()
+    .unwrap();
     let result = producer.send(message).await;
 
     assert!(result.is_ok());
@@ -236,8 +248,12 @@ use proptest::prelude::*;
 proptest! {
     #[test]
     fn test_message_roundtrip(topic in "[a-zA-Z0-9]+") {
-        let msg = Message::new(topic.clone(), vec![1, 2, 3]);
-        assert_eq!(msg.get_topic(), topic);
+    let msg = Message::builder()
+      .topic(topic.clone())
+      .body(vec![1, 2, 3])
+      .build()
+      .unwrap();
+    assert_eq!(msg.topic().as_str(), topic);
     }
 }
 ```
@@ -250,12 +266,20 @@ proptest! {
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn bench_send_message(c: &mut Criterion) {
-    let producer = Producer::new();
+  let mut producer = DefaultMQProducer::builder()
+    .producer_group("bench_group")
+    .name_server_addr("localhost:9876")
+    .build();
     let rt = tokio::runtime::Runtime::new().unwrap();
+  rt.block_on(producer.start()).unwrap();
 
     c.bench_function("send_message", |b| {
         b.iter(|| {
-            let message = Message::new("Test".to_string(), vec![0; 1024]);
+        let message = Message::builder()
+          .topic("Test")
+          .body(vec![0; 1024])
+          .build()
+          .unwrap();
             rt.block_on(producer.send(message)).unwrap();
         });
     });
@@ -286,12 +310,18 @@ criterion_main!(benches);
 /// # Examples
 ///
 /// ```no_run
-/// use rocketmq::producer::Producer;
-/// use rocketmq::model::Message;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+/// use rocketmq_common::common::message::message_single::Message;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let producer = Producer::new();
-/// let message = Message::new("TestTopic".to_string(), b"Hello".to_vec());
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
+/// let message = Message::builder()
+///     .topic("TestTopic")
+///     .body("Hello")
+///     .build()?;
 /// let result = producer.send(message).await?;
 /// # Ok(())
 /// # }

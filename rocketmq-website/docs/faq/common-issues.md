@@ -28,7 +28,12 @@ Solutions to frequently encountered problems when using RocketMQ-Rust.
 2. Verify name server address:
 
     ```rust
-    producer_option.set_name_server_addr("localhost:9876");
+    use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+
+    let producer = DefaultMQProducer::builder()
+        .producer_group("check_group")
+        .name_server_addr("localhost:9876")
+        .build();
     ```
 
 3. Check firewall settings:
@@ -85,21 +90,21 @@ Solutions to frequently encountered problems when using RocketMQ-Rust.
 
     ```rust
     // Ensure consumer group is correct
-    consumer_option.set_group_name("correct_consumer_group");
+    consumer.set_consumer_group("correct_consumer_group");
     ```
 
 3. Check message model:
 
     ```rust
     // Verify clustering vs broadcasting
-    consumer_option.set_message_model(MessageModel::Clustering);
+    consumer.set_message_model(MessageModel::Clustering);
     ```
 
 4. Check consumer position:
 
     ```rust
     // May be consuming from last offset
-    consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset);
+    consumer.set_consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset);
     ```
 
 ### Duplicate Messages
@@ -139,28 +144,33 @@ impl IdempotentProcessor {
 1. Increase batch size:
 
     ```rust
-    producer_option.set_max_message_size(4 * 1024 * 1024);
-    consumer_option.set_pull_batch_size(64);
+    producer.set_max_message_size(4 * 1024 * 1024);
+    consumer.set_pull_batch_size(64);
     ```
 
 2. Use compression:
 
     ```rust
-    producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+    producer.set_compress_msg_body_over_howmuch(4 * 1024);
     ```
 
 3. Optimize thread pools:
 
     ```rust
-    consumer_option.set_consume_thread_min(10);
-    consumer_option.set_consume_thread_max(20);
+    consumer.set_consume_thread_min(10);
+    consumer.set_consume_thread_max(20);
     ```
 
 4. Use async sending:
 
     ```rust
-    producer.send_async(message, |result| {
-        // Handle result
+    producer.send_with_callback(message, |result, error| {
+        if let Some(send_result) = result {
+            println!("Sent: {:?}", send_result);
+        }
+        if let Some(err) = error {
+            eprintln!("Send failed: {}", err);
+        }
     }).await?;
     ```
 
@@ -182,7 +192,7 @@ impl IdempotentProcessor {
 
     ```rust
     // Compress large messages
-    producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+    producer.set_compress_msg_body_over_howmuch(4 * 1024);
     ```
 
 3. Check network latency:
@@ -213,14 +223,14 @@ impl IdempotentProcessor {
 1. Limit process queue size:
 
     ```rust
-    consumer_option.set_pull_threshold_for_all(10000);
-    consumer_option.set_pull_threshold_for_queue(1000);
+    consumer.set_pull_threshold_for_topic(10000);
+    consumer.set_pull_threshold_for_queue(1000);
     ```
 
 2. Reduce pull batch size:
 
     ```rust
-    consumer_option.set_pull_batch_size(32);
+    consumer.set_pull_batch_size(32);
     ```
 
 3. Process messages faster:
@@ -252,14 +262,22 @@ impl IdempotentProcessor {
 
     ```rust
     // Don't hold onto messages after processing
-    impl MessageListener for MyListener {
-        fn consume_message(&self, messages: Vec<MessageExt>) -> ConsumeResult {
-            for msg in messages {
+    consumer.register_message_listener_concurrently(|messages, _ctx| {
+        for msg in messages {
                 process_message(&msg);
                 // Don't store msg in long-lived structures
-            }
-            ConsumeResult::Success
         }
+        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+    });
+    ```
+
+    ```rust
+    use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+    use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+
+    fn process_message(_msg: &&MessageExt) {
+        // business handling
     }
     ```
 
@@ -338,4 +356,4 @@ If you're still stuck:
 
 - [Performance FAQ](./performance) - Performance-related issues
 - [Troubleshooting](./troubleshooting) - Advanced debugging
-- [Configuration](../configuration) - Configuration options
+- [Broker Configuration](../configuration/broker-config) - Configuration options

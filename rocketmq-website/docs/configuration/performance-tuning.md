@@ -50,8 +50,14 @@ flushCommitLogLeastPages = 0
 ### Batch Size
 
 ```rust
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+
 // Increase batch size for higher throughput
-producer_option.set_max_message_size(4 * 1024 * 1024); // 4MB
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("perf_group")
+    .name_server_addr("localhost:9876")
+    .max_message_size(4 * 1024 * 1024) // 4MB
+    .build();
 
 // Send multiple messages
 let messages: Vec<Message> = /* ... */;
@@ -62,14 +68,23 @@ producer.send_batch(messages).await?;
 
 ```rust
 // Enable compression for large messages
-producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+producer.set_compress_msg_body_over_howmuch(4 * 1024);
 ```
 
 ### Connection Pool
 
 ```rust
-// Increase connection idle time
-producer_option.set_client_channel_max_idle_time_seconds(300);
+// Tune producer-side request and async backpressure controls
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("perf_group")
+    .name_server_addr("localhost:9876")
+    .send_msg_max_timeout_per_request(5_000)
+    .enable_backpressure_for_async_mode(true)
+    .back_pressure_for_async_send_num(10_000)
+    .back_pressure_for_async_send_size(64 * 1024 * 1024)
+    .build();
 ```
 
 ## Consumer Tuning
@@ -77,29 +92,39 @@ producer_option.set_client_channel_max_idle_time_seconds(300);
 ### Thread Pool
 
 ```rust
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+
 // For CPU-intensive processing
-consumer_option.set_consume_thread_min(num_cpus::get() as i32);
-consumer_option.set_consume_thread_max(num_cpus::get() as i32 * 2);
+let mut cpu_consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("cpu_group")
+    .name_server_addr("localhost:9876")
+    .consume_thread_min(num_cpus::get() as u32)
+    .consume_thread_max((num_cpus::get() as u32) * 2)
+    .build();
 
 // For I/O-intensive processing
-consumer_option.set_consume_thread_min(num_cpus::get() as i32 * 2);
-consumer_option.set_consume_thread_max(num_cpus::get() as i32 * 4);
+let mut io_consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("io_group")
+    .name_server_addr("localhost:9876")
+    .consume_thread_min((num_cpus::get() as u32) * 2)
+    .consume_thread_max((num_cpus::get() as u32) * 4)
+    .build();
 ```
 
 ### Pull Batch Size
 
 ```rust
 // Increase for higher throughput
-consumer_option.set_pull_batch_size(64);
-consumer_option.set_pull_interval(0);
+cpu_consumer.set_pull_batch_size(64);
+cpu_consumer.set_pull_interval(0);
 ```
 
 ### Process Queue
 
 ```rust
 // Limit memory usage
-consumer_option.set_pull_threshold_for_all(10000);
-consumer_option.set_pull_threshold_for_queue(1000);
+cpu_consumer.set_pull_threshold_for_topic(10000);
+cpu_consumer.set_pull_threshold_for_queue(1000);
 ```
 
 ## Network Tuning
@@ -187,14 +212,14 @@ mount -t xfs -o noatime,nodiratime /dev/sdb /data/rocketmq
 ### Monitoring Tools
 
 ```rust
-// RocketMQ-Rust metrics
-use rocketmq::metrics::Metrics;
+use std::time::Instant;
 
-let metrics = producer.get_metrics();
+let start = Instant::now();
+let result = producer.send(message).await?;
+let elapsed = start.elapsed();
 
-println!("Send TPS: {}", metrics.send_tps);
-println!("Avg Latency: {} ms", metrics.avg_latency);
-println!("Success Rate: {:.2}%", metrics.success_rate * 100.0);
+println!("Send result: {:?}", result);
+println!("Latency: {} ms", elapsed.as_millis());
 ```
 
 ## Performance Benchmarks
@@ -212,13 +237,21 @@ println!("Success Rate: {:.2}%", metrics.success_rate * 100.0);
 
 ```rust
 use std::time::Instant;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_common::common::message::message_single::Message;
 
-async fn benchmark_producer(producer: &Producer, num_messages: usize) -> Result<(), Error> {
+async fn benchmark_producer(
+    producer: &mut DefaultMQProducer,
+    num_messages: usize,
+) -> rocketmq_error::RocketMQResult<()> {
     let start = Instant::now();
 
     for i in 0..num_messages {
-        let body = format!("Message {}", i).into_bytes();
-        let message = Message::new("BenchmarkTopic".to_string(), body);
+        let message = Message::builder()
+            .topic("BenchmarkTopic")
+            .body(format!("Message {}", i))
+            .build()?;
         producer.send(message).await?;
     }
 
@@ -271,4 +304,4 @@ async fn benchmark_producer(producer: &Producer, num_messages: usize) -> Result<
 
 - [Broker Configuration](./broker-config) - Broker settings
 - [Client Configuration](./client-config) - Client settings
-- [FAQ](../faq) - Common issues
+- [Common Issues](../faq/common-issues) - Common issues

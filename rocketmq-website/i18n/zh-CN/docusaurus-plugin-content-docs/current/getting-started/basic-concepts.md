@@ -20,11 +20,14 @@ title: 基本概念
 - **Properties**：额外的键值元数据
 
 ```rust
-use rocketmq::model::Message;
+use rocketmq_common::common::message::message_single::Message;
 
-let message = Message::new("TopicTest".to_string(), b"Hello".to_vec());
-message.set_tags("tag1");
-message.set_keys("key1");
+let message = Message::builder()
+    .topic("TopicTest")
+    .body("Hello")
+    .tags("tag1")
+    .key("key1")
+    .build()?;
 ```
 
 ### 主题（Topic）
@@ -53,9 +56,13 @@ Topic: OrderEvents
 - 跨 Broker 负载均衡
 
 ```rust
-use rocketmq::producer::Producer;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
 
-let producer = Producer::new(producer_option);
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("example_group")
+    .name_server_addr("localhost:9876")
+    .build();
 producer.start().await?;
 producer.send(message).await?;
 ```
@@ -70,9 +77,13 @@ producer.send(message).await?;
 - **Pull Consumer**：消费者主动从 Broker 拉取消息
 
 ```rust
-use rocketmq::consumer::PushConsumer;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 
-let consumer = PushConsumer::new(consumer_option);
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("example_group")
+    .name_server_addr("localhost:9876")
+    .build();
 consumer.subscribe("TopicTest", "*").await?;
 consumer.start().await?;
 ```
@@ -170,7 +181,10 @@ graph LR
 - 每个消费组维护独立的消费位点
 
 ```rust
-consumer_option.set_group_name("my_consumer_group");
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("my_consumer_group")
+    .name_server_addr("localhost:9876")
+    .build();
 ```
 
 ## 下一步

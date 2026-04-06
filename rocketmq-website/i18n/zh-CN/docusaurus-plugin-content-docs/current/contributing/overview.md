@@ -76,26 +76,31 @@ git checkout -b feature/your-feature-name
 1. **编写代码**：遵循编码标准
 2. **添加测试**：确保测试覆盖率
 3. **格式化代码**：使用 rustfmt
-```bash
-cargo fmt
-```
+
+    ```bash
+    cargo fmt
+    ```
+
 4. **运行 linter**：使用 clippy
-```bash
-cargo clippy -- -D warnings
-```
+
+    ```bash
+    cargo clippy -- -D warnings
+    ```
+
 5. **运行测试**：确保所有测试通过
-```bash
-cargo test --all
-```
+
+    ```bash
+    cargo test --all
+    ```
 
 ### 提交更改
 
 使用清晰的提交信息：
 
-```
+```text
 feat: 添加事务消息支持
 
-- 实现 TransactionProducer
+- 实现 TransactionMQProducer
 - 添加事务监听器 trait
 - 为事务消息添加单元测试
 
@@ -103,6 +108,7 @@ Closes #123
 ```
 
 提交信息格式：
+
 - `feat:` 新功能
 - `fix:` Bug 修复
 - `docs:` 文档更改
@@ -114,9 +120,10 @@ Closes #123
 ### 提交拉取请求
 
 1. **推送到你的 fork**：
-```bash
-git push origin feature/your-feature-name
-```
+
+    ```bash
+    git push origin feature/your-feature-name
+    ```
 
 2. **创建拉取请求**：在 GitHub 上
 
@@ -175,10 +182,13 @@ use crate::model::Message;
 /// # 示例
 ///
 /// ```rust
-/// use rocketmq::producer::Producer;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let producer = Producer::new();
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
 /// producer.start().await?;
 /// # Ok(())
 /// # }
@@ -238,10 +248,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_message() {
-        let producer = Producer::new();
+        let mut producer = DefaultMQProducer::builder()
+            .producer_group("example_group")
+            .name_server_addr("localhost:9876")
+            .build();
         producer.start().await.unwrap();
 
-        let message = Message::new("TestTopic".to_string(), b"Test".to_vec());
+        let message = Message::builder()
+            .topic("TestTopic")
+            .body("Test")
+            .build()
+            .unwrap();
         let result = producer.send(message).await;
 
         assert!(result.is_ok());
@@ -268,9 +285,14 @@ cargo doc --no-deps --open
 /// # 示例
 ///
 /// ```
-/// use rocketmq::producer::Producer;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+/// use rocketmq_common::common::message::message_single::Message;
 ///
-/// let producer = Producer::new();
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
+/// let message = Message::builder().topic("TopicTest").body("hello").build().unwrap();
 /// ```
 ///
 /// # 错误

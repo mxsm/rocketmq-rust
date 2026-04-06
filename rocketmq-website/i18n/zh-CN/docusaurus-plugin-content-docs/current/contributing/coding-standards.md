@@ -12,6 +12,7 @@ title: 编码标准
 ## 为什么编码标准很重要
 
 一致的代码：
+
 - **更易于阅读**和理解
 - **更易于维护**和调试
 - **更易于审查**拉取请求
@@ -89,7 +90,7 @@ use crate::error::Result;
 
 pub async fn send_message(&self, msg: Message) -> Result<SendResult> {
     // 使用 ? 进行错误传播 - 简洁且地道
-    let broker = self.find_broker(&msg.topic)?;
+    let broker = resolve_broker(&msg.topic)?;
 
     // ⚠️ 在库代码中避免使用 unwrap() - 它可能导致 panic！
     // ✅ 相反，应显式处理错误
@@ -131,7 +132,7 @@ RocketMQ-Rust 使用 `tokio` 作为异步运行时。所有 I/O 操作都应该�
 ```rust
 // ✅ 对异步操作使用 async/await
 pub async fn send(&self, msg: Message) -> Result<SendResult> {
-    let broker = self.get_broker().await?;
+    let broker = resolve_broker_async().await?;
     broker.send(msg).await
 }
 
@@ -153,13 +154,13 @@ pub async fn send_batch(&self, msgs: Vec<Message>) -> Result<Vec<SendResult>> {
 pub async fn send_bad(&self, msg: Message) -> Result<SendResult> {
     // 不要这样做 - 会阻塞异步运行时！
     std::thread::sleep(std::time::Duration::from_secs(1));
-    self.send_impl(msg).await
+    self.send(msg).await
 }
 
 // ✅ 好的做法：使用 tokio 的异步 sleep
 pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    self.send_impl(msg).await
+    self.send(msg).await
 }
 ```
 
@@ -175,10 +176,13 @@ pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
 /// # 示例
 ///
 /// ```rust
-/// use rocketmq::producer::Producer;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let producer = Producer::new();
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
 /// producer.start().await?;
 /// # Ok(())
 /// # }
@@ -208,11 +212,17 @@ pub struct Producer { }
 //! # 示例
 //!
 //! ```rust
-//! use rocketmq::producer::Producer;
+//! use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let producer = Producer::new();
-//! let message = Message::new("TopicTest".to_string(), b"Hello".to_vec());
+//! let mut producer = DefaultMQProducer::builder()
+//!     .producer_group("example_group")
+//!     .name_server_addr("localhost:9876")
+//!     .build();
+//! let message = Message::builder()
+//!     .topic("TopicTest")
+//!     .body("Hello")
+//!     .build()?;
 //! producer.send(message).await?;
 //! # Ok(())
 //! # }
@@ -230,8 +240,12 @@ mod tests {
 
     #[test]
     fn test_message_creation() {
-        let msg = Message::new("Test".to_string(), vec![1, 2, 3]);
-        assert_eq!(msg.get_topic(), "Test");
+        let msg = Message::builder()
+            .topic("Test")
+            .body(vec![1, 2, 3])
+            .build()
+            .unwrap();
+        assert_eq!(msg.topic().as_str(), "Test");
     }
 
     #[tokio::test]
@@ -248,10 +262,16 @@ mod tests {
 // tests/integration_test.rs
 #[tokio::test]
 async fn test_producer_consumer() {
-    let producer = Producer::new();
+    let mut producer = DefaultMQProducer::builder()
+        .producer_group("example_group")
+        .name_server_addr("localhost:9876")
+        .build();
     producer.start().await.unwrap();
 
-    let consumer = PushConsumer::new();
+    let mut consumer = DefaultMQPushConsumer::builder()
+        .consumer_group("example_group")
+        .name_server_addr("localhost:9876")
+        .build();
     consumer.subscribe("TestTopic", "*").await.unwrap();
 
     // 测试逻辑
@@ -273,6 +293,7 @@ cargo fmt --all --check
 ```
 
 **专业提示**：配置 IDE 在保存时自动格式化：
+
 - **VS Code**：使用 rust-analyzer 设置 `"editor.formatOnSave": true`
 - **RustRover**：在设置 → 工具 → 保存时操作中启用"重新格式化代码"
 
@@ -293,6 +314,7 @@ cargo clippy --fix --all-targets --all-features --workspace
 ### 常见模式
 
 **构建器模式**：
+
 ```rust
 pub struct ProducerOptions {
     name_server_addr: String,
@@ -322,6 +344,7 @@ impl ProducerOptions {
 ```
 
 **Newtype 模式**：
+
 ```rust
 /// 带验证的消息 ID 包装器
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -402,6 +425,7 @@ let (tx, mut rx) = mpsc::channel(1000);
 ### 1. 在库代码中使用 `unwrap()` 或 `panic!()`
 
 ❌ **坏的做法**：
+
 ```rust
 pub fn get_broker(&self) -> Broker {
     self.brokers.get(0).unwrap()  // 可能 panic！
@@ -409,6 +433,7 @@ pub fn get_broker(&self) -> Broker {
 ```
 
 ✅ **好的做法**：
+
 ```rust
 pub fn get_broker(&self) -> Result<&Broker> {
     self.brokers.get(0).ok_or(Error::NoBrokerAvailable)
@@ -418,11 +443,13 @@ pub fn get_broker(&self) -> Result<&Broker> {
 ### 2. 忽略错误
 
 ❌ **坏的做法**：
+
 ```rust
 let _ = self.send(msg).await;  // 错误被静默忽略！
 ```
 
 ✅ **好的做法**：
+
 ```rust
 if let Err(e) = self.send(msg).await {
     log::error!("Failed to send message: {}", e);
@@ -433,6 +460,7 @@ if let Err(e) = self.send(msg).await {
 ### 3. 在异步代码中阻塞
 
 ❌ **坏的做法**：
+
 ```rust
 pub async fn send(&self) -> Result<()> {
     std::thread::sleep(Duration::from_secs(1));  // 阻塞执行器！
@@ -440,6 +468,7 @@ pub async fn send(&self) -> Result<()> {
 ```
 
 ✅ **好的做法**：
+
 ```rust
 pub async fn send(&self) -> Result<()> {
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -449,17 +478,19 @@ pub async fn send(&self) -> Result<()> {
 ### 4. 不必要的克隆
 
 ❌ **坏的做法**：
+
 ```rust
 pub fn process(&self, data: String) -> Result<()> {
     let copy = data.clone();  // 不必要！
-    self.process_impl(&copy)
+    process_data(&copy)
 }
 ```
 
 ✅ **好的做法**：
+
 ```rust
 pub fn process(&self, data: &str) -> Result<()> {
-    self.process_impl(data)
+    process_data(data)
 }
 ```
 
@@ -480,17 +511,20 @@ pub fn process(&self, data: &str) -> Result<()> {
 想编写更好的 Rust 代码？查看这些资源：
 
 ### 官方 Rust 资源
+
 - [The Rust Book](https://doc.rust-lang.org/book/) - 全面的 Rust 指南
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) - API 设计最佳实践
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/) - 通过示例学习
 - [Clippy Lint List](https://rust-lang.github.io/rust-clippy/master/index.html) - 所有 clippy lints 解释
 
 ### 高级主题
+
 - [Async Book](https://rust-lang.github.io/async-book/) - 深入异步 Rust
 - [Tokio Tutorial](https://tokio.rs/tokio/tutorial) - 异步运行时指南
 - [The Rustonomicon](https://doc.rust-lang.org/nomicon/) - Unsafe Rust（高级）
 
 ### RocketMQ-Rust 专用
+
 - [架构概述](/docs/zh-CN/architecture/overview) - 了解代码库结构
 - [开发指南](./development-guide) - 设置开发环境
 - [贡献概述](./overview) - 立即开始贡献！
@@ -498,6 +532,7 @@ pub fn process(&self, data: &str) -> Result<()> {
 ## 总结
 
 请记住：
+
 - ✅ 编写地道的 Rust 代码
 - ✅ 使用 `Result` 正确处理错误
 - ✅ 对 I/O 操作使用 async/await

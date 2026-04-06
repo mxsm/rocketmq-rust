@@ -77,9 +77,10 @@ The Name Server is a lightweight registry service that provides:
 
 **Key Operations:**
 
-```rust
-// Client queries name server for broker addresses
-let broker_addrs = name_server.lookup_broker("TopicTest").await?;
+```text
+// Pseudo flow:
+// Client queries NameServer route data for TopicTest
+// NameServer returns broker/queue route entries
 ```
 
 ### 2. Broker

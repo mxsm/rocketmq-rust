@@ -20,11 +20,14 @@ A message is the fundamental unit of communication in RocketMQ. Each message con
 - **Properties**: Additional key-value pairs for metadata
 
 ```rust
-use rocketmq::model::Message;
+use rocketmq_common::common::message::message_single::Message;
 
-let message = Message::new("TopicTest".to_string(), b"Hello".to_vec());
-message.set_tags("tag1");
-message.set_keys("key1");
+let message = Message::builder()
+    .topic("TopicTest")
+    .body("Hello")
+    .tags("tag1")
+    .key("key1")
+    .build()?;
 ```
 
 ### Topic
@@ -53,9 +56,13 @@ Producers are applications that send messages to RocketMQ brokers.
 - Load balancing across brokers
 
 ```rust
-use rocketmq::producer::Producer;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
 
-let producer = Producer::new(producer_option);
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("example_group")
+    .name_server_addr("localhost:9876")
+    .build();
 producer.start().await?;
 producer.send(message).await?;
 ```
@@ -70,9 +77,13 @@ Consumers are applications that receive and process messages from RocketMQ broke
 - **Pull Consumer**: Consumer actively pulls messages from the broker
 
 ```rust
-use rocketmq::consumer::PushConsumer;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 
-let consumer = PushConsumer::new(consumer_option);
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("example_group")
+    .name_server_addr("localhost:9876")
+    .build();
 consumer.subscribe("TopicTest", "*").await?;
 consumer.start().await?;
 ```
@@ -170,7 +181,10 @@ A consumer group is a logical grouping of consumers that work together to consum
 - Each group maintains its own consumer offsets
 
 ```rust
-consumer_option.set_group_name("my_consumer_group");
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("my_consumer_group")
+    .name_server_addr("localhost:9876")
+    .build();
 ```
 
 ## Next Steps

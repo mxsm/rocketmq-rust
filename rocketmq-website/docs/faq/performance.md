@@ -38,27 +38,36 @@ Throughput depends on many factors:
 1. **Increase batch size**:
 
     ```rust
-    producer_option.set_max_message_size(4 * 1024 * 1024);
-    consumer_option.set_pull_batch_size(64);
+    let mut producer = DefaultMQProducer::builder()
+        .producer_group("perf_group")
+        .name_server_addr("localhost:9876")
+        .max_message_size(4 * 1024 * 1024)
+        .build();
+
+    let mut consumer = DefaultMQPushConsumer::builder()
+        .consumer_group("perf_group")
+        .name_server_addr("localhost:9876")
+        .pull_batch_size(64)
+        .build();
     ```
 
 2. **Use compression**:
 
     ```rust
-    producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+    producer.set_compress_msg_body_over_howmuch(4 * 1024);
     ```
 
 3. **Optimize thread pools**:
 
     ```rust
-    consumer_option.set_consume_thread_min(10);
-    consumer_option.set_consume_thread_max(20);
+    consumer.set_consume_thread_min(10);
+    consumer.set_consume_thread_max(20);
     ```
 
 4. **Use async sending**:
 
     ```rust
-    producer.send_async(message, callback).await?;
+    producer.send_with_callback(message, callback).await?;
     ```
 
 5. **Tune broker**:
@@ -114,7 +123,7 @@ Default: 4MB
 Can be configured:
 
 ```rust
-producer_option.set_max_message_size(8 * 1024 * 1024); // 8MB
+producer.set_max_message_size(8 * 1024 * 1024); // 8MB
 ```
 
 Also configure broker:
@@ -133,11 +142,14 @@ maxMessageSize = 8388608
 
 ```rust
 // Enable compression
-producer_option.set_compress_msg_body_over_threshold(4 * 1024);
+producer.set_compress_msg_body_over_howmuch(4 * 1024);
 
 // Compress before sending
 let compressed = compress(&data)?;
-let message = Message::new("TopicTest".to_string(), compressed);
+let message = Message::builder()
+    .topic("TopicTest")
+    .body(compressed)
+    .build()?;
 ```
 
 ## Scalability
@@ -228,12 +240,9 @@ Example:
 
 ### How to calculate consumer lag?
 
-```rust
-let max_offset = consumer.get_max_offset(queue)?;
-let current_offset = consumer.get_current_offset(queue)?;
-let lag = max_offset - current_offset;
-
-println!("Consumer lag: {} messages", lag);
+```bash
+# Check consumer progress and lag from broker side
+sh mqadmin consumerProgress -n localhost:9876 -g <consumer_group>
 ```
 
 ## Benchmarks
@@ -241,20 +250,30 @@ println!("Consumer lag: {} messages", lag);
 ### How to run benchmarks?
 
 ```rust
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_common::common::message::message_single::Message;
 use std::time::Instant;
 
-async fn benchmark_send(producer: &Producer, count: usize) {
+async fn benchmark_send(
+    producer: &mut DefaultMQProducer,
+    count: usize,
+) -> rocketmq_error::RocketMQResult<()> {
     let start = Instant::now();
 
     for i in 0..count {
         let body = format!("Message {}", i).into_bytes();
-        let message = Message::new("BenchmarkTopic".to_string(), body);
+        let message = Message::builder()
+            .topic("BenchmarkTopic")
+            .body(body)
+            .build()?;
         producer.send(message).await?;
     }
 
     let elapsed = start.elapsed();
     let tps = count as f64 / elapsed.as_secs_f64();
     println!("TPS: {:.2}", tps);
+    Ok(())
 }
 ```
 
@@ -272,4 +291,4 @@ async fn benchmark_send(producer: &Producer, count: usize) {
 
 - [Performance Tuning](../configuration/performance-tuning) - Detailed optimization
 - [Common Issues](./common-issues) - Other problems
-- [Configuration](../configuration) - All configuration options
+- [Broker Configuration](../configuration/broker-config) - All configuration options

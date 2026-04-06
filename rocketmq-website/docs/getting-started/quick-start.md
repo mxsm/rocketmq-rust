@@ -35,43 +35,39 @@ Add RocketMQ to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rocketmq = "0.3"
+rocketmq-client-rust = "0.8"
+rocketmq-common = "0.8"
+rocketmq-error = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 
 Create `src/main.rs`:
 
 ```rust
-use rocketmq::producer::Producer;
-use rocketmq::conf::ProducerOption;
-use rocketmq::model::Message;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_common::common::message::message_single::Message;
+use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure producer
-    let mut producer_option = ProducerOption::default();
-    producer_option.set_name_server_addr("localhost:9876");
-    producer_option.set_group_name("producer_group_1");
+async fn main() -> RocketMQResult<()> {
+    let mut producer = DefaultMQProducer::builder()
+        .producer_group("producer_group_1")
+        .name_server_addr("localhost:9876")
+        .build();
 
-    // Create producer
-    let producer = Producer::new(producer_option);
-
-    // Start producer
     producer.start().await?;
 
-    // Create message
-    let message = Message::new(
-        "TopicTest".to_string(),
-        b"Hello, RocketMQ-Rust!".to_vec(),
-    );
+    let message = Message::builder()
+        .topic("TopicTest")
+        .tags("TagA")
+        .body("Hello, RocketMQ-Rust!")
+        .build()?;
 
-    // Send message
-    let result = producer.send(message).await?;
+    let result = producer.send_with_timeout(message, 3_000).await?;
     println!("Message sent: {:?}", result);
 
-    // Shutdown producer
-    producer.shutdown().await?;
-
+    producer.shutdown().await;
     Ok(())
 }
 ```
@@ -89,59 +85,55 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-rocketmq = "0.3"
+rocketmq-client-rust = "0.8"
+rocketmq-common = "0.8"
+rocketmq-error = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 
 Create `src/main.rs`:
 
 ```rust
-use rocketmq::consumer::PushConsumer;
-use rocketmq::conf::ConsumerOption;
-use rocketmq::listener::MessageListener;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
+use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
+use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_error::RocketMQResult;
 
 struct MyListener;
 
-impl MessageListener for MyListener {
+impl MessageListenerConcurrently for MyListener {
     fn consume_message(
         &self,
-        messages: Vec<rocketmq::model::MessageExt>,
-    ) -> rocketmq::error::ConsumeResult {
-        for msg in messages {
+        messages: &[&MessageExt],
+        _context: &ConsumeConcurrentlyContext,
+    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+        for msg in &messages {
             println!("Received message: {:?}", msg);
         }
-        rocketmq::error::ConsumeResult::Success
+        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure consumer
-    let mut consumer_option = ConsumerOption::default();
-    consumer_option.set_name_server_addr("localhost:9876");
-    consumer_option.set_group_name("consumer_group_1");
-    consumer_option.set_consume_thread_min(1);
-    consumer_option.set_consume_thread_max(1);
+async fn main() -> RocketMQResult<()> {
+    let mut consumer = DefaultMQPushConsumer::builder()
+        .consumer_group("consumer_group_1")
+        .name_server_addr("localhost:9876")
+        .consume_thread_min(1)
+        .consume_thread_max(1)
+        .build();
 
-    // Create consumer
-    let consumer = PushConsumer::new(consumer_option);
-
-    // Subscribe to topic
     consumer.subscribe("TopicTest", "*").await?;
-
-    // Register message listener
-    consumer.register_message_listener(Box::new(MyListener));
-
-    // Start consumer
+    consumer.register_message_listener_concurrently(MyListener);
     consumer.start().await?;
 
     println!("Consumer started. Press Ctrl+C to exit.");
 
-    // Keep running
-    tokio::signal::ctrl_c().await?;
-
-    // Shutdown consumer
-    consumer.shutdown().await?;
+    let _ = tokio::signal::ctrl_c().await;
+    consumer.shutdown().await;
 
     Ok(())
 }

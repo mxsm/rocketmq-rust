@@ -5,15 +5,15 @@ title: Transaction Messages
 
 # Transaction Messages
 
-Transaction messages enable distributed transaction consistency between message sending and local database operations.
+Transaction messages are used to keep message delivery and local business state consistent.
 
 ## Overview
 
 Transaction messages ensure that:
 
-1. Message sending and local transactions succeed or fail atomically
-2. Messages are delivered only after the local transaction commits
-3. System eventually reaches a consistent state
+1. The half message is persisted before local business execution.
+2. The final visibility (commit/rollback) depends on local transaction state.
+3. Unknown states can be checked by broker callbacks.
 
 ## Transaction Flow
 
@@ -24,43 +24,41 @@ sequenceDiagram
     participant L as Local Transaction
     participant C as Consumer
 
-    P->>B: Send half message (prepared state)
-    B->>B: Store half message
-    B-->>P: Acknowledge
-
+    P->>B: Send half message
+    B-->>P: Ack half message
     P->>L: Execute local transaction
-    L-->>P: Return transaction status
+    L-->>P: Return local state
 
     alt Commit
-        P->>B: Commit transaction
-        B->>B: Make message visible
+        P->>B: Commit message
         B->>C: Deliver message
     else Rollback
-        P->>B: Rollback transaction
-        B->>B: Delete half message
+        P->>B: Rollback message
     else Unknown
-        B->>B: Check transaction status
-        B->>P: Query transaction status
-        P-->>B: Return status
-        B->>B: Commit or rollback
+        B->>P: Check local transaction
+        P-->>B: Return local state
     end
 ```
 
 ## Creating a Transaction Producer
 
 ```rust
-use rocketmq::producer::TransactionProducer;
-use rocketmq::conf::ProducerOption;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
+use rocketmq_error::RocketMQResult;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut producer_option = ProducerOption::default();
-    producer_option.set_name_server_addr("localhost:9876");
-    producer_option.set_group_name("transaction_producer_group");
+async fn main() -> RocketMQResult<()> {
+    let mut producer = TransactionMQProducer::builder()
+        .producer_group("transaction_producer_group")
+        .name_server_addr("localhost:9876")
+        .topics(vec!["OrderEvents"])
+        .transaction_listener(OrderTransactionListener::default())
+        .build();
 
-    let producer = TransactionProducer::new(producer_option)?;
     producer.start().await?;
-
+    // Send transaction messages ...
+    producer.shutdown().await;
     Ok(())
 }
 ```
@@ -68,47 +66,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Implementing Transaction Listener
 
 ```rust
-use rocketmq::listener::TransactionListener;
-use rocketmq::error::TransactionSendResult;
+use std::any::Any;
 
-struct OrderTransactionListener {
-    db_connection: DatabaseConnection,
-}
+use cheetah_string::CheetahString;
+use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
+use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::MessageTrait;
+
+#[derive(Default)]
+struct OrderTransactionListener;
 
 impl TransactionListener for OrderTransactionListener {
-    /// Execute local transaction
-    async fn execute_local_transaction(
+    fn execute_local_transaction(
         &self,
-        message: &Message,
-        arg: &str,
-    ) -> TransactionSendResult {
-        // Parse message to get order data
-        let order: Order = serde_json::from_slice(message.get_body())?;
-
-        // Execute local transaction
-        match self.db_connection.create_order(&order).await {
-            Ok(_) => {
-                println!("Order created successfully");
-                TransactionSendResult::Commit
-            }
-            Err(e) => {
-                eprintln!("Failed to create order: {:?}", e);
-                TransactionSendResult::Rollback
-            }
-        }
+        msg: &dyn MessageTrait,
+        _arg: Option<&(dyn Any + Send + Sync)>,
+    ) -> LocalTransactionState {
+        // Implement your local transaction with msg body/properties.
+        let _tx_id: Option<&CheetahString> = msg.transaction_id();
+        LocalTransactionState::Unknown
     }
 
-    /// Check transaction status (called by broker on unknown status)
-    async fn check_local_transaction(
-        &self,
-        msg_id: &str,
-    ) -> TransactionSendResult {
-        // Check if order exists in database
-        match self.db_connection.get_order_by_msg_id(msg_id).await {
-            Ok(Some(_)) => TransactionSendResult::Commit,
-            Ok(None) => TransactionSendResult::Rollback,
-            Err(_) => TransactionSendResult::Unknown,
-        }
+    fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
+        // Query local storage and return CommitMessage / RollbackMessage / Unknown.
+        LocalTransactionState::Unknown
     }
 }
 ```
@@ -116,216 +98,71 @@ impl TransactionListener for OrderTransactionListener {
 ## Sending Transaction Messages
 
 ```rust
-use rocketmq::model::Message;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_common::common::message::message_single::Message;
 
-// Create transaction listener
-let listener = OrderTransactionListener {
-    db_connection: db_conn,
-};
+let message = Message::builder()
+    .topic("OrderEvents")
+    .tags("order_created")
+    .key("order_12345")
+    .body("{\"order_id\":\"order_12345\"}")
+    .build()?;
 
-// Register listener
-producer.set_transaction_listener(listener);
+let result = producer
+    .send_message_in_transaction(message, Some("order_12345".to_string()))
+    .await?;
 
-// Prepare message
-let order = Order {
-    id: "order_12345".to_string(),
-    amount: 99.99,
-    customer_id: "customer_67890".to_string(),
-};
-
-let body = serde_json::to_vec(&order)?;
-let mut message = Message::new("OrderEvents".to_string(), body);
-message.set_tags("order_created");
-message.set_keys(&order.id);
-
-// Send transaction message
-let result = producer.send_transactional_message(message, &order.id).await?;
-
-println!("Transaction message sent: {:?}", result);
+println!("Transaction message sent: {}", result);
 ```
 
-## Transaction States
+## Local Transaction State Handling (Pseudo Code)
 
-### Commit
+```text
+execute_local_transaction(message):
+  if local business succeeds:
+    return CommitMessage
+  if local business fails permanently:
+    return RollbackMessage
+  if local result is uncertain:
+    return Unknown
 
-The local transaction succeeded, message should be delivered:
-
-```rust
-async fn execute_local_transaction(
-    &self,
-    message: &Message,
-    arg: &str,
-) -> TransactionSendResult {
-    match self.process_order(message).await {
-        Ok(_) => TransactionSendResult::Commit,
-        Err(_) => TransactionSendResult::Rollback,
-    }
-}
-```
-
-### Rollback
-
-The local transaction failed, message should be discarded:
-
-```rust
-async fn execute_local_transaction(
-    &self,
-    message: &Message,
-    arg: &str,
-) -> TransactionSendResult {
-    if self.validate_business_rules(message).await {
-        TransactionSendResult::Commit
-    } else {
-        TransactionSendResult::Rollback
-    }
-}
-```
-
-### Unknown
-
-Transaction status is unclear, broker will check back later:
-
-```rust
-async fn execute_local_transaction(
-    &self,
-    message: &Message,
-    arg: &str,
-) -> TransactionSendResult {
-    match self.process_order(message).await {
-        Ok(_) => TransactionSendResult::Commit,
-        Err(_) if is_transient_error() => TransactionSendResult::Unknown,
-        Err(_) => TransactionSendResult::Rollback,
-    }
-}
-```
-
-## Transaction Check
-
-The broker periodically checks transaction status when state is unknown:
-
-```rust
-async fn check_local_transaction(
-    &self,
-    msg_id: &str,
-) -> TransactionSendResult {
-    // Query database for transaction status
-    let tx_status = self.db_connection
-        .get_transaction_status(msg_id)
-        .await?;
-
-    match tx_status {
-        TransactionStatus::Committed => TransactionSendResult::Commit,
-        TransactionStatus::RolledBack => TransactionSendResult::Rollback,
-        TransactionStatus::Pending => TransactionSendResult::Unknown,
-    }
-}
-```
-
-## Common Patterns
-
-### Account Transfer
-
-```rust
-struct TransferTransactionListener {
-    db: DatabaseConnection,
-}
-
-impl TransactionListener for TransferTransactionListener {
-    async fn execute_local_transaction(
-        &self,
-        message: &Message,
-        arg: &str,
-    ) -> TransactionSendResult {
-        let transfer: Transfer = serde_json::from_slice(message.get_body())?;
-
-        // Execute transfer in local transaction
-        match self.db.transfer_funds(&transfer).await {
-            Ok(_) => TransactionSendResult::Commit,
-            Err(_) => TransactionSendResult::Rollback,
-        }
-    }
-
-    async fn check_local_transaction(
-        &self,
-        msg_id: &str,
-    ) -> TransactionSendResult {
-        match self.db.get_transfer_status(msg_id).await {
-            Some(status) if status == "completed" => TransactionSendResult::Commit,
-            Some(status) if status == "failed" => TransactionSendResult::Rollback,
-            _ => TransactionSendResult::Unknown,
-        }
-    }
-}
-```
-
-### Inventory Update
-
-```rust
-struct InventoryTransactionListener {
-    db: DatabaseConnection,
-}
-
-impl TransactionListener for InventoryTransactionListener {
-    async fn execute_local_transaction(
-        &self,
-        message: &Message,
-        arg: &str,
-    ) -> TransactionSendResult {
-        let order: Order = serde_json::from_slice(message.get_body())?;
-
-        // Check and reserve inventory
-        match self.db.reserve_inventory(&order.items).await {
-            Ok(_) => TransactionSendResult::Commit,
-            Err(_) => TransactionSendResult::Rollback,
-        }
-    }
-
-    async fn check_local_transaction(
-        &self,
-        msg_id: &str,
-    ) -> TransactionSendResult {
-        match self.db.get_inventory_reservation(msg_id).await {
-            Some(_) => TransactionSendResult::Commit,
-            None => TransactionSendResult::Rollback,
-        }
-    }
-}
+check_local_transaction(message):
+  query local transaction table by transaction id
+  return CommitMessage / RollbackMessage / Unknown
 ```
 
 ## Configuration
 
+`TransactionMQProducer::builder()` currently exposes thread-pool and check queue controls:
+
 ```rust
-let mut producer_option = ProducerOption::default();
-
-// Transaction check timeout (milliseconds)
-producer_option.set_transaction_check_timeout(3000);
-
-// Maximum number of check retries
-producer_option.set_transaction_check_max_retry(15);
-
-// Check interval (milliseconds)
-producer_option.set_transaction_check_interval(60000);
+let mut producer = TransactionMQProducer::builder()
+    .producer_group("transaction_producer_group")
+    .name_server_addr("localhost:9876")
+    .topics(vec!["OrderEvents"])
+    .transaction_listener(OrderTransactionListener::default())
+    .check_thread_pool_min_size(2)
+    .check_thread_pool_max_size(8)
+    .check_request_hold_max(2_000)
+    .build();
 ```
 
 ## Best Practices
 
-1. **Keep transactions short**: Local transactions should complete quickly
-2. **Implement idempotency**: Ensure local transactions can be safely retried
-3. **Handle check logic**: Implement robust check logic for unknown states
-4. **Monitor transaction status**: Track transaction success/failure rates
-5. **Set appropriate timeouts**: Balance between consistency and performance
-6. **Use proper error handling**: Distinguish between transient and permanent errors
-7. **Log transaction outcomes**: Maintain audit trail for debugging
+1. Keep local transaction execution short and deterministic.
+2. Persist transaction outcome before returning commit/rollback.
+3. Implement idempotent local transaction logic.
+4. Return `Unknown` only for transient uncertainty, not for permanent errors.
+5. Monitor transaction check frequency and unknown-state duration.
 
 ## Limitations
 
-- Transaction messages add latency compared to normal messages
-- Requires additional database queries for check operations
-- Not suitable for high-frequency transactions
-- Broker resources are consumed during transaction checking
+- Transaction messages have higher latency than normal messages.
+- Brokers hold half messages until commit/rollback is resolved.
+- Poorly designed check logic can cause long pending windows.
 
 ## Next Steps
 
-- [Configuration](../configuration) - Configure transaction settings
-- [Consumer Guide](../consumer/overview) - Learn about consuming transaction messages
-- [Troubleshooting](../faq/troubleshooting) - Debug transaction issues
+- [Client Configuration](../configuration/client-config) - Configure producer/client options
+- [Consumer Guide](../consumer/overview) - Learn consumer-side handling
+- [Troubleshooting](../faq/troubleshooting) - Diagnose production issues

@@ -271,9 +271,15 @@ grep "ERROR" ~/logs/rocketmqfiles/consumer.log | tail -100
 
 Enable message trace:
 
-```rust
-producer_option.set_enable_msg_trace(true);
-consumer_option.set_enable_msg_trace(true);
+```text
+Trace setup is implementation-specific in current APIs.
+
+Example (Lite Pull Consumer):
+DefaultLitePullConsumer::builder()
+    .enable_msg_trace()
+    .build();
+
+For producer/push consumer tracing, configure a trace dispatcher in your bootstrap code.
 ```
 
 Query messages by ID or key:
@@ -334,4 +340,4 @@ If you're still stuck:
 
 - [Common Issues](./common-issues) - Frequent problems
 - [Performance FAQ](./performance) - Performance issues
-- [Configuration](../configuration) - Configuration reference
+- [Broker Configuration](../configuration/broker-config) - Configuration reference

@@ -5,190 +5,168 @@ title: Client Configuration
 
 # Client Configuration
 
-Configure RocketMQ-Rust clients (producers and consumers) for optimal performance.
+This page describes how to configure RocketMQ-Rust producers and consumers with the current builder-based APIs.
 
 ## Producer Configuration
 
-### Producer Basic Configuration
+### Basic Producer Configuration
 
 ```rust
-let mut producer_option = ProducerOption::default();
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 
-// Required settings
-producer_option.set_name_server_addr("localhost:9876");
-producer_option.set_group_name("my_producer_group");
-
-// Optional settings
-producer_option.set_send_msg_timeout(3000); // milliseconds
-producer_option.set_retry_times_when_send_failed(2);
-producer_option.set_max_message_size(4 * 1024 * 1024); // 4MB
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("my_producer_group")
+    .name_server_addr("localhost:9876")
+    .send_msg_timeout(3_000)
+    .retry_times_when_send_failed(2)
+    .max_message_size(4 * 1024 * 1024)
+    .build();
 ```
 
-### Producer Advanced Configuration
+### Advanced Producer Configuration
 
 ```rust
-// Compression
-producer_option.set_compress_msg_body_over_threshold(4 * 1024); // 4KB
-
-// Retry settings
-producer_option.set_retry_times_when_send_failed(3);
-producer_option.set_retry_next_server(true);
-
-// Timeout settings
-producer_option.set_tcp_transport_try_lock_timeout(1000);
-producer_option.set_tcp_transport_connect_timeout(3000);
-
-// Connection pool
-producer_option.set_client_channel_max_idle_time_seconds(120);
+let mut producer = DefaultMQProducer::builder()
+    .producer_group("my_producer_group")
+    .name_server_addr("localhost:9876")
+    .compress_msg_body_over_howmuch(4 * 1024)
+    .retry_times_when_send_failed(3)
+    .retry_times_when_send_async_failed(3)
+    .retry_another_broker_when_not_store_ok(true)
+    .send_msg_max_timeout_per_request(5_000)
+    .batch_max_delay_ms(10)
+    .batch_max_bytes(512 * 1024)
+    .total_batch_max_bytes(4 * 1024 * 1024)
+    .enable_backpressure_for_async_mode(true)
+    .back_pressure_for_async_send_num(10_000)
+    .back_pressure_for_async_send_size(64 * 1024 * 1024)
+    .build();
 ```
 
-### Producer Complete Example
+## Push Consumer Configuration
+
+### Basic Push Consumer Configuration
 
 ```rust
-use rocketmq::producer::Producer;
-use rocketmq::conf::ProducerOption;
+use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 
-fn create_producer() -> Producer {
-    let mut producer_option = ProducerOption::default();
-
-    // Basic
-    producer_option.set_name_server_addr("localhost:9876");
-    producer_option.set_group_name("order_producer");
-
-    // Performance
-    producer_option.set_compress_msg_body_over_threshold(4 * 1024);
-    producer_option.set_max_message_size(4 * 1024 * 1024);
-
-    // Reliability
-    producer_option.set_send_msg_timeout(3000);
-    producer_option.set_retry_times_when_send_failed(3);
-    producer_option.set_retry_next_server(true);
-
-    Producer::new(producer_option)
-}
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("my_consumer_group")
+    .name_server_addr("localhost:9876")
+    .consume_thread_min(2)
+    .consume_thread_max(10)
+    .build();
 ```
 
-## Consumer Configuration
-
-### Consumer Basic Configuration
+### Advanced Push Consumer Configuration
 
 ```rust
-let mut consumer_option = ConsumerOption::default();
+use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 
-// Required settings
-consumer_option.set_name_server_addr("localhost:9876");
-consumer_option.set_group_name("my_consumer_group");
-
-// Thread pool
-consumer_option.set_consume_thread_min(2);
-consumer_option.set_consume_thread_max(10);
+let mut consumer = DefaultMQPushConsumer::builder()
+    .consumer_group("my_consumer_group")
+    .name_server_addr("localhost:9876")
+    .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
+    .message_model(MessageModel::Clustering)
+    .max_reconsume_times(3)
+    .pull_batch_size(32)
+    .pull_interval(0)
+    .pull_threshold_for_queue(1_000)
+    .pull_threshold_for_topic(10_000)
+    .build();
 ```
 
-### Consumer Advanced Configuration
+## Lite Pull Consumer Configuration
 
 ```rust
-// Offset management
-consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
+use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 
-// Retry settings
-consumer_option.set_max_reconsume_times(3);
-
-// Message model
-consumer_option.set_message_model(MessageModel::Clustering);
-
-// Pull settings
-consumer_option.set_pull_batch_size(32);
-consumer_option.set_pull_interval(0);
+let consumer = DefaultLitePullConsumer::builder()
+    .consumer_group("my_pull_group")
+    .name_server_addr("localhost:9876")
+    .pull_batch_size(32)
+    .pull_threshold_for_queue(1_000)
+    .pull_threshold_for_all(10_000)
+    .auto_commit(false)
+    .auto_commit_interval_millis(5_000)
+    .build();
 ```
 
-### Consumer Complete Example
+## Configuration Options Reference
 
-```rust
-use rocketmq::consumer::PushConsumer;
-use rocketmq::conf::ConsumerOption;
+### Producer Builder Options
 
-fn create_consumer() -> PushConsumer {
-    let mut consumer_option = ConsumerOption::default();
+| Option | Description |
+| -------- | ------------- |
+| `producer_group` | Producer group name |
+| `name_server_addr` | Name server address |
+| `send_msg_timeout` | Send timeout in milliseconds |
+| `retry_times_when_send_failed` | Retry count for sync send |
+| `retry_times_when_send_async_failed` | Retry count for async send |
+| `retry_another_broker_when_not_store_ok` | Retry another broker on store failure |
+| `max_message_size` | Max message bytes |
+| `compress_msg_body_over_howmuch` | Compression threshold |
+| `batch_max_delay_ms` | Max batch hold time |
+| `batch_max_bytes` | Max single batch bytes |
+| `total_batch_max_bytes` | Max buffered batch bytes |
 
-    // Basic
-    consumer_option.set_name_server_addr("localhost:9876");
-    consumer_option.set_group_name("order_consumer");
+### Push Consumer Builder Options
 
-    // Threading
-    consumer_option.set_consume_thread_min(2);
-    consumer_option.set_consume_thread_max(10);
+| Option | Description |
+| -------- | ------------- |
+| `consumer_group` | Consumer group name |
+| `name_server_addr` | Name server address |
+| `consume_thread_min` | Min consume threads |
+| `consume_thread_max` | Max consume threads |
+| `consume_from_where` | Start point when no committed offset |
+| `message_model` | Clustering or Broadcasting |
+| `max_reconsume_times` | Max retry count |
+| `pull_batch_size` | Pull batch size |
+| `pull_threshold_for_queue` | Cache threshold per queue |
+| `pull_threshold_for_topic` | Cache threshold per topic |
 
-    // Offset
-    consumer_option.set_consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset);
+### Lite Pull Consumer Builder Options
 
-    // Pull settings
-    consumer_option.set_pull_batch_size(32);
-    consumer_option.set_pull_interval(0);
-
-    // Retry
-    consumer_option.set_max_reconsume_times(3);
-
-    PushConsumer::new(consumer_option)
-}
-```
-
-## Configuration Options
-
-### Producer Options
-
-| Option | Default | Description |
-| -------- | --------- | ------------- |
-| `name_server_addr` | Required | Name server address |
-| `group_name` | Required | Producer group name |
-| `send_msg_timeout` | 3000 | Send timeout (ms) |
-| `retry_times_when_send_failed` | 2 | Retry count |
-| `max_message_size` | 4MB | Maximum message size |
-| `compress_msg_body_over_threshold` | 4KB | Compression threshold |
-| `retry_next_server` | false | Retry on next broker |
-
-### Consumer Options
-
-| Option | Default | Description |
-| -------- | --------- | ------------- |
-| `name_server_addr` | Required | Name server address |
-| `group_name` | Required | Consumer group name |
-| `consume_thread_min` | 1 | Min consume threads |
-| `consume_thread_max` | 10 | Max consume threads |
-| `pull_batch_size` | 32 | Messages per pull |
-| `pull_interval` | 0 | Pull interval (ms) |
-| `max_reconsume_times` | 16 | Max retry count |
-| `message_model` | Clustering | Clustering or Broadcasting |
+| Option | Description |
+| -------- | ------------- |
+| `consumer_group` | Consumer group name |
+| `name_server_addr` | Name server address |
+| `pull_batch_size` | Messages per pull request |
+| `pull_threshold_for_queue` | Cache threshold per queue |
+| `pull_threshold_for_all` | Cache threshold for all queues |
+| `auto_commit` | Enable/disable auto commit |
+| `auto_commit_interval_millis` | Auto commit interval |
 
 ## Environment Variables
 
 ```rust
 use std::env;
 
-// Read from environment
 let name_server = env::var("ROCKETMQ_NAME_SERVER")
     .unwrap_or_else(|_| "localhost:9876".to_string());
 
-let group_name = env::var("ROCKETMQ_GROUP")
-    .unwrap_or_else(|_| "default_group".to_string());
+let producer_group = env::var("ROCKETMQ_PRODUCER_GROUP")
+    .unwrap_or_else(|_| "default_producer_group".to_string());
 
-producer_option.set_name_server_addr(&name_server);
-producer_option.set_group_name(&group_name);
+let mut producer = DefaultMQProducer::builder()
+    .producer_group(producer_group)
+    .name_server_addr(name_server)
+    .build();
 ```
 
-## Configuration File
+## Config File Example
 
 ```toml
-# rocketmq-client.toml
-
 [producer]
 name_server_addr = "localhost:9876"
 group_name = "my_producer"
 send_msg_timeout = 3000
 retry_times_when_send_failed = 3
 max_message_size = 4194304
-compress_msg_body_over_threshold = 4096
+compress_msg_body_over_howmuch = 4096
 
-[consumer]
+[push_consumer]
 name_server_addr = "localhost:9876"
 group_name = "my_consumer"
 consume_thread_min = 2
@@ -197,37 +175,13 @@ pull_batch_size = 32
 max_reconsume_times = 3
 ```
 
-```rust
-use serde::Deserialize;
-use std::fs;
-
-#[derive(Deserialize)]
-struct Config {
-    producer: ProducerConfig,
-    consumer: ConsumerConfig,
-}
-
-#[derive(Deserialize)]
-struct ProducerConfig {
-    name_server_addr: String,
-    group_name: String,
-    send_msg_timeout: u64,
-}
-
-fn load_config(path: &str) -> Config {
-    let contents = fs::read_to_string(path).unwrap();
-    toml::from_str(&contents).unwrap()
-}
-```
-
 ## Best Practices
 
-1. **Use sensible timeouts**: Balance between reliability and performance
-2. **Configure retries**: Set appropriate retry counts
-3. **Tune thread pools**: Match to your workload
-4. **Set message size limits**: Prevent oversized messages
-5. **Use compression**: For larger messages
-6. **Monitor performance**: Track success rates and latency
+1. Keep producer and consumer groups stable; do not randomize group names in production.
+2. Tune retry and timeout settings according to your SLA.
+3. Use push consumer for online processing, lite pull for controlled replay.
+4. Set conservative cache thresholds before scaling up.
+5. Track send/consume latency and retry rates continuously.
 
 ## Next Steps
 

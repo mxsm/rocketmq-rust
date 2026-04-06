@@ -12,6 +12,7 @@ This guide will help you write clean, idiomatic Rust code that follows our proje
 ## Why Coding Standards Matter
 
 Consistent code is:
+
 - **Easier to read** and understand
 - **Easier to maintain** and debug
 - **Easier to review** in pull requests
@@ -89,7 +90,7 @@ use crate::error::Result;
 
 pub async fn send_message(&self, msg: Message) -> Result<SendResult> {
     // Use ? for error propagation - clean and idiomatic
-    let broker = self.find_broker(&msg.topic)?;
+    let broker = resolve_broker(&msg.topic)?;
 
     // ⚠️ Avoid unwrap() in library code - it can panic!
     // ✅ Instead, handle errors explicitly
@@ -131,7 +132,7 @@ RocketMQ-Rust uses `tokio` as the async runtime. All I/O operations should be as
 ```rust
 // ✅ Use async/await for async operations
 pub async fn send(&self, msg: Message) -> Result<SendResult> {
-    let broker = self.get_broker().await?;
+    let broker = resolve_broker_async().await?;
     broker.send(msg).await
 }
 
@@ -153,13 +154,13 @@ pub async fn send_batch(&self, msgs: Vec<Message>) -> Result<Vec<SendResult>> {
 pub async fn send_bad(&self, msg: Message) -> Result<SendResult> {
     // Don't do this - blocks the async runtime!
     std::thread::sleep(std::time::Duration::from_secs(1));
-    self.send_impl(msg).await
+    self.send(msg).await
 }
 
 // ✅ Good: Use tokio's async sleep
 pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    self.send_impl(msg).await
+    self.send(msg).await
 }
 ```
 
@@ -176,10 +177,13 @@ pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
 /// # Examples
 ///
 /// ```rust
-/// use rocketmq::producer::Producer;
+/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let producer = Producer::new();
+/// let mut producer = DefaultMQProducer::builder()
+///     .producer_group("example_group")
+///     .name_server_addr("localhost:9876")
+///     .build();
 /// producer.start().await?;
 /// # Ok(())
 /// # }
@@ -210,11 +214,17 @@ pub struct Producer { }
 //! # Examples
 //!
 //! ```rust
-//! use rocketmq::producer::Producer;
+//! use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let producer = Producer::new();
-//! let message = Message::new("TopicTest".to_string(), b"Hello".to_vec());
+//! let mut producer = DefaultMQProducer::builder()
+//!     .producer_group("example_group")
+//!     .name_server_addr("localhost:9876")
+//!     .build();
+//! let message = Message::builder()
+//!     .topic("TopicTest")
+//!     .body("Hello")
+//!     .build()?;
 //! producer.send(message).await?;
 //! # Ok(())
 //! # }
@@ -232,8 +242,12 @@ mod tests {
 
     #[test]
     fn test_message_creation() {
-        let msg = Message::new("Test".to_string(), vec![1, 2, 3]);
-        assert_eq!(msg.get_topic(), "Test");
+        let msg = Message::builder()
+            .topic("Test")
+            .body(vec![1, 2, 3])
+            .build()
+            .unwrap();
+        assert_eq!(msg.topic().as_str(), "Test");
     }
 
     #[tokio::test]
@@ -250,10 +264,16 @@ mod tests {
 // tests/integration_test.rs
 #[tokio::test]
 async fn test_producer_consumer() {
-    let producer = Producer::new();
+    let mut producer = DefaultMQProducer::builder()
+        .producer_group("example_group")
+        .name_server_addr("localhost:9876")
+        .build();
     producer.start().await.unwrap();
 
-    let consumer = PushConsumer::new();
+    let mut consumer = DefaultMQPushConsumer::builder()
+        .consumer_group("example_group")
+        .name_server_addr("localhost:9876")
+        .build();
     consumer.subscribe("TestTopic", "*").await.unwrap();
 
     // Test logic
@@ -275,6 +295,7 @@ cargo fmt --all --check
 ```
 
 **Pro tip**: Configure your IDE to format on save:
+
 - **VS Code**: Set `"editor.formatOnSave": true` with rust-analyzer
 - **RustRover**: Enable "Reformat code" in Settings → Tools → Actions on Save
 
@@ -295,6 +316,7 @@ cargo clippy --fix --all-targets --all-features --workspace
 ### Common Patterns
 
 **Builder Pattern**:
+
 ```rust
 pub struct ProducerOptions {
     name_server_addr: String,
@@ -324,6 +346,7 @@ impl ProducerOptions {
 ```
 
 **Newtype Pattern**:
+
 ```rust
 /// Wrapper for message IDs with validation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -404,6 +427,7 @@ Learn from these common pitfalls:
 ### 1. Using `unwrap()` or `panic!()` in Library Code
 
 ❌ **Bad**:
+
 ```rust
 pub fn get_broker(&self) -> Broker {
     self.brokers.get(0).unwrap()  // Can panic!
@@ -411,6 +435,7 @@ pub fn get_broker(&self) -> Broker {
 ```
 
 ✅ **Good**:
+
 ```rust
 pub fn get_broker(&self) -> Result<&Broker> {
     self.brokers.get(0).ok_or(Error::NoBrokerAvailable)
@@ -420,11 +445,13 @@ pub fn get_broker(&self) -> Result<&Broker> {
 ### 2. Ignoring Errors
 
 ❌ **Bad**:
+
 ```rust
 let _ = self.send(msg).await;  // Error silently ignored!
 ```
 
 ✅ **Good**:
+
 ```rust
 if let Err(e) = self.send(msg).await {
     log::error!("Failed to send message: {}", e);
@@ -435,6 +462,7 @@ if let Err(e) = self.send(msg).await {
 ### 3. Blocking in Async Code
 
 ❌ **Bad**:
+
 ```rust
 pub async fn send(&self) -> Result<()> {
     std::thread::sleep(Duration::from_secs(1));  // Blocks executor!
@@ -442,6 +470,7 @@ pub async fn send(&self) -> Result<()> {
 ```
 
 ✅ **Good**:
+
 ```rust
 pub async fn send(&self) -> Result<()> {
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -451,17 +480,19 @@ pub async fn send(&self) -> Result<()> {
 ### 4. Unnecessary Clones
 
 ❌ **Bad**:
+
 ```rust
 pub fn process(&self, data: String) -> Result<()> {
     let copy = data.clone();  // Unnecessary!
-    self.process_impl(&copy)
+    process_data(&copy)
 }
 ```
 
 ✅ **Good**:
+
 ```rust
 pub fn process(&self, data: &str) -> Result<()> {
-    self.process_impl(data)
+    process_data(data)
 }
 ```
 
@@ -482,17 +513,20 @@ Avoid using `_` in match arms - be explicit to catch future enum additions.
 Want to write better Rust code? Check out these resources:
 
 ### Official Rust Resources
+
 - [The Rust Book](https://doc.rust-lang.org/book/) - Comprehensive Rust guide
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) - API design best practices
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/) - Learn by examples
 - [Clippy Lint List](https://rust-lang.github.io/rust-clippy/master/index.html) - All clippy lints explained
 
 ### Advanced Topics
+
 - [Async Book](https://rust-lang.github.io/async-book/) - Deep dive into async Rust
 - [Tokio Tutorial](https://tokio.rs/tokio/tutorial) - Async runtime guide
 - [The Rustonomicon](https://doc.rust-lang.org/nomicon/) - Unsafe Rust (advanced)
 
 ### RocketMQ-Rust Specific
+
 - [Architecture Overview](/docs/architecture/overview) - Understand the codebase structure
 - [Development Guide](./development-guide) - Set up your dev environment
 - [Contributing Overview](./overview) - Start contributing today!
@@ -500,6 +534,7 @@ Want to write better Rust code? Check out these resources:
 ## Summary
 
 Remember:
+
 - ✅ Write idiomatic Rust code
 - ✅ Handle errors properly with `Result`
 - ✅ Use async/await for I/O operations

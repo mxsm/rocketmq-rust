@@ -34,23 +34,16 @@ pub struct Message {
 ### 消息示例
 
 ```rust
-use rocketmq::model::Message;
+use rocketmq_common::common::message::message_single::Message;
 
-// 创建基础消息
-let mut message = Message::new(
-    "OrderEvents".to_string(),
-    b"{\"order_id\": \"12345\", \"amount\": 99.99}".to_vec(),
-);
-
-// 添加过滤标签
-message.set_tags("order_created");
-
-// 添加索引 Key
-message.set_keys("order_12345");
-
-// 添加自定义属性
-message.put_property("region", "us-west");
-message.put_property("priority", "high");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body_slice(b"{\"order_id\": \"12345\", \"amount\": 99.99}")
+    .tags("order_created")
+    .key("order_12345")
+    .raw_property("region", "us-west")?
+    .raw_property("priority", "high")?
+    .build()?;
 ```
 
 ## Topics 与 Queues
@@ -92,7 +85,10 @@ Topic: OrderEvents (4 queues)
 无特殊语义的常规消息：
 
 ```rust
-let message = Message::new("NormalTopic".to_string(), body);
+let message = Message::builder()
+    .topic("NormalTopic")
+    .body(body)
+    .build()?;
 producer.send(message).await?;
 ```
 
@@ -101,14 +97,23 @@ producer.send(message).await?;
 同一队列内按顺序消费的消息：
 
 ```rust
-// 使用队列选择器，将相关消息路由到同一队列
-let selector = |queue_list: &[MessageQueue], message: &Message, arg: &str| {
-    let hash = compute_hash(arg); // 例如 order_id
-    let index = (hash % queue_list.len() as u64) as usize;
-    &queue_list[index]
-};
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body("ordered payload")
+    .build()?;
 
-producer.send_with_selector(message, selector, "order_123").await?;
+let order_id = "order_123".to_string();
+producer
+    .send_with_selector(
+        message,
+        |queues: &[MessageQueue], _msg: &Message, id: &String| {
+            let hash = compute_hash(id);
+            let index = (hash % queues.len() as u64) as usize;
+            queues.get(index).cloned()
+        },
+        order_id,
+    )
+    .await?;
 ```
 
 ### 事务消息
@@ -116,18 +121,21 @@ producer.send_with_selector(message, selector, "order_123").await?;
 与本地事务保持原子性的消息：
 
 ```rust
-let transaction_producer = TransactionProducer::new(option)?;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
 
-transaction_producer.send_transactional_message(message, |local_state| {
-    // 执行本地事务
-    let result = execute_database_transaction();
+let mut transaction_producer = TransactionMQProducer::builder()
+    .producer_group("tx_group")
+    .name_server_addr("localhost:9876")
+    .topics(vec!["OrderEvents"])
+    .transaction_listener(OrderTransactionListener::default())
+    .build();
 
-    // 返回事务状态
-    match result {
-        Ok(_) => TransactionStatus::CommitMessage,
-        Err(_) => TransactionStatus::RollbackMessage,
-    }
-}).await?;
+let tx_result = transaction_producer
+    .send_message_in_transaction(message, Some("order_123".to_string()))
+    .await?;
+
+println!("tx_result = {}", tx_result);
 ```
 
 ### 延迟消息
@@ -135,8 +143,11 @@ transaction_producer.send_transactional_message(message, |local_state| {
 经过指定延迟后再投递的消息：
 
 ```rust
-let mut message = Message::new("DelayedTopic".to_string(), body);
-message.set_delay_time_level(3); // 延迟等级 3（例如 10 秒）
+let message = Message::builder()
+    .topic("DelayedTopic")
+    .body(body)
+    .delay_level(3) // 延迟等级 3（例如 10 秒）
+    .build()?;
 producer.send(message).await?;
 ```
 
@@ -147,8 +158,11 @@ producer.send(message).await?;
 在 Broker 侧按 Tag 进行过滤：
 
 ```rust
-// 生产者设置 tag
-message.set_tags("order_paid");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body("payload")
+    .tags("order_paid")
+    .build()?;
 
 // 消费者订阅指定 tag
 consumer.subscribe("OrderEvents", "order_paid || order_shipped").await?;
@@ -159,9 +173,12 @@ consumer.subscribe("OrderEvents", "order_paid || order_shipped").await?;
 使用 SQL92 表达式进行高级过滤：
 
 ```rust
-// 生产者设置属性
-message.put_property("region", "us-west");
-message.put_property("amount", "100");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body("payload")
+    .raw_property("region", "us-west")?
+    .raw_property("amount", "100")?
+    .build()?;
 
 // 消费者使用 SQL 表达式
 consumer.subscribe("OrderEvents", "region = 'us-west' AND amount > 50").await?;
@@ -186,9 +203,13 @@ RocketMQ 会自动为每条消息写入系统属性：
 你也可以写入自定义属性：
 
 ```rust
-message.put_property("source", "mobile_app");
-message.put_property("version", "2.1.0");
-message.put_property("user_id", "user_12345");
+let message = Message::builder()
+    .topic("OrderEvents")
+    .body("payload")
+    .raw_property("source", "mobile_app")?
+    .raw_property("version", "2.1.0")?
+    .raw_property("user_id", "user_12345")?
+    .build()?;
 ```
 
 ## 消息生命周期

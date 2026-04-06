@@ -271,9 +271,15 @@ grep "ERROR" ~/logs/rocketmqfiles/consumer.log | tail -100
 
 启用消息追踪：
 
-```rust
-producer_option.set_enable_msg_trace(true);
-consumer_option.set_enable_msg_trace(true);
+```text
+当前 API 中，追踪配置与具体实现相关。
+
+示例（Lite Pull Consumer）：
+DefaultLitePullConsumer::builder()
+    .enable_msg_trace()
+    .build();
+
+Producer / Push Consumer 场景建议在启动阶段配置 trace dispatcher。
 ```
 
 按 ID 或 Key 查询消息：
@@ -334,4 +340,4 @@ impl MessageListener for MyListener {
 
 - [常见问题](./common-issues) - 高频问题速查
 - [性能 FAQ](./performance) - 性能问题定位
-- [配置概览](../configuration) - 核对配置项
+- [Broker 配置](../configuration/broker-config) - 核对配置项
