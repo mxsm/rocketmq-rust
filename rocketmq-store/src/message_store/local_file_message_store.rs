@@ -73,7 +73,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
-use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tracing::error;
@@ -1744,24 +1743,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn clean_expired_consumer_queue(&self) {
         let min_commit_log_offset = self.get_min_phy_offset();
-        let consume_queue_store = self.consume_queue_store.clone();
-        let clean_expired = move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("clean expired consumer queue runtime should build");
-            runtime.block_on(async move {
-                consume_queue_store.clean_expired(min_commit_log_offset).await;
-            });
-        };
-
-        if Handle::try_current().is_ok() {
-            thread::spawn(clean_expired)
-                .join()
-                .expect("clean expired consumer queue thread should complete");
-        } else {
-            clean_expired();
-        }
+        self.consume_queue_store.clean_expired_sync(min_commit_log_offset);
     }
 
     fn check_in_mem_by_consume_offset(
@@ -2939,24 +2921,7 @@ impl CleanConsumeQueueService {
         self.index_service
             .delete_expired_file(min_commit_log_offset.max(0) as u64);
 
-        let consume_queue_store = self.consume_queue_store.clone();
-        let clean_expired = move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("clean consume queue runtime should build");
-            runtime.block_on(async move {
-                consume_queue_store.clean_expired(min_commit_log_offset).await;
-            });
-        };
-
-        if Handle::try_current().is_ok() {
-            thread::spawn(clean_expired)
-                .join()
-                .expect("clean consume queue thread should complete");
-        } else {
-            clean_expired();
-        }
+        self.consume_queue_store.clean_expired_sync(min_commit_log_offset);
     }
 }
 

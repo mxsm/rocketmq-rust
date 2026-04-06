@@ -19,6 +19,7 @@ use std::fmt::Formatter;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -60,7 +61,7 @@ pub struct AllocateMappedFileService {
     notify: Arc<Notify>,
 
     /// Background worker handle
-    worker_handle: Arc<parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    worker_handle: Arc<parking_lot::Mutex<Option<thread::JoinHandle<()>>>>,
 
     /// TransientStorePool reference (optional)
     transient_store_pool: Option<Arc<TransientStorePool>>,
@@ -70,6 +71,22 @@ pub struct AllocateMappedFileService {
 
     /// Whether to fast fail when no buffer available in pool
     fast_fail_if_no_buffer: bool,
+}
+
+impl Clone for AllocateMappedFileService {
+    fn clone(&self) -> Self {
+        Self {
+            request_table: self.request_table.clone(),
+            request_queue: self.request_queue.clone(),
+            has_exception: self.has_exception.clone(),
+            stopped: self.stopped.clone(),
+            notify: self.notify.clone(),
+            worker_handle: self.worker_handle.clone(),
+            transient_store_pool: self.transient_store_pool.clone(),
+            transient_store_pool_enable: self.transient_store_pool_enable,
+            fast_fail_if_no_buffer: self.fast_fail_if_no_buffer,
+        }
+    }
 }
 
 impl Default for AllocateMappedFileService {
@@ -125,20 +142,34 @@ impl AllocateMappedFileService {
         let notify = self.notify.clone();
         let transient_store_pool = self.transient_store_pool.clone();
 
-        let handle = tokio::spawn(async move {
-            Self::run_worker(
-                request_table,
-                request_queue,
-                has_exception,
-                stopped,
-                notify,
-                transient_store_pool,
-            )
-            .await;
-        });
-
-        *self.worker_handle.lock() = Some(handle);
-        info!("AllocateMappedFileService started");
+        match thread::Builder::new()
+            .name("allocate-mapped-file-service".to_string())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("AllocateMappedFileService runtime should build");
+                runtime.block_on(async move {
+                    Self::run_worker(
+                        request_table,
+                        request_queue,
+                        has_exception,
+                        stopped,
+                        notify,
+                        transient_store_pool,
+                    )
+                    .await;
+                });
+            }) {
+            Ok(handle) => {
+                *self.worker_handle.lock() = Some(handle);
+                info!("AllocateMappedFileService started");
+            }
+            Err(error) => {
+                self.has_exception.store(true, Ordering::Relaxed);
+                error!("AllocateMappedFileService failed to start worker thread: {}", error);
+            }
+        }
     }
 
     /// Main worker loop - corresponds to Java's run() method
@@ -472,6 +503,74 @@ impl AllocateMappedFileService {
         self.submit_request(file_path, file_size).await
     }
 
+    pub fn allocate_mapped_file_blocking(
+        &self,
+        file_path: String,
+        file_size: u64,
+    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+        let service = self.clone();
+        let error_path = file_path.clone();
+        let allocate = move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| RocketMQError::StorageWriteFailed {
+                    path: file_path.clone(),
+                    reason: format!("failed to build allocation runtime: {error}"),
+                })?;
+            runtime.block_on(async move { service.allocate_mapped_file(file_path, file_size).await })
+        };
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            thread::spawn(allocate)
+                .join()
+                .map_err(|_| RocketMQError::StorageWriteFailed {
+                    path: error_path,
+                    reason: "allocation thread panicked".to_string(),
+                })?
+        } else {
+            allocate()
+        }
+    }
+
+    pub fn submit_request_in_background(&self, file_path: String, file_size: u64) {
+        let mut can_submit_request = true;
+        if self.transient_store_pool_enable && self.fast_fail_if_no_buffer {
+            if let Some(ref pool) = self.transient_store_pool {
+                let queue_size = self.request_queue.read().len();
+                can_submit_request = pool.available_buffer_nums().saturating_sub(queue_size) > 0;
+            }
+        }
+
+        if !can_submit_request {
+            warn!(
+                "[NOTIFYME]TransientStorePool is not enough, so skip background preallocate mapped file, \
+                 RequestQueueSize: {}, StorePoolSize: {}",
+                self.request_queue.read().len(),
+                self.transient_store_pool
+                    .as_ref()
+                    .map_or(0, |pool| pool.available_buffer_nums())
+            );
+            return;
+        }
+
+        let req = Arc::new(AllocateRequest::new(file_path.clone(), file_size as i32));
+        let put_ok = {
+            let mut table = self.request_table.write();
+            if let std::collections::hash_map::Entry::Vacant(entry) = table.entry(file_path) {
+                entry.insert(req.clone());
+                true
+            } else {
+                false
+            }
+        };
+
+        if put_ok {
+            self.request_queue.write().push(req);
+            self.notify.notify_one();
+        }
+    }
+
     /// Shutdown the service - corresponds to Java's shutdown()
     pub async fn shutdown(&self) {
         info!("AllocateMappedFileService: shutting down");
@@ -482,7 +581,7 @@ impl AllocateMappedFileService {
         // Wait for worker to complete
         let handle = self.worker_handle.lock().take();
         if let Some(handle) = handle {
-            let _ = tokio::time::timeout(Duration::from_secs(3), handle).await;
+            let _ = tokio::task::spawn_blocking(move || handle.join()).await;
         }
 
         // Clean up pre-allocated files
@@ -594,5 +693,29 @@ impl Ord for AllocateRequest {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse ordering: smaller offsets come out first (min-heap behavior)
         other.file_offset().cmp(&self.file_offset())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn allocate_mapped_file_blocking_works_inside_runtime() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let service = AllocateMappedFileService::new();
+        service.start();
+
+        let mapped_file = service
+            .allocate_mapped_file_blocking(file_path.to_string_lossy().to_string(), 1024)
+            .expect("allocate mapped file");
+
+        assert_eq!(mapped_file.get_file_size(), 1024);
+        assert!(file_path.exists(), "mapped file should be created on disk");
+
+        service.shutdown().await;
     }
 }

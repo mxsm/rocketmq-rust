@@ -308,23 +308,18 @@ impl MappedFileQueue {
 
         // Try async allocation if service available
         if let Some(ref service) = self.allocate_mapped_file_service {
-            if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                match rt.block_on(async {
-                    service
-                        .allocate_mapped_file(file_path_str.clone(), self.mapped_file_size)
-                        .await
-                }) {
-                    Ok(pre_allocated) => {
-                        // Trigger pre-allocation of N+2 file
-                        std::mem::drop(
-                            service.submit_request(next_file_path.to_string_lossy().to_string(), self.mapped_file_size),
-                        );
-                        // Return Arc directly
-                        return Some(pre_allocated);
-                    }
-                    Err(e) => {
-                        warn!("Pre-allocation failed: {}, using sync creation", e);
-                    }
+            match service.allocate_mapped_file_blocking(file_path_str.clone(), self.mapped_file_size) {
+                Ok(pre_allocated) => {
+                    // Trigger pre-allocation of N+2 file
+                    service.submit_request_in_background(
+                        next_file_path.to_string_lossy().to_string(),
+                        self.mapped_file_size,
+                    );
+                    // Return Arc directly
+                    return Some(pre_allocated);
+                }
+                Err(e) => {
+                    warn!("Pre-allocation failed: {}, using sync creation", e);
                 }
             }
         }

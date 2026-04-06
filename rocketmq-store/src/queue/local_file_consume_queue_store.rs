@@ -72,6 +72,86 @@ impl Inner {
 }
 
 impl ConsumeQueueStore {
+    pub fn clean_expired_sync(&self, min_commit_log_offset: i64) {
+        // Collect queues to remove
+        let mut queues_to_destroy = Vec::new();
+        let mut topics_to_remove = Vec::new();
+
+        {
+            let mut consume_queue_table = self.inner.consume_queue_table.lock();
+            let topics: Vec<CheetahString> = consume_queue_table.keys().cloned().collect();
+
+            for topic in topics {
+                // Skip system topics
+                if TopicValidator::is_system_topic(&topic) {
+                    continue;
+                }
+
+                if let Some(queue_table) = consume_queue_table.get_mut(&topic) {
+                    let queue_ids: Vec<i32> = queue_table.keys().cloned().collect();
+                    let mut queues_to_remove = Vec::new();
+
+                    for queue_id in queue_ids {
+                        if let Some(consume_queue) = queue_table.get(&queue_id) {
+                            let max_cl_offset_in_queue = consume_queue.get_max_physic_offset();
+                            let message_total_in_queue = consume_queue.get_message_total_in_queue();
+                            let queue_trimmed_to_empty =
+                                message_total_in_queue <= 0 && consume_queue.get_min_offset_in_queue() > 0;
+
+                            if max_cl_offset_in_queue == -1 {
+                                tracing::warn!(
+                                    "maybe ConsumeQueue was created just now. topic={} queueId={} maxPhysicOffset={} \
+                                     minLogicOffset={}.",
+                                    consume_queue.get_topic(),
+                                    consume_queue.get_queue_id(),
+                                    consume_queue.get_max_physic_offset(),
+                                    consume_queue.get_min_logic_offset()
+                                );
+                            } else if max_cl_offset_in_queue < min_commit_log_offset || queue_trimmed_to_empty {
+                                tracing::info!(
+                                    "cleanExpiredConsumerQueue: {} {} consumer queue destroyed, minCommitLogOffset: \
+                                     {} maxCLOffsetInConsumeQueue: {} messageTotalInQueue: {} minOffsetInQueue: {}",
+                                    topic,
+                                    queue_id,
+                                    min_commit_log_offset,
+                                    max_cl_offset_in_queue,
+                                    message_total_in_queue,
+                                    consume_queue.get_min_offset_in_queue()
+                                );
+
+                                queues_to_remove.push(queue_id);
+                            }
+                        }
+                    }
+
+                    // Remove expired queues and collect for destruction
+                    for queue_id in queues_to_remove {
+                        if let Some(consume_queue) = queue_table.remove(&queue_id) {
+                            queues_to_destroy.push((topic.clone(), queue_id, consume_queue));
+                        }
+                    }
+
+                    // If all queues removed, mark topic for removal
+                    if queue_table.is_empty() {
+                        topics_to_remove.push(topic.clone());
+                    }
+                }
+            }
+
+            // Remove empty topics
+            for topic in &topics_to_remove {
+                consume_queue_table.remove(topic);
+                tracing::info!("cleanExpiredConsumerQueue: {},topic destroyed", topic);
+            }
+        }
+
+        // Now destroy queues and remove from offset table (outside the lock)
+        for (topic, queue_id, mut consume_queue) in queues_to_destroy {
+            self.inner.queue_offset_operator.remove(&topic, queue_id);
+            consume_queue.destroy();
+        }
+    }
+
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
         let table = self.inner.consume_queue_table.lock();
         let queue_table = table.get(topic)?;
@@ -215,86 +295,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn clean_expired(&self, min_commit_log_offset: i64) {
-        // Collect queues to remove
-        let mut queues_to_destroy = Vec::new();
-        let mut topics_to_remove = Vec::new();
-
-        {
-            let mut consume_queue_table = self.inner.consume_queue_table.lock();
-            let topics: Vec<CheetahString> = consume_queue_table.keys().cloned().collect();
-
-            for topic in topics {
-                // Skip system topics
-                if TopicValidator::is_system_topic(&topic) {
-                    continue;
-                }
-
-                if let Some(queue_table) = consume_queue_table.get_mut(&topic) {
-                    let queue_ids: Vec<i32> = queue_table.keys().cloned().collect();
-                    let mut queues_to_remove = Vec::new();
-
-                    for queue_id in queue_ids {
-                        if let Some(consume_queue) = queue_table.get(&queue_id) {
-                            let max_cl_offset_in_queue = consume_queue.get_max_physic_offset();
-                            let message_total_in_queue = consume_queue.get_message_total_in_queue();
-                            let queue_trimmed_to_empty =
-                                message_total_in_queue <= 0 && consume_queue.get_min_offset_in_queue() > 0;
-
-                            if max_cl_offset_in_queue == -1 {
-                                tracing::warn!(
-                                    "maybe ConsumeQueue was created just now. topic={} queueId={} maxPhysicOffset={} \
-                                     minLogicOffset={}.",
-                                    consume_queue.get_topic(),
-                                    consume_queue.get_queue_id(),
-                                    consume_queue.get_max_physic_offset(),
-                                    consume_queue.get_min_logic_offset()
-                                );
-                            } else if max_cl_offset_in_queue < min_commit_log_offset || queue_trimmed_to_empty {
-                                tracing::info!(
-                                    "cleanExpiredConsumerQueue: {} {} consumer queue destroyed, minCommitLogOffset: \
-                                     {} maxCLOffsetInConsumeQueue: {} messageTotalInQueue: {} minOffsetInQueue: {}",
-                                    topic,
-                                    queue_id,
-                                    min_commit_log_offset,
-                                    max_cl_offset_in_queue,
-                                    message_total_in_queue,
-                                    consume_queue.get_min_offset_in_queue()
-                                );
-
-                                queues_to_remove.push(queue_id);
-                            }
-                        }
-                    }
-
-                    // Remove expired queues and collect for destruction
-                    for queue_id in queues_to_remove {
-                        if let Some(consume_queue) = queue_table.remove(&queue_id) {
-                            queues_to_destroy.push((topic.clone(), queue_id, consume_queue));
-                        }
-                    }
-
-                    // If all queues removed, mark topic for removal
-                    if queue_table.is_empty() {
-                        topics_to_remove.push(topic.clone());
-                    }
-                }
-            }
-
-            // Remove empty topics
-            for topic in &topics_to_remove {
-                consume_queue_table.remove(topic);
-                tracing::info!("cleanExpiredConsumerQueue: {},topic destroyed", topic);
-            }
-        }
-
-        // Now destroy queues and remove from offset table (outside the lock)
-        for (topic, queue_id, mut consume_queue) in queues_to_destroy {
-            // Remove from topic queue table
-            self.inner.queue_offset_operator.remove(&topic, queue_id);
-
-            // Destroy the removed queue instance directly to avoid re-creating it via get_life_cycle.
-            consume_queue.destroy();
-        }
+        self.clean_expired_sync(min_commit_log_offset);
     }
 
     fn check_self(&self) {
