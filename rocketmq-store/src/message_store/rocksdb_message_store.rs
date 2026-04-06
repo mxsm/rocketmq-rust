@@ -12,4 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub struct RocksDBMessageStore;
+//! Compatibility RocksDB message store.
+//!
+//! The full RocksDB-backed queue/index implementation is still under active
+//! alignment work. For the current P1-4 scope we expose a `RocksDBMessageStore`
+//! type that reuses the already-closed local file message store main path so
+//! `store_type=RocksDB` can participate in `init/load/start/recover/query`
+//! flows without hitting placeholder panics.
+//!
+//! This keeps the public type boundary stable for broker/store wiring and
+//! allows the later real RocksDB backend to replace this alias without
+//! reshaping callers.
+
+pub type RocksDBMessageStore = crate::message_store::local_file_message_store::LocalFileMessageStore;

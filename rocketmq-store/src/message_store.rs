@@ -21,5 +21,5 @@ pub enum GenericMessageStore {
     LocalFileStore(Box<local_file_message_store::LocalFileMessageStore>),
 
     #[cfg(feature = "rocksdb_store")]
-    RocksDBStore(rocksdb_message_store::RocksDBMessageStore),
+    RocksDBStore(Box<rocksdb_message_store::RocksDBMessageStore>),
 }

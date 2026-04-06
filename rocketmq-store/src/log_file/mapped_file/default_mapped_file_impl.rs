@@ -52,6 +52,11 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
 use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceCounter;
 use crate::log_file::mapped_file::MappedFile;
+use crate::utils::ffi::get_page_size;
+use crate::utils::ffi::madvise;
+use crate::utils::ffi::mlock as lock_memory;
+use crate::utils::ffi::munlock as unlock_memory;
+use crate::utils::ffi::MADV_WILLNEED;
 
 pub const OS_PAGE_SIZE: u64 = 1024 * 4;
 
@@ -73,7 +78,7 @@ pub struct DefaultMappedFile {
     store_timestamp: AtomicU64,
     first_create_in_queue: bool,
     last_flush_time: AtomicU64,
-    swap_map_time: u64,
+    swap_map_time: AtomicU64,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     start_timestamp: AtomicI64,
     stop_timestamp: AtomicI64,
@@ -146,7 +151,7 @@ impl DefaultMappedFile {
             store_timestamp: Default::default(),
             first_create_in_queue: false,
             last_flush_time: AtomicU64::new(0),
-            swap_map_time: 0,
+            swap_map_time: AtomicU64::new(current_millis()),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             start_timestamp: AtomicI64::new(-1),
             transient_store_pool: None,
@@ -244,7 +249,7 @@ impl DefaultMappedFile {
             store_timestamp: Default::default(),
             first_create_in_queue: false,
             last_flush_time: AtomicU64::new(0),
-            swap_map_time: 0,
+            swap_map_time: AtomicU64::new(current_millis()),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             start_timestamp: AtomicI64::new(-1),
             transient_store_pool: Some(transient_store_pool),
@@ -368,7 +373,16 @@ impl MappedFile for DefaultMappedFile {
         byte_buffer_msg: &mut Bytes,
         cb: &dyn CompactionAppendMsgCallback,
     ) -> AppendMessageResult {
-        unimplemented!("append_message_compaction not implemented")
+        let _ = cb;
+        warn!(
+            "append_message_compaction is not supported for DefaultMappedFile: file={}, msg_len={}",
+            self.file_name,
+            byte_buffer_msg.len()
+        );
+        AppendMessageResult {
+            status: AppendMessageStatus::UnknownError,
+            ..Default::default()
+        }
     }
 
     #[inline]
@@ -523,56 +537,44 @@ impl MappedFile for DefaultMappedFile {
                 let value = self.get_read_position();
                 self.mapped_byte_buffer_access_count_since_last_swap
                     .fetch_add(1, Ordering::AcqRel);
+                use crate::log_file::mapped_file::FlushStrategy;
+                let should_flush = match &self.flush_strategy {
+                    FlushStrategy::Sync => true,
+                    FlushStrategy::Async => flush_least_pages >= 0,
+                    FlushStrategy::EveryNPages(_) => true,
+                    FlushStrategy::Periodic(_) => true,
+                    FlushStrategy::Hybrid { .. } => true,
+                    FlushStrategy::Never => false,
+                };
 
-                if self.transient_store_pool.is_none() {
-                    use crate::log_file::mapped_file::FlushStrategy;
-                    let should_flush = match &self.flush_strategy {
-                        FlushStrategy::Sync => true,
-                        FlushStrategy::Async => {
-                            // Async: flush based on pages
-                            flush_least_pages >= 0
+                if should_flush {
+                    let flush_start = std::time::Instant::now();
+
+                    let flushed_pos = self.flushed_position.load(Ordering::Acquire);
+                    let flush_size = value - flushed_pos;
+
+                    let flush_result = if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
+                        self.flush_range(flushed_pos as usize, value as usize)
+                    } else {
+                        if let Err(e) = self.mmapped_file.flush() {
+                            error!("Error occurred when force data to disk: {:?}", e);
+                            0
+                        } else {
+                            value - flushed_pos
                         }
-                        FlushStrategy::EveryNPages(_) => true,
-                        FlushStrategy::Periodic(_) => true,
-                        FlushStrategy::Hybrid { .. } => true,
-                        FlushStrategy::Never => false,
                     };
 
-                    if should_flush {
-                        let flush_start = std::time::Instant::now();
+                    if flush_result > 0 {
+                        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
 
-                        let flushed_pos = self.flushed_position.load(Ordering::Acquire);
-                        let flush_size = value - flushed_pos;
-
-                        let flush_result = if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
-                            self.flush_range(flushed_pos as usize, value as usize)
-                        } else {
-                            // Full flush for large updates
-                            if let Err(e) = self.mmapped_file.flush() {
-                                error!("Error occurred when force data to disk: {:?}", e);
-                                0
-                            } else {
-                                value - flushed_pos
-                            }
-                        };
-
-                        if flush_result > 0 {
-                            self.last_flush_time.store(current_millis(), Ordering::Relaxed);
-
-                            if let Some(metrics) = &self.metrics {
-                                let flush_duration = flush_start.elapsed();
-                                metrics.record_flush(flush_duration);
-                            }
+                        if let Some(metrics) = &self.metrics {
+                            let flush_duration = flush_start.elapsed();
+                            metrics.record_flush(flush_duration);
                         }
                     }
-
-                    MappedFile::release(self);
-                } else {
-                    unimplemented!(
-                        // need to implement
-                        "flush transient store pool"
-                    );
                 }
+
+                MappedFile::release(self);
                 self.flushed_position.store(value, Ordering::Release);
             } else {
                 warn!(
@@ -587,10 +589,11 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn commit(&self, commit_least_pages: i32) -> i32 {
-        unimplemented!(
-            // need to implement
-            "commit"
-        )
+        if self.is_able_to_commit(commit_least_pages) {
+            let wrote_position = self.wrote_position.load(Ordering::Acquire);
+            self.committed_position.store(wrote_position, Ordering::Release);
+        }
+        self.get_committed_position()
     }
 
     fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<SelectMappedBufferResult> {
@@ -779,10 +782,7 @@ impl MappedFile for DefaultMappedFile {
     fn get_read_position(&self) -> i32 {
         match self.transient_store_pool {
             None => self.wrote_position.load(Ordering::Acquire),
-            Some(_) => {
-                //need to optimize
-                self.wrote_position.load(Ordering::Acquire)
-            }
+            Some(_) => self.committed_position.load(Ordering::Acquire),
         }
     }
 
@@ -798,37 +798,99 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn mlock(&self) {
-        todo!()
+        if let Err(error) = lock_memory(self.mmapped_file.as_ptr(), self.file_size as usize) {
+            warn!("Failed to mlock mapped file {}: {}", self.file_name, error);
+        }
     }
 
     #[inline]
     fn munlock(&self) {
-        todo!()
+        if let Err(error) = unlock_memory(self.mmapped_file.as_ptr(), self.file_size as usize) {
+            warn!("Failed to munlock mapped file {}: {}", self.file_name, error);
+        }
     }
 
     #[inline]
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) {
-        todo!()
+        let page_size = get_page_size().max(1);
+        let file_size = self.file_size as usize;
+        if file_size == 0 {
+            return;
+        }
+
+        let flush_every_pages = pages.max(1);
+        let mut last_flush_offset = 0usize;
+        {
+            let mapped_file = self.get_mapped_file_mut();
+            let mut touched_pages = 0usize;
+            let mapped_ptr = mapped_file.as_mut_ptr();
+            for offset in (0..file_size).step_by(page_size) {
+                unsafe {
+                    let page_ptr = mapped_ptr.add(offset);
+                    let value = std::ptr::read_volatile(page_ptr);
+                    std::ptr::write_volatile(page_ptr, value);
+                }
+                touched_pages += 1;
+
+                if flush_disk_type == FlushDiskType::SyncFlush && touched_pages % flush_every_pages == 0 {
+                    let end = (offset + 1).min(file_size);
+                    if let Err(error) = mapped_file.flush_range(last_flush_offset, end - last_flush_offset) {
+                        warn!(
+                            "Failed to flush warmed mapped file range {}-{} for {}: {:?}",
+                            last_flush_offset, end, self.file_name, error
+                        );
+                    } else {
+                        self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+                    }
+                    last_flush_offset = end;
+                }
+            }
+
+            if flush_disk_type == FlushDiskType::SyncFlush && last_flush_offset < file_size {
+                if let Err(error) = mapped_file.flush_range(last_flush_offset, file_size - last_flush_offset) {
+                    warn!(
+                        "Failed to flush final warmed mapped file range {}-{} for {}: {:?}",
+                        last_flush_offset, file_size, self.file_name, error
+                    );
+                } else {
+                    self.last_flush_time.store(current_millis(), Ordering::Relaxed);
+                }
+            }
+        }
+
+        if madvise(self.mmapped_file.as_ptr(), file_size, MADV_WILLNEED) != 0 {
+            warn!(
+                "madvise(MADV_WILLNEED) failed while warming mapped file {}",
+                self.file_name
+            );
+        }
     }
 
     #[inline]
     fn swap_map(&self) -> bool {
-        todo!()
+        self.swap_map_time.store(current_millis(), Ordering::Release);
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .store(0, Ordering::Release);
+        false
     }
 
     #[inline]
     fn clean_swaped_map(&self, force: bool) {
-        todo!()
+        if force {
+            self.mapped_byte_buffer_access_count_since_last_swap
+                .store(0, Ordering::Release);
+        }
     }
 
     #[inline]
     fn get_recent_swap_map_time(&self) -> i64 {
-        todo!()
+        self.swap_map_time.load(Ordering::Acquire) as i64
     }
 
     #[inline]
     fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> i64 {
-        todo!()
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .load(Ordering::Acquire)
     }
 
     #[inline]
@@ -838,12 +900,18 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn rename_to_delete(&self) {
-        todo!()
+        warn!(
+            "rename_to_delete is not supported for DefaultMappedFile without mutable file metadata: {}",
+            self.file_name
+        );
     }
 
     #[inline]
     fn move_to_parent(&self) -> std::io::Result<()> {
-        todo!()
+        Err(std::io::Error::other(format!(
+            "move_to_parent is not supported for immutable mapped file handle {}",
+            self.file_name
+        )))
     }
 
     #[inline]
@@ -979,7 +1047,29 @@ impl MappedFile for DefaultMappedFile {
         file_size: usize,
         transient_store_pool: &TransientStorePool,
     ) -> std::io::Result<()> {
-        unimplemented!("init")
+        let _ = transient_store_pool.available_buffer_nums();
+
+        if file_name != self.get_file_name() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "mapped file init path mismatch: expected {}, got {}",
+                    self.file_name, file_name
+                ),
+            ));
+        }
+
+        if file_size as u64 != self.file_size {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "mapped file init size mismatch: expected {}, got {}",
+                    self.file_size, file_size
+                ),
+            ));
+        }
+
+        Ok(())
     }
 
     fn get_slice(&self, pos: usize, size: usize) -> Option<&[u8]> {
@@ -1064,6 +1154,19 @@ impl DefaultMappedFile {
             return (write - flush) / OS_PAGE_SIZE as i32 >= flush_least_pages;
         }
         write > flush
+    }
+
+    #[inline]
+    fn is_able_to_commit(&self, commit_least_pages: i32) -> bool {
+        if self.is_full() {
+            return true;
+        }
+        let committed = self.committed_position.load(Ordering::Acquire);
+        let write = self.wrote_position.load(Ordering::Acquire);
+        if commit_least_pages > 0 {
+            return (write - committed) / OS_PAGE_SIZE as i32 >= commit_least_pages;
+        }
+        write > committed
     }
 
     #[inline]
@@ -1317,12 +1420,11 @@ impl DefaultMappedFile {
         let flush_start = Instant::now();
 
         // Perform the flush
-        let result = if let Some(transient_store_pool) = &self.transient_store_pool {
-            // Commit to write buffer first
+        if self.transient_store_pool.is_some() {
             self.committed_position.store(end as i32, Ordering::Release);
-            0
-        } else {
-            // Directly flush mmap range
+        }
+
+        let result = {
             let mmap = self.mmapped_file.deref();
             match mmap.flush_range(start, end - start) {
                 Ok(_) => (end - start) as i32,
@@ -1367,6 +1469,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
 
     fn create_test_file() -> (TempDir, DefaultMappedFile) {
         let temp_dir = TempDir::new().unwrap();
@@ -1376,6 +1479,31 @@ mod tests {
 
         let mapped_file = DefaultMappedFile::new(file_name, 4096);
         (temp_dir, mapped_file)
+    }
+
+    fn create_transient_test_file() -> (TempDir, TransientStorePool, DefaultMappedFile) {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_name = CheetahString::from(file_path.to_str().unwrap());
+        let transient_store_pool = TransientStorePool::new(1, 4096);
+        let mapped_file =
+            DefaultMappedFile::new_with_transient_store_pool(file_name, 4096, transient_store_pool.clone());
+        (temp_dir, transient_store_pool, mapped_file)
+    }
+
+    struct RejectingCompactionCallback;
+
+    impl CompactionAppendMsgCallback for RejectingCompactionCallback {
+        fn do_append(
+            &self,
+            bb_dest: &mut bytes::Bytes,
+            file_from_offset: i64,
+            max_blank: i32,
+            bb_src: &mut bytes::Bytes,
+        ) -> AppendMessageResult {
+            let _ = (bb_dest, file_from_offset, max_blank, bb_src);
+            AppendMessageResult::default()
+        }
     }
 
     #[test]
@@ -1497,5 +1625,59 @@ mod tests {
         assert!(summary.contains("Reads:"));
         assert!(summary.contains("Flushes:"));
         assert!(summary.contains("zero-copy"));
+    }
+
+    #[test]
+    fn transient_store_pool_commit_flush_round_trip() {
+        let (_temp_dir, _pool, mapped_file) = create_transient_test_file();
+
+        assert!(mapped_file.append_message_bytes(b"hello transient"));
+        assert_eq!(mapped_file.get_wrote_position(), 15);
+        assert_eq!(mapped_file.get_committed_position(), 0);
+        assert_eq!(mapped_file.get_read_position(), 0);
+
+        assert_eq!(mapped_file.commit(0), 15);
+        assert_eq!(mapped_file.get_committed_position(), 15);
+        assert_eq!(mapped_file.get_read_position(), 15);
+
+        assert_eq!(mapped_file.flush(0), 15);
+        assert_eq!(mapped_file.get_flushed_position(), 15);
+        assert_eq!(
+            mapped_file.get_bytes_readable_checked(0, 15).unwrap(),
+            Bytes::from_static(b"hello transient")
+        );
+    }
+
+    #[test]
+    fn compaction_append_is_explicitly_rejected() {
+        let (_temp_dir, mut mapped_file) = create_test_file();
+        let mut message = Bytes::from_static(b"compaction-message");
+
+        let result = mapped_file.append_message_compaction(&mut message, &RejectingCompactionCallback);
+
+        assert_eq!(result.status, AppendMessageStatus::UnknownError);
+        assert_eq!(result.wrote_bytes, 0);
+    }
+
+    #[test]
+    fn mapped_file_init_with_transient_pool_is_stable() {
+        let (_temp_dir, pool, mapped_file) = create_transient_test_file();
+
+        let result = mapped_file.init(mapped_file.get_file_name(), 4096, &pool);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn swap_map_updates_bookkeeping_without_panicking() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        mapped_file
+            .mapped_byte_buffer_access_count_since_last_swap
+            .store(3, Ordering::Release);
+        let before = mapped_file.get_recent_swap_map_time();
+
+        assert!(!mapped_file.swap_map());
+        assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 0);
+        assert!(mapped_file.get_recent_swap_map_time() >= before);
     }
 }

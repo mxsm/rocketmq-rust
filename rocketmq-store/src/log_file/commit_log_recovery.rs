@@ -268,10 +268,6 @@ fn is_mapped_file_matched_recover(
         return false;
     }
 
-    if message_store_config.is_enable_rocksdb_store() {
-        unimplemented!("RocksDB store not supported in optimized recovery")
-    }
-
     // Read sys flag
     let sys_flag = mapped_file
         .get_bytes(SYSFLAG_POSITION, mem::size_of::<i32>())
