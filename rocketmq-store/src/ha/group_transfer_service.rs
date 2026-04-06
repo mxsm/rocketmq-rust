@@ -30,6 +30,7 @@ use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
@@ -39,12 +40,6 @@ use crate::store_error::HAResult;
 pub struct GroupTransferService {
     inner: Arc<GroupTransferServiceInner>,
     service_manager: ServiceManager<GroupTransferServiceInner>,
-}
-
-#[derive(Clone, Copy)]
-struct AckedReplica {
-    slave_broker_id: Option<i64>,
-    slave_ack_offset: i64,
 }
 
 impl GroupTransferService {
@@ -120,10 +115,32 @@ impl GroupTransferServiceInner {
         std::mem::swap(&mut *read_requests, &mut *write_requests);
     }
 
+    async fn load_acked_replicas(&self) -> Vec<HAAckedReplicaSnapshot> {
+        if let Some(acked_replicas) = self.ha_service.try_snapshot_acked_replicas() {
+            return acked_replicas;
+        }
+
+        self.ha_service
+            .get_connection_list()
+            .await
+            .into_iter()
+            .map(|connection| HAAckedReplicaSnapshot {
+                slave_broker_id: connection.slave_broker_id(),
+                slave_ack_offset: connection.get_slave_ack_offset(),
+            })
+            .collect()
+    }
+
     async fn do_wait_transfer(&self) {
-        let mut read_requests = self.requests_read.lock().await;
+        let mut read_requests = {
+            let mut pending_requests = self.requests_read.lock().await;
+            if pending_requests.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *pending_requests)
+        };
+
         if read_requests.is_empty() {
-            drop(read_requests);
             return;
         }
 
@@ -153,16 +170,7 @@ impl GroupTransferServiceInner {
                 }
                 if all_ack_in_sync_state_set && self.ha_service.is_auto_switch_enabled() {
                     if let Some(sync_state_set) = self.ha_service.sync_state_set() {
-                        let acked_replicas = self
-                            .ha_service
-                            .get_connection_list()
-                            .await
-                            .into_iter()
-                            .map(|connection| AckedReplica {
-                                slave_broker_id: connection.slave_broker_id(),
-                                slave_ack_offset: connection.get_slave_ack_offset(),
-                            })
-                            .collect::<Vec<_>>();
+                        let acked_replicas = self.load_acked_replicas().await;
                         transfer_ok = has_required_sync_state_set_acks(
                             &sync_state_set,
                             &acked_replicas,
@@ -173,16 +181,8 @@ impl GroupTransferServiceInner {
                     transfer_ok =
                         self.ha_service.in_sync_replicas_nums(request.get_next_offset()) >= request.get_ack_nums();
                 } else {
-                    let mut ack_nums = 1;
-                    for connection in self.ha_service.get_connection_list().await {
-                        if connection.get_slave_ack_offset() >= request.get_next_offset() {
-                            ack_nums += 1;
-                        }
-                        if ack_nums >= request.get_ack_nums() {
-                            transfer_ok = true;
-                            break;
-                        }
-                    }
+                    let acked_replicas = self.load_acked_replicas().await;
+                    transfer_ok = has_required_acks(request.get_ack_nums(), &acked_replicas, request.get_next_offset());
                 }
             }
             if !transfer_ok {
@@ -198,7 +198,6 @@ impl GroupTransferServiceInner {
                 PutMessageStatus::FlushSlaveTimeout
             });
         }
-        read_requests.clear();
     }
 }
 
@@ -222,7 +221,7 @@ impl ServiceTask for GroupTransferServiceInner {
 
 fn has_required_sync_state_set_acks(
     sync_state_set: &std::collections::HashSet<i64>,
-    acked_replicas: &[AckedReplica],
+    acked_replicas: &[HAAckedReplicaSnapshot],
     next_offset: i64,
 ) -> bool {
     if sync_state_set.len() <= 1 {
@@ -246,6 +245,24 @@ fn has_required_sync_state_set_acks(
     false
 }
 
+fn has_required_acks(required_acks: i32, acked_replicas: &[HAAckedReplicaSnapshot], next_offset: i64) -> bool {
+    if required_acks <= 1 {
+        return true;
+    }
+
+    let mut ack_nums = 1;
+    for replica in acked_replicas {
+        if replica.slave_ack_offset >= next_offset {
+            ack_nums += 1;
+        }
+        if ack_nums >= required_acks {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -256,11 +273,11 @@ mod tests {
     fn sync_state_set_ack_requires_all_members() {
         let sync_state_set = HashSet::from([7_i64, 9_i64, 10_i64]);
         let acked_replicas = vec![
-            AckedReplica {
+            HAAckedReplicaSnapshot {
                 slave_broker_id: Some(9),
                 slave_ack_offset: 128,
             },
-            AckedReplica {
+            HAAckedReplicaSnapshot {
                 slave_broker_id: Some(10),
                 slave_ack_offset: 64,
             },
@@ -274,16 +291,34 @@ mod tests {
     fn sync_state_set_ack_ignores_non_members() {
         let sync_state_set = HashSet::from([7_i64, 9_i64]);
         let acked_replicas = vec![
-            AckedReplica {
+            HAAckedReplicaSnapshot {
                 slave_broker_id: Some(11),
                 slave_ack_offset: 256,
             },
-            AckedReplica {
+            HAAckedReplicaSnapshot {
                 slave_broker_id: Some(9),
                 slave_ack_offset: 256,
             },
         ];
 
         assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
+    }
+
+    #[test]
+    fn required_acks_count_master_and_acked_slaves() {
+        let acked_replicas = vec![
+            HAAckedReplicaSnapshot {
+                slave_broker_id: Some(9),
+                slave_ack_offset: 32,
+            },
+            HAAckedReplicaSnapshot {
+                slave_broker_id: Some(10),
+                slave_ack_offset: 96,
+            },
+        ];
+
+        assert!(!has_required_acks(3, &acked_replicas, 64));
+        assert!(has_required_acks(2, &acked_replicas, 64));
+        assert!(has_required_acks(3, &acked_replicas, 32));
     }
 }

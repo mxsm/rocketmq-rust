@@ -278,10 +278,7 @@ impl FlushRealTimeService {
 
     pub fn wakeup(&self) {
         if !self.message_store_config.flush_commit_log_timed {
-            let notified = self.notified.clone();
-            tokio::spawn(async move {
-                notified.notify_one();
-            });
+            self.notified.notify_one();
         }
     }
 
@@ -297,10 +294,7 @@ pub(crate) struct CommitRealTimeService {
 
 impl CommitRealTimeService {
     pub fn wakeup(&self) {
-        let notified = self.notified.clone();
-        tokio::spawn(async move {
-            notified.notify_one();
-        });
+        self.notified.notify_one();
     }
 
     fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {

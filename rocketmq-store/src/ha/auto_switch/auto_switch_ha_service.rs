@@ -33,6 +33,7 @@ use crate::ha::default_ha_service::DefaultHAService;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
@@ -68,6 +69,10 @@ impl AutoSwitchHAService {
             is_synchronizing_sync_state_set: AtomicBool::new(false),
             local_broker_id: AtomicI64::new(-1),
         }
+    }
+
+    pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
+        self.delegate.try_snapshot_acked_replicas()
     }
 
     pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {

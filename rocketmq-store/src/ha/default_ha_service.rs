@@ -44,6 +44,7 @@ use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::general_ha_service::HAAckedReplicaSnapshot;
 use crate::ha::group_transfer_service::GroupTransferService;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection::HAConnection;
@@ -230,6 +231,18 @@ impl DefaultHAService {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
+        self.connections.try_lock().ok().map(|connections| {
+            connections
+                .values()
+                .map(|connection| HAAckedReplicaSnapshot {
+                    slave_broker_id: connection.slave_broker_id(),
+                    slave_ack_offset: connection.get_slave_ack_offset(),
+                })
+                .collect()
+        })
     }
 
     pub(crate) fn handle_connection_added(&self, connection: &GeneralHAConnection) {

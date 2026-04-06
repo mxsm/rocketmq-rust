@@ -28,6 +28,12 @@ use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAResult;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HAAckedReplicaSnapshot {
+    pub slave_broker_id: Option<i64>,
+    pub slave_ack_offset: i64,
+}
+
 #[derive(Clone)]
 pub enum GeneralHAService {
     DefaultHAService(ArcMut<DefaultHAService>),
@@ -84,6 +90,13 @@ impl GeneralHAService {
         match self {
             GeneralHAService::DefaultHAService(_) => None,
             GeneralHAService::AutoSwitchHAService(service) => Some(service.get_sync_state_set()),
+        }
+    }
+
+    pub(crate) fn try_snapshot_acked_replicas(&self) -> Option<Vec<HAAckedReplicaSnapshot>> {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.try_snapshot_acked_replicas(),
+            GeneralHAService::AutoSwitchHAService(service) => service.try_snapshot_acked_replicas(),
         }
     }
 }
