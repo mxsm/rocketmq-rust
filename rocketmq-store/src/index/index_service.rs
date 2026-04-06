@@ -122,6 +122,16 @@ impl IndexService {
             .map_or(0, |f| (f.get_file_size() * index_file_list.len()) as u64)
     }
 
+    #[inline]
+    pub fn get_max_dispatch_commit_log_offset(&self) -> Option<i64> {
+        self.index_file_list
+            .read()
+            .iter()
+            .rev()
+            .find(|index_file| index_file.has_entries())
+            .map(|index_file| index_file.get_end_phy_offset())
+    }
+
     pub fn delete_expired_file(&self, offset: u64) {
         let files = {
             let index_file_list = self.index_file_list.read();

@@ -40,4 +40,11 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
             self.index_service.build_index(dispatch_request);
         }
     }
+
+    fn dispatch_progress_offset(&self, _commit_log_min_offset: i64) -> Option<i64> {
+        self.message_store_config
+            .message_index_enable
+            .then(|| self.index_service.get_max_dispatch_commit_log_offset())
+            .flatten()
+    }
 }

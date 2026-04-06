@@ -279,6 +279,11 @@ impl IndexFile {
         self.index_header.get_end_phy_offset()
     }
 
+    #[inline]
+    pub fn has_entries(&self) -> bool {
+        self.index_header.get_index_count() > 1
+    }
+
     pub fn is_time_matched(&self, begin: i64, end: i64) -> bool {
         let begin_timestamp = self.index_header.get_begin_timestamp();
         let end_timestamp = self.index_header.get_end_timestamp();

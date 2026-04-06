@@ -30,7 +30,6 @@ use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::put_message_context::PutMessageContext;
 use crate::config::message_store_config::MessageStoreConfig;
-use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 
 pub struct MessageExtEncoder {
@@ -217,10 +216,6 @@ impl MessageExtEncoder {
 
     pub fn encode(&mut self, msg_inner: &MessageExtBrokerInner) -> Option<PutMessageResult> {
         self.byte_buf.clear();
-
-        if self.message_store_config.enable_multi_dispatch && CommitLog::is_multi_dispatch_msg(msg_inner) {
-            return self.encode_without_properties(msg_inner);
-        }
 
         // Serialize message
         let properties_data = msg_inner.properties_string().as_bytes();

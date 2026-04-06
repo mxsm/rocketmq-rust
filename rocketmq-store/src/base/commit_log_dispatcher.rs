@@ -24,4 +24,12 @@ pub trait CommitLogDispatcher: Send + Sync + 'static {
             self.dispatch(request);
         }
     }
+
+    /// Returns the highest persisted CommitLog offset this dispatcher has already processed.
+    ///
+    /// The returned offset is used as a recovery/reput lower bound. `None` means the dispatcher
+    /// has no persisted progress to contribute.
+    fn dispatch_progress_offset(&self, _commit_log_min_offset: i64) -> Option<i64> {
+        None
+    }
 }

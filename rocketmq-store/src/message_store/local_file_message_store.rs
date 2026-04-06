@@ -521,16 +521,16 @@ impl LocalFileMessageStore {
         );
         let recover_consume_queue_start = Instant::now();
         self.recover_consume_queue().await;
-        let max_phy_offset_of_consume_queue = self.consume_queue_store.get_max_phy_offset_in_consume_queue_global();
+        let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
             .as_millis();
 
         let recover_commit_log_start = Instant::now();
         if last_exit_ok {
-            self.recover_normally(max_phy_offset_of_consume_queue).await;
+            self.recover_normally(dispatch_recovery_offset).await;
         } else {
-            self.recover_abnormally(max_phy_offset_of_consume_queue).await;
+            self.recover_abnormally(dispatch_recovery_offset).await;
         }
         let recover_commit_log = Instant::now()
             .saturating_duration_since(recover_commit_log_start)
@@ -690,6 +690,14 @@ impl LocalFileMessageStore {
         ConsumeQueueStoreTrait::check_self(&self.consume_queue_store);
     }
 
+    fn get_dispatch_recovery_offset(&self) -> i64 {
+        let commit_log_min_offset = self.commit_log.get_min_offset();
+        self.dispatcher
+            .min_dispatch_progress_offset(commit_log_min_offset)
+            .unwrap_or(commit_log_min_offset)
+            .max(commit_log_min_offset)
+    }
+
     pub fn next_offset_correction(&self, old_offset: i64, new_offset: i64) -> i64 {
         let mut next_offset = old_offset;
         if self.message_store_config.broker_role != BrokerRole::Slave || self.message_store_config.offset_check_in_slave
@@ -714,26 +722,20 @@ impl LocalFileMessageStore {
         self.message_arriving_listener = message_arriving_listener;
     }
 
-    fn do_recheck_reput_offset_from_cq(&self) {
+    fn do_recheck_reput_offset_from_dispatchers(&self) {
         let Some(reput_from_offset) = self.reput_message_service.reput_from_offset.as_ref() else {
             return;
         };
 
-        let cq_reput_from_offset = self.consume_queue_store.get_max_phy_offset_in_consume_queue_global();
-        let commit_log_min_offset = self.commit_log.get_min_offset();
         let commit_log_confirm_offset = self.commit_log.get_confirm_offset();
-        let normalized_from_cq = if cq_reput_from_offset < 0 {
-            commit_log_min_offset
-        } else {
-            cq_reput_from_offset.max(commit_log_min_offset)
-        };
-        let target_reput_from_offset = normalized_from_cq.min(commit_log_confirm_offset);
+        let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
+        let target_reput_from_offset = dispatch_recovery_offset.min(commit_log_confirm_offset);
         let previous_reput_from_offset = reput_from_offset.swap(target_reput_from_offset, Ordering::SeqCst);
 
         if previous_reput_from_offset != target_reput_from_offset {
             info!(
-                "rechecked reputFromOffset from {} to {} using consume queue max physical offset {}",
-                previous_reput_from_offset, target_reput_from_offset, cq_reput_from_offset
+                "rechecked reputFromOffset from {} to {} using dispatch recovery offset {}",
+                previous_reput_from_offset, target_reput_from_offset, dispatch_recovery_offset
             );
         }
     }
@@ -744,10 +746,7 @@ impl LocalFileMessageStore {
 
     pub async fn reput_once(&mut self) {
         if self.reput_message_service.reput_from_offset.is_none() {
-            let start_offset = self
-                .consume_queue_store
-                .get_max_phy_offset_in_consume_queue_global()
-                .max(0);
+            let start_offset = self.get_dispatch_recovery_offset().max(0);
             self.reput_message_service.set_reput_from_offset(start_offset);
         }
         let Some(message_store) = self.message_store_arc.clone() else {
@@ -882,7 +881,7 @@ impl MessageStore for LocalFileMessageStore {
             self.notify_message_arrive_in_batch,
             self.message_store_arc.clone().unwrap(),
         );
-        self.do_recheck_reput_offset_from_cq();
+        self.do_recheck_reput_offset_from_dispatchers();
         self.flush_consume_queue_service.start();
         self.commit_log.start();
         self.consume_queue_store.start();
@@ -2235,6 +2234,14 @@ impl CommitLogDispatcherDefault {
     pub fn add_first_dispatcher(&mut self, dispatcher: Arc<dyn CommitLogDispatcher>) {
         self.dispatcher_vec.insert(0, dispatcher);
     }
+
+    #[inline]
+    pub fn min_dispatch_progress_offset(&self, commit_log_min_offset: i64) -> Option<i64> {
+        self.dispatcher_vec
+            .iter()
+            .filter_map(|dispatcher| dispatcher.dispatch_progress_offset(commit_log_min_offset))
+            .min()
+    }
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherDefault {
@@ -3109,6 +3116,7 @@ mod tests {
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_rust::ArcMut;
@@ -3754,7 +3762,54 @@ mod tests {
     }
 
     #[test]
-    fn do_recheck_reput_offset_from_cq_rewinds_to_dispatched_commitlog_offset() {
+    fn reput_once_initializes_from_minimum_dispatcher_progress() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("reput-init-offset-topic");
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 100_i64), (1, 132_i64)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    consume_queue_offset: queue_offset,
+                    store_timestamp: 1000 + queue_offset,
+                    success: true,
+                    ..DispatchRequest::default()
+                });
+        }
+
+        store.index_service.build_index(&DispatchRequest {
+            topic,
+            queue_id: 0,
+            commit_log_offset: 100,
+            msg_size: 32,
+            store_timestamp: 1000,
+            keys: CheetahString::from_static_str("lookup-key"),
+            success: true,
+            ..DispatchRequest::default()
+        });
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(store.reput_once());
+
+        let reput_from_offset = store
+            .reput_message_service
+            .reput_from_offset
+            .as_ref()
+            .expect("reput offset should exist")
+            .load(Ordering::SeqCst);
+        assert_eq!(reput_from_offset, 100);
+    }
+
+    #[test]
+    fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset() {
         let temp_dir = tempdir().unwrap();
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(MessageStoreConfig {
@@ -3792,7 +3847,7 @@ mod tests {
                 });
         }
 
-        store.do_recheck_reput_offset_from_cq();
+        store.do_recheck_reput_offset_from_dispatchers();
 
         let reput_from_offset = store
             .reput_message_service
@@ -3801,6 +3856,106 @@ mod tests {
             .expect("reput offset should exist")
             .load(Ordering::SeqCst);
         assert_eq!(reput_from_offset, 164);
+    }
+
+    #[test]
+    fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_index() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                enable_controller_mode: true,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig {
+                enable_controller_mode: true,
+                ..BrokerConfig::default()
+            }),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        let topic = CheetahString::from_static_str("recheck-reput-offset-with-index-topic");
+
+        store.set_confirm_offset(256);
+        store.reput_message_service.set_reput_from_offset(256);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 100_i64), (1, 132_i64)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    consume_queue_offset: queue_offset,
+                    store_timestamp: 1000 + queue_offset,
+                    success: true,
+                    ..DispatchRequest::default()
+                });
+        }
+
+        store.index_service.build_index(&DispatchRequest {
+            topic,
+            queue_id: 0,
+            commit_log_offset: 100,
+            msg_size: 32,
+            store_timestamp: 1000,
+            keys: CheetahString::from_static_str("lookup-key"),
+            success: true,
+            ..DispatchRequest::default()
+        });
+
+        store.do_recheck_reput_offset_from_dispatchers();
+
+        let reput_from_offset = store
+            .reput_message_service
+            .reput_from_offset
+            .as_ref()
+            .expect("reput offset should exist")
+            .load(Ordering::SeqCst);
+        assert_eq!(reput_from_offset, 100);
+    }
+
+    #[tokio::test]
+    async fn put_message_with_multi_dispatch_properties_dispatches_lmq_queues_after_reput() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_multi_dispatch: true,
+                enable_lmq: true,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let source_topic = CheetahString::from_static_str("multi-dispatch-source-topic");
+        let lmq_alpha = CheetahString::from_static_str("%LMQ%alpha");
+        let lmq_beta = CheetahString::from_static_str("%LMQ%beta");
+
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(source_topic);
+        msg.message_ext_inner.set_queue_id(0);
+        msg.set_body(Bytes::from_static(b"multi-dispatch-body"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("%LMQ%alpha,%LMQ%beta"),
+        );
+
+        let put_result = store.put_message(msg).await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+
+        store.reput_once().await;
+
+        let alpha_queue = store.consume_queue_store.find_or_create_consume_queue(&lmq_alpha, 0);
+        let beta_queue = store.consume_queue_store.find_or_create_consume_queue(&lmq_beta, 0);
+
+        assert_eq!(alpha_queue.get_message_total_in_queue(), 1);
+        assert_eq!(beta_queue.get_message_total_in_queue(), 1);
+        assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%alpha-0"), 1);
+        assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%beta-0"), 1);
     }
 
     #[tokio::test]

@@ -36,7 +36,6 @@ use crate::base::message_status_enum::AppendMessageStatus;
 use crate::base::put_message_context::PutMessageContext;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::get_message_num;
-use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::BLANK_MAGIC_CODE;
 use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 use crate::log_file::mapped_file::MappedFile;
@@ -151,11 +150,6 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         let mut pre_encode_buffer = msg_inner.encoded_buff.take().unwrap(); // Assuming get_encoded_buff returns Option<ByteBuffer>
-        let is_multi_dispatch_msg =
-            self.message_store_config.enable_multi_dispatch && CommitLog::is_multi_dispatch_msg(msg_inner);
-        if is_multi_dispatch_msg {
-            unimplemented!("Multi dispatch message is not supported yet");
-        }
 
         let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
         //physic offset
@@ -356,14 +350,6 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
     ) -> AppendMessageResult {
         // Extract pre-encoded buffer (still contains metadata we need)
         let pre_encode_buffer = msg_inner.encoded_buff.take().unwrap();
-        let is_multi_dispatch_msg =
-            self.message_store_config.enable_multi_dispatch && CommitLog::is_multi_dispatch_msg(msg_inner);
-
-        if is_multi_dispatch_msg {
-            // Fall back to standard implementation for multi-dispatch
-            msg_inner.encoded_buff = Some(pre_encode_buffer);
-            return self.do_append(file_from_offset, mapped_file, max_blank, msg_inner, put_message_context);
-        }
 
         let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
 

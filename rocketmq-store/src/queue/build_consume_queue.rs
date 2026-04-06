@@ -40,4 +40,9 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildConsumeQueue {
             _ => {}
         }
     }
+
+    fn dispatch_progress_offset(&self, _commit_log_min_offset: i64) -> Option<i64> {
+        let offset = self.consume_queue_store.get_max_phy_offset_in_consume_queue_global();
+        (offset >= 0).then_some(offset)
+    }
 }
