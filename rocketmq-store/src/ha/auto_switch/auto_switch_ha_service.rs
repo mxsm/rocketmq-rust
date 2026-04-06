@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -56,6 +57,7 @@ pub struct AutoSwitchHAService {
     sync_state_tracker: Mutex<SyncStateTracker>,
     is_synchronizing_sync_state_set: AtomicBool,
     local_broker_id: AtomicI64,
+    current_master_epoch: AtomicI32,
 }
 
 impl AutoSwitchHAService {
@@ -68,6 +70,7 @@ impl AutoSwitchHAService {
             sync_state_tracker: Mutex::new(SyncStateTracker::default()),
             is_synchronizing_sync_state_set: AtomicBool::new(false),
             local_broker_id: AtomicI64::new(-1),
+            current_master_epoch: AtomicI32::new(0),
         }
     }
 
@@ -372,6 +375,45 @@ impl AutoSwitchHAService {
         tracker.remote_sync_state_set.clear();
         tracker.connection_caught_up_time_table.clear();
     }
+
+    fn apply_epoch_transition(&self, next_epoch: i32) -> bool {
+        let current_epoch = self.current_master_epoch.load(Ordering::SeqCst);
+        if next_epoch < current_epoch {
+            return false;
+        }
+
+        if next_epoch > current_epoch {
+            let epoch_start_offset = self
+                .message_store
+                .get_max_phy_offset()
+                .max(self.message_store.get_min_phy_offset());
+            self.current_master_epoch.store(next_epoch, Ordering::SeqCst);
+            let message_store = self.message_store.clone();
+            let message_store = message_store.mut_from_ref();
+            message_store.set_state_machine_version(next_epoch as i64);
+            message_store.set_controller_epoch_start_offset(epoch_start_offset);
+        }
+
+        true
+    }
+
+    fn refresh_confirm_offset_after_role_change(&self) {
+        let min_phy_offset = self.message_store.get_min_phy_offset();
+        let max_phy_offset = self.message_store.get_max_phy_offset().max(min_phy_offset);
+        let next_confirm_offset = if self.is_master.load(Ordering::SeqCst) {
+            max_phy_offset
+        } else {
+            self.message_store.get_commit_log().get_confirm_offset_directly()
+        };
+        self.message_store
+            .clone()
+            .mut_from_ref()
+            .set_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
+    }
+
+    pub fn current_master_epoch(&self) -> i32 {
+        self.current_master_epoch.load(Ordering::SeqCst)
+    }
 }
 
 impl HAService for AutoSwitchHAService {
@@ -384,8 +426,10 @@ impl HAService for AutoSwitchHAService {
     }
 
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
+        if !self.apply_epoch_transition(master_epoch) {
+            return Ok(false);
+        }
         self.is_master.store(true, Ordering::SeqCst);
-        let _ = master_epoch;
         self.clear_pending_sync_state_tracking();
         let local_broker_id = self.local_broker_id.load(Ordering::SeqCst);
         if local_broker_id >= 0 {
@@ -395,6 +439,7 @@ impl HAService for AutoSwitchHAService {
             }
         }
         self.clear_master_target().await;
+        self.refresh_confirm_offset_after_role_change();
         Ok(true)
     }
 
@@ -408,8 +453,10 @@ impl HAService for AutoSwitchHAService {
         new_master_epoch: i32,
         slave_id: Option<i64>,
     ) -> HAResult<bool> {
+        if !self.apply_epoch_transition(new_master_epoch) {
+            return Ok(false);
+        }
         self.is_master.store(false, Ordering::SeqCst);
-        let _ = new_master_epoch;
         if let Some(slave_id) = slave_id {
             self.set_local_broker_id(slave_id);
         }
@@ -417,6 +464,7 @@ impl HAService for AutoSwitchHAService {
         self.delegate.destroy_connections().await;
         self.delegate.set_ha_client_reported_broker_id(slave_id);
         self.update_master_target(new_master_addr).await;
+        self.refresh_confirm_offset_after_role_change();
         Ok(true)
     }
 
@@ -746,10 +794,67 @@ mod tests {
         assert_eq!(service.get_local_sync_state_set(), HashSet::from([7_i64]));
         assert_eq!(service.get_sync_state_set(), HashSet::from([7_i64]));
         assert!(!service.is_synchronizing_sync_state_set());
+        assert_eq!(service.current_master_epoch(), 3);
+        assert_eq!(store.get_state_machine_version(), 3);
+        assert_eq!(store.get_controller_epoch_start_offset(), 4);
         assert_eq!(
             service.get_ha_client().expect("ha client").get_master_address(),
             "127.0.0.1:10912"
         );
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn change_to_master_records_epoch_boundary_and_refreshes_confirm_offset() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-change-master-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root);
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+        store.set_confirm_offset(0);
+
+        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
+        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+
+        let switched = service.change_to_master(5).await.expect("change to master");
+
+        assert!(switched);
+        assert_eq!(service.current_master_epoch(), 5);
+        assert_eq!(store.get_state_machine_version(), 5);
+        assert_eq!(store.get_controller_epoch_start_offset(), 4);
+        assert_eq!(store.get_confirm_offset(), 4);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn follower_rejects_stale_epoch() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-auto-switch-stale-epoch-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root);
+        store.init().await.expect("init message store");
+
+        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
+        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+
+        assert!(service.change_to_master(6).await.expect("change to master"));
+        let stale = service
+            .change_to_slave("127.0.0.1:10912", 5, Some(11))
+            .await
+            .expect("stale change should be handled");
+
+        assert!(!stale);
+        assert!(service.get_runtime_info(0).master);
+        assert_eq!(service.current_master_epoch(), 6);
+        assert_eq!(store.get_state_machine_version(), 6);
+        assert_eq!(service.get_ha_client().expect("ha client").get_master_address(), "");
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

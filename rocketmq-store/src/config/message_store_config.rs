@@ -273,6 +273,10 @@ mod defaults {
     pub fn default_query_max_num() -> usize {
         32
     }
+
+    pub const fn max_checksum_range() -> usize {
+        1024 * 1024 * 1024
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -725,7 +729,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub sync_master_flush_offset_when_startup: bool,
 
-    #[serde(default)]
+    #[serde(default = "defaults::max_checksum_range")]
     pub max_checksum_range: usize,
 
     #[serde(default)]
@@ -964,7 +968,7 @@ impl Default for MessageStoreConfig {
             max_ha_transfer_byte_in_second: 100 * 1024 * 1024,
             ha_max_time_slave_not_catchup: 0,
             sync_master_flush_offset_when_startup: false,
-            max_checksum_range: 0,
+            max_checksum_range: defaults::max_checksum_range(),
             replicas_per_disk_partition: 0,
             logical_disk_space_clean_forcibly_threshold: 0.0,
             max_slave_resend_length: 0,
@@ -1571,5 +1575,15 @@ impl MessageStoreConfig {
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
             .collect::<HashMap<CheetahString, CheetahString>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessageStoreConfig;
+
+    #[test]
+    fn default_max_checksum_range_matches_java_default() {
+        assert_eq!(MessageStoreConfig::default().max_checksum_range, 1024 * 1024 * 1024);
     }
 }

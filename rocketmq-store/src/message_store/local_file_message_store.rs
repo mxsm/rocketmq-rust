@@ -127,6 +127,100 @@ use crate::timer::timer_message_store::TimerMessageStore;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 
+fn murmur3_x64_128(bytes: &[u8], seed: u32) -> (u64, u64) {
+    const C1: u64 = 0x87c3_7b91_1142_53d5;
+    const C2: u64 = 0x4cf5_ad43_2745_937f;
+
+    let mut h1 = seed as u64;
+    let mut h2 = seed as u64;
+
+    let block_count = bytes.len() / 16;
+    for index in 0..block_count {
+        let offset = index * 16;
+        let mut k1 = u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("slice is exactly 8 bytes"));
+        let mut k2 = u64::from_le_bytes(
+            bytes[offset + 8..offset + 16]
+                .try_into()
+                .expect("slice is exactly 8 bytes"),
+        );
+
+        k1 = k1.wrapping_mul(C1);
+        k1 = k1.rotate_left(31);
+        k1 = k1.wrapping_mul(C2);
+        h1 ^= k1;
+
+        h1 = h1.rotate_left(27);
+        h1 = h1.wrapping_add(h2);
+        h1 = h1.wrapping_mul(5).wrapping_add(0x52dc_e729);
+
+        k2 = k2.wrapping_mul(C2);
+        k2 = k2.rotate_left(33);
+        k2 = k2.wrapping_mul(C1);
+        h2 ^= k2;
+
+        h2 = h2.rotate_left(31);
+        h2 = h2.wrapping_add(h1);
+        h2 = h2.wrapping_mul(5).wrapping_add(0x3849_5ab5);
+    }
+
+    let tail = &bytes[block_count * 16..];
+    let mut k1 = 0u64;
+    let mut k2 = 0u64;
+
+    for (index, byte) in tail.iter().enumerate() {
+        if index < 8 {
+            k1 |= (*byte as u64) << (index * 8);
+        } else {
+            k2 |= (*byte as u64) << ((index - 8) * 8);
+        }
+    }
+
+    if tail.len() > 8 {
+        k2 = k2.wrapping_mul(C2);
+        k2 = k2.rotate_left(33);
+        k2 = k2.wrapping_mul(C1);
+        h2 ^= k2;
+    }
+
+    if !tail.is_empty() {
+        k1 = k1.wrapping_mul(C1);
+        k1 = k1.rotate_left(31);
+        k1 = k1.wrapping_mul(C2);
+        h1 ^= k1;
+    }
+
+    h1 ^= bytes.len() as u64;
+    h2 ^= bytes.len() as u64;
+
+    h1 = h1.wrapping_add(h2);
+    h2 = h2.wrapping_add(h1);
+
+    h1 = fmix64(h1);
+    h2 = fmix64(h2);
+
+    h1 = h1.wrapping_add(h2);
+    h2 = h2.wrapping_add(h1);
+
+    (h1, h2)
+}
+
+fn fmix64(mut value: u64) -> u64 {
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    value ^= value >> 33;
+    value
+}
+
+fn murmur3_x64_128_bytes(bytes: &[u8], seed: u32) -> [u8; 16] {
+    let (h1, h2) = murmur3_x64_128(bytes, seed);
+    let mut result = [0u8; 16];
+    result[..8].copy_from_slice(&h1.to_le_bytes());
+    result[8..].copy_from_slice(&h2.to_le_bytes());
+    result
+}
+
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
@@ -144,6 +238,7 @@ pub struct LocalFileMessageStore {
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
+    controller_epoch_start_offset: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
     running_flags: Arc<RunningFlags>,
     reput_message_service: ReputMessageService,
@@ -238,6 +333,7 @@ impl LocalFileMessageStore {
             dispatcher,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
+            controller_epoch_start_offset: Arc::new(AtomicI64::new(-1)),
             shutdown: Arc::new(AtomicBool::new(false)),
             running_flags,
             reput_message_service: ReputMessageService {
@@ -332,11 +428,39 @@ impl LocalFileMessageStore {
         self.max_delay_level
     }
 
+    fn enabled_rocksdb_specific_options(message_store_config: &MessageStoreConfig) -> Vec<&'static str> {
+        let mut enabled = Vec::new();
+        if message_store_config.clean_rocksdb_dirty_cq_interval_min > 0 {
+            enabled.push("clean_rocksdb_dirty_cq_interval_min");
+        }
+        if message_store_config.stat_rocksdb_cq_interval_sec > 0 {
+            enabled.push("stat_rocksdb_cq_interval_sec");
+        }
+        if message_store_config.real_time_persist_rocksdb_config {
+            enabled.push("real_time_persist_rocksdb_config");
+        }
+        if message_store_config.enable_rocksdb_log {
+            enabled.push("enable_rocksdb_log");
+        }
+        if message_store_config.rocksdb_cq_double_write_enable {
+            enabled.push("rocksdb_cq_double_write_enable");
+        }
+        enabled
+    }
+
     fn validate_supported_configuration(&self) -> Result<(), StoreError> {
         if Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
             return Err(StoreError::General(
                 "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
             ));
+        }
+
+        let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
+        if !self.message_store_config.is_enable_rocksdb_store() && !enabled_rocksdb_options.is_empty() {
+            return Err(StoreError::General(format!(
+                "RocksDB-specific configuration requires store_type=RocksDB: {}",
+                enabled_rocksdb_options.join(", ")
+            )));
         }
         Ok(())
     }
@@ -692,10 +816,31 @@ impl LocalFileMessageStore {
 
     fn get_dispatch_recovery_offset(&self) -> i64 {
         let commit_log_min_offset = self.commit_log.get_min_offset();
-        self.dispatcher
+        let dispatch_recovery_offset = self
+            .dispatcher
             .min_dispatch_progress_offset(commit_log_min_offset)
             .unwrap_or(commit_log_min_offset)
-            .max(commit_log_min_offset)
+            .max(commit_log_min_offset);
+        let controller_epoch_start_offset = self.controller_epoch_start_offset.load(Ordering::SeqCst);
+        if controller_epoch_start_offset >= 0 {
+            dispatch_recovery_offset.max(controller_epoch_start_offset.max(commit_log_min_offset))
+        } else {
+            dispatch_recovery_offset
+        }
+    }
+
+    pub fn set_state_machine_version(&mut self, state_machine_version: i64) {
+        self.state_machine_version
+            .store(state_machine_version, Ordering::SeqCst);
+    }
+
+    pub fn set_controller_epoch_start_offset(&mut self, epoch_start_offset: i64) {
+        self.controller_epoch_start_offset
+            .store(epoch_start_offset, Ordering::SeqCst);
+    }
+
+    pub fn get_controller_epoch_start_offset(&self) -> i64 {
+        self.controller_epoch_start_offset.load(Ordering::SeqCst)
     }
 
     pub fn next_offset_correction(&self, old_offset: i64, new_offset: i64) -> i64 {
@@ -729,7 +874,9 @@ impl LocalFileMessageStore {
 
         let commit_log_confirm_offset = self.commit_log.get_confirm_offset();
         let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
-        let target_reput_from_offset = dispatch_recovery_offset.min(commit_log_confirm_offset);
+        let target_reput_from_offset = dispatch_recovery_offset
+            .min(commit_log_confirm_offset)
+            .max(self.get_controller_epoch_start_offset().max(0));
         let previous_reput_from_offset = reput_from_offset.swap(target_reput_from_offset, Ordering::SeqCst);
 
         if previous_reput_from_offset != target_reput_from_offset {
@@ -2052,7 +2199,49 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {
-        todo!()
+        if from < 0 || to <= from {
+            return Vec::new();
+        }
+
+        let Ok(size) = usize::try_from(to - from) else {
+            return Vec::new();
+        };
+        if size == 0 || size > i32::MAX as usize {
+            return Vec::new();
+        }
+
+        let max_checksum_range = self.message_store_config.max_checksum_range;
+        if max_checksum_range > 0 && size > max_checksum_range {
+            error!(
+                "checksum range from {} with size {} exceeds threshold {}",
+                from, size, max_checksum_range
+            );
+            return Vec::new();
+        }
+
+        let Some(buffer_results) = self.get_bulk_commit_log_data(from, size as i32) else {
+            return Vec::new();
+        };
+
+        let mut encoded_messages = BytesMut::with_capacity(size);
+        for buffer_result in buffer_results {
+            let Some(mut bytes) = buffer_result.get_bytes() else {
+                continue;
+            };
+
+            for message in MessageDecoder::decodes_batch(&mut bytes, true, false) {
+                match MessageDecoder::encode_uniquely(&message, false) {
+                    Ok(encoded) => encoded_messages.extend_from_slice(encoded.as_ref()),
+                    Err(error) => warn!("skip uniquely encoding message while calculating checksum: {}", error),
+                }
+            }
+        }
+
+        if encoded_messages.is_empty() {
+            return Vec::new();
+        }
+
+        murmur3_x64_128_bytes(encoded_messages.as_ref(), 0).to_vec()
     }
 
     fn truncate_files(&self, offset_to_truncate: i64) -> Result<bool, StoreError> {
@@ -3129,6 +3318,7 @@ mod tests {
     use crate::base::message_status_enum::PutMessageStatus;
     use crate::base::message_store::MessageStore;
     use crate::base::store_checkpoint::StoreCheckpoint;
+    use crate::base::store_enum::StoreType;
     use crate::config::flush_disk_type::FlushDiskType;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::filter::MessageFilter;
@@ -3221,6 +3411,55 @@ mod tests {
             let error = store.init().await.expect_err("DLedger should be rejected explicitly");
             assert!(matches!(error, StoreError::General(message) if message.contains("DLedger commit log")));
         }
+    }
+
+    #[tokio::test]
+    async fn init_rejects_rocksdb_specific_flags_without_rocksdb_store_type() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                clean_rocksdb_dirty_cq_interval_min: 1,
+                stat_rocksdb_cq_interval_sec: 2,
+                real_time_persist_rocksdb_config: true,
+                enable_rocksdb_log: true,
+                rocksdb_cq_double_write_enable: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let error = store
+            .init()
+            .await
+            .expect_err("local file store should reject rocksdb-only configuration");
+        assert!(matches!(
+            error,
+            StoreError::General(message)
+            if message.contains("store_type=RocksDB")
+                && message.contains("clean_rocksdb_dirty_cq_interval_min")
+                && message.contains("stat_rocksdb_cq_interval_sec")
+                && message.contains("real_time_persist_rocksdb_config")
+                && message.contains("enable_rocksdb_log")
+                && message.contains("rocksdb_cq_double_write_enable")
+        ));
+    }
+
+    #[tokio::test]
+    async fn init_allows_rocksdb_specific_flags_when_store_type_is_rocksdb() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                store_type: StoreType::RocksDB,
+                enable_rocksdb_log: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        store
+            .init()
+            .await
+            .expect("rocksdb-typed store should accept rocksdb flags");
     }
 
     #[test]
@@ -3917,6 +4156,164 @@ mod tests {
             .expect("reput offset should exist")
             .load(Ordering::SeqCst);
         assert_eq!(reput_from_offset, 100);
+    }
+
+    #[test]
+    fn get_dispatch_recovery_offset_respects_controller_epoch_start_offset() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                enable_controller_mode: true,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig {
+                enable_controller_mode: true,
+                ..BrokerConfig::default()
+            }),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+
+        store.set_controller_epoch_start_offset(180);
+
+        assert_eq!(store.get_dispatch_recovery_offset(), 180);
+    }
+
+    #[test]
+    fn do_recheck_reput_offset_from_dispatchers_respects_controller_epoch_start_offset_floor() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                enable_controller_mode: true,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig {
+                enable_controller_mode: true,
+                ..BrokerConfig::default()
+            }),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        let topic = CheetahString::from_static_str("recheck-reput-offset-epoch-floor-topic");
+
+        store.set_confirm_offset(256);
+        store.set_controller_epoch_start_offset(180);
+        store.reput_message_service.set_reput_from_offset(256);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 100_i64), (1, 132_i64)] {
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset,
+                    msg_size: 32,
+                    consume_queue_offset: queue_offset,
+                    store_timestamp: 1000 + queue_offset,
+                    success: true,
+                    ..DispatchRequest::default()
+                });
+        }
+
+        store.do_recheck_reput_offset_from_dispatchers();
+
+        let reput_from_offset = store
+            .reput_message_service
+            .reput_from_offset
+            .as_ref()
+            .expect("reput offset should exist")
+            .load(Ordering::SeqCst);
+        assert_eq!(reput_from_offset, 180);
+    }
+
+    #[tokio::test]
+    async fn calc_delta_checksum_matches_truncated_range() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("delta-checksum-truncate-topic");
+
+        let mut first = MessageExtBrokerInner::default();
+        first.set_topic(topic.clone());
+        first.message_ext_inner.set_queue_id(0);
+        first.set_keys(CheetahString::from_static_str("first-key"));
+        first.set_body(Bytes::from_static(b"first-checksum-body"));
+
+        let first_result = store.put_message(first).await;
+        assert_eq!(first_result.put_message_status(), PutMessageStatus::PutOk);
+        let first_append = first_result.append_message_result().expect("first append result");
+        let first_end = first_append.wrote_offset + first_append.wrote_bytes as i64;
+
+        let mut second = MessageExtBrokerInner::default();
+        second.set_topic(topic);
+        second.message_ext_inner.set_queue_id(0);
+        second.set_keys(CheetahString::from_static_str("second-key"));
+        second.set_body(Bytes::from_static(b"second-checksum-body"));
+
+        let second_result = store.put_message(second).await;
+        assert_eq!(second_result.put_message_status(), PutMessageStatus::PutOk);
+        let second_append = second_result.append_message_result().expect("second append result");
+        assert_eq!(second_append.wrote_offset, first_end);
+
+        let checksum_before_truncate = store.calc_delta_checksum(0, second_append.wrote_offset);
+        assert!(!checksum_before_truncate.is_empty());
+
+        assert!(store
+            .truncate_files(second_append.wrote_offset)
+            .expect("truncate succeeds"));
+
+        let checksum_after_truncate = store.calc_delta_checksum(0, store.get_max_phy_offset());
+        assert_eq!(store.get_max_phy_offset(), second_append.wrote_offset);
+        assert_eq!(checksum_before_truncate, checksum_after_truncate);
+    }
+
+    #[tokio::test]
+    async fn truncate_files_keeps_checksum_boundary_consistent() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("truncate-checksum-boundary-topic");
+
+        for (index, body) in [
+            Bytes::from_static(b"boundary-body-1"),
+            Bytes::from_static(b"boundary-body-2"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut msg = MessageExtBrokerInner::default();
+            msg.set_topic(topic.clone());
+            msg.message_ext_inner.set_queue_id(0);
+            msg.set_keys(CheetahString::from_string(format!("boundary-key-{index}")));
+            msg.set_body(body);
+
+            let result = store.put_message(msg).await;
+            assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        }
+
+        let max_phy_offset_before_truncate = store.get_max_phy_offset();
+        let first_message_end = store
+            .look_message_by_offset(0)
+            .map(|message| message.commit_log_offset + message.store_size as i64)
+            .expect("first message");
+
+        let full_checksum = store.calc_delta_checksum(0, max_phy_offset_before_truncate);
+        let first_range_checksum = store.calc_delta_checksum(0, first_message_end);
+        assert!(!full_checksum.is_empty());
+        assert!(!first_range_checksum.is_empty());
+        assert_ne!(full_checksum, first_range_checksum);
+
+        assert!(store.truncate_files(first_message_end).expect("truncate succeeds"));
+
+        let truncated_checksum = store.calc_delta_checksum(0, store.get_max_phy_offset());
+        assert_eq!(store.get_max_phy_offset(), first_message_end);
+        assert_eq!(truncated_checksum, first_range_checksum);
     }
 
     #[tokio::test]
