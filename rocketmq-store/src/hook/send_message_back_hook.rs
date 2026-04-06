@@ -15,7 +15,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 
-pub trait SendMessageBackHook {
+pub trait SendMessageBackHook: Send + Sync {
     fn execute_send_message_back(
         &self,
         msg_list: &mut [MessageExt],

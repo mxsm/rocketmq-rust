@@ -33,6 +33,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -161,6 +162,8 @@ pub struct LocalFileMessageStore {
     timer_message_store: Option<Arc<TimerMessageStore>>,
     transient_store_pool: TransientStorePool,
     message_store_arc: Option<ArcMut<LocalFileMessageStore>>,
+    master_store_in_process: StdRwLock<Option<Arc<dyn Any + Send + Sync>>>,
+    send_message_back_hook: StdRwLock<Option<Arc<dyn SendMessageBackHook>>>,
     ha_service: Option<GeneralHAService>,
     flush_consume_queue_service: FlushConsumeQueueService,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
@@ -270,6 +273,8 @@ impl LocalFileMessageStore {
             timer_message_store: None,
             transient_store_pool,
             message_store_arc: None,
+            master_store_in_process: StdRwLock::new(None),
+            send_message_back_hook: StdRwLock::new(None),
             ha_service: None,
             flush_consume_queue_service: FlushConsumeQueueService::new(
                 message_store_config.clone(),
@@ -1983,12 +1988,22 @@ impl MessageStore for LocalFileMessageStore {
         }
     }
 
-    fn get_master_store_in_process<M: MessageStore>(&self) -> Option<Arc<M>> {
-        todo!()
+    fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+        let guard = self
+            .master_store_in_process
+            .read()
+            .expect("master_store_in_process lock poisoned");
+        let erased = guard.as_ref()?.clone();
+        let boxed_master_store = erased.downcast::<Arc<M>>().ok()?;
+        Some(Arc::clone(boxed_master_store.as_ref()))
     }
 
-    fn set_master_store_in_process<M: MessageStore>(&self, master_store_in_process: Arc<M>) {
-        todo!()
+    fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+        let mut guard = self
+            .master_store_in_process
+            .write()
+            .expect("master_store_in_process lock poisoned");
+        *guard = Some(Arc::new(master_store_in_process) as Arc<dyn Any + Send + Sync>);
     }
 
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool {
@@ -2101,11 +2116,18 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>) {
-        todo!()
+        let mut guard = self
+            .send_message_back_hook
+            .write()
+            .expect("send_message_back_hook lock poisoned");
+        *guard = Some(send_message_back_hook);
     }
 
     fn get_send_message_back_hook(&self) -> Option<Arc<dyn SendMessageBackHook>> {
-        todo!()
+        self.send_message_back_hook
+            .read()
+            .expect("send_message_back_hook lock poisoned")
+            .clone()
     }
 
     fn get_last_file_from_offset(&self) -> i64 {
@@ -3120,6 +3142,7 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::topic::TopicValidator;
@@ -3137,6 +3160,7 @@ mod tests {
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::filter::MessageFilter;
     use crate::hook::put_message_hook::PutMessageHook;
+    use crate::hook::send_message_back_hook::SendMessageBackHook;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use crate::store_error::StoreError;
@@ -3308,6 +3332,63 @@ mod tests {
 
         assert_eq!(store.get_commit_log().get_confirm_offset_directly(), 4);
         assert_eq!(store.get_confirm_offset(), 4);
+    }
+
+    #[test]
+    fn master_store_in_process_round_trips_concrete_store_reference() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let master_store = Arc::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir
+                    .path()
+                    .join("master-store")
+                    .to_string_lossy()
+                    .to_string()
+                    .into(),
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+
+        store.set_master_store_in_process(master_store.clone());
+
+        let restored = store
+            .get_master_store_in_process::<LocalFileMessageStore>()
+            .expect("master store should be present");
+
+        assert!(Arc::ptr_eq(&master_store, &restored));
+    }
+
+    #[test]
+    fn send_message_back_hook_round_trips_registered_hook() {
+        struct MockSendBackHook;
+
+        impl SendMessageBackHook for MockSendBackHook {
+            fn execute_send_message_back(
+                &self,
+                _msg_list: &mut [MessageExt],
+                broker_name: &CheetahString,
+                broker_addr: &CheetahString,
+            ) -> bool {
+                !broker_name.is_empty() && !broker_addr.is_empty()
+            }
+        }
+
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let hook = Arc::new(MockSendBackHook) as Arc<dyn SendMessageBackHook>;
+
+        store.set_send_message_back_hook(hook.clone());
+
+        let restored = store
+            .get_send_message_back_hook()
+            .expect("send message back hook should be present");
+
+        assert!(Arc::ptr_eq(&hook, &restored));
     }
 
     #[test]

@@ -464,10 +464,10 @@ pub trait MessageStoreInner: Sync + 'static {
     fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16);
 
     /// Get master broker message store in process in broker container
-    fn get_master_store_in_process<M: MessageStore>(&self) -> Option<Arc<M>>;
+    fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>>;
 
     /// Set master broker message store in process
-    fn set_master_store_in_process<M: MessageStore>(&self, master_store_in_process: Arc<M>);
+    fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>);
 
     /// Use FileChannel to get data
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool;
