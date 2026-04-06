@@ -713,7 +713,11 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
     #[inline]
     fn flush(&self, flush_least_pages: i32) -> bool {
-        self.mapped_file_queue.flush(flush_least_pages)
+        let mut result = self.mapped_file_queue.flush(flush_least_pages);
+        if self.is_ext_read_enable() {
+            result &= self.consume_queue_ext.as_ref().unwrap().flush(flush_least_pages);
+        }
+        result
     }
 
     #[inline]
@@ -866,12 +870,17 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get_total_size(&self) -> i64 {
-        self.mapped_file_queue
+        let mut total_size: i64 = self
+            .mapped_file_queue
             .get_mapped_files()
             .load()
             .iter()
             .map(|mapped_file| mapped_file.get_file_size() as i64)
-            .sum()
+            .sum();
+        if self.is_ext_read_enable() {
+            total_size += self.consume_queue_ext.as_ref().unwrap().get_total_size();
+        }
+        total_size
     }
 
     #[inline]
@@ -1118,7 +1127,7 @@ struct ConsumeQueueIterator {
 }
 
 impl ConsumeQueueIterator {
-    fn get_ext(&self, offset: i64, cq_ext_unit: &CqExtUnit) -> bool {
+    fn get_ext(&self, offset: i64, cq_ext_unit: &mut CqExtUnit) -> bool {
         match self.consume_queue_ext.as_ref() {
             None => false,
             Some(value) => value.get(offset, cq_ext_unit),
@@ -1153,8 +1162,8 @@ impl Iterator for ConsumeQueueIterator {
                 };
 
                 if ConsumeQueueExt::is_ext_addr(cq_unit.tags_code) {
-                    let cq_ext_unit = CqExtUnit::default();
-                    let ext_ret = self.get_ext(cq_unit.tags_code, &cq_ext_unit);
+                    let mut cq_ext_unit = CqExtUnit::default();
+                    let ext_ret = self.get_ext(cq_unit.tags_code, &mut cq_ext_unit);
                     if ext_ret {
                         cq_unit.tags_code = cq_ext_unit.tags_code();
                         cq_unit.cq_ext_unit = Some(cq_ext_unit);
@@ -1186,18 +1195,29 @@ mod tests {
     use crate::base::dispatch_request::DispatchRequest;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use crate::queue::file_queue_life_cycle::FileQueueLifeCycle;
     use crate::store_path_config_helper::get_store_path_consume_queue;
 
     fn new_test_store(
         temp_dir: &tempfile::TempDir,
         mapped_file_size_consume_queue: usize,
     ) -> ArcMut<LocalFileMessageStore> {
-        let mut store = ArcMut::new(LocalFileMessageStore::new(
-            Arc::new(MessageStoreConfig {
-                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+        new_configured_test_store(
+            temp_dir,
+            MessageStoreConfig {
                 mapped_file_size_consume_queue,
                 ..MessageStoreConfig::default()
-            }),
+            },
+        )
+    }
+
+    fn new_configured_test_store(
+        temp_dir: &tempfile::TempDir,
+        mut config: MessageStoreConfig,
+    ) -> ArcMut<LocalFileMessageStore> {
+        config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(config),
             Arc::new(BrokerConfig::default()),
             Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
             None,
@@ -1214,6 +1234,24 @@ mod tests {
         mapped_file_size_consume_queue: usize,
     ) -> ConsumeQueue<LocalFileMessageStore> {
         let store = new_test_store(temp_dir, mapped_file_size_consume_queue);
+        ConsumeQueue::new(
+            topic.clone(),
+            0,
+            CheetahString::from_string(get_store_path_consume_queue(
+                store.get_message_store_config().store_path_root_dir.as_str(),
+            )),
+            mapped_file_size_consume_queue as i32,
+            store,
+        )
+    }
+
+    fn new_configured_test_consume_queue(
+        temp_dir: &tempfile::TempDir,
+        topic: &CheetahString,
+        config: MessageStoreConfig,
+    ) -> ConsumeQueue<LocalFileMessageStore> {
+        let mapped_file_size_consume_queue = config.mapped_file_size_consume_queue;
+        let store = new_configured_test_store(temp_dir, config);
         ConsumeQueue::new(
             topic.clone(),
             0,
@@ -1277,5 +1315,90 @@ mod tests {
         consume_queue.swap_map(3, 0, 0);
         consume_queue.clean_swapped_map(0);
         assert_eq!(consume_queue.mapped_file_queue.get_mapped_files_size(), 2);
+    }
+
+    #[test]
+    fn consume_queue_round_trips_cqext_bitmap_on_iterate() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-cqext-topic");
+        let mut consume_queue = new_configured_test_consume_queue(
+            &temp_dir,
+            &topic,
+            MessageStoreConfig {
+                enable_consume_queue_ext: true,
+                mapped_file_size_consume_queue: (2 * CQ_STORE_UNIT_SIZE) as usize,
+                mapped_file_size_consume_queue_ext: 64,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let bitmap = vec![0xAB, 0xCD, 0xEF];
+        consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+            topic: topic.clone(),
+            queue_id: 0,
+            commit_log_offset: 123,
+            msg_size: 32,
+            tags_code: 456,
+            consume_queue_offset: 0,
+            store_timestamp: 7890,
+            bit_map: Some(bitmap.clone()),
+            success: true,
+            ..DispatchRequest::default()
+        });
+
+        let cq_unit = consume_queue.get(0).expect("consume queue unit");
+        assert_eq!(cq_unit.tags_code, 456);
+        let cq_ext_unit = cq_unit.cq_ext_unit.expect("cq ext unit");
+        assert_eq!(cq_ext_unit.tags_code(), 456);
+        assert_eq!(cq_ext_unit.msg_store_time(), 7890);
+        assert_eq!(cq_ext_unit.filter_bit_map(), Some(bitmap.as_slice()));
+    }
+
+    #[test]
+    fn consume_queue_flush_and_total_size_include_cqext() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-cqext-flush-topic");
+        let mut consume_queue = new_configured_test_consume_queue(
+            &temp_dir,
+            &topic,
+            MessageStoreConfig {
+                enable_consume_queue_ext: true,
+                mapped_file_size_consume_queue: (2 * CQ_STORE_UNIT_SIZE) as usize,
+                mapped_file_size_consume_queue_ext: 64,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+            topic: topic.clone(),
+            queue_id: 0,
+            commit_log_offset: 321,
+            msg_size: 32,
+            tags_code: 654,
+            consume_queue_offset: 0,
+            store_timestamp: 9876,
+            bit_map: Some(vec![1, 2, 3, 4]),
+            success: true,
+            ..DispatchRequest::default()
+        });
+
+        let ext_queue = consume_queue
+            .consume_queue_ext
+            .as_ref()
+            .expect("consume queue ext should exist");
+        let base_total_size: i64 = consume_queue
+            .mapped_file_queue
+            .get_mapped_files()
+            .load()
+            .iter()
+            .map(|mapped_file| mapped_file.get_file_size() as i64)
+            .sum();
+
+        let _ = consume_queue.flush(0);
+        let _ = ext_queue.flush(0);
+        assert_eq!(
+            consume_queue.get_total_size(),
+            base_total_size + ext_queue.get_total_size()
+        );
     }
 }

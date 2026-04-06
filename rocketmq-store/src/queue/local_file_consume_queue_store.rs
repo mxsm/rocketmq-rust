@@ -159,6 +159,9 @@ impl ConsumeQueueStore {
     }
 
     fn encode_cq_unit(cq_unit: &CqUnit) -> Bytes {
+        if !cq_unit.native_buffer.is_empty() {
+            return Bytes::copy_from_slice(&cq_unit.native_buffer);
+        }
         let mut bytes = BytesMut::with_capacity(CQ_STORE_UNIT_SIZE as usize);
         bytes.put_i64(cq_unit.pos);
         bytes.put_i32(cq_unit.size);
@@ -786,5 +789,74 @@ impl ConsumeQueueStore {
     #[inline]
     fn get_life_cycle(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
         self.find_or_create_consume_queue(topic, queue_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::Buf;
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_rust::ArcMut;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::queue::batch_consume_queue;
+
+    #[test]
+    fn batch_consume_queue_store_get_returns_full_batch_unit() {
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let broker_config = Arc::new(BrokerConfig::default());
+        let store = ConsumeQueueStore::new(message_store_config.clone(), broker_config);
+        let root = tempdir().expect("tempdir");
+        let store_path = CheetahString::from_string(root.path().join("batch-cq").to_string_lossy().to_string());
+        let topic = CheetahString::from_static_str("BatchTopic");
+        let queue_id = 1;
+
+        let mut batch_queue = BatchConsumeQueue::new(
+            topic.clone(),
+            queue_id,
+            store_path,
+            (batch_consume_queue::CQ_STORE_UNIT_SIZE * 2) as usize,
+            None,
+            message_store_config,
+        );
+        batch_queue.put_message_position_info_wrapper(&DispatchRequest {
+            topic: topic.clone(),
+            queue_id,
+            commit_log_offset: 100,
+            msg_size: 32,
+            tags_code: 7,
+            store_timestamp: 1_000,
+            msg_base_offset: 0,
+            batch_size: 3,
+            success: true,
+            ..DispatchRequest::default()
+        });
+
+        store
+            .inner
+            .consume_queue_table
+            .lock()
+            .entry(topic.clone())
+            .or_default()
+            .insert(queue_id, ArcMut::new(Box::new(batch_queue)));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let bytes = runtime.block_on(store.get(&topic, queue_id, 0));
+
+        assert_eq!(bytes.len(), batch_consume_queue::CQ_STORE_UNIT_SIZE as usize);
+        let mut bytes = bytes;
+        assert_eq!(bytes.get_i64(), 100);
+        assert_eq!(bytes.get_i32(), 32);
+        assert_eq!(bytes.get_i64(), 7);
+        assert_eq!(bytes.get_i64(), 1_000);
+        assert_eq!(bytes.get_i64(), 0);
+        assert_eq!(bytes.get_i16(), 3);
     }
 }
