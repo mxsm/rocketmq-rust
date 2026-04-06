@@ -61,6 +61,74 @@ use crate::ha::HAConnectionError;
 /// Transfer Header buffer size. Schema: physic offset and body size.
 /// Format: [physicOffset (8bytes)][bodySize (4bytes)]
 pub const TRANSFER_HEADER_SIZE: usize = 8 + 4;
+/// Controller transfer header extends the default header with confirm offset.
+/// Format: [physicOffset (8bytes)][bodySize (4bytes)][confirmOffset (8bytes)]
+pub(crate) const CONTROLLER_TRANSFER_HEADER_SIZE: usize = TRANSFER_HEADER_SIZE + 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TransferHeader {
+    pub master_phy_offset: i64,
+    pub body_size: usize,
+    pub confirm_offset: Option<i64>,
+}
+
+pub(crate) const fn transfer_header_size(enable_controller_mode: bool) -> usize {
+    if enable_controller_mode {
+        CONTROLLER_TRANSFER_HEADER_SIZE
+    } else {
+        TRANSFER_HEADER_SIZE
+    }
+}
+
+pub(crate) fn encode_transfer_header(
+    byte_buffer_header: &mut BytesMut,
+    master_phy_offset: i64,
+    body_size: usize,
+    enable_controller_mode: bool,
+    confirm_offset: i64,
+) -> Bytes {
+    byte_buffer_header.clear();
+    byte_buffer_header.put_i64(master_phy_offset);
+    byte_buffer_header.put_i32(i32::try_from(body_size).expect("transfer body size exceeds i32"));
+    if enable_controller_mode {
+        byte_buffer_header.put_i64(confirm_offset);
+    }
+    byte_buffer_header.split().freeze()
+}
+
+pub(crate) fn decode_transfer_header(
+    src: &[u8],
+    enable_controller_mode: bool,
+) -> Result<TransferHeader, HAConnectionError> {
+    let header_size = transfer_header_size(enable_controller_mode);
+    if src.len() < header_size {
+        return Err(HAConnectionError::Service(format!(
+            "transfer header underflow: expected at least {header_size} bytes, got {}",
+            src.len()
+        )));
+    }
+
+    let master_phy_offset = i64::from_be_bytes(src[0..8].try_into().expect("slice len 8"));
+    let body_size = i32::from_be_bytes(src[8..12].try_into().expect("slice len 4"));
+    if body_size < 0 {
+        return Err(HAConnectionError::Service(format!(
+            "transfer header contains negative body size: {body_size}"
+        )));
+    }
+    let confirm_offset = enable_controller_mode.then(|| {
+        i64::from_be_bytes(
+            src[TRANSFER_HEADER_SIZE..CONTROLLER_TRANSFER_HEADER_SIZE]
+                .try_into()
+                .expect("slice len 8"),
+        )
+    });
+
+    Ok(TransferHeader {
+        master_phy_offset,
+        body_size: body_size as usize,
+        confirm_offset,
+    })
+}
 
 pub struct DefaultHAConnection {
     ha_service: ArcMut<DefaultHAService>,
@@ -555,6 +623,7 @@ impl WriteSocketService {
         connection: WeakArcMut<GeneralHAConnection>,
         next_transfer_from_where: Arc<AtomicI64>,
     ) -> Result<Self, HAConnectionError> {
+        let enable_controller_mode = message_store_config.enable_controller_mode;
         Ok(Self {
             writer,
             client_address,
@@ -567,7 +636,7 @@ impl WriteSocketService {
             connection,
             last_write_timestamp: AtomicU64::new(current_millis()),
             last_print_timestamp: AtomicU64::new(current_millis()),
-            byte_buffer_header: BytesMut::with_capacity(TRANSFER_HEADER_SIZE),
+            byte_buffer_header: BytesMut::with_capacity(transfer_header_size(enable_controller_mode)),
             last_write_over: AtomicBool::new(true),
         })
     }
@@ -722,17 +791,20 @@ impl WriteSocketService {
     }
 
     async fn send_heartbeat(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.byte_buffer_header.clear();
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        self.byte_buffer_header.put_i64(next_offset);
-        self.byte_buffer_header.put_i32(0); // 0 size indicates heartbeat
-
-        let bytes = self.byte_buffer_header.split().freeze();
+        let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
+        let bytes = encode_transfer_header(
+            &mut self.byte_buffer_header,
+            next_offset,
+            0,
+            self.message_store_config.enable_controller_mode,
+            confirm_offset,
+        );
         self.writer.send(bytes).await?;
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
         self.flow_monitor
-            .add_byte_count_transferred(TRANSFER_HEADER_SIZE as i64);
+            .add_byte_count_transferred(transfer_header_size(self.message_store_config.enable_controller_mode) as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
 
         Ok(())
@@ -744,10 +816,14 @@ impl WriteSocketService {
         select_result: Option<Bytes>,
         size: usize,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.byte_buffer_header.clear();
-        self.byte_buffer_header.put_i64(offset);
-        self.byte_buffer_header.put_i32(size as i32);
-        let header_bytes = self.byte_buffer_header.split().freeze();
+        let confirm_offset = self.ha_service.get_default_message_store().get_confirm_offset();
+        let header_bytes = encode_transfer_header(
+            &mut self.byte_buffer_header,
+            offset,
+            size,
+            self.message_store_config.enable_controller_mode,
+            confirm_offset,
+        );
 
         self.writer.send(header_bytes).await?;
         if let Some(mut data) = select_result {
@@ -757,8 +833,9 @@ impl WriteSocketService {
         }
 
         self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
-        self.flow_monitor
-            .add_byte_count_transferred((TRANSFER_HEADER_SIZE + size) as i64);
+        self.flow_monitor.add_byte_count_transferred(
+            (transfer_header_size(self.message_store_config.enable_controller_mode) + size) as i64,
+        );
         self.last_write_over.store(true, Ordering::Relaxed);
 
         Ok(())
@@ -817,5 +894,24 @@ mod tests {
         assert_eq!(frame.offset, 256);
         assert_eq!(frame.broker_id, Some(9));
         assert!(src.is_empty());
+    }
+
+    #[test]
+    fn controller_transfer_header_round_trips_confirm_offset() {
+        let encoded = encode_transfer_header(
+            &mut BytesMut::with_capacity(CONTROLLER_TRANSFER_HEADER_SIZE),
+            128,
+            64,
+            true,
+            96,
+        );
+
+        assert_eq!(encoded.len(), CONTROLLER_TRANSFER_HEADER_SIZE);
+
+        let header = decode_transfer_header(&encoded, true).expect("decode controller transfer header");
+
+        assert_eq!(header.master_phy_offset, 128);
+        assert_eq!(header.body_size, 64);
+        assert_eq!(header.confirm_offset, Some(96));
     }
 }

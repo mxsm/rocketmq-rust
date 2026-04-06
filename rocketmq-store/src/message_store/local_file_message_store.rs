@@ -168,6 +168,10 @@ pub struct LocalFileMessageStore {
 }
 
 impl LocalFileMessageStore {
+    fn is_dledger_commit_log_enabled_config(message_store_config: &MessageStoreConfig) -> bool {
+        message_store_config.enable_dledger_commit_log || message_store_config.enable_dleger_commit_log
+    }
+
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
@@ -278,12 +282,7 @@ impl LocalFileMessageStore {
     }
 
     pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
-        match message_store_config.enable_dledger_commit_log {
-            true => {
-                unimplemented!("dledger commit log is not supported yet")
-            }
-            false => message_store_config.get_store_path_commit_log(),
-        }
+        message_store_config.get_store_path_commit_log()
     }
 
     pub fn get_store_path_logic(message_store_config: &Arc<MessageStoreConfig>) -> String {
@@ -327,6 +326,39 @@ impl LocalFileMessageStore {
     #[inline]
     pub fn max_delay_level(&self) -> i32 {
         self.max_delay_level
+    }
+
+    fn validate_supported_configuration(&self) -> Result<(), StoreError> {
+        if Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
+            return Err(StoreError::General(
+                "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn should_run_timer_dequeue(&self) -> bool {
+        self.message_store_config.is_timer_wheel_enable() && self.message_store_config.broker_role != BrokerRole::Slave
+    }
+
+    fn sync_timer_message_store_role(&self) {
+        if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+            timer_message_store.set_should_running_dequeue(self.should_run_timer_dequeue());
+        }
+    }
+
+    fn refresh_controller_confirm_offset_after_role_change(&mut self) {
+        if !self.broker_config.enable_controller_mode {
+            return;
+        }
+
+        let min_phy_offset = self.get_min_phy_offset();
+        let max_phy_offset = self.get_max_phy_offset().max(min_phy_offset);
+        let next_confirm_offset = match self.message_store_config.broker_role {
+            BrokerRole::Slave => self.commit_log.get_confirm_offset_directly(),
+            _ => self.commit_log.get_confirm_offset(),
+        };
+        self.set_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
     }
 }
 
@@ -832,6 +864,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn start(&mut self) -> Result<(), StoreError> {
+        self.validate_supported_configuration()?;
         self.allocate_mapped_file_service.start();
 
         self.index_service.start();
@@ -853,6 +886,7 @@ impl MessageStore for LocalFileMessageStore {
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             timer_message_store.start();
         }
+        self.sync_timer_message_store_role();
 
         if let Some(ha_service) = self.ha_service.as_mut() {
             ha_service.start().await.map_err(|e| {
@@ -868,7 +902,11 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn init(&mut self) -> Result<(), StoreError> {
-        if !self.message_store_config.enable_dleger_commit_log && !self.message_store_config.duplication_enable {
+        self.validate_supported_configuration()?;
+
+        if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
+            && !self.message_store_config.duplication_enable
+        {
             if self.message_store_config.enable_controller_mode {
                 let mut auto_switch_ha_service = GeneralHAService::AutoSwitchHAService(ArcMut::new(
                     crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
@@ -2000,6 +2038,9 @@ impl MessageStore for LocalFileMessageStore {
     fn set_master_flushed_offset(&self, master_flushed_offset: i64) {
         self.master_flushed_offset
             .store(master_flushed_offset, Ordering::SeqCst);
+        if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
+            store_checkpoint.set_master_flushed_offset(master_flushed_offset.max(0) as u64);
+        }
     }
 
     fn set_broker_init_max_offset(&mut self, broker_init_max_offset: i64) {
@@ -2010,6 +2051,8 @@ impl MessageStore for LocalFileMessageStore {
     fn sync_broker_role(&mut self, broker_role: BrokerRole) {
         Arc::make_mut(&mut self.message_store_config).broker_role = broker_role;
         self.commit_log.sync_broker_role(broker_role);
+        self.refresh_controller_confirm_offset_after_role_change();
+        self.sync_timer_message_store_role();
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {
@@ -2644,8 +2687,8 @@ impl ReputMessageServiceInner {
                     self.reput_from_offset.fetch_add(size as i64, Ordering::SeqCst);
                 } else {
                     do_next = false;
-                    if self.message_store_config.enable_dledger_commit_log {
-                        unimplemented!()
+                    if LocalFileMessageStore::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
+                        warn!("reput reached an unsupported DLedger branch; stopping batch dispatch for this tick");
                     }
                 }
             }
@@ -2774,8 +2817,11 @@ impl ReputMessageServiceInner {
                 );
                 self.reput_from_offset.fetch_add(size as i64, Ordering::SeqCst);
             } else {
-                if self.message_store_config.enable_dledger_commit_log {
-                    unimplemented!()
+                if LocalFileMessageStore::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
+                    warn!(
+                        "read_and_parse_batch reached an unsupported DLedger branch; stopping batch dispatch for this \
+                         tick"
+                    );
                 }
                 break;
             }
@@ -3072,6 +3118,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_common::common::config::TopicConfig;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_common::common::message::MessageTrait;
@@ -3092,6 +3139,7 @@ mod tests {
     use crate::hook::put_message_hook::PutMessageHook;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+    use crate::store_error::StoreError;
     use crate::store_path_config_helper::get_store_checkpoint;
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
@@ -3156,6 +3204,110 @@ mod tests {
         store.set_message_store_arc(store_clone);
 
         assert!(store.get_timer_message_store().is_some());
+    }
+
+    #[tokio::test]
+    async fn init_rejects_dledger_commit_log_configuration() {
+        let temp_dir = tempdir().unwrap();
+
+        for message_store_config in [
+            MessageStoreConfig {
+                enable_dledger_commit_log: true,
+                ..MessageStoreConfig::default()
+            },
+            MessageStoreConfig {
+                enable_dleger_commit_log: true,
+                ..MessageStoreConfig::default()
+            },
+        ] {
+            let mut store = new_configured_test_store(&temp_dir, message_store_config);
+            let error = store.init().await.expect_err("DLedger should be rejected explicitly");
+            assert!(matches!(error, StoreError::General(message) if message.contains("DLedger commit log")));
+        }
+    }
+
+    #[test]
+    fn sync_broker_role_updates_timer_dequeue_state() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                timer_wheel_enable: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let timer_message_store = store
+            .get_timer_message_store()
+            .cloned()
+            .expect("timer message store should exist");
+
+        assert!(!timer_message_store.is_should_running_dequeue());
+
+        store.sync_broker_role(BrokerRole::SyncMaster);
+        assert!(timer_message_store.is_should_running_dequeue());
+
+        store.sync_broker_role(BrokerRole::Slave);
+        assert!(!timer_message_store.is_should_running_dequeue());
+
+        store.sync_broker_role(BrokerRole::AsyncMaster);
+        assert!(timer_message_store.is_should_running_dequeue());
+    }
+
+    #[test]
+    fn set_master_flushed_offset_updates_store_checkpoint() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let checkpoint_path = get_store_checkpoint(store.message_store_config_ref().store_path_root_dir.as_str());
+
+        store.set_master_flushed_offset(1024);
+        store
+            .store_checkpoint
+            .as_ref()
+            .expect("store checkpoint")
+            .flush()
+            .expect("flush checkpoint");
+
+        let checkpoint = StoreCheckpoint::new(&checkpoint_path).expect("reload checkpoint");
+        assert_eq!(checkpoint.master_flushed_offset(), 1024);
+    }
+
+    #[tokio::test]
+    async fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                enable_controller_mode: true,
+                all_ack_in_sync_state_set: true,
+                ..MessageStoreConfig::default()
+            }),
+            Arc::new(BrokerConfig {
+                enable_controller_mode: true,
+                ..BrokerConfig::default()
+            }),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store.init().await.expect("init store");
+        store.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+        store.set_confirm_offset(0);
+        store.sync_broker_role(BrokerRole::Slave);
+        assert_eq!(store.get_commit_log().get_confirm_offset_directly(), 0);
+
+        store.sync_broker_role(BrokerRole::SyncMaster);
+
+        assert_eq!(store.get_commit_log().get_confirm_offset_directly(), 4);
+        assert_eq!(store.get_confirm_offset(), 4);
     }
 
     #[test]

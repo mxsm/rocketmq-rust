@@ -41,6 +41,8 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::message_store::MessageStore;
+use crate::ha::default_ha_connection::decode_transfer_header;
+use crate::ha::default_ha_connection::transfer_header_size;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
@@ -59,9 +61,6 @@ pub const CONTROLLER_REPORT_HEADER_SIZE: usize = 16;
 
 /// Maximum read buffer size (4MB)
 const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024 * 4;
-
-/// Transfer header size from DefaultHAConnection
-const TRANSFER_HEADER_SIZE: usize = 12; // 8 bytes offset + 4 bytes body size
 
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
@@ -350,6 +349,10 @@ impl HAClient for DefaultHAClient {
                                 store,
                                 flow_monitor: flow,
                                 last_read_timestamp: client.last_read_timestamp.clone(),
+                                enable_controller_mode: client
+                                    .default_message_store
+                                    .message_store_config_ref()
+                                    .enable_controller_mode,
                             };
                             let reader_handle = tokio::spawn(async move {
                                 tokio::select! {
@@ -558,6 +561,7 @@ struct ReaderTask {
     flow_monitor: Arc<FlowMonitor>,
     /// Last time slave read data from master
     last_read_timestamp: Arc<AtomicU64>,
+    enable_controller_mode: bool,
 }
 
 impl ReaderTask {
@@ -587,15 +591,19 @@ impl ReaderTask {
 
     async fn dispatch_read(&mut self) -> anyhow::Result<bool> {
         loop {
+            let header_size = transfer_header_size(self.enable_controller_mode);
             let diff = self.buf.len().saturating_sub(self.dispatch_pos);
-            if diff < TRANSFER_HEADER_SIZE {
+            if diff < header_size {
                 self.compact();
                 return Ok(true);
             }
 
-            let header = &self.buf[self.dispatch_pos..self.dispatch_pos + TRANSFER_HEADER_SIZE];
-            let master_phy_offset = i64::from_be_bytes(header[0..8].try_into().expect("slice len 8"));
-            let body_size = i32::from_be_bytes(header[8..12].try_into().expect("slice len 4")) as usize;
+            let header = decode_transfer_header(
+                &self.buf[self.dispatch_pos..self.dispatch_pos + header_size],
+                self.enable_controller_mode,
+            )?;
+            let master_phy_offset = header.master_phy_offset;
+            let body_size = header.body_size;
 
             let slave_phy_offset = self.store.get_max_phy_offset();
             if slave_phy_offset != 0 && slave_phy_offset != master_phy_offset {
@@ -606,24 +614,43 @@ impl ReaderTask {
                 );
             }
 
-            if diff < TRANSFER_HEADER_SIZE + body_size {
+            if diff < header_size + body_size {
                 self.compact();
                 return Ok(true);
             }
 
-            let data_start = self.dispatch_pos + TRANSFER_HEADER_SIZE;
+            let data_start = self.dispatch_pos + header_size;
             let data_end = data_start + body_size;
             let body = &self.buf[data_start..data_end];
 
-            self.store
-                .append_to_commit_log(master_phy_offset, body, 0, body_size as i32)
-                .await?;
+            if body_size > 0 {
+                self.store
+                    .append_to_commit_log(master_phy_offset, body, 0, body_size as i32)
+                    .await?;
+            }
+
+            Self::apply_master_confirm_offset(&self.store, header.confirm_offset);
 
             self.dispatch_pos = data_end;
 
-            let cur = self.store.get_max_phy_offset();
-            let _ = self.offset_tx.send(cur);
+            if body_size > 0 {
+                let cur = self.store.get_max_phy_offset();
+                let _ = self.offset_tx.send(cur);
+            }
         }
+    }
+
+    fn apply_master_confirm_offset(store: &ArcMut<LocalFileMessageStore>, confirm_offset: Option<i64>) {
+        let Some(confirm_offset) = confirm_offset else {
+            return;
+        };
+
+        let min_phy_offset = store.get_min_phy_offset();
+        let max_phy_offset = store.get_max_phy_offset().max(min_phy_offset);
+        store
+            .clone()
+            .mut_from_ref()
+            .set_confirm_offset(confirm_offset.clamp(min_phy_offset, max_phy_offset));
     }
 
     // Move the unconsumed data to the start of the buffer to save space.
@@ -726,7 +753,48 @@ pub enum HAClientError {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use tempfile::tempdir;
+
     use super::*;
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::ha::default_ha_connection::decode_transfer_header;
+    use crate::ha::default_ha_connection::encode_transfer_header;
+    use crate::ha::default_ha_connection::CONTROLLER_TRANSFER_HEADER_SIZE;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+
+    fn new_test_message_store(root: &Path) -> ArcMut<LocalFileMessageStore> {
+        std::fs::create_dir_all(root).expect("create temp root dir");
+
+        let broker_config = BrokerConfig {
+            enable_controller_mode: true,
+            ..BrokerConfig::default()
+        };
+
+        let message_store_config = MessageStoreConfig {
+            enable_controller_mode: true,
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        };
+
+        let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(broker_config),
+            topic_table,
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store
+    }
 
     #[test]
     fn writer_task_encodes_controller_report_with_broker_id() {
@@ -743,5 +811,30 @@ mod tests {
             i64::from_be_bytes(encoded[8..16].try_into().expect("broker id bytes")),
             9
         );
+    }
+
+    #[tokio::test]
+    async fn apply_master_confirm_offset_clamps_to_local_max_phy_offset() {
+        let temp_dir = tempdir().expect("temp dir");
+        let mut store = new_test_message_store(temp_dir.path());
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        let encoded = encode_transfer_header(
+            &mut BytesMut::with_capacity(CONTROLLER_TRANSFER_HEADER_SIZE),
+            4,
+            0,
+            true,
+            128,
+        );
+        let header = decode_transfer_header(&encoded, true).expect("decode transfer header");
+
+        ReaderTask::apply_master_confirm_offset(&store, header.confirm_offset);
+
+        assert_eq!(store.get_confirm_offset(), 4);
     }
 }
