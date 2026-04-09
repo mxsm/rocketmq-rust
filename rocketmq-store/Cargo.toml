@@ -85,7 +85,7 @@ anyhow       = { workspace = true }
 page_size    = "0.6.0"
 
 dashmap   = { workspace = true }
-hashbrown = "0.16"
+hashbrown = "0.17"
 rayon     = "1.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
