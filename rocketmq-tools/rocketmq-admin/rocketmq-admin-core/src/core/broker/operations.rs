@@ -20,6 +20,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use regex::Regex;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
 use rocketmq_remoting::runtime::RPCHook;
 
 use super::types::validate_update_value;
@@ -33,6 +34,9 @@ use super::types::BrokerConfigUpdateApplyResult;
 use super::types::BrokerConfigUpdatePlan;
 use super::types::BrokerConfigUpdatePlanResult;
 use super::types::BrokerConfigUpdateRequest;
+use super::types::BrokerConsumeStatsQueryRequest;
+use super::types::BrokerConsumeStatsResult;
+use super::types::BrokerConsumeStatsRow;
 use super::types::BrokerRuntimeStatsEntry;
 use super::types::BrokerRuntimeStatsFailure;
 use super::types::BrokerRuntimeStatsQueryRequest;
@@ -64,6 +68,52 @@ impl BrokerService {
         let result = Self::query_broker_runtime_stats_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
+    }
+
+    pub async fn query_broker_consume_stats_by_request(
+        request: BrokerConsumeStatsQueryRequest,
+    ) -> RocketMQResult<BrokerConsumeStatsResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::query_broker_consume_stats_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_broker_consume_stats_by_request_with_rpc_hook(
+        request: BrokerConsumeStatsQueryRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerConsumeStatsResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::query_broker_consume_stats_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_broker_consume_stats_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &BrokerConsumeStatsQueryRequest,
+    ) -> RocketMQResult<BrokerConsumeStatsResult> {
+        let consume_stats_list = admin
+            .fetch_consume_stats_in_broker(
+                request.broker_addr().clone(),
+                request.is_order(),
+                request.timeout_millis(),
+            )
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to fetch consume stats from {}: {}",
+                    request.broker_addr(),
+                    error
+                ))
+            })?;
+
+        Ok(build_broker_consume_stats_result(
+            consume_stats_list,
+            request.diff_level(),
+        ))
     }
 
     pub async fn query_broker_runtime_stats_by_request_with_rpc_hook(
@@ -407,6 +457,47 @@ fn sort_runtime_stats_entries(properties: HashMap<CheetahString, CheetahString>)
     entries
 }
 
+fn build_broker_consume_stats_result(source: ConsumeStatsList, diff_level: i64) -> BrokerConsumeStatsResult {
+    let mut rows = Vec::new();
+    for group_map in &source.consume_stats_list {
+        for (group, consume_stats_array) in group_map {
+            for consume_stats in consume_stats_array {
+                for (mq, offset_wrapper) in &consume_stats.offset_table {
+                    let diff = offset_wrapper.get_broker_offset() - offset_wrapper.get_consumer_offset();
+                    if diff < diff_level {
+                        continue;
+                    }
+
+                    rows.push(BrokerConsumeStatsRow {
+                        topic: mq.topic().clone(),
+                        group: group.clone(),
+                        broker_name: mq.broker_name().clone(),
+                        queue_id: mq.queue_id(),
+                        broker_offset: offset_wrapper.get_broker_offset(),
+                        consumer_offset: offset_wrapper.get_consumer_offset(),
+                        diff,
+                        last_timestamp: offset_wrapper.get_last_timestamp(),
+                    });
+                }
+            }
+        }
+    }
+    rows.sort_by(|left, right| {
+        left.topic
+            .cmp(&right.topic)
+            .then_with(|| left.group.cmp(&right.group))
+            .then_with(|| left.broker_name.cmp(&right.broker_name))
+            .then_with(|| left.queue_id.cmp(&right.queue_id))
+    });
+
+    BrokerConsumeStatsResult {
+        broker_addr: source.broker_addr,
+        total_diff: source.total_diff,
+        total_inflight_diff: source.total_inflight_diff,
+        rows,
+    }
+}
+
 async fn fetch_broker_config_snapshot(
     admin: &DefaultMQAdminExt,
     broker_addr: &CheetahString,
@@ -570,5 +661,57 @@ mod tests {
             entries.iter().map(|entry| entry.key.as_str()).collect::<Vec<_>>(),
             vec!["brokerVersion", "putTps"]
         );
+    }
+
+    #[test]
+    fn build_broker_consume_stats_result_filters_and_sorts_rows() {
+        use rocketmq_common::common::message::message_queue::MessageQueue;
+        use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
+        use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
+        use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
+
+        let mut included = OffsetWrapper::new();
+        included.set_broker_offset(120);
+        included.set_consumer_offset(80);
+        included.set_last_timestamp(1_700_000_000_000);
+
+        let mut below_threshold = OffsetWrapper::new();
+        below_threshold.set_broker_offset(95);
+        below_threshold.set_consumer_offset(90);
+        below_threshold.set_last_timestamp(1_700_000_000_000);
+
+        let mut offset_table = HashMap::new();
+        offset_table.insert(MessageQueue::from_parts("TopicB", "broker-b", 1), included);
+        offset_table.insert(MessageQueue::from_parts("TopicA", "broker-a", 0), below_threshold);
+
+        let mut group_stats = HashMap::new();
+        group_stats.insert(
+            CheetahString::from("GroupA"),
+            vec![ConsumeStats {
+                offset_table,
+                consume_tps: 0.0,
+            }],
+        );
+
+        let source = ConsumeStatsList {
+            consume_stats_list: vec![group_stats],
+            broker_addr: Some(CheetahString::from("127.0.0.1:10911")),
+            total_diff: 45,
+            total_inflight_diff: 0,
+        };
+
+        let result = build_broker_consume_stats_result(source, 10);
+
+        assert_eq!(result.total_diff, 45);
+        assert_eq!(result.rows.len(), 1);
+        let row = &result.rows[0];
+        assert_eq!(row.topic.as_str(), "TopicB");
+        assert_eq!(row.group.as_str(), "GroupA");
+        assert_eq!(row.broker_name.as_str(), "broker-b");
+        assert_eq!(row.queue_id, 1);
+        assert_eq!(row.broker_offset, 120);
+        assert_eq!(row.consumer_offset, 80);
+        assert_eq!(row.diff, 40);
+        assert_eq!(row.last_timestamp, 1_700_000_000_000);
     }
 }

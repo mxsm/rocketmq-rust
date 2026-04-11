@@ -15,6 +15,7 @@
 use rocketmq_admin_core::core::admin::AdminBuilder;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
+use rocketmq_admin_core::core::broker::BrokerConsumeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
@@ -127,6 +128,19 @@ impl TuiAdminFacade {
     ) -> RocketMQResult<BrokerRuntimeStatsQueryRequest> {
         Ok(BrokerRuntimeStatsQueryRequest::try_new(broker_addr, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn broker_consume_stats_request(
+        &self,
+        broker_addr: impl Into<String>,
+        timeout_millis: u64,
+        diff_level: i64,
+        is_order: bool,
+    ) -> RocketMQResult<BrokerConsumeStatsQueryRequest> {
+        Ok(
+            BrokerConsumeStatsQueryRequest::try_new(broker_addr, timeout_millis, diff_level, is_order)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
     }
 
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
@@ -393,5 +407,19 @@ mod tests {
             request.target(),
             rocketmq_admin_core::core::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
         ));
+    }
+
+    #[test]
+    fn facade_builds_broker_consume_stats_request_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+        let request = facade
+            .broker_consume_stats_request(" 127.0.0.1:10911 ", 3_000, 42, true)
+            .unwrap();
+
+        assert_eq!(request.broker_addr().as_str(), "127.0.0.1:10911");
+        assert_eq!(request.timeout_millis(), 3_000);
+        assert_eq!(request.diff_level(), 42);
+        assert!(request.is_order());
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
     }
 }

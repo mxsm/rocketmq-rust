@@ -14,16 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerConsumeStatsQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
+use rocketmq_admin_core::core::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct BrokerConsumeStatsSubCommand {
@@ -58,6 +56,17 @@ pub struct BrokerConsumeStatsSubCommand {
     is_order: String,
 }
 
+impl BrokerConsumeStatsSubCommand {
+    fn request(&self) -> RocketMQResult<BrokerConsumeStatsQueryRequest> {
+        BrokerConsumeStatsQueryRequest::try_new(
+            self.broker_addr.clone(),
+            self.timeout_millis,
+            self.diff_level,
+            self.is_order.trim().parse::<bool>().unwrap_or(false),
+        )
+    }
+}
+
 fn format_timestamp(timestamp: i64) -> String {
     if timestamp <= 0 {
         return "-".to_string();
@@ -76,84 +85,73 @@ fn format_timestamp(timestamp: i64) -> String {
 
 impl CommandExecute for BrokerConsumeStatsSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let result =
+            BrokerService::query_broker_consume_stats_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        print_broker_consume_stats_result(&result);
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+fn print_broker_consume_stats_result(result: &BrokerConsumeStatsResult) {
+    println!(
+        "{:<64}  {:<64}  {:<32}  {:<4}  {:<20}  {:<20}  {:<20}  #LastTime",
+        "#Topic", "#Group", "#Broker Name", "#QID", "#Broker Offset", "#Consumer Offset", "#Diff"
+    );
 
-        let broker_addr = self.broker_addr.trim().to_string();
-        let is_order = self.is_order.trim().parse::<bool>().unwrap_or(false);
-        let timeout_millis = self.timeout_millis;
-        let diff_level = self.diff_level;
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "BrokerConsumeStatsSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            let consume_stats_list = default_mqadmin_ext
-                .fetch_consume_stats_in_broker(CheetahString::from(broker_addr.as_str()), is_order, timeout_millis)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "BrokerConsumeStatsSubCommand: Failed to fetch consume stats: {}",
-                        e
-                    ))
-                })?;
-
-            println!(
-                "{:<64}  {:<64}  {:<32}  {:<4}  {:<20}  {:<20}  {:<20}  #LastTime",
-                "#Topic", "#Group", "#Broker Name", "#QID", "#Broker Offset", "#Consumer Offset", "#Diff"
-            );
-
-            for map in &consume_stats_list.consume_stats_list {
-                for (group, consume_stats_array) in map {
-                    for consume_stats in consume_stats_array {
-                        let mut mq_list: Vec<_> = consume_stats.offset_table.keys().collect();
-                        mq_list.sort();
-
-                        for mq in &mq_list {
-                            let offset_wrapper = &consume_stats.offset_table[*mq];
-                            let diff = offset_wrapper.get_broker_offset() - offset_wrapper.get_consumer_offset();
-
-                            if diff < diff_level {
-                                continue;
-                            }
-
-                            if offset_wrapper.get_last_timestamp() > 0 {
-                                let last_time = format_timestamp(offset_wrapper.get_last_timestamp());
-                                println!(
-                                    "{:<64}  {:<64}  {:<32}  {:<4}  {:<20}  {:<20}  {:<20}  {}",
-                                    mq.topic_str(),
-                                    group,
-                                    mq.broker_name(),
-                                    mq.queue_id(),
-                                    offset_wrapper.get_broker_offset(),
-                                    offset_wrapper.get_consumer_offset(),
-                                    diff,
-                                    last_time
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            println!("\nDiff Total: {}", consume_stats_list.total_diff);
-
-            Ok(())
+    for row in &result.rows {
+        if row.last_timestamp <= 0 {
+            continue;
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        println!(
+            "{:<64}  {:<64}  {:<32}  {:<4}  {:<20}  {:<20}  {:<20}  {}",
+            row.topic,
+            row.group,
+            row.broker_name,
+            row.queue_id,
+            row.broker_offset,
+            row.consumer_offset,
+            row.diff,
+            format_timestamp(row.last_timestamp)
+        );
+    }
+
+    println!("\nDiff Total: {}", result.total_diff);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_broker_consume_stats_request() {
+        let cmd = BrokerConsumeStatsSubCommand::try_parse_from([
+            "brokerConsumeStats",
+            "-b",
+            " 127.0.0.1:10911 ",
+            "-t",
+            "3000",
+            "-l",
+            "42",
+            "-o",
+            "true",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+
+        assert_eq!(request.broker_addr().as_str(), "127.0.0.1:10911");
+        assert_eq!(request.timeout_millis(), 3_000);
+        assert_eq!(request.diff_level(), 42);
+        assert!(request.is_order());
+    }
+
+    #[test]
+    fn parses_invalid_order_flag_as_false_for_compatibility() {
+        let cmd =
+            BrokerConsumeStatsSubCommand::try_parse_from(["brokerConsumeStats", "-b", "127.0.0.1:10911", "-o", "bad"])
+                .unwrap();
+
+        assert!(!cmd.request().unwrap().is_order());
     }
 }

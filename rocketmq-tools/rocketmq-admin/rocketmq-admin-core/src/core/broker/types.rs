@@ -471,6 +471,85 @@ pub struct BrokerRuntimeStatsResult {
     pub failures: Vec<BrokerRuntimeStatsFailure>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerConsumeStatsQueryRequest {
+    broker_addr: CheetahString,
+    timeout_millis: u64,
+    diff_level: i64,
+    is_order: bool,
+    namesrv_addr: Option<String>,
+}
+
+impl BrokerConsumeStatsQueryRequest {
+    pub fn try_new(
+        broker_addr: impl Into<String>,
+        timeout_millis: u64,
+        diff_level: i64,
+        is_order: bool,
+    ) -> RocketMQResult<Self> {
+        Ok(Self {
+            broker_addr: trim_required_cheetah("brokerAddr", broker_addr)?,
+            timeout_millis,
+            diff_level,
+            is_order,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn broker_addr(&self) -> &CheetahString {
+        &self.broker_addr
+    }
+
+    pub fn timeout_millis(&self) -> u64 {
+        self.timeout_millis
+    }
+
+    pub fn diff_level(&self) -> i64 {
+        self.diff_level
+    }
+
+    pub fn is_order(&self) -> bool {
+        self.is_order
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerConsumeStatsRow {
+    pub topic: CheetahString,
+    pub group: CheetahString,
+    pub broker_name: CheetahString,
+    pub queue_id: i32,
+    pub broker_offset: i64,
+    pub consumer_offset: i64,
+    pub diff: i64,
+    pub last_timestamp: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerConsumeStatsResult {
+    pub broker_addr: Option<CheetahString>,
+    pub total_diff: i64,
+    pub total_inflight_diff: i64,
+    pub rows: Vec<BrokerConsumeStatsRow>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -569,5 +648,20 @@ mod tests {
             BrokerRuntimeStatsQueryRequest::try_new(Some("127.0.0.1:10911".into()), Some("DefaultCluster".into()))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn broker_consume_stats_query_request_trims_broker_and_keeps_filters() {
+        let request = BrokerConsumeStatsQueryRequest::try_new(" 127.0.0.1:10911 ", 3_000, 42, true)
+            .unwrap()
+            .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+
+        assert_eq!(request.broker_addr().as_str(), "127.0.0.1:10911");
+        assert_eq!(request.timeout_millis(), 3_000);
+        assert_eq!(request.diff_level(), 42);
+        assert!(request.is_order());
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        assert!(BrokerConsumeStatsQueryRequest::try_new(" ", 3_000, 0, false).is_err());
     }
 }
