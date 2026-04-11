@@ -39,6 +39,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::flush_disk_type::FlushDiskType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::log_file::commit_log_recovery::RecoveryContext;
@@ -70,6 +71,7 @@ fn phase6_store_config() -> MessageStoreConfig {
         flush_disk_type: FlushDiskType::AsyncFlush,
         mapped_file_size_commit_log: 4096,
         mapped_file_size_consume_queue: 200,
+        ha_listen_port: 0,
         ..MessageStoreConfig::default()
     }
 }
@@ -95,6 +97,61 @@ fn corrupt_commitlog_tail(commitlog_file: &Path, offset: i64, payload: &[u8]) {
     file.seek(SeekFrom::Start(offset as u64)).expect("seek commitlog tail");
     file.write_all(payload).expect("write dirty tail");
     file.sync_data().expect("sync dirty tail");
+}
+
+#[derive(Debug, PartialEq)]
+struct StoreParitySnapshot {
+    get_status: Option<GetMessageStatus>,
+    get_message_count: i32,
+    query_message_count: usize,
+    max_offset_in_queue: i64,
+    total_in_queue: i64,
+    max_phy_offset: i64,
+}
+
+async fn collect_restart_snapshot(store_type: StoreType, topic: &CheetahString) -> StoreParitySnapshot {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let group = CheetahString::from_static_str("phase6-store-parity-group");
+    let key = CheetahString::from_static_str("phase6-store-parity-key");
+    let mut config = phase6_store_config();
+    config.store_type = store_type;
+
+    let mut writer = new_test_store(&temp_dir, config.clone());
+    writer.init().await.expect("init writer");
+    assert!(writer.load().await, "load writer");
+
+    for body in [b"phase6-parity-first".as_slice(), b"phase6-parity-second".as_slice()] {
+        let mut msg = build_test_message(topic, 0, body);
+        msg.set_keys(key.clone());
+        let put_result = writer.put_message(msg).await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+    }
+
+    writer.reput_once().await;
+    writer.shutdown().await;
+    drop(writer);
+
+    let mut reloaded = new_test_store(&temp_dir, config);
+    reloaded.init().await.expect("init reloaded store");
+    assert!(reloaded.load().await, "load reloaded store");
+
+    let get_result = reloaded
+        .get_message(&group, topic, 0, 0, 32, None)
+        .await
+        .expect("get parity messages");
+    let query_result = reloaded
+        .query_message(topic, &key, 32, 0, i64::MAX)
+        .await
+        .expect("query parity messages");
+
+    StoreParitySnapshot {
+        get_status: get_result.status(),
+        get_message_count: get_result.message_count(),
+        query_message_count: query_result.message_maped_list.len(),
+        max_offset_in_queue: reloaded.get_max_offset_in_queue(topic, 0),
+        total_in_queue: reloaded.get_message_total_in_queue(topic, 0),
+        max_phy_offset: reloaded.get_max_phy_offset(),
+    }
 }
 
 #[test]
@@ -296,4 +353,17 @@ async fn load_clears_stale_consume_queue_when_commitlog_is_missing() {
         !topic_queue_dir.exists(),
         "stale topic consume queue should be removed when commitlog is missing"
     );
+}
+
+#[tokio::test]
+async fn file_store_vs_rocksdb_behavior_parity_after_restart() {
+    let topic = CheetahString::from_static_str("phase6-store-parity-topic");
+
+    let local_snapshot = collect_restart_snapshot(StoreType::LocalFile, &topic).await;
+    let rocksdb_snapshot = collect_restart_snapshot(StoreType::RocksDB, &topic).await;
+
+    assert_eq!(local_snapshot, rocksdb_snapshot);
+    assert_eq!(local_snapshot.get_status, Some(GetMessageStatus::Found));
+    assert_eq!(local_snapshot.get_message_count, 2);
+    assert_eq!(local_snapshot.query_message_count, 2);
 }

@@ -21,6 +21,7 @@ use std::hint::black_box;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use criterion::criterion_group;
@@ -49,10 +50,19 @@ struct BenchStore {
 }
 
 fn new_async_flush_bench_store() -> BenchStore {
+    new_bench_store(FlushDiskType::AsyncFlush)
+}
+
+fn new_sync_flush_bench_store() -> BenchStore {
+    new_bench_store(FlushDiskType::SyncFlush)
+}
+
+fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
     let temp_dir = TempDir::new().expect("create temp dir for benchmark");
     let mut message_store_config = MessageStoreConfig {
         store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
-        flush_disk_type: FlushDiskType::AsyncFlush,
+        flush_disk_type,
+        ha_listen_port: 0,
         ..MessageStoreConfig::default()
     };
     message_store_config.mapped_file_size_commit_log = 1024 * 1024 * 256;
@@ -213,10 +223,59 @@ fn bench_reput_once_after_batch(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_sync_flush_tail_latency_baseline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("phase6/sync_flush_tail_latency_baseline");
+    group.sample_size(10);
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function("single_1KiB_message", |b| {
+        let runtime = Runtime::new().expect("create runtime");
+        let bench_store = new_sync_flush_bench_store();
+        runtime.block_on(async {
+            bench_store
+                .store
+                .clone()
+                .mut_from_ref()
+                .init()
+                .await
+                .expect("init sync flush benchmark store");
+            assert!(bench_store.store.clone().mut_from_ref().load().await, "load store");
+            bench_store
+                .store
+                .clone()
+                .mut_from_ref()
+                .start()
+                .await
+                .expect("start sync flush benchmark store");
+        });
+        let counter = AtomicU64::new(0);
+
+        b.iter(|| {
+            let key_seed = counter.fetch_add(1, Ordering::Relaxed);
+            let msg = create_test_message("BenchSyncFlushTopic", 0, 1024, key_seed);
+            let (status, elapsed) = runtime.block_on(async {
+                let started = Instant::now();
+                let status = bench_store
+                    .store
+                    .clone()
+                    .mut_from_ref()
+                    .put_message(msg)
+                    .await
+                    .put_message_status();
+                (status, started.elapsed())
+            });
+            black_box((status, elapsed));
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_async_flush_single_message,
     bench_async_flush_multi_queue,
     bench_reput_once_after_batch,
+    bench_sync_flush_tail_latency_baseline,
 );
 criterion_main!(benches);

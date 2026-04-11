@@ -188,3 +188,44 @@ async fn restart_revises_lagging_timer_checkpoint_in_default_store_path() {
         1
     );
 }
+
+#[tokio::test]
+async fn timer_restart_soak_smoke_preserves_indexed_queue_checkpoint() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let real_topic = CheetahString::from_static_str("phase6-timer-real-topic");
+
+    let mut writer = new_test_store(&temp_dir);
+    writer.init().await.expect("init writer");
+    assert!(writer.load().await, "load writer");
+
+    let timer_message_store = writer
+        .get_timer_message_store()
+        .cloned()
+        .expect("timer message store should be auto-initialized");
+    let put_result = writer
+        .put_message(build_timer_message(&real_topic, current_millis() as u64 + 60_000))
+        .await;
+    assert!(put_result.is_ok(), "put timer message");
+
+    writer.reput_once().await;
+    assert_eq!(timer_message_store.process_once().await, 1);
+    writer.shutdown().await;
+    drop(writer);
+
+    for _ in 0..3 {
+        let mut reloaded = new_test_store(&temp_dir);
+        reloaded.init().await.expect("init reloaded store");
+        assert!(reloaded.load().await, "load reloaded store");
+
+        let reloaded_timer_message_store = reloaded
+            .get_timer_message_store()
+            .cloned()
+            .expect("timer message store should be auto-initialized after restart");
+        assert_eq!(
+            reloaded_timer_message_store.curr_queue_offset.load(Ordering::Relaxed),
+            1
+        );
+
+        reloaded.shutdown().await;
+    }
+}

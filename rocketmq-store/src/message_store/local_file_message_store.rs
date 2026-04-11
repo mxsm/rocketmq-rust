@@ -2723,7 +2723,9 @@ impl ReputMessageService {
 
     #[inline]
     pub fn behind(&self) -> i64 {
-        let inner = self.inner.as_ref().unwrap();
+        let Some(inner) = self.inner.as_ref() else {
+            return 0;
+        };
         inner.message_store.get_confirm_offset() - inner.reput_from_offset.load(Ordering::Relaxed)
     }
 }

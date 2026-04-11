@@ -14,6 +14,7 @@
 
 //! Integration tests for store-facing HA semantics.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,12 +35,18 @@ use rocketmq_store::message_store::local_file_message_store::LocalFileMessageSto
 use tempfile::TempDir;
 
 fn new_test_store(message_store_config: MessageStoreConfig) -> ArcMut<LocalFileMessageStore> {
-    let broker_config = Arc::new(BrokerConfig::default());
+    new_test_store_with_broker_config(message_store_config, BrokerConfig::default())
+}
+
+fn new_test_store_with_broker_config(
+    message_store_config: MessageStoreConfig,
+    broker_config: BrokerConfig,
+) -> ArcMut<LocalFileMessageStore> {
     let topic_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
 
     let mut store = ArcMut::new(LocalFileMessageStore::new(
         Arc::new(message_store_config),
-        broker_config,
+        Arc::new(broker_config),
         topic_table,
         None,
         false,
@@ -110,4 +117,50 @@ async fn wait_store_msg_ok_false_skips_ha_wait_and_returns_put_ok() {
     assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
 
     store.shutdown().await;
+}
+
+#[tokio::test]
+async fn controller_role_failover_smoke_keeps_confirm_offset_at_master_tail() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let topic = CheetahString::from_static_str("phase6-ha-failover-smoke-topic");
+    let mut store = new_test_store_with_broker_config(
+        MessageStoreConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+            broker_role: BrokerRole::AsyncMaster,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: 4096,
+            mapped_file_size_consume_queue: 200,
+            ha_listen_port: 0,
+            enable_controller_mode: true,
+            all_ack_in_sync_state_set: false,
+            ..MessageStoreConfig::default()
+        },
+        BrokerConfig {
+            enable_controller_mode: true,
+            ..BrokerConfig::default()
+        },
+    );
+
+    store.init().await.expect("init controller-mode store");
+    store.sync_controller_sync_state_set(1, &HashSet::from([1_i64]));
+
+    for round in 0..3 {
+        let body = match round {
+            0 => b"phase6-ha-failover-round-0".as_slice(),
+            1 => b"phase6-ha-failover-round-1".as_slice(),
+            _ => b"phase6-ha-failover-round-2".as_slice(),
+        };
+        let result = store.put_message(build_message(&topic, body)).await;
+        assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+
+        let max_phy_offset = store.get_max_phy_offset();
+        store.set_confirm_offset(0);
+        store.sync_broker_role(BrokerRole::Slave);
+        assert_eq!(store.get_confirm_offset(), 0);
+
+        store.sync_broker_role(BrokerRole::AsyncMaster);
+        assert_eq!(store.get_confirm_offset(), max_phy_offset);
+    }
+
+    assert_eq!(store.get_max_offset_in_queue(&topic, 0), 0);
 }
