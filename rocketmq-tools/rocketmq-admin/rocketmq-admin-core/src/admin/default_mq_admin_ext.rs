@@ -113,7 +113,7 @@ impl DefaultMQAdminExt {
         }
     }
 
-    pub(crate) fn set_namesrv_addr(&mut self, name_serv_addr: &str) {
+    pub fn set_namesrv_addr(&mut self, name_serv_addr: &str) {
         self.client_config.set_namesrv_addr(name_serv_addr.into());
     }
 }

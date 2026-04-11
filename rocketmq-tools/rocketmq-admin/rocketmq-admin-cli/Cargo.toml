@@ -29,13 +29,29 @@ rust-version.workspace = true
 
 [dependencies]
 rocketmq-admin-core = { path = "../rocketmq-admin-core" }
+rocketmq-client-rust = { workspace = true }
 rocketmq-common     = { workspace = true }
+rocketmq-error      = { workspace = true }
 rocketmq-remoting   = { workspace = true }
 rocketmq-rust       = { workspace = true }
 
+bytes = { workspace = true }
+cheetah-string = { workspace = true }
+chrono = "0.4"
 clap = { version = "4.6.0", features = ["derive"] }
 clap_complete = "4.6"
+colored = "3.1"
+dialoguer = "0.12"
+futures = "0.3.32"
+indicatif = "0.18"
+regex = "1.12.3"
+rocksdb = "0.24"
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+tabled = { version = "0.20.0", features = ["derive"] }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [[bin]]
 name = "rocketmq-admin-cli"

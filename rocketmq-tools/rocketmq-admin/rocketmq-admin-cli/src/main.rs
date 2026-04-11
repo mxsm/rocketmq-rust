@@ -13,13 +13,10 @@
 // limitations under the License.
 
 use clap::Parser;
+use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_remoting::protocol::remoting_command;
-
-use crate::rocketmq_cli::RocketMQCli;
-
-mod rocketmq_cli;
 
 #[rocketmq_rust::main]
 async fn main() {

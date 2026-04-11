@@ -28,9 +28,9 @@ keywords = [
   "rust",
   "rocketmq-tools",
 ]
-categories = ["command-line-utilities", "parsing"]
+categories = ["development-tools"]
 readme = "README.md"
-description = "Rust implementation of Apache RocketMQ tools"
+description = "Reusable RocketMQ admin capability layer"
 rust-version.workspace = true
 
 [dependencies]
@@ -40,21 +40,10 @@ rocketmq-rust        = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 rocketmq-error       = { workspace = true }
 
-bytes                = { workspace = true }
-
 serde.workspace      = true
 serde_json.workspace = true
-serde_yaml           = "0.9"
 tokio                = { workspace = true }
 tracing              = { workspace = true }
 
 cheetah-string = { workspace = true }
-chrono         = "0.4"
-clap           = { version = "4.6.0", features = ["derive"] }
-rocksdb        = "0.24"
-tabled         = { version = "0.20.0", features = ["derive"] }
 futures        = "0.3.32"
-colored        = "3.1"
-indicatif      = "0.18"
-dialoguer      = "0.12"
-regex          = "1.12.3"
