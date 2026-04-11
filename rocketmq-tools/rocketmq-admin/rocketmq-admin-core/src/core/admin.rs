@@ -18,8 +18,11 @@
 //! - [`AdminBuilder`] - Fluent builder pattern for client configuration
 //! - [`AdminGuard`] - RAII wrapper for automatic resource cleanup
 
+use std::sync::Arc;
+
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::RocketMQResult;
@@ -45,12 +48,26 @@ use crate::core::RocketMQResult;
 ///     .build_and_start()
 ///     .await?;
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct AdminBuilder {
     namesrv_addr: Option<String>,
     instance_name: Option<String>,
     timeout_millis: Option<u64>,
     unit_name: Option<String>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
+}
+
+impl std::fmt::Debug for AdminBuilder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdminBuilder")
+            .field("namesrv_addr", &self.namesrv_addr)
+            .field("instance_name", &self.instance_name)
+            .field("timeout_millis", &self.timeout_millis)
+            .field("unit_name", &self.unit_name)
+            .field("rpc_hook", &self.rpc_hook.is_some())
+            .finish()
+    }
 }
 
 impl AdminBuilder {
@@ -94,6 +111,13 @@ impl AdminBuilder {
         self
     }
 
+    /// Set RPC hook for authenticated admin operations.
+    #[inline]
+    pub fn rpc_hook(mut self, hook: Arc<dyn RPCHook>) -> Self {
+        self.rpc_hook = Some(hook);
+        self
+    }
+
     /// Build and start the admin client
     ///
     /// This will:
@@ -108,7 +132,10 @@ impl AdminBuilder {
     /// - Connection cannot be established
     /// - Network I/O fails
     pub async fn build_and_start(self) -> RocketMQResult<DefaultMQAdminExt> {
-        let mut admin = DefaultMQAdminExt::new();
+        let mut admin = match self.rpc_hook {
+            Some(hook) => DefaultMQAdminExt::with_rpc_hook(hook),
+            None => DefaultMQAdminExt::new(),
+        };
 
         // Apply NameServer address
         if let Some(addr) = self.namesrv_addr {

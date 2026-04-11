@@ -23,4 +23,8 @@ pub use self::types::BrokerConfigQueryRequest;
 pub use self::types::BrokerConfigQueryResult;
 pub use self::types::BrokerConfigSection;
 pub use self::types::BrokerConfigSectionTarget;
+pub use self::types::BrokerConfigUpdateApplyResult;
+pub use self::types::BrokerConfigUpdatePlan;
+pub use self::types::BrokerConfigUpdatePlanResult;
+pub use self::types::BrokerConfigUpdateRequest;
 pub use self::types::BrokerTarget;

@@ -15,18 +15,27 @@
 //! Broker operations - core business logic.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use regex::Regex;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_remoting::runtime::RPCHook;
 
+use super::types::validate_update_value;
+use super::types::AppliedBrokerConfigUpdate;
 use super::types::BrokerConfigEntry;
 use super::types::BrokerConfigQueryRequest;
 use super::types::BrokerConfigQueryResult;
 use super::types::BrokerConfigSection;
 use super::types::BrokerConfigSectionTarget;
+use super::types::BrokerConfigUpdateApplyResult;
+use super::types::BrokerConfigUpdatePlan;
+use super::types::BrokerConfigUpdatePlanResult;
+use super::types::BrokerConfigUpdateRequest;
 use super::types::BrokerTarget;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use crate::core::admin::AdminBuilder;
 use crate::core::resolver::BrokerAddressResolver;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
@@ -106,6 +115,173 @@ impl BrokerService {
         })
     }
 
+    pub async fn build_broker_config_update_plan_by_request(
+        request: BrokerConfigUpdateRequest,
+    ) -> RocketMQResult<BrokerConfigUpdatePlanResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::build_broker_config_update_plan_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn build_broker_config_update_plan_by_request_with_rpc_hook(
+        request: BrokerConfigUpdateRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerConfigUpdatePlanResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::build_broker_config_update_plan_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn build_broker_config_update_plan_with_admin(
+        admin: &mut DefaultMQAdminExt,
+        request: &BrokerConfigUpdateRequest,
+    ) -> RocketMQResult<BrokerConfigUpdatePlanResult> {
+        let targets = Self::resolve_update_targets(admin, request).await?;
+        let configs =
+            futures::future::try_join_all(targets.iter().map(|target| fetch_broker_config_snapshot(admin, target)))
+                .await?;
+
+        let plans = targets
+            .into_iter()
+            .zip(configs)
+            .map(|(broker_addr, current)| build_update_plan_for_snapshot(broker_addr, current, request))
+            .collect::<RocketMQResult<Vec<_>>>()?;
+
+        Ok(BrokerConfigUpdatePlanResult { plans })
+    }
+
+    pub async fn apply_broker_config_update_by_request(
+        request: BrokerConfigUpdateRequest,
+    ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = async {
+            let plan = Self::build_broker_config_update_plan_with_admin(&mut admin, &request).await?;
+            Self::apply_broker_config_update_plan_with_admin(&admin, &plan, request.rollback_enabled()).await
+        }
+        .await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn apply_broker_config_update_plan_by_request(
+        request: &BrokerConfigUpdateRequest,
+        plan_result: &BrokerConfigUpdatePlanResult,
+    ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result =
+            Self::apply_broker_config_update_plan_with_admin(&admin, plan_result, request.rollback_enabled()).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn apply_broker_config_update_plan_by_request_with_rpc_hook(
+        request: &BrokerConfigUpdateRequest,
+        plan_result: &BrokerConfigUpdatePlanResult,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result =
+            Self::apply_broker_config_update_plan_with_admin(&admin, plan_result, request.rollback_enabled()).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn apply_broker_config_update_plan_with_admin(
+        admin: &DefaultMQAdminExt,
+        plan_result: &BrokerConfigUpdatePlanResult,
+        rollback_enabled: bool,
+    ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
+        let mut applied_updates = Vec::new();
+        let mut skipped_brokers = Vec::new();
+
+        for plan in &plan_result.plans {
+            if plan.changes.is_empty() {
+                skipped_brokers.push(plan.broker_addr.clone());
+                continue;
+            }
+
+            let rollback_properties = plan.rollback_properties();
+            let non_rollbackable_keys = plan.non_rollbackable_keys();
+            match admin
+                .update_broker_config(plan.broker_addr.clone(), plan.update_properties())
+                .await
+            {
+                Ok(_) => applied_updates.push(AppliedBrokerConfigUpdate {
+                    broker_addr: plan.broker_addr.clone(),
+                    rollback_properties,
+                    non_rollbackable_keys,
+                }),
+                Err(error) => {
+                    let base_error = format!("BrokerService: failed to update broker {}: {}", plan.broker_addr, error);
+
+                    if !rollback_enabled {
+                        return Err(RocketMQError::Internal(format!(
+                            "{}. Automatic rollback is disabled, previous successful updates are retained.",
+                            base_error
+                        )));
+                    }
+
+                    let rollback_failures = rollback_applied_updates(admin, &applied_updates).await;
+                    if rollback_failures.is_empty() {
+                        return Err(RocketMQError::Internal(format!(
+                            "{}. Automatic rollback succeeded for {} previously updated broker(s).",
+                            base_error,
+                            applied_updates.len()
+                        )));
+                    }
+
+                    return Err(RocketMQError::Internal(format!(
+                        "{}. Rollback encountered issues: {}",
+                        base_error,
+                        rollback_failures.join("; ")
+                    )));
+                }
+            }
+        }
+
+        Ok(BrokerConfigUpdateApplyResult {
+            applied_updates,
+            skipped_brokers,
+        })
+    }
+
+    async fn resolve_update_targets(
+        admin: &DefaultMQAdminExt,
+        request: &BrokerConfigUpdateRequest,
+    ) -> RocketMQResult<Vec<CheetahString>> {
+        match request.target() {
+            BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
+            BrokerTarget::ClusterName(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                })?;
+
+                let mut broker_addrs =
+                    BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?
+                        .into_iter()
+                        .filter(|addr| addr.as_str() != BrokerAddressResolver::NO_MASTER_PLACEHOLDER)
+                        .collect::<Vec<_>>();
+                broker_addrs.sort();
+                broker_addrs.dedup();
+
+                if broker_addrs.is_empty() {
+                    return Err(RocketMQError::Internal(format!(
+                        "BrokerService: cluster {} has no broker address",
+                        cluster_name
+                    )));
+                }
+
+                Ok(broker_addrs)
+            }
+        }
+    }
+
     async fn get_broker_config_entries(
         admin: &DefaultMQAdminExt,
         broker_addr: &CheetahString,
@@ -135,6 +311,94 @@ fn filter_and_sort_properties(
     entries
 }
 
+async fn fetch_broker_config_snapshot(
+    admin: &DefaultMQAdminExt,
+    broker_addr: &CheetahString,
+) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
+    admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
+        RocketMQError::Internal(format!(
+            "BrokerService: failed to get broker config for {}: {}",
+            broker_addr, error
+        ))
+    })
+}
+
+fn build_update_plan_for_snapshot(
+    broker_addr: CheetahString,
+    current: HashMap<CheetahString, CheetahString>,
+    request: &BrokerConfigUpdateRequest,
+) -> RocketMQResult<BrokerConfigUpdatePlan> {
+    let mut changes = Vec::new();
+    for (key, new_value) in request.update_entries() {
+        let old_value = current.get(key).cloned();
+        validate_update_value(
+            key.as_str(),
+            new_value.as_str(),
+            old_value.as_ref().map(|value| value.as_str()),
+        )
+        .map_err(|error| RocketMQError::IllegalArgument(format!("Broker {}: {}", broker_addr, error)))?;
+        if old_value.as_ref().map(|value| value.as_str()) != Some(new_value.as_str()) {
+            changes.push(super::types::BrokerConfigChange {
+                key: key.clone(),
+                old_value,
+                new_value: new_value.clone(),
+            });
+        }
+    }
+
+    Ok(BrokerConfigUpdatePlan { broker_addr, changes })
+}
+
+async fn rollback_applied_updates(
+    admin: &DefaultMQAdminExt,
+    applied_updates: &[AppliedBrokerConfigUpdate],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for applied in applied_updates.iter().rev() {
+        if applied.rollback_properties.is_empty() {
+            if !applied.non_rollbackable_keys.is_empty() {
+                failures.push(format!(
+                    "broker {} has only newly added keys [{}], cannot rollback to non-existent state",
+                    applied.broker_addr,
+                    join_cheetah_strings(&applied.non_rollbackable_keys)
+                ));
+            }
+            continue;
+        }
+
+        match admin
+            .update_broker_config(applied.broker_addr.clone(), applied.rollback_properties.clone())
+            .await
+        {
+            Ok(_) => {
+                if !applied.non_rollbackable_keys.is_empty() {
+                    failures.push(format!(
+                        "broker {} has newly added keys [{}], removal is not supported by rollback",
+                        applied.broker_addr,
+                        join_cheetah_strings(&applied.non_rollbackable_keys)
+                    ));
+                }
+            }
+            Err(error) => {
+                failures.push(format!("failed to rollback broker {}: {}", applied.broker_addr, error));
+            }
+        }
+    }
+
+    failures
+}
+
+fn join_cheetah_strings(values: &[CheetahString]) -> String {
+    values.iter().map(|value| value.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+fn admin_builder_with_rpc_hook(builder: AdminBuilder, rpc_hook: Option<Arc<dyn RPCHook>>) -> AdminBuilder {
+    match rpc_hook {
+        Some(hook) => builder.rpc_hook(hook),
+        None => builder,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +417,48 @@ mod tests {
             entries.iter().map(|entry| entry.key.as_str()).collect::<Vec<_>>(),
             vec!["flushDiskType", "flushInterval"]
         );
+    }
+
+    #[test]
+    fn build_update_plan_for_snapshot_tracks_old_and_missing_values() {
+        let mut update_entries = std::collections::BTreeMap::new();
+        update_entries.insert("flushDiskType".to_string(), "SYNC_FLUSH".to_string());
+        update_entries.insert("maxTransferCount".to_string(), "1024".to_string());
+        update_entries.insert("newKey".to_string(), "newValue".to_string());
+
+        let request = BrokerConfigUpdateRequest::try_new(Some("127.0.0.1:10911".into()), None, update_entries).unwrap();
+        let mut current = HashMap::new();
+        current.insert(CheetahString::from("flushDiskType"), CheetahString::from("SYNC_FLUSH"));
+        current.insert(CheetahString::from("maxTransferCount"), CheetahString::from("512"));
+
+        let plan = build_update_plan_for_snapshot(CheetahString::from("127.0.0.1:10911"), current, &request).unwrap();
+
+        assert_eq!(plan.broker_addr.as_str(), "127.0.0.1:10911");
+        assert_eq!(plan.changes.len(), 2);
+        assert!(plan.changes.iter().any(|change| {
+            change.key.as_str() == "maxTransferCount"
+                && change.old_value.as_ref().map(|value| value.as_str()) == Some("512")
+                && change.new_value.as_str() == "1024"
+        }));
+        assert!(plan.changes.iter().any(|change| {
+            change.key.as_str() == "newKey" && change.old_value.is_none() && change.new_value.as_str() == "newValue"
+        }));
+
+        let rollback = plan.rollback_properties();
+        assert_eq!(rollback.get(&CheetahString::from("maxTransferCount")).unwrap(), "512");
+        assert_eq!(plan.non_rollbackable_keys(), vec![CheetahString::from("newKey")]);
+    }
+
+    #[test]
+    fn build_update_plan_for_snapshot_validates_value_compatibility() {
+        let mut update_entries = std::collections::BTreeMap::new();
+        update_entries.insert("maxTransferCount".to_string(), "not_numeric".to_string());
+        let request = BrokerConfigUpdateRequest::try_new(Some("127.0.0.1:10911".into()), None, update_entries).unwrap();
+        let mut current = HashMap::new();
+        current.insert(CheetahString::from("maxTransferCount"), CheetahString::from("512"));
+
+        let result = build_update_plan_for_snapshot(CheetahString::from("127.0.0.1:10911"), current, &request);
+
+        assert!(result.is_err());
     }
 }

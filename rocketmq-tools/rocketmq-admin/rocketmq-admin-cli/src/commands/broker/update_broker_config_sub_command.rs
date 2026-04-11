@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::future::try_join_all;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::ArgAction;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerConfigUpdateApplyResult;
+use rocketmq_admin_core::core::broker::BrokerConfigUpdatePlanResult;
+use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
+use rocketmq_admin_core::core::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -100,27 +97,16 @@ pub struct UpdateBrokerConfigSubCommand {
     yes: bool,
 }
 
-#[derive(Debug, Clone)]
-struct ConfigChange {
-    key: String,
-    old_value: Option<String>,
-    new_value: String,
-}
-
-#[derive(Debug, Clone)]
-struct BrokerUpdatePlan {
-    broker_addr: String,
-    changes: Vec<ConfigChange>,
-}
-
-#[derive(Debug, Clone)]
-struct AppliedBrokerUpdate {
-    broker_addr: String,
-    rollback_properties: HashMap<CheetahString, CheetahString>,
-    non_rollbackable_keys: Vec<String>,
-}
-
 impl UpdateBrokerConfigSubCommand {
+    fn request(&self) -> RocketMQResult<BrokerConfigUpdateRequest> {
+        Ok(BrokerConfigUpdateRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.parse_update_entries()?,
+        )?
+        .with_rollback_enabled(!self.no_rollback))
+    }
+
     fn parse_update_entries(&self) -> RocketMQResult<BTreeMap<String, String>> {
         let mut entries = BTreeMap::new();
 
@@ -141,227 +127,30 @@ impl UpdateBrokerConfigSubCommand {
 
         Ok(entries)
     }
-
-    async fn resolve_targets(&self, admin_ext: &DefaultMQAdminExt) -> RocketMQResult<Vec<String>> {
-        if let Some(broker_addr) = &self.broker_addr {
-            let addr = broker_addr.trim();
-            if addr.is_empty() {
-                return Err(RocketMQError::IllegalArgument(
-                    "UpdateBrokerConfigSubCommand: brokerAddr cannot be empty".to_string(),
-                ));
-            }
-            return Ok(vec![addr.to_string()]);
-        }
-
-        let cluster_name = self
-            .cluster_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|cluster_name| !cluster_name.is_empty())
-            .ok_or_else(|| {
-                RocketMQError::IllegalArgument("UpdateBrokerConfigSubCommand: clusterName cannot be empty".to_string())
-            })?;
-
-        let cluster_info = admin_ext.examine_broker_cluster_info().await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "UpdateBrokerConfigSubCommand: Failed to examine broker cluster info: {}",
-                e
-            ))
-        })?;
-
-        let mut broker_addrs = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?
-            .into_iter()
-            .map(|addr| addr.to_string())
-            .filter(|addr| addr != CommandUtil::NO_MASTER_PLACEHOLDER)
-            .collect::<Vec<_>>();
-
-        broker_addrs.sort();
-        broker_addrs.dedup();
-
-        if broker_addrs.is_empty() {
-            return Err(RocketMQError::Internal(format!(
-                "UpdateBrokerConfigSubCommand: Cluster {} has no broker address",
-                cluster_name
-            )));
-        }
-
-        Ok(broker_addrs)
-    }
-
-    async fn build_update_plans(
-        &self,
-        admin_ext: &DefaultMQAdminExt,
-        targets: &[String],
-        update_entries: &BTreeMap<String, String>,
-    ) -> RocketMQResult<Vec<BrokerUpdatePlan>> {
-        let config = try_join_all(
-            targets
-                .iter()
-                .map(|target| fetch_broker_config_snapshot(admin_ext, target)),
-        )
-        .await?;
-
-        targets
-            .iter()
-            .zip(config)
-            .map(|(broker_addr, current)| {
-                let mut changes = Vec::new();
-                for (key, new_value) in update_entries {
-                    let old_value = current.get(key).cloned();
-                    validate_update_value(key, new_value, old_value.as_deref())
-                        .map_err(|e| RocketMQError::IllegalArgument(format!("Broker {}: {}", broker_addr, e)))?;
-                    if old_value.as_deref() != Some(new_value.as_str()) {
-                        changes.push(ConfigChange {
-                            key: key.clone(),
-                            old_value,
-                            new_value: new_value.clone(),
-                        });
-                    }
-                }
-                Ok(BrokerUpdatePlan {
-                    broker_addr: broker_addr.clone(),
-                    changes,
-                })
-            })
-            .collect()
-    }
-
-    async fn apply_update_plans(
-        &self,
-        admin_ext: &DefaultMQAdminExt,
-        plans: &[BrokerUpdatePlan],
-    ) -> RocketMQResult<()> {
-        let mut applied_updates = Vec::new();
-
-        for plan in plans {
-            if plan.changes.is_empty() {
-                println!("Broker {} has no effective config changes, skipped.", plan.broker_addr);
-                continue;
-            }
-
-            let mut update_properties = HashMap::with_capacity(plan.changes.len());
-            let mut rollback_properties = HashMap::new();
-            let mut non_rollbackable_keys = Vec::new();
-
-            for change in &plan.changes {
-                update_properties.insert(
-                    CheetahString::from(change.key.as_str()),
-                    CheetahString::from(change.new_value.as_str()),
-                );
-                if let Some(old_value) = &change.old_value {
-                    rollback_properties.insert(
-                        CheetahString::from(change.key.as_str()),
-                        CheetahString::from(old_value.as_str()),
-                    );
-                } else {
-                    non_rollbackable_keys.push(change.key.clone());
-                }
-            }
-
-            match admin_ext
-                .update_broker_config(CheetahString::from(plan.broker_addr.as_str()), update_properties)
-                .await
-            {
-                Ok(_) => {
-                    println!("Updated broker {} successfully.", plan.broker_addr);
-                    if !non_rollbackable_keys.is_empty() {
-                        println!(
-                            "Warning: broker {} has newly added keys [{}]; rollback can only restore existing keys.",
-                            plan.broker_addr,
-                            non_rollbackable_keys.join(", ")
-                        );
-                    }
-                    applied_updates.push(AppliedBrokerUpdate {
-                        broker_addr: plan.broker_addr.clone(),
-                        rollback_properties,
-                        non_rollbackable_keys,
-                    });
-                }
-                Err(e) => {
-                    let base_error = format!(
-                        "UpdateBrokerConfigSubCommand: Failed to update broker {}: {}",
-                        plan.broker_addr, e
-                    );
-
-                    if self.no_rollback {
-                        return Err(RocketMQError::Internal(format!(
-                            "{}. Automatic rollback is disabled, previous successful updates are retained.",
-                            base_error
-                        )));
-                    }
-
-                    let rollback_failures = rollback_applied_updates(admin_ext, &applied_updates).await;
-                    if rollback_failures.is_empty() {
-                        return Err(RocketMQError::Internal(format!(
-                            "{}. Automatic rollback succeeded for {} previously updated broker(s).",
-                            base_error,
-                            applied_updates.len()
-                        )));
-                    }
-
-                    return Err(RocketMQError::Internal(format!(
-                        "{}. Rollback encountered issues: {}",
-                        base_error,
-                        rollback_failures.join("; ")
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl CommandExecute for UpdateBrokerConfigSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let update_entries = self.parse_update_entries()?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "UpdateBrokerConfigSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            let targets = self.resolve_targets(&default_mqadmin_ext).await?;
-            let plans = self
-                .build_update_plans(&default_mqadmin_ext, &targets, &update_entries)
+        let request = self.request()?;
+        let plan =
+            BrokerService::build_broker_config_update_plan_by_request_with_rpc_hook(request.clone(), rpc_hook.clone())
                 .await?;
 
-            print_update_plan(&plans);
-            if self.dry_run {
-                println!("Dry-run mode enabled, no broker config has been changed.");
-                return Ok(());
-            }
-
-            if !self.yes && !prompt_confirmation() {
-                println!("Aborted by user, no broker config has been changed.");
-                return Ok(());
-            }
-
-            self.apply_update_plans(&default_mqadmin_ext, &plans).await?;
-
-            let updated_broker_count = plans.iter().filter(|plan| !plan.changes.is_empty()).count();
-            println!(
-                "UpdateBrokerConfigSubCommand: Updated broker config on {} broker(s).",
-                updated_broker_count
-            );
-            Ok(())
+        print_update_plan(&plan);
+        if self.dry_run {
+            println!("Dry-run mode enabled, no broker config has been changed.");
+            return Ok(());
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        if !self.yes && !prompt_confirmation() {
+            println!("Aborted by user, no broker config has been changed.");
+            return Ok(());
+        }
+
+        let apply_result =
+            BrokerService::apply_broker_config_update_plan_by_request_with_rpc_hook(&request, &plan, rpc_hook).await?;
+        print_apply_result(&apply_result, plan.changed_broker_count());
+        Ok(())
     }
 }
 
@@ -373,9 +162,6 @@ fn insert_update_entry(
 ) -> RocketMQResult<()> {
     let key = key.trim();
     let value = value.trim();
-
-    validate_config_key(key)?;
-    validate_update_value(key, value, None)?;
 
     match entries.get(key) {
         Some(existing) if existing != value => Err(RocketMQError::IllegalArgument(format!(
@@ -400,74 +186,9 @@ fn parse_property_entry(property: &str) -> RocketMQResult<(String, String)> {
     Ok((key.trim().to_string(), value.trim().to_string()))
 }
 
-fn validate_config_key(key: &str) -> RocketMQResult<()> {
-    if key.is_empty() {
-        return Err(RocketMQError::IllegalArgument(
-            "UpdateBrokerConfigSubCommand: Config key cannot be empty".to_string(),
-        ));
-    }
-    if key.contains('=') {
-        return Err(RocketMQError::IllegalArgument(format!(
-            "UpdateBrokerConfigSubCommand: Invalid config key '{}', '=' is not allowed",
-            key
-        )));
-    }
-    if key.chars().any(char::is_whitespace) {
-        return Err(RocketMQError::IllegalArgument(format!(
-            "UpdateBrokerConfigSubCommand: Invalid config key '{}', whitespace is not allowed",
-            key
-        )));
-    }
-    Ok(())
-}
-
-fn validate_update_value(key: &str, new_value: &str, old_value: Option<&str>) -> RocketMQResult<()> {
-    if new_value.trim().is_empty() {
-        return Err(RocketMQError::IllegalArgument(format!(
-            "UpdateBrokerConfigSubCommand: Config value for key '{}' cannot be empty",
-            key
-        )));
-    }
-    if new_value.contains('\n') || new_value.contains('\r') {
-        return Err(RocketMQError::IllegalArgument(format!(
-            "UpdateBrokerConfigSubCommand: Config value for key '{}' cannot contain line breaks",
-            key
-        )));
-    }
-
-    if let Some(old_value) = old_value {
-        if parse_bool(old_value).is_some() && parse_bool(new_value).is_none() {
-            return Err(RocketMQError::IllegalArgument(format!(
-                "UpdateBrokerConfigSubCommand: Config key '{}' expects boolean value, old='{}', new='{}'",
-                key, old_value, new_value
-            )));
-        } else if old_value.parse::<i64>().is_ok() && new_value.parse::<i64>().is_err() {
-            return Err(RocketMQError::IllegalArgument(format!(
-                "UpdateBrokerConfigSubCommand: Config key '{}' expects integer, old='{}', new='{}'",
-                key, old_value, new_value
-            )));
-        } else if old_value.parse::<f64>().is_ok() && new_value.parse::<f64>().is_err() {
-            return Err(RocketMQError::IllegalArgument(format!(
-                "UpdateBrokerConfigSubCommand: Config key '{}' expects numeric value, old='{}', new='{}'",
-                key, old_value, new_value
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn parse_bool(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
-fn print_update_plan(plans: &[BrokerUpdatePlan]) {
+fn print_update_plan(result: &BrokerConfigUpdatePlanResult) {
     println!("Planned broker configuration changes:");
-    for plan in plans {
+    for plan in &result.plans {
         println!("============{}============", plan.broker_addr);
         if plan.changes.is_empty() {
             println!("(no effective changes)\n");
@@ -475,83 +196,42 @@ fn print_update_plan(plans: &[BrokerUpdatePlan]) {
         }
 
         for change in &plan.changes {
-            let old_value = change.old_value.as_deref().unwrap_or("<missing>");
+            let old_value = change
+                .old_value
+                .as_ref()
+                .map(|value| value.as_str())
+                .unwrap_or("<missing>");
             println!("{:<50} {} -> {}", change.key, old_value, change.new_value);
         }
         println!();
     }
 }
 
-async fn fetch_broker_config_snapshot(
-    admin_ext: &DefaultMQAdminExt,
-    broker_addr: &str,
-) -> RocketMQResult<HashMap<String, String>> {
-    let config = admin_ext
-        .get_broker_config(CheetahString::from(broker_addr))
-        .await
-        .map_err(|e| {
-            RocketMQError::Internal(format!(
-                "UpdateBrokerConfigSubCommand: Failed to get broker config for {}: {}",
-                broker_addr, e
-            ))
-        })?;
+fn print_apply_result(result: &BrokerConfigUpdateApplyResult, updated_broker_count: usize) {
+    for broker_addr in &result.skipped_brokers {
+        println!("Broker {} has no effective config changes, skipped.", broker_addr);
+    }
 
-    Ok(config
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect())
-}
-
-async fn rollback_applied_updates(
-    admin_ext: &DefaultMQAdminExt,
-    applied_updates: &[AppliedBrokerUpdate],
-) -> Vec<String> {
-    if applied_updates.is_empty() {
-        return Vec::new();
+    for applied in &result.applied_updates {
+        println!("Updated broker {} successfully.", applied.broker_addr);
+        if !applied.non_rollbackable_keys.is_empty() {
+            let keys = applied
+                .non_rollbackable_keys
+                .iter()
+                .map(|key| key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "Warning: broker {} has newly added keys [{}]; rollback can only restore existing keys.",
+                applied.broker_addr, keys
+            );
+        }
     }
 
     println!(
-        "Applying automatic rollback for {} previously updated broker(s)...",
-        applied_updates.len()
+        "UpdateBrokerConfigSubCommand: Updated broker config on {} broker(s).",
+        updated_broker_count
     );
-
-    let mut failures = Vec::new();
-    for applied in applied_updates.iter().rev() {
-        if applied.rollback_properties.is_empty() {
-            if !applied.non_rollbackable_keys.is_empty() {
-                failures.push(format!(
-                    "broker {} has only newly added keys [{}], cannot rollback to non-existent state",
-                    applied.broker_addr,
-                    applied.non_rollbackable_keys.join(", ")
-                ));
-            }
-            continue;
-        }
-
-        match admin_ext
-            .update_broker_config(
-                CheetahString::from(applied.broker_addr.as_str()),
-                applied.rollback_properties.clone(),
-            )
-            .await
-        {
-            Ok(_) => {
-                println!("Rolled back broker {} successfully.", applied.broker_addr);
-                if !applied.non_rollbackable_keys.is_empty() {
-                    failures.push(format!(
-                        "broker {} has newly added keys [{}], removal is not supported by rollback",
-                        applied.broker_addr,
-                        applied.non_rollbackable_keys.join(", ")
-                    ));
-                }
-            }
-            Err(e) => {
-                failures.push(format!("failed to rollback broker {}: {}", applied.broker_addr, e));
-            }
-        }
-    }
-
-    failures
 }
 
 fn prompt_confirmation() -> bool {
@@ -684,14 +364,19 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_update_value_boolean_compatibility() {
-        assert!(validate_update_value("enableControllerMode", "true", Some("false")).is_ok());
-        assert!(validate_update_value("enableControllerMode", "not_bool", Some("false")).is_err());
-    }
+    fn test_request_disables_rollback_for_no_rollback_flag() {
+        let args = [
+            "updateBrokerConfig",
+            "-b",
+            "127.0.0.1:10911",
+            "-k",
+            "flushDiskType",
+            "-v",
+            "ASYNC_FLUSH",
+            "--noRollback",
+        ];
+        let cmd = UpdateBrokerConfigSubCommand::try_parse_from(args).unwrap();
 
-    #[test]
-    fn test_validate_update_value_numeric_compatibility() {
-        assert!(validate_update_value("maxTransferCount", "1024", Some("512")).is_ok());
-        assert!(validate_update_value("maxTransferCount", "abc", Some("512")).is_err());
+        assert!(!cmd.request().unwrap().rollback_enabled());
     }
 }

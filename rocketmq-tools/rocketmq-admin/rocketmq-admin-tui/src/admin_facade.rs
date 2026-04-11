@@ -14,6 +14,7 @@
 
 use rocketmq_admin_core::core::admin::AdminBuilder;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
 use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
@@ -104,6 +105,18 @@ impl TuiAdminFacade {
             BrokerConfigQueryRequest::try_new(broker_addr, cluster_name, key_pattern)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
         )
+    }
+
+    pub fn broker_config_update_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        entries: std::collections::BTreeMap<String, String>,
+        rollback_enabled: bool,
+    ) -> RocketMQResult<BrokerConfigUpdateRequest> {
+        Ok(BrokerConfigUpdateRequest::try_new(broker_addr, cluster_name, entries)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone())
+            .with_rollback_enabled(rollback_enabled))
     }
 
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
@@ -343,6 +356,18 @@ mod tests {
         assert!(matches!(
             request.target(),
             rocketmq_admin_core::core::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
+        ));
+
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(" flushDiskType ".to_string(), " ASYNC_FLUSH ".to_string());
+        let update_request = facade
+            .broker_config_update_request(Some(" 127.0.0.1:10911 ".to_string()), None, entries, false)
+            .unwrap();
+        assert_eq!(update_request.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert!(!update_request.rollback_enabled());
+        assert!(matches!(
+            update_request.target(),
+            rocketmq_admin_core::core::broker::BrokerTarget::BrokerAddr(addr) if addr.as_str() == "127.0.0.1:10911"
         ));
     }
 }
