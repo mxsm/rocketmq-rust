@@ -17,8 +17,6 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 use tabled::Table;
@@ -30,7 +28,8 @@ use tabled::settings::object::Rows;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::namesrv::NameServerService;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetNamesrvConfigSubCommand {
@@ -39,48 +38,27 @@ pub struct GetNamesrvConfigSubCommand {
 }
 
 impl GetNamesrvConfigSubCommand {
-    fn parse_server_list(&self) -> Option<Vec<CheetahString>> {
-        self.common.namesrv_addr.as_ref().and_then(|servers| {
-            if servers.trim().is_empty() {
-                None
-            } else {
-                let server_array = servers
-                    .trim()
-                    .split(';')
-                    .filter(|s| !s.trim().is_empty())
-                    .map(|s| s.trim().to_string().into())
-                    .collect::<Vec<CheetahString>>();
-
-                if server_array.is_empty() {
-                    None
-                } else {
-                    Some(server_array)
-                }
-            }
-        })
+    fn request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
+        NamesrvConfigQueryRequest::try_new(self.common.namesrv_addr.clone())
     }
 }
 
 impl CommandExecute for GetNamesrvConfigSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = match self.request() {
+            Ok(request) => request,
+            Err(_) => {
+                eprintln!("Please set the namesrvAddr parameter");
+                return Ok(());
+            }
+        };
         if self.common.namesrv_addr.is_none() {
             eprintln!("Please set the namesrvAddr parameter");
             return Ok(());
         }
-        let mut admin = DefaultMQAdminExt::new();
-        admin.client_config_mut().instance_name = current_millis().to_string().into();
 
-        let server_list = self.parse_server_list();
-        if let Some(server_list) = server_list {
-            admin.start().await?;
-            let configs = admin.get_name_server_config(server_list).await?;
-            display_configs_with_table(&configs);
-            admin.shutdown().await;
-            return Ok(());
-        } else {
-            eprintln!("Please set the namesrvAddr parameter");
-        }
-
+        let result = NameServerService::query_namesrv_config(request).await?;
+        display_configs_with_table(&result.configs);
         Ok(())
     }
 }
@@ -123,5 +101,25 @@ fn display_configs_with_table(configs: &HashMap<CheetahString, HashMap<CheetahSt
             println!("No configuration found for this server.");
         }
         println!(); // Add blank line between servers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_namesrv_config_sub_command_parse() {
+        let cmd =
+            GetNamesrvConfigSubCommand::try_parse_from(["getNamesrvConfig", "-n", "127.0.0.1:9876;127.0.0.2:9876"])
+                .unwrap();
+
+        assert_eq!(
+            cmd.request().unwrap().namesrv_addrs(),
+            vec![
+                CheetahString::from("127.0.0.1:9876"),
+                CheetahString::from("127.0.0.2:9876")
+            ]
+        );
     }
 }

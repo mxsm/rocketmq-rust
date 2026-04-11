@@ -15,14 +15,12 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
+use rocketmq_admin_core::core::namesrv::NameServerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteKvConfigSubCommand {
@@ -33,33 +31,28 @@ pub struct DeleteKvConfigSubCommand {
     key: String,
 }
 
+impl DeleteKvConfigSubCommand {
+    fn request(&self) -> RocketMQResult<KvConfigDeleteRequest> {
+        KvConfigDeleteRequest::try_new(self.namespace.clone(), self.key.clone())
+    }
+}
+
 impl CommandExecute for DeleteKvConfigSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        NameServerService::delete_kv_config_by_request(self.request()?).await?;
+        println!("delete kv config from namespace success.");
+        Ok(())
+    }
+}
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("DeleteKvConfigSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-            MQAdminExt::delete_kv_config(
-                &default_mqadmin_ext,
-                self.namespace.parse().unwrap(),
-                self.key.parse().unwrap(),
-            )
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!("DeleteKvConfigSubCommand: Failed to delete kv config: {}", e))
-            })?;
+    #[test]
+    fn delete_kv_config_sub_command_parse() {
+        let cmd = DeleteKvConfigSubCommand::try_parse_from(["deleteKvConfig", "-s", "namespace", "-k", "key"]).unwrap();
 
-            println!("delete kv config from namespace success.");
-            Ok(())
-        }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        assert_eq!(cmd.request().unwrap().namespace().as_str(), "namespace");
     }
 }

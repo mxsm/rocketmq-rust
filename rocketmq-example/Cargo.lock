@@ -1927,6 +1927,7 @@ version = "0.8.0"
 dependencies = [
  "cheetah-string",
  "futures",
+ "regex",
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",

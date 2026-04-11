@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::namesrv::NameServerService;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateRequest;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateNamesrvConfigSubCommand {
@@ -39,60 +36,65 @@ pub struct UpdateNamesrvConfigSubCommand {
     value: String,
 }
 
-impl CommandExecute for UpdateNamesrvConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+impl UpdateNamesrvConfigSubCommand {
+    fn request(&self) -> RocketMQResult<NamesrvConfigUpdateRequest> {
+        NamesrvConfigUpdateRequest::try_new(
+            self.key.clone(),
+            self.value.clone(),
+            self.common_args.namesrv_addr.clone(),
+        )
+    }
 
-        let operation_result = async {
-            // key name
-            let key: CheetahString = self.key.trim().into();
-
-            // key name
-            let value: CheetahString = self.value.trim().into();
-            let mut properties = HashMap::with_capacity(1);
-            properties.insert(key.clone(), value.clone());
-
-            let mut server_list = None;
-            if let Some(servers) = &self.common_args.namesrv_addr {
-                if !servers.is_empty() {
-                    let servers_split: Vec<&str> = servers.split(';').collect();
-                    if !servers_split.is_empty() {
-                        let mut vec = Vec::with_capacity(servers_split.len());
-                        for server in servers_split {
-                            vec.push(server.into());
-                        }
-                        server_list = Some(vec);
-                    }
-                }
-            }
-
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "UpdateNamesrvConfigSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            default_mqadmin_ext
-                .update_name_server_config(properties, server_list.clone())
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!("UpdateNamesrvConfigSubCommand: Failed to update config: {}", e))
-                })?;
-
+    fn print_result(result: NamesrvConfigUpdateResult) {
+        let server_list = result
+            .namesrv_addrs
+            .unwrap_or_default()
+            .iter()
+            .map(|addr| addr.as_str())
+            .collect::<Vec<_>>()
+            .join(";");
+        for (key, value) in result.properties {
             println!(
                 "update name server config success!{}\n{} : {}\n",
-                server_list.unwrap_or_default().join(";"),
-                key,
-                value
+                server_list, key, value
             );
-            Ok(())
         }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    }
+}
+
+impl CommandExecute for UpdateNamesrvConfigSubCommand {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let result = NameServerService::update_namesrv_config_by_request(self.request()?).await?;
+        Self::print_result(result);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cheetah_string::CheetahString;
+
+    #[test]
+    fn update_namesrv_config_sub_command_parse() {
+        let cmd = UpdateNamesrvConfigSubCommand::try_parse_from([
+            "updateNamesrvConfig",
+            "-k",
+            "deleteWhen",
+            "-v",
+            "04",
+            "-n",
+            "127.0.0.1:9876",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cmd.request()
+                .unwrap()
+                .properties()
+                .get(&CheetahString::from("deleteWhen"))
+                .unwrap(),
+            "04"
+        );
     }
 }

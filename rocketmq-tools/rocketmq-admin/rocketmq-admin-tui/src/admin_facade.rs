@@ -13,6 +13,12 @@
 // limitations under the License.
 
 use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
+use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
+use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateRequest;
+use rocketmq_admin_core::core::namesrv::WritePermRequest;
 use rocketmq_admin_core::core::topic::AllocateMqQueryRequest;
 use rocketmq_admin_core::core::topic::DeleteTopicRequest;
 use rocketmq_admin_core::core::topic::OrderConfRequest;
@@ -50,6 +56,54 @@ impl TuiAdminFacade {
             Some(addr) => builder.namesrv_addr(addr),
             None => builder,
         }
+    }
+
+    pub fn namesrv_config_query_request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
+        NamesrvConfigQueryRequest::try_new(self.namesrv_addr.clone())
+    }
+
+    pub fn namesrv_config_update_request(
+        &self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<NamesrvConfigUpdateRequest> {
+        NamesrvConfigUpdateRequest::try_new(key, value, self.namesrv_addr.clone())
+    }
+
+    pub fn kv_config_update_request(
+        &self,
+        namespace: impl Into<String>,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<KvConfigUpdateRequest> {
+        Ok(
+            KvConfigUpdateRequest::try_new(namespace, key, value)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn kv_config_delete_request(
+        &self,
+        namespace: impl Into<String>,
+        key: impl Into<String>,
+    ) -> RocketMQResult<KvConfigDeleteRequest> {
+        Ok(KvConfigDeleteRequest::try_new(namespace, key)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn write_perm_request(&self, broker_name: impl Into<String>) -> RocketMQResult<WritePermRequest> {
+        Ok(WritePermRequest::try_new(broker_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn broker_config_query_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        key_pattern: Option<String>,
+    ) -> RocketMQResult<BrokerConfigQueryRequest> {
+        Ok(
+            BrokerConfigQueryRequest::try_new(broker_addr, cluster_name, key_pattern)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
     }
 
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
@@ -243,5 +297,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(update_perm.perm(), 6);
+    }
+
+    #[test]
+    fn facade_builds_namesrv_requests_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876;127.0.0.2:9876 ");
+
+        assert_eq!(facade.namesrv_config_query_request().unwrap().namesrv_addrs().len(), 2);
+        let update_config = facade.namesrv_config_update_request(" deleteWhen ", " 04 ").unwrap();
+        assert!(update_config
+            .properties()
+            .iter()
+            .any(|(key, value)| key.as_str() == "deleteWhen" && value.as_str() == "04"));
+        assert_eq!(
+            facade
+                .kv_config_update_request(" ns ", " key ", " value ")
+                .unwrap()
+                .namespace()
+                .as_str(),
+            "ns"
+        );
+        assert_eq!(
+            facade.kv_config_delete_request(" ns ", " key ").unwrap().key().as_str(),
+            "key"
+        );
+        assert_eq!(
+            facade.write_perm_request(" broker-a ").unwrap().broker_name().as_str(),
+            "broker-a"
+        );
+    }
+
+    #[test]
+    fn facade_builds_broker_config_request_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+        let request = facade
+            .broker_config_query_request(
+                None,
+                Some(" DefaultCluster ".to_string()),
+                Some(" ^flush.* ".to_string()),
+            )
+            .unwrap();
+
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(request.key_pattern(), Some("^flush.*"));
+        assert!(matches!(
+            request.target(),
+            rocketmq_admin_core::core::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
+        ));
     }
 }

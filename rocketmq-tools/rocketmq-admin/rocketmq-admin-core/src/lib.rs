@@ -25,6 +25,7 @@ pub mod core {
     //! Presentation-independent admin services and supporting utilities.
 
     pub mod admin;
+    pub mod broker;
     pub mod cache;
     pub mod concurrent;
     pub mod namesrv;

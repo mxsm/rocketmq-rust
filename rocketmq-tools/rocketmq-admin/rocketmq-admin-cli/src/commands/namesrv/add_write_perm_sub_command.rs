@@ -15,15 +15,14 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::namesrv::NameServerService;
+use rocketmq_admin_core::core::namesrv::WritePermRequest;
+use rocketmq_admin_core::core::namesrv::WritePermResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct AddWritePermSubCommand {
@@ -34,41 +33,49 @@ pub struct AddWritePermSubCommand {
     broker_name: String,
 }
 
-impl CommandExecute for AddWritePermSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+impl AddWritePermSubCommand {
+    fn request(&self) -> RocketMQResult<WritePermRequest> {
+        Ok(WritePermRequest::try_new(self.broker_name.clone())?
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
+    }
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("AddWritePermSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-            let broker_name = self.broker_name.trim();
-            for namesrv_addr in default_mqadmin_ext.get_name_server_address_list().await {
-                match default_mqadmin_ext
-                    .add_write_perm_of_broker(namesrv_addr.clone(), broker_name.into())
-                    .await
-                    .map_err(|e| {
-                        RocketMQError::Internal(format!("AddWritePermSubCommand: Failed to add write perm: {}", e))
-                    }) {
-                    Ok(add_topic_count) => {
-                        println!(
-                            "add write perm of broker[{broker_name}] in name server[{namesrv_addr}] OK, \
-                             {add_topic_count}"
-                        );
-                    }
-                    Err(e) => {
-                        println!("add write perm of broker[{broker_name}] in name server[{namesrv_addr}] Failed",);
-                        println!("{e}")
-                    }
+    fn print_result(result: WritePermResult) {
+        for entry in result.entries {
+            if let Some(affected_count) = entry.affected_count {
+                println!(
+                    "add write perm of broker[{}] in name server[{}] OK, {}",
+                    result.broker_name, entry.namesrv_addr, affected_count
+                );
+            } else {
+                println!(
+                    "add write perm of broker[{}] in name server[{}] Failed",
+                    result.broker_name, entry.namesrv_addr
+                );
+                if let Some(error) = entry.error {
+                    println!("{error}");
                 }
             }
-            Ok(())
         }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    }
+}
+
+impl CommandExecute for AddWritePermSubCommand {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let result = NameServerService::add_write_perm_by_request(self.request()?).await?;
+        Self::print_result(result);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_write_perm_sub_command_parse() {
+        let cmd =
+            AddWritePermSubCommand::try_parse_from(["addWritePerm", "-b", "broker-a", "-n", "127.0.0.1:9876"]).unwrap();
+
+        assert_eq!(cmd.request().unwrap().broker_name().as_str(), "broker-a");
     }
 }
