@@ -31,6 +31,7 @@ pub mod types;
 // Re-export all public items from submodules
 pub use self::operations::TopicOperations;
 pub use self::operations::TopicService;
+pub use self::types::AllocatedMqQueryResult;
 pub use self::types::BrokerData;
 pub use self::types::QueueData;
 pub use self::types::TopicClusterList;

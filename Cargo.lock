@@ -3536,6 +3536,15 @@ dependencies = [
 [[package]]
 name = "rocketmq-admin-cli"
 version = "0.8.0"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "rocketmq-admin-core",
+ "rocketmq-common",
+ "rocketmq-remoting",
+ "rocketmq-rust",
+ "tokio",
+]
 
 [[package]]
 name = "rocketmq-admin-core"
@@ -3545,7 +3554,6 @@ dependencies = [
  "cheetah-string",
  "chrono",
  "clap",
- "clap_complete",
  "colored",
  "dialoguer",
  "futures",

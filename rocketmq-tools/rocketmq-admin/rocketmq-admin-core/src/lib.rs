@@ -95,6 +95,7 @@ pub mod core {
     pub mod cache;
     pub mod concurrent;
     pub mod namesrv;
+    pub mod resolver;
     pub mod topic;
 
     // Re-export error types from rocketmq-error
@@ -142,8 +143,5 @@ pub mod ui;
 // Admin API layer
 pub mod admin;
 
-// Legacy command structure (will be gradually migrated)
-pub(crate) mod commands;
-
-// CLI entry point
-pub mod rocketmq_cli;
+// Legacy command structure exposed temporarily for rocketmq-admin-cli migration.
+pub mod commands;

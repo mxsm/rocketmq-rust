@@ -12,6 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-fn main() {
-    println!("Hello, world!");
+use clap::Parser;
+use rocketmq_common::EnvUtils::EnvUtils;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
+use rocketmq_remoting::protocol::remoting_command;
+
+use crate::rocketmq_cli::RocketMQCli;
+
+mod rocketmq_cli;
+
+#[rocketmq_rust::main]
+async fn main() {
+    EnvUtils::put_property(
+        remoting_command::REMOTING_VERSION_KEY,
+        (CURRENT_VERSION as u32).to_string(),
+    );
+
+    let cli = RocketMQCli::parse();
+    cli.handle().await;
 }

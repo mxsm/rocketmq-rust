@@ -22,8 +22,10 @@ use std::collections::HashSet;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 
+use super::types::AllocatedMqQueryResult;
 use super::types::TopicClusterList;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use crate::core::resolver::BrokerAddressResolver;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -143,10 +145,8 @@ impl TopicService {
                     .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
 
                 // Find master brokers in the cluster
-                let master_addrs = crate::commands::command_util::CommandUtil::fetch_master_addr_by_cluster_name(
-                    &cluster_info,
-                    &cluster_name,
-                )?;
+                let master_addrs =
+                    BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, &cluster_name)?;
 
                 if master_addrs.is_empty() {
                     return Err(ToolsError::ClusterNotFound {
@@ -292,10 +292,8 @@ impl TopicService {
                     .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
 
                 // Find master brokers
-                let master_addrs = crate::commands::command_util::CommandUtil::fetch_master_addr_by_cluster_name(
-                    &cluster_info,
-                    &cluster_name,
-                )?;
+                let master_addrs =
+                    BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, &cluster_name)?;
 
                 if master_addrs.is_empty() {
                     return Err(ToolsError::ClusterNotFound {
@@ -341,36 +339,43 @@ impl TopicService {
     /// * `ip_list` - Comma-separated IP addresses
     ///
     /// # Returns
-    /// Result indicating success or failure
+    /// Allocation summary for CLI/TUI rendering
     pub async fn query_allocated_mq(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         ip_list: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> RocketMQResult<AllocatedMqQueryResult> {
         let topic = topic.into();
         let ip_list = ip_list.into();
 
-        // Parse IP list
-        let ips: Vec<_> = ip_list.split(',').map(|s| s.trim()).collect();
-
-        // Get topic route
+        let requested_ips = ip_list
+            .split(',')
+            .map(str::trim)
+            .filter(|ip| !ip.is_empty())
+            .map(CheetahString::from)
+            .collect::<Vec<_>>();
         let route_opt = admin.examine_topic_route_info(topic.clone()).await?;
 
-        if let Some(route) = route_opt {
-            // Build a simple allocation overview
-            println!("Topic: {topic}");
-            println!("IP List: {}", ips.join(", "));
-            println!("\nMessage Queue Allocation:");
-            println!("Total Queues: {}", route.queue_datas.len());
-            println!("\nBrokers:");
-            for broker in &route.broker_datas {
-                println!("  - {}", broker.broker_name());
-            }
-        } else {
-            println!("No route information found for topic: {topic}");
-        }
-
-        Ok(())
+        Ok(match route_opt {
+            Some(route) => AllocatedMqQueryResult {
+                topic,
+                requested_ips,
+                route_found: true,
+                total_queues: route.queue_datas.len(),
+                broker_names: route
+                    .broker_datas
+                    .iter()
+                    .map(|broker| broker.broker_name().clone())
+                    .collect(),
+            },
+            None => AllocatedMqQueryResult {
+                topic,
+                requested_ips,
+                route_found: false,
+                total_queues: 0,
+                broker_names: Vec::new(),
+            },
+        })
     }
 
     /// Create or update order configuration

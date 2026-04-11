@@ -70,6 +70,15 @@ pub struct TopicStatus {
     pub last_update_timestamp: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllocatedMqQueryResult {
+    pub topic: CheetahString,
+    pub requested_ips: Vec<CheetahString>,
+    pub route_found: bool,
+    pub total_queues: usize,
+    pub broker_names: Vec<CheetahString>,
+}
+
 /// Target for topic creation/update operations
 #[derive(Debug, Clone)]
 pub enum TopicTarget {

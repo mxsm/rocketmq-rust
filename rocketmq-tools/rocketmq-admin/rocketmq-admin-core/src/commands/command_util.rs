@@ -13,43 +13,21 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+
+use crate::core::resolver::BrokerAddressResolver;
 
 pub struct CommandUtil;
 
 impl CommandUtil {
-    const MASTER_ID: u64 = 0;
-    pub const NO_MASTER_PLACEHOLDER: &'static str = "NO_MASTER";
+    pub const NO_MASTER_PLACEHOLDER: &'static str = BrokerAddressResolver::NO_MASTER_PLACEHOLDER;
 
     pub fn fetch_master_addr_by_cluster_name(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
-        let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No cluster address table available from nameserver.".into())
-        })?;
-        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is \
-                 correct. Cluster: {}",
-                cluster_name
-            ))
-        })?;
-        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
-        })?;
-
-        let mut master_addrs = Vec::new();
-        for broker_name in broker_names {
-            if let Some(broker_data) = broker_addr_table.get(broker_name) {
-                if let Some(master_addr) = broker_data.broker_addrs().get(&Self::MASTER_ID) {
-                    master_addrs.push(master_addr.clone());
-                }
-            }
-        }
-        Ok(master_addrs)
+        BrokerAddressResolver::fetch_master_addr_by_cluster_name(cluster_info, cluster_name)
     }
 
     #[allow(unused)]
@@ -57,36 +35,14 @@ impl CommandUtil {
         cluster_info: &ClusterInfo,
         broker_name: &str,
     ) -> RocketMQResult<CheetahString> {
-        if let Some(broker_addr_table) = &cluster_info.broker_addr_table {
-            if let Some(broker_data) = broker_addr_table.get(broker_name) {
-                if let Some(master_addr) = broker_data.broker_addrs().get(&Self::MASTER_ID) {
-                    return Ok(master_addr.clone());
-                }
-            }
-        }
-        Err(RocketMQError::Internal(format!(
-            "CommandUtil: No broker address for broker name: {}",
-            broker_name
-        )))
+        BrokerAddressResolver::fetch_master_addr_by_broker_name(cluster_info, broker_name)
     }
 
     pub fn fetch_master_and_slave_addr_by_broker_name(
         cluster_info: &ClusterInfo,
         broker_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
-        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
-        })?;
-        let broker_data = broker_addr_table.get(broker_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "CommandUtil: No broker data found for broker name: {}",
-                broker_name
-            ))
-        })?;
-        let mut addrs: Vec<CheetahString> = broker_data.broker_addrs().values().cloned().collect();
-        addrs.sort();
-        addrs.dedup();
-        Ok(addrs)
+        BrokerAddressResolver::fetch_master_and_slave_addr_by_broker_name(cluster_info, broker_name)
     }
 
     #[allow(unused)]
@@ -94,118 +50,26 @@ impl CommandUtil {
         cluster_info: &ClusterInfo,
         cluster_name: &str,
     ) -> RocketMQResult<Vec<String>> {
-        if let Some(cluster_addr_table) = &cluster_info.cluster_addr_table {
-            if let Some(broker_names) = cluster_addr_table.get(cluster_name) {
-                return Ok(broker_names.iter().map(|n| n.to_string()).collect());
-            }
-        }
-        Err(RocketMQError::Internal(format!(
-            "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is correct. \
-             Cluster: {}",
-            cluster_name
-        )))
+        BrokerAddressResolver::fetch_broker_name_by_cluster_name(cluster_info, cluster_name)
     }
 
     #[allow(unused)]
     pub fn fetch_broker_name_by_addr(cluster_info: &ClusterInfo, broker_addr: &str) -> RocketMQResult<String> {
-        if let Some(broker_addr_table) = &cluster_info.broker_addr_table {
-            for (broker_name, broker_data) in broker_addr_table.iter() {
-                for addr in broker_data.broker_addrs().values() {
-                    if addr.as_str() == broker_addr {
-                        return Ok(broker_name.to_string());
-                    }
-                }
-            }
-        }
-        Err(RocketMQError::Internal(format!(
-            "CommandUtil: Make sure the specified broker address exists. Address: {}",
-            broker_addr
-        )))
+        BrokerAddressResolver::fetch_broker_name_by_addr(cluster_info, broker_addr)
     }
 
     pub fn fetch_master_and_slave_addr_by_cluster_name(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
-        let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No cluster address table available from nameserver.".into())
-        })?;
-        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is \
-                 correct. Cluster: {}",
-                cluster_name
-            ))
-        })?;
-        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
-        })?;
-
-        let mut all_addrs = Vec::new();
-        for broker_name in broker_names {
-            if let Some(broker_data) = broker_addr_table.get(broker_name) {
-                for addr in broker_data.broker_addrs().values() {
-                    all_addrs.push(addr.clone());
-                }
-            }
-        }
-        Ok(all_addrs)
+        BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(cluster_info, cluster_name)
     }
 
     pub fn fetch_master_and_slave_distinguish(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
     ) -> RocketMQResult<std::collections::HashMap<CheetahString, Vec<CheetahString>>> {
-        let mut master_and_slave_map = std::collections::HashMap::new();
-
-        let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No cluster address table available from nameserver.".into())
-        })?;
-
-        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(format!(
-                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is \
-                 correct. Cluster: {}",
-                cluster_name
-            ))
-        })?;
-
-        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
-        })?;
-
-        for broker_name in broker_names {
-            let broker_data = match broker_addr_table.get(broker_name) {
-                Some(data) => data,
-                None => continue,
-            };
-
-            let broker_addrs = broker_data.broker_addrs();
-            if broker_addrs.is_empty() {
-                continue;
-            }
-
-            let master_addr = broker_addrs.get(&Self::MASTER_ID);
-
-            let key = if let Some(addr) = master_addr {
-                master_and_slave_map.entry(addr.clone()).or_insert_with(Vec::new);
-                addr.clone()
-            } else {
-                let placeholder = CheetahString::from_static_str(Self::NO_MASTER_PLACEHOLDER);
-                master_and_slave_map.entry(placeholder.clone()).or_insert_with(Vec::new);
-                placeholder
-            };
-
-            for (broker_id, addr) in broker_addrs {
-                if *broker_id != Self::MASTER_ID {
-                    if let Some(slaves) = master_and_slave_map.get_mut(&key) {
-                        slaves.push(addr.clone());
-                    }
-                }
-            }
-        }
-
-        Ok(master_and_slave_map)
+        BrokerAddressResolver::fetch_master_and_slave_distinguish(cluster_info, cluster_name)
     }
 }
 

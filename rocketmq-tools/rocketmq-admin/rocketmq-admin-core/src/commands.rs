@@ -48,6 +48,7 @@ use crate::core::RocketMQResult;
 /// This trait is designed to be implemented by various command types
 /// that require execution logic. The `execute` method provides the
 /// functionality to execute a command with a given RPC hook.
+#[allow(async_fn_in_trait)]
 pub trait CommandExecute {
     /// Executes the command.
     ///
@@ -202,7 +203,7 @@ struct Command {
 }
 
 #[derive(Parser)]
-pub(crate) struct ClassificationTablePrint;
+pub struct ClassificationTablePrint;
 
 impl CommandExecute for ClassificationTablePrint {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {

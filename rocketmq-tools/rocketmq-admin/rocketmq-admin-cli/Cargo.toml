@@ -28,6 +28,14 @@ description            = "Command-line interface for managing RocketMQ-Rust and 
 rust-version.workspace = true
 
 [dependencies]
+rocketmq-admin-core = { path = "../rocketmq-admin-core" }
+rocketmq-common     = { workspace = true }
+rocketmq-remoting   = { workspace = true }
+rocketmq-rust       = { workspace = true }
+
+clap = { version = "4.6.0", features = ["derive"] }
+clap_complete = "4.6"
+tokio = { workspace = true }
 
 [[bin]]
 name = "rocketmq-admin-cli"

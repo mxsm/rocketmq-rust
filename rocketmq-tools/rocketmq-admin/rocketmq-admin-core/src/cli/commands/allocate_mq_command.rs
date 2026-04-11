@@ -45,12 +45,33 @@ impl CommandExecute for AllocateMqCommand {
         }
         let mut admin = builder.build_with_guard().await?;
 
-        TopicOperations::query_allocated_mq(
+        let allocation = TopicOperations::query_allocated_mq(
             &mut admin,
             CheetahString::from(self.topic.clone()),
             CheetahString::from(self.ip_list.clone()),
         )
         .await?;
+
+        if allocation.route_found {
+            println!("Topic: {}", allocation.topic);
+            println!(
+                "IP List: {}",
+                allocation
+                    .requested_ips
+                    .iter()
+                    .map(|ip| ip.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!("\nMessage Queue Allocation:");
+            println!("Total Queues: {}", allocation.total_queues);
+            println!("\nBrokers:");
+            for broker_name in allocation.broker_names {
+                println!("  - {broker_name}");
+            }
+        } else {
+            println!("No route information found for topic: {}", allocation.topic);
+        }
 
         Ok(())
     }
