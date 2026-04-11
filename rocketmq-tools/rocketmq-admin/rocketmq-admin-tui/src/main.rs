@@ -17,6 +17,7 @@
 #![allow(unused_variables)]
 
 mod action;
+mod admin_facade;
 mod rocketmq_tui_app;
 mod ui;
 
@@ -30,4 +31,20 @@ async fn main() -> anyhow::Result<()> {
     let result = RocketmqTuiApp::default().run(terminal).await;
     ratatui::try_restore()?;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_admin_core::core::admin::AdminBuilder;
+
+    use crate::admin_facade::TuiAdminFacade;
+
+    #[test]
+    fn admin_facade_builds_core_admin_builder() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        assert_eq!(facade.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let _builder: AdminBuilder = facade.admin_builder();
+    }
 }

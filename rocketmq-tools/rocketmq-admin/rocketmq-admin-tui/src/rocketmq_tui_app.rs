@@ -26,10 +26,12 @@ use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use tokio_stream::StreamExt;
 
+use crate::admin_facade::TuiAdminFacade;
 use crate::ui::search_input_widget::SearchInputWidget;
 
 #[derive(Default)]
 pub struct RocketmqTuiApp {
+    admin_facade: TuiAdminFacade,
     should_quit: bool,
     search_input: SearchInputWidget,
 }
@@ -37,9 +39,22 @@ pub struct RocketmqTuiApp {
 impl RocketmqTuiApp {
     pub fn new() -> Self {
         Self {
+            admin_facade: Default::default(),
             should_quit: false,
             search_input: Default::default(),
         }
+    }
+
+    pub fn with_admin_facade(admin_facade: TuiAdminFacade) -> Self {
+        Self {
+            admin_facade,
+            should_quit: false,
+            search_input: Default::default(),
+        }
+    }
+
+    pub fn admin_facade(&self) -> &TuiAdminFacade {
+        &self.admin_facade
     }
 
     pub fn should_quit(&self) -> bool {
@@ -150,5 +165,19 @@ impl RocketmqTuiApp {
                 .title("Progress Bar"),
             progress_bar,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admin_facade::TuiAdminFacade;
+
+    #[test]
+    fn app_can_be_constructed_with_admin_facade() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+        let app = RocketmqTuiApp::with_admin_facade(facade);
+
+        assert_eq!(app.admin_facade().namesrv_addr(), Some("127.0.0.1:9876"));
     }
 }

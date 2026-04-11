@@ -28,6 +28,7 @@ description            = "A RocketMQ Rust terminal command management tool imple
 rust-version.workspace = true
 
 [dependencies]
+rocketmq-admin-core = { path = "../rocketmq-admin-core" }
 rocketmq-rust = { workspace = true }
 ratatui       = { version = "0.29.0" }
 crossterm     = { version = "0.28.1", features = ["event-stream"] }
