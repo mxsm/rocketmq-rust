@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use crate::commands::topic::NAMESPACE_ORDER_TOPIC_CONFIG;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::topic::OrderConfMethod;
+use rocketmq_admin_core::core::topic::OrderConfRequest;
+use rocketmq_admin_core::core::topic::OrderConfResult;
+use rocketmq_admin_core::core::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateOrderConfSubCommand {
@@ -46,49 +45,65 @@ pub struct UpdateOrderConfSubCommand {
     )]
     order_conf: Option<String>,
 }
+
+impl UpdateOrderConfSubCommand {
+    fn request(&self) -> rocketmq_error::RocketMQResult<OrderConfRequest> {
+        Ok(
+            OrderConfRequest::try_new(self.topic.clone(), self.method.as_str(), self.order_conf.clone())?
+                .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
+        )
+    }
+
+    fn print_result(result: OrderConfResult) {
+        match result.method {
+            OrderConfMethod::Get => println!(
+                "get orderConf success. topic={}, orderConf={}",
+                result.topic,
+                result.order_conf.unwrap_or_default()
+            ),
+            OrderConfMethod::Put => println!(
+                "update orderConf success. topic={}, orderConf={}",
+                result.topic,
+                result.order_conf.unwrap_or_default()
+            ),
+            OrderConfMethod::Delete => println!("delete orderConf success. topic={}", result.topic),
+        }
+        println!("mqadmin UpdateOrderConf");
+    }
+}
+
 impl CommandExecute for UpdateOrderConfSubCommand {
     async fn execute(
         &self,
         _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = DefaultMQAdminExt::new();
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            default_mq_admin_ext.set_namesrv_addr(addr.trim());
-        }
-        default_mq_admin_ext.start().await?;
-        let topic = self.topic.trim();
-        let method = self.method.trim();
-
-        if "get".eq(method) {
-            let order_conf = default_mq_admin_ext
-                .get_kv_config(NAMESPACE_ORDER_TOPIC_CONFIG.into(), topic.into())
-                .await?;
-            println!("get orderConf success. topic={}, orderConf={}", topic, order_conf);
-        } else if "put".eq(method) {
-            if let Some(order_conf) = &self.order_conf {
-                default_mq_admin_ext
-                    .create_or_update_order_conf(topic.into(), order_conf.into(), true)
-                    .await?;
-
-                println!("update orderConf success. topic={}, orderConf={}", topic, order_conf);
-            } else if self.order_conf.is_none() {
-                default_mq_admin_ext.shutdown().await;
-                return Err(RocketMQError::Internal(
-                    "please set orderConf with option -v.".to_string(),
-                ));
-            }
-        } else if "delete".eq(method) {
-            default_mq_admin_ext
-                .delete_kv_config(NAMESPACE_ORDER_TOPIC_CONFIG.into(), topic.into())
-                .await?;
-            println!("delete orderConf success. topic={}", topic);
-        }
-
-        println!("mqadmin UpdateOrderConf");
-        default_mq_admin_ext.shutdown().await;
+        let result = TopicService::apply_order_conf(self.request()?).await?;
+        Self::print_result(result);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_order_conf_sub_command_parse_put() {
+        let cmd = UpdateOrderConfSubCommand::try_parse_from([
+            "updateOrderConf",
+            "-t",
+            "TestTopic",
+            "-m",
+            "put",
+            "-v",
+            "broker-a:4",
+            "-n",
+            "127.0.0.1:9876",
+        ])
+        .unwrap();
+
+        assert_eq!(cmd.topic, "TestTopic");
+        assert_eq!(cmd.method, "put");
+        assert_eq!(cmd.order_conf, Some("broker-a:4".to_string()));
     }
 }

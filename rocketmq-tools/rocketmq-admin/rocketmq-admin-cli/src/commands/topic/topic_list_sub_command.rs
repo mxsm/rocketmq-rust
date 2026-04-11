@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
-use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::topic::TopicListQueryRequest;
+use rocketmq_admin_core::core::topic::TopicListResult;
+use rocketmq_admin_core::core::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicListSubCommand {
@@ -39,75 +33,55 @@ pub struct TopicListSubCommand {
     )]
     cluster_name: Option<String>,
 }
+
 impl TopicListSubCommand {
-    async fn find_topic_belong_to_which_cluster(
-        &self,
-        topic: &CheetahString,
-        cluster_info: &ClusterInfo,
-        default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<String> {
-        let topic_route_data = default_mq_admin_ext
-            .examine_topic_route_info(topic.clone())
-            .await?
-            .unwrap();
+    fn request(&self) -> TopicListQueryRequest {
+        TopicListQueryRequest::new()
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone())
+            .with_optional_cluster_name(self.cluster_name.clone())
+    }
 
-        let broker_data = topic_route_data.broker_datas.first().unwrap();
-
-        let broker_name = broker_data.broker_name();
-
-        let it = cluster_info.cluster_addr_table.iter();
-        for cluster_addr in it {
-            for (k, v) in cluster_addr.iter() {
-                if v.contains(broker_name) {
-                    return Ok(k.to_string());
-                }
+    fn print_topics(&self, result: TopicListResult) {
+        if self.cluster_name.is_some() {
+            println!("#Cluster Name #Topic #Consumer Group");
+            for item in result.topics {
+                println!(
+                    "{} {} {}",
+                    item.cluster.as_ref().map(|value| value.as_str()).unwrap_or(""),
+                    item.topic,
+                    item.consumer_group.as_ref().map(|value| value.as_str()).unwrap_or("")
+                );
             }
+            return;
         }
-        Err(RocketMQError::Internal(
-            "find_topic_belong_to_which_cluster err".to_string(),
-        ))
+
+        for item in result.topics {
+            println!("{}", item.topic);
+        }
     }
 }
+
 impl CommandExecute for TopicListSubCommand {
     async fn execute(
         &self,
         _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = DefaultMQAdminExt::new();
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            default_mq_admin_ext.set_namesrv_addr(addr.trim());
-        }
-        default_mq_admin_ext.start().await?;
-        if self.cluster_name.is_some() {
-            let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
-
-            println!("#Cluster Name #Topic #Consumer Group");
-
-            let topic_list = default_mq_admin_ext.fetch_all_topic_list().await?;
-            for topic in &topic_list.topic_list {
-                if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX) {
-                    continue;
-                }
-
-                let _ = self
-                    .find_topic_belong_to_which_cluster(topic, &cluster_info, &default_mq_admin_ext)
-                    .await?;
-                let mut group_list = default_mq_admin_ext.query_topic_consume_by_who(topic.clone()).await?;
-
-                if group_list.get_group_list().is_empty() {
-                    group_list.group_list.insert("".into());
-                }
-            }
-        } else {
-            let topic_list = default_mq_admin_ext.fetch_all_topic_list().await?;
-            for topic in &topic_list.topic_list {
-                println!("{}", topic);
-            }
-        }
-        default_mq_admin_ext.shutdown().await;
+        let result = TopicService::query_topic_list(self.request()).await?;
+        self.print_topics(result);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_list_sub_command_parse() {
+        let cmd =
+            TopicListSubCommand::try_parse_from(["topicList", "-c", "DefaultCluster", "-n", "127.0.0.1:9876"]).unwrap();
+
+        assert_eq!(cmd.cluster_name, Some("DefaultCluster".to_string()));
+        assert_eq!(cmd.common_args.namesrv_addr, Some("127.0.0.1:9876".to_string()));
     }
 }

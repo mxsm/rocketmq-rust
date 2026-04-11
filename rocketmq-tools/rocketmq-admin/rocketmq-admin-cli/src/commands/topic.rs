@@ -43,7 +43,6 @@ use crate::commands::topic::update_static_topic_sub_command::UpdateStaticTopicSu
 use crate::commands::topic::update_topic_list_sub_command::UpdateTopicListSubCommand;
 use crate::commands::topic::update_topic_perm_sub_command::UpdateTopicPermSubCommand;
 use crate::commands::topic::update_topic_sub_command::UpdateTopicSubCommand;
-const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 #[derive(Subcommand)]
 pub enum TopicCommands {
     #[command(

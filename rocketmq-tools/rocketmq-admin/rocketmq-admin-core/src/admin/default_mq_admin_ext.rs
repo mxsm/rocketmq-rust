@@ -514,7 +514,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString) {
-        todo!()
+        self.default_mqadmin_ext_impl.put_kv_config(namespace, key, value).await
     }
 
     async fn get_kv_config(
@@ -522,7 +522,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         namespace: CheetahString,
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        todo!()
+        self.default_mqadmin_ext_impl.get_kv_config(namespace, key).await
     }
 
     async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
@@ -1559,6 +1559,18 @@ mod tests {
                 CheetahString::from("TopicTest"),
                 CheetahString::from("msg-id"),
             )
+            .await
+            .expect_err("unstarted admin should return an error instead of panicking");
+
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+    }
+
+    #[tokio::test]
+    async fn get_kv_config_delegates_to_inner_impl() {
+        let admin = DefaultMQAdminExt::new();
+
+        let error = admin
+            .get_kv_config(CheetahString::from("namespace"), CheetahString::from("key"))
             .await
             .expect_err("unstarted admin should return an error instead of panicking");
 

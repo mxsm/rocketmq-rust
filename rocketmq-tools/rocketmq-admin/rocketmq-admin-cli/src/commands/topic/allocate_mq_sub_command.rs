@@ -19,9 +19,16 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
+use crate::commands::CommonArgs;
+use rocketmq_admin_core::core::topic::AllocateMqQueryRequest;
+use rocketmq_admin_core::core::topic::AllocatedMqQueryResult;
+use rocketmq_admin_core::core::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct AllocateMQSubCommand {
+    #[command(flatten)]
+    common_args: CommonArgs,
+
     /// Topic name
     #[arg(short = 't', long = "topic", required = true)]
     topic: String,
@@ -31,8 +38,65 @@ pub struct AllocateMQSubCommand {
     ip_list: String,
 }
 
+impl AllocateMQSubCommand {
+    fn request(&self) -> RocketMQResult<AllocateMqQueryRequest> {
+        Ok(
+            AllocateMqQueryRequest::try_new(self.topic.clone(), self.ip_list.clone())?
+                .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
+        )
+    }
+
+    fn print_result(result: AllocatedMqQueryResult) {
+        if result.route_found {
+            println!("Topic: {}", result.topic);
+            println!(
+                "IP List: {}",
+                result
+                    .requested_ips
+                    .iter()
+                    .map(|ip| ip.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!("\nMessage Queue Allocation:");
+            println!("Total Queues: {}", result.total_queues);
+            println!("\nBrokers:");
+            for broker_name in result.broker_names {
+                println!("  - {broker_name}");
+            }
+        } else {
+            println!("No route information found for topic: {}", result.topic);
+        }
+    }
+}
+
 impl CommandExecute for AllocateMQSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        unimplemented!("AllocateMQSubCommand is not implemented yet");
+        let result = TopicService::query_allocated_mq_by_request(self.request()?).await?;
+        Self::print_result(result);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_mq_sub_command_parse() {
+        let cmd = AllocateMQSubCommand::try_parse_from([
+            "allocateMQ",
+            "-t",
+            "TestTopic",
+            "-i",
+            "192.168.1.1,192.168.1.2",
+            "-n",
+            "127.0.0.1:9876",
+        ])
+        .unwrap();
+
+        assert_eq!(cmd.topic, "TestTopic");
+        assert_eq!(cmd.ip_list, "192.168.1.1,192.168.1.2");
+        assert_eq!(cmd.common_args.namesrv_addr, Some("127.0.0.1:9876".to_string()));
     }
 }

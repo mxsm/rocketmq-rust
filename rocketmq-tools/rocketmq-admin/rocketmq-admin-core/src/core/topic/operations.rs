@@ -22,12 +22,27 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
+use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 
+use super::types::AllocateMqQueryRequest;
 use super::types::AllocatedMqQueryResult;
+use super::types::DeleteTopicRequest;
+use super::types::DeleteTopicResult;
+use super::types::OrderConfMethod;
+use super::types::OrderConfRequest;
+use super::types::OrderConfResult;
 use super::types::TopicClusterList;
 use super::types::TopicClusterQueryRequest;
+use super::types::TopicListItem;
+use super::types::TopicListQueryRequest;
+use super::types::TopicListResult;
 use super::types::TopicRouteQueryRequest;
 use super::types::TopicStatusQueryRequest;
+use super::types::UpdateTopicPermRequest;
+use super::types::UpdateTopicPermResult;
+use super::types::UpdateTopicRequest;
+use super::types::UpdateTopicResult;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::resolver::BrokerAddressResolver;
 use crate::core::RocketMQResult;
@@ -72,6 +87,14 @@ impl TopicService {
         result
     }
 
+    /// Query all topics, optionally filtered by cluster, through a complete core request lifecycle.
+    pub async fn query_topic_list(request: TopicListQueryRequest) -> RocketMQResult<TopicListResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::query_topic_list_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
     /// Query topic route through a complete core request lifecycle.
     pub async fn query_topic_route(
         request: TopicRouteQueryRequest,
@@ -107,6 +130,97 @@ impl TopicService {
         } else {
             admin.examine_topic_stats(topic, None).await
         };
+        admin.shutdown().await;
+        result
+    }
+
+    /// Delete a topic through a complete core request lifecycle.
+    pub async fn delete_topic_by_request(request: DeleteTopicRequest) -> RocketMQResult<DeleteTopicResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::delete_topic(&mut admin, request.topic().clone(), request.cluster_name().clone()).await;
+        admin.shutdown().await;
+        result.map(|_| DeleteTopicResult {
+            topic: request.topic().clone(),
+            cluster_name: request.cluster_name().clone(),
+        })
+    }
+
+    /// Apply order configuration through a complete core request lifecycle.
+    pub async fn apply_order_conf(request: OrderConfRequest) -> RocketMQResult<OrderConfResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = match request.method() {
+            OrderConfMethod::Put => {
+                let order_conf = CheetahString::from(request.order_conf().unwrap_or_default());
+                Self::create_or_update_order_conf(&mut admin, request.topic().clone(), order_conf.clone())
+                    .await
+                    .map(|_| OrderConfResult {
+                        topic: request.topic().clone(),
+                        method: request.method(),
+                        order_conf: Some(order_conf),
+                    })
+            }
+            OrderConfMethod::Get => Self::get_order_conf(&mut admin, request.topic().clone())
+                .await
+                .map(|order_conf| OrderConfResult {
+                    topic: request.topic().clone(),
+                    method: request.method(),
+                    order_conf: Some(order_conf),
+                }),
+            OrderConfMethod::Delete => Self::delete_order_conf(&mut admin, request.topic().clone())
+                .await
+                .map(|_| OrderConfResult {
+                    topic: request.topic().clone(),
+                    method: request.method(),
+                    order_conf: None,
+                }),
+        };
+        admin.shutdown().await;
+        result
+    }
+
+    /// Query message queue allocation through a complete core request lifecycle.
+    pub async fn query_allocated_mq_by_request(
+        request: AllocateMqQueryRequest,
+    ) -> RocketMQResult<AllocatedMqQueryResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::query_allocated_mq(&mut admin, request.topic().clone(), request.ip_list().clone()).await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Create or update a topic through a complete core request lifecycle.
+    pub async fn create_or_update_topic_by_request(request: UpdateTopicRequest) -> RocketMQResult<UpdateTopicResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let config = request.config().clone();
+        let target = request.target().clone();
+        let result = Self::create_or_update_topic(&mut admin, config.clone(), target.clone())
+            .await
+            .map(|_| UpdateTopicResult {
+                order_warning: config.order,
+                config,
+                target,
+            });
+        admin.shutdown().await;
+        result
+    }
+
+    /// Update topic permission through a complete core request lifecycle.
+    pub async fn update_topic_perm_by_request(
+        request: UpdateTopicPermRequest,
+    ) -> RocketMQResult<UpdateTopicPermResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::update_topic_perm(
+            &mut admin,
+            request.topic().clone(),
+            request.perm(),
+            request.target().clone(),
+        )
+        .await
+        .map(|_| UpdateTopicPermResult {
+            topic: request.topic().clone(),
+            target: request.target().clone(),
+            perm: request.perm(),
+        });
         admin.shutdown().await;
         result
     }
@@ -269,6 +383,85 @@ impl TopicService {
             .map_err(|e| ToolsError::internal(format!("Failed to fetch topic list: {e}")))?;
 
         Ok(topic_list.topic_list.into_iter().collect())
+    }
+
+    async fn query_topic_list_with_admin(
+        admin: &mut DefaultMQAdminExt,
+        request: &TopicListQueryRequest,
+    ) -> RocketMQResult<TopicListResult> {
+        let topic_list = admin
+            .fetch_all_topic_list()
+            .await
+            .map_err(|e| ToolsError::internal(format!("Failed to fetch topic list: {e}")))?;
+
+        let Some(cluster_name) = request.cluster_name() else {
+            return Ok(TopicListResult {
+                topics: topic_list
+                    .topic_list
+                    .into_iter()
+                    .map(|topic| TopicListItem {
+                        topic,
+                        cluster: None,
+                        consumer_group: None,
+                    })
+                    .collect(),
+            });
+        };
+
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+
+        let mut topics = Vec::new();
+        for topic in topic_list.topic_list {
+            if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX) {
+                continue;
+            }
+
+            let route = match admin.examine_topic_route_info(topic.clone()).await? {
+                Some(route) => route,
+                None => continue,
+            };
+            if !Self::topic_route_belongs_to_cluster(&route, &cluster_info, cluster_name) {
+                continue;
+            }
+
+            let group_list = admin.query_topic_consume_by_who(topic.clone()).await?;
+            if group_list.get_group_list().is_empty() {
+                topics.push(TopicListItem {
+                    topic,
+                    cluster: Some(cluster_name.clone()),
+                    consumer_group: None,
+                });
+            } else {
+                topics.extend(group_list.get_group_list().iter().map(|group| TopicListItem {
+                    topic: topic.clone(),
+                    cluster: Some(cluster_name.clone()),
+                    consumer_group: Some(group.clone()),
+                }));
+            }
+        }
+
+        Ok(TopicListResult { topics })
+    }
+
+    fn topic_route_belongs_to_cluster(
+        route: &rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData,
+        cluster_info: &rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo,
+        cluster_name: &CheetahString,
+    ) -> bool {
+        let Some(cluster_table) = cluster_info.cluster_addr_table.as_ref() else {
+            return false;
+        };
+        let Some(cluster_brokers) = cluster_table.get(cluster_name) else {
+            return false;
+        };
+
+        route
+            .broker_datas
+            .iter()
+            .any(|broker| cluster_brokers.contains(broker.broker_name()))
     }
 
     /// Get topic statistics

@@ -15,10 +15,6 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -26,8 +22,10 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::core::topic::TopicTarget;
+use rocketmq_admin_core::core::topic::UpdateTopicPermRequest;
+use rocketmq_admin_core::core::topic::UpdateTopicPermResult;
 
 #[derive(Debug, Parser, Clone)]
 pub struct UpdateTopicPermSubCommand {
@@ -63,14 +61,45 @@ pub struct UpdateTopicPermSubCommand {
     perm: String,
 }
 
-impl CommandExecute for UpdateTopicPermSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if self.broker_addr.is_none() && self.cluster_name.is_none() {
+impl UpdateTopicPermSubCommand {
+    fn request(&self) -> RocketMQResult<UpdateTopicPermRequest> {
+        let target = if let Some(broker_addr) = &self.broker_addr {
+            TopicTarget::Broker(broker_addr.trim().into())
+        } else if let Some(cluster_name) = &self.cluster_name {
+            TopicTarget::Cluster(cluster_name.trim().into())
+        } else {
             return Err(RocketMQError::IllegalArgument(
                 "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
             ));
-        }
+        };
+        let perm = self.perm.parse::<i32>().map_err(|e| {
+            RocketMQError::IllegalArgument(format!(
+                "UpdateTopicPermSubCommand: Invalid perm value '{}': {}",
+                self.perm, e
+            ))
+        })?;
 
+        Ok(UpdateTopicPermRequest::try_new(self.topic.clone(), target, perm)?
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
+    }
+
+    fn print_result(result: UpdateTopicPermResult) {
+        match result.target {
+            TopicTarget::Broker(broker_addr) => {
+                println!("update topic perm to {} in {} success.", result.perm, broker_addr)
+            }
+            TopicTarget::Cluster(cluster_name) => {
+                println!(
+                    "update topic perm to {} in cluster {} success.",
+                    result.perm, cluster_name
+                )
+            }
+        }
+    }
+}
+
+impl CommandExecute for UpdateTopicPermSubCommand {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
             return Err(RocketMQError::IllegalArgument(format!(
@@ -79,130 +108,9 @@ impl CommandExecute for UpdateTopicPermSubCommand {
             )));
         }
 
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("UpdateTopicPermSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-            let topic = self.topic.trim();
-            let topic_route_data = default_mqadmin_ext
-                .examine_topic_route_info(topic.into())
-                .await?
-                .ok_or_else(|| {
-                    RocketMQError::IllegalArgument(format!(
-                        "UpdateTopicPermSubCommand: Topic route not found for topic: {}",
-                        topic
-                    ))
-                })?;
-            let queue_datas = &topic_route_data.queue_datas;
-            if queue_datas.is_empty() {
-                return Err(RocketMQError::IllegalArgument(format!(
-                    "UpdateTopicPermSubCommand: No queue data found for topic: {}",
-                    topic
-                )));
-            }
-
-            let perm = self.perm.parse::<u32>().map_err(|e| {
-                RocketMQError::IllegalArgument(format!(
-                    "UpdateTopicPermSubCommand: Invalid perm value '{}': {}",
-                    self.perm, e
-                ))
-            })?;
-            if perm != 2 && perm != 4 && perm != 6 {
-                return Err(RocketMQError::IllegalArgument(format!(
-                    "UpdateTopicPermSubCommand: Invalid perm value '{}': perm must be 2, 4, or 6",
-                    perm
-                )));
-            }
-            let topic_config = TopicConfig {
-                topic_name: Some(self.topic.clone().into()),
-                read_queue_nums: queue_datas[0].read_queue_nums(),
-                write_queue_nums: queue_datas[0].write_queue_nums(),
-                topic_sys_flag: queue_datas[0].topic_sys_flag(),
-                perm,
-                ..Default::default()
-            };
-            if let Some(broker_addr) = &self.broker_addr {
-                let broker_addr = broker_addr.trim();
-                let broker_datas = &topic_route_data.broker_datas;
-                let mut broker_name: Option<String> = None;
-                for data in broker_datas {
-                    let broker_addrs = data.broker_addrs();
-                    for (&key, value) in broker_addrs.iter() {
-                        if key == mix_all::MASTER_ID && value == broker_addr {
-                            broker_name = Some(data.broker_name().to_string());
-                            break;
-                        }
-                    }
-                    if broker_name.is_some() {
-                        break;
-                    }
-                }
-                if let Some(ref broker_name_ref) = broker_name {
-                    let queue_data_list = &topic_route_data.queue_datas;
-                    let mut old_perm = 0;
-                    for data in queue_data_list {
-                        if broker_name_ref == data.broker_name() {
-                            old_perm = data.perm();
-                            if perm == old_perm {
-                                println!("new perm equals to the old one!");
-                                return Ok(());
-                            }
-                            break;
-                        }
-                    }
-                    default_mqadmin_ext
-                        .create_and_update_topic_config(broker_addr.into(), topic_config.clone())
-                        .await
-                        .map_err(|_e| {
-                            RocketMQError::Internal(
-                                "UpdateTopicPermSubCommand error broker not exit or broker is not master!.".to_string(),
-                            )
-                        })?;
-                    println!(
-                        "update topic perm from {} to {} in {} success.",
-                        old_perm, perm, broker_addr
-                    );
-                    println!("{:?}.", topic_config);
-                } else {
-                    println!("updateTopicPerm error broker not exit or broker is not master!.");
-                    return Ok(());
-                }
-            } else if let Some(cluster_name) = &self.cluster_name {
-                let cluster_name = cluster_name.trim();
-                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-                let master_set =
-                    CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name).map_err(|_e| {
-                        RocketMQError::IllegalArgument(format!(
-                            "UpdateTopicPermSubCommand: Cluster '{}' not found",
-                            cluster_name
-                        ))
-                    })?;
-                for addr in master_set {
-                    default_mqadmin_ext
-                        .create_and_update_topic_config(addr.clone(), topic_config.clone())
-                        .await
-                        .map_err(|_e| {
-                            RocketMQError::Internal(
-                                "UpdateTopicPermSubCommand error broker not exit or broker is not master!.".to_string(),
-                            )
-                        })?;
-                    println!(
-                        "update topic perm from {} to {} in {:?} success.",
-                        queue_datas[0].perm(),
-                        perm,
-                        addr
-                    )
-                }
-            }
-            Ok(())
-        }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let result = TopicService::update_topic_perm_by_request(self.request()?).await?;
+        Self::print_result(result);
+        Ok(())
     }
 }
 

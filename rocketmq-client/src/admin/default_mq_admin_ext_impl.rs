@@ -1031,7 +1031,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         Ok(self
             .client_instance
             .as_ref()
-            .unwrap()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
             .get_mq_client_api_impl()
             .get_kvconfig_value(namespace, key, self.timeout_millis.as_millis() as u64)
             .await?
