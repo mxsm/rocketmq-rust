@@ -14,17 +14,15 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
+use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::BrokerTarget;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -41,85 +39,76 @@ pub struct BrokerStatusSubCommand {
 }
 
 impl BrokerStatusSubCommand {
-    async fn print_broker_runtime_stats(
-        default_mqadmin_ext: &DefaultMQAdminExt,
-        broker_addr: &str,
-        print_broker: bool,
-    ) -> RocketMQResult<()> {
-        let kv_table = default_mqadmin_ext
-            .fetch_broker_runtime_stats(CheetahString::from(broker_addr))
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "BrokerStatusSubCommand: Failed to fetch broker runtime stats from {}: {}",
-                    broker_addr, e
-                ))
-            })?;
-
-        let mut sorted_entries: Vec<_> = kv_table.table.iter().collect();
-        sorted_entries.sort_by(|a, b| a.0.cmp(b.0));
-
-        for (key, value) in &sorted_entries {
-            if print_broker {
-                println!("{:<24} {:<32}: {}", broker_addr, key, value);
-            } else {
-                println!("{:<32}: {}", key, value);
-            }
-        }
-
-        Ok(())
+    fn request(&self) -> RocketMQResult<BrokerRuntimeStatsQueryRequest> {
+        BrokerRuntimeStatsQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 }
 
 impl CommandExecute for BrokerStatusSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let request = self.request()?;
+        let print_broker = matches!(request.target(), BrokerTarget::ClusterName(_));
+        let result = BrokerService::query_broker_runtime_stats_by_request_with_rpc_hook(request, rpc_hook).await?;
+        print_runtime_stats_result(&result, print_broker);
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("BrokerStatusSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-
-            if let Some(broker_addr) = &self.broker_addr {
-                let broker_addr = broker_addr.trim();
-                Self::print_broker_runtime_stats(&default_mqadmin_ext, broker_addr, false).await?;
-            } else if let Some(cluster_name) = &self.cluster_name {
-                let cluster_name = cluster_name.trim();
-                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "BrokerStatusSubCommand: Failed to examine broker cluster info: {}",
-                        e
-                    ))
-                })?;
-
-                let master_set = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?;
-
-                for broker_addr in &master_set {
-                    match Self::print_broker_runtime_stats(&default_mqadmin_ext, broker_addr.as_str(), true).await {
-                        Ok(()) => {}
-                        Err(e) => {
-                            eprintln!(
-                                "BrokerStatusSubCommand: Failed to fetch runtime stats from {}: {}",
-                                broker_addr, e
-                            );
-                        }
-                    }
-                }
+fn print_runtime_stats_result(result: &BrokerRuntimeStatsResult, print_broker: bool) {
+    for section in &result.sections {
+        for entry in &section.entries {
+            if print_broker {
+                println!("{:<24} {:<32}: {}", section.broker_addr, entry.key, entry.value);
+            } else {
+                println!("{:<32}: {}", entry.key, entry.value);
             }
-
-            Ok(())
         }
-        .await;
+    }
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    for failure in &result.failures {
+        eprintln!(
+            "BrokerStatusSubCommand: Failed to fetch runtime stats from {}: {}",
+            failure.broker_addr, failure.error
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn parses_broker_addr_into_runtime_stats_request() {
+        let cmd = BrokerStatusSubCommand::try_parse_from(["brokerStatus", "-b", " 127.0.0.1:10911 "]).unwrap();
+
+        let request = cmd.request().unwrap();
+
+        assert_eq!(
+            request.target(),
+            &BrokerTarget::BrokerAddr(CheetahString::from("127.0.0.1:10911"))
+        );
+    }
+
+    #[test]
+    fn parses_cluster_name_into_runtime_stats_request() {
+        let cmd = BrokerStatusSubCommand::try_parse_from(["brokerStatus", "-c", " DefaultCluster "]).unwrap();
+
+        let request = cmd.request().unwrap();
+
+        assert_eq!(
+            request.target(),
+            &BrokerTarget::ClusterName(CheetahString::from("DefaultCluster"))
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_ambiguous_runtime_stats_target() {
+        assert!(BrokerStatusSubCommand::try_parse_from(["brokerStatus"]).is_err());
+        assert!(
+            BrokerStatusSubCommand::try_parse_from(["brokerStatus", "-b", "127.0.0.1:10911", "-c", "DefaultCluster"])
+                .is_err()
+        );
     }
 }

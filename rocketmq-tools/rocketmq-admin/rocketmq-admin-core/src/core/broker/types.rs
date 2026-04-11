@@ -390,6 +390,87 @@ pub struct BrokerConfigUpdateApplyResult {
     pub skipped_brokers: Vec<CheetahString>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerRuntimeStatsQueryRequest {
+    target: BrokerTarget,
+    namesrv_addr: Option<String>,
+}
+
+impl BrokerRuntimeStatsQueryRequest {
+    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+        let broker_addr = trim_optional_string(broker_addr);
+        let cluster_name = trim_optional_string(cluster_name);
+        let target = match (broker_addr, cluster_name) {
+            (Some(addr), None) => BrokerTarget::BrokerAddr(trim_required_cheetah("brokerAddr", addr)?),
+            (None, Some(cluster)) => BrokerTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?),
+            (None, None) => {
+                return Err(ToolsError::validation_error(
+                    "target",
+                    "either brokerAddr or clusterName must be provided",
+                )
+                .into());
+            }
+            (Some(_), Some(_)) => {
+                return Err(ToolsError::validation_error(
+                    "target",
+                    "brokerAddr and clusterName cannot be provided together",
+                )
+                .into());
+            }
+        };
+
+        Ok(Self {
+            target,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn target(&self) -> &BrokerTarget {
+        &self.target
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerRuntimeStatsEntry {
+    pub key: CheetahString,
+    pub value: CheetahString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerRuntimeStatsSection {
+    pub broker_addr: CheetahString,
+    pub entries: Vec<BrokerRuntimeStatsEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerRuntimeStatsFailure {
+    pub broker_addr: CheetahString,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerRuntimeStatsResult {
+    pub sections: Vec<BrokerRuntimeStatsSection>,
+    pub failures: Vec<BrokerRuntimeStatsFailure>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -464,5 +545,29 @@ mod tests {
         let mut invalid_entries = BTreeMap::new();
         invalid_entries.insert("bad key".to_string(), "value".to_string());
         assert!(BrokerConfigUpdateRequest::try_new(Some("127.0.0.1:10911".into()), None, invalid_entries).is_err());
+    }
+
+    #[test]
+    fn broker_runtime_stats_query_request_validates_target() {
+        let broker_request = BrokerRuntimeStatsQueryRequest::try_new(Some(" 127.0.0.1:10911 ".into()), None)
+            .unwrap()
+            .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+        assert_eq!(
+            broker_request.target(),
+            &BrokerTarget::BrokerAddr(CheetahString::from("127.0.0.1:10911"))
+        );
+        assert_eq!(broker_request.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let cluster_request = BrokerRuntimeStatsQueryRequest::try_new(None, Some(" DefaultCluster ".into())).unwrap();
+        assert_eq!(
+            cluster_request.target(),
+            &BrokerTarget::ClusterName(CheetahString::from("DefaultCluster"))
+        );
+
+        assert!(BrokerRuntimeStatsQueryRequest::try_new(None, None).is_err());
+        assert!(
+            BrokerRuntimeStatsQueryRequest::try_new(Some("127.0.0.1:10911".into()), Some("DefaultCluster".into()))
+                .is_err()
+        );
     }
 }

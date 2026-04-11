@@ -33,6 +33,11 @@ use super::types::BrokerConfigUpdateApplyResult;
 use super::types::BrokerConfigUpdatePlan;
 use super::types::BrokerConfigUpdatePlanResult;
 use super::types::BrokerConfigUpdateRequest;
+use super::types::BrokerRuntimeStatsEntry;
+use super::types::BrokerRuntimeStatsFailure;
+use super::types::BrokerRuntimeStatsQueryRequest;
+use super::types::BrokerRuntimeStatsResult;
+use super::types::BrokerRuntimeStatsSection;
 use super::types::BrokerTarget;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
@@ -50,6 +55,71 @@ impl BrokerService {
         let result = Self::query_broker_config_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
+    }
+
+    pub async fn query_broker_runtime_stats_by_request(
+        request: BrokerRuntimeStatsQueryRequest,
+    ) -> RocketMQResult<BrokerRuntimeStatsResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::query_broker_runtime_stats_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_broker_runtime_stats_by_request_with_rpc_hook(
+        request: BrokerRuntimeStatsQueryRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerRuntimeStatsResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::query_broker_runtime_stats_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_broker_runtime_stats_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &BrokerRuntimeStatsQueryRequest,
+    ) -> RocketMQResult<BrokerRuntimeStatsResult> {
+        match request.target() {
+            BrokerTarget::BrokerAddr(addr) => {
+                let entries = Self::get_broker_runtime_stats_entries(admin, addr).await?;
+                Ok(BrokerRuntimeStatsResult {
+                    sections: vec![BrokerRuntimeStatsSection {
+                        broker_addr: addr.clone(),
+                        entries,
+                    }],
+                    failures: Vec::new(),
+                })
+            }
+            BrokerTarget::ClusterName(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                })?;
+                let mut broker_addrs =
+                    BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?
+                        .into_iter()
+                        .filter(|addr| addr.as_str() != BrokerAddressResolver::NO_MASTER_PLACEHOLDER)
+                        .collect::<Vec<_>>();
+                broker_addrs.sort();
+                broker_addrs.dedup();
+
+                let mut sections = Vec::new();
+                let mut failures = Vec::new();
+                for broker_addr in broker_addrs {
+                    match Self::get_broker_runtime_stats_entries(admin, &broker_addr).await {
+                        Ok(entries) => sections.push(BrokerRuntimeStatsSection { broker_addr, entries }),
+                        Err(error) => failures.push(BrokerRuntimeStatsFailure {
+                            broker_addr,
+                            error: error.to_string(),
+                        }),
+                    }
+                }
+
+                Ok(BrokerRuntimeStatsResult { sections, failures })
+            }
+        }
     }
 
     pub async fn query_broker_config_with_admin(
@@ -296,6 +366,23 @@ impl BrokerService {
 
         Ok(filter_and_sort_properties(properties, key_pattern))
     }
+
+    async fn get_broker_runtime_stats_entries(
+        admin: &DefaultMQAdminExt,
+        broker_addr: &CheetahString,
+    ) -> RocketMQResult<Vec<BrokerRuntimeStatsEntry>> {
+        let kv_table = admin
+            .fetch_broker_runtime_stats(broker_addr.clone())
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to fetch broker runtime stats from {}: {}",
+                    broker_addr, error
+                ))
+            })?;
+
+        Ok(sort_runtime_stats_entries(kv_table.table))
+    }
 }
 
 fn filter_and_sort_properties(
@@ -306,6 +393,15 @@ fn filter_and_sort_properties(
         .into_iter()
         .filter(|(key, _)| key_pattern.is_none_or(|regex| regex.is_match(key.as_str())))
         .map(|(key, value)| BrokerConfigEntry { key, value })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.key.cmp(&right.key));
+    entries
+}
+
+fn sort_runtime_stats_entries(properties: HashMap<CheetahString, CheetahString>) -> Vec<BrokerRuntimeStatsEntry> {
+    let mut entries = properties
+        .into_iter()
+        .map(|(key, value)| BrokerRuntimeStatsEntry { key, value })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.key.cmp(&right.key));
     entries
@@ -460,5 +556,19 @@ mod tests {
         let result = build_update_plan_for_snapshot(CheetahString::from("127.0.0.1:10911"), current, &request);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn sort_runtime_stats_entries_orders_by_key() {
+        let mut table = HashMap::new();
+        table.insert(CheetahString::from("putTps"), CheetahString::from("1.0"));
+        table.insert(CheetahString::from("brokerVersion"), CheetahString::from("5.0"));
+
+        let entries = sort_runtime_stats_entries(table);
+
+        assert_eq!(
+            entries.iter().map(|entry| entry.key.as_str()).collect::<Vec<_>>(),
+            vec!["brokerVersion", "putTps"]
+        );
     }
 }

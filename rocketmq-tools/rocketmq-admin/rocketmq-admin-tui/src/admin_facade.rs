@@ -15,6 +15,7 @@
 use rocketmq_admin_core::core::admin::AdminBuilder;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
+use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
 use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
@@ -117,6 +118,15 @@ impl TuiAdminFacade {
         Ok(BrokerConfigUpdateRequest::try_new(broker_addr, cluster_name, entries)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone())
             .with_rollback_enabled(rollback_enabled))
+    }
+
+    pub fn broker_runtime_stats_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerRuntimeStatsQueryRequest> {
+        Ok(BrokerRuntimeStatsQueryRequest::try_new(broker_addr, cluster_name)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
@@ -368,6 +378,20 @@ mod tests {
         assert!(matches!(
             update_request.target(),
             rocketmq_admin_core::core::broker::BrokerTarget::BrokerAddr(addr) if addr.as_str() == "127.0.0.1:10911"
+        ));
+    }
+
+    #[test]
+    fn facade_builds_broker_runtime_stats_request_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+        let request = facade
+            .broker_runtime_stats_request(None, Some(" DefaultCluster ".to_string()))
+            .unwrap();
+
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert!(matches!(
+            request.target(),
+            rocketmq_admin_core::core::broker::BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
         ));
     }
 }
