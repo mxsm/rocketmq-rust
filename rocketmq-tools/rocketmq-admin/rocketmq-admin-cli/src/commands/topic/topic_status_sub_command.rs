@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string2;
-use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::core::topic::TopicStatusQueryRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicStatusSubCommand {
@@ -45,37 +41,10 @@ impl CommandExecute for TopicStatusSubCommand {
         &self,
         _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = DefaultMQAdminExt::new();
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            default_mq_admin_ext.set_namesrv_addr(addr.trim());
-        }
-        default_mq_admin_ext.start().await?;
-        let topic = self.topic.trim();
-        let topic_status = {
-            if let Some(cluster) = &self.cluster_name {
-                let cluster = cluster.trim();
-                let topic_route_data = default_mq_admin_ext.examine_topic_route_info(cluster.into()).await?;
-                let mut topic_stats_table = TopicStatsTable::new();
-                if let Some(route_data) = &topic_route_data {
-                    let mut total_offset_table = HashMap::new();
-                    for bd in &route_data.broker_datas {
-                        let addr = bd.select_broker_addr();
-                        let offset_table = default_mq_admin_ext
-                            .examine_topic_stats(topic.into(), addr)
-                            .await?
-                            .into_offset_table();
-                        total_offset_table.extend(offset_table);
-                    }
-                    topic_stats_table.set_offset_table(total_offset_table);
-                }
-                topic_stats_table
-            } else {
-                default_mq_admin_ext.examine_topic_stats(topic.into(), None).await?
-            }
-        };
+        let request = TopicStatusQueryRequest::try_new(self.topic.clone())?
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone())
+            .with_optional_cluster_name(self.cluster_name.clone());
+        let topic_status = TopicService::query_topic_status(request).await?;
 
         let offset_table = topic_status.get_offset_table();
         let mut mq_list: Vec<_> = offset_table.keys().cloned().collect();
@@ -100,7 +69,36 @@ impl CommandExecute for TopicStatusSubCommand {
             }
         }
 
-        default_mq_admin_ext.shutdown().await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_status_sub_command_parse() {
+        let cmd = TopicStatusSubCommand::try_parse_from([
+            "topicStatus",
+            "-t",
+            "TestTopic",
+            "-c",
+            "DefaultCluster",
+            "-n",
+            "127.0.0.1:9876",
+        ])
+        .unwrap();
+
+        assert_eq!(cmd.topic, "TestTopic");
+        assert_eq!(cmd.cluster_name, Some("DefaultCluster".to_string()));
+        assert_eq!(cmd.common_args.namesrv_addr, Some("127.0.0.1:9876".to_string()));
+    }
+
+    #[test]
+    fn topic_status_sub_command_missing_topic() {
+        let cmd = TopicStatusSubCommand::try_parse_from(["topicStatus"]);
+
+        assert!(cmd.is_err());
     }
 }

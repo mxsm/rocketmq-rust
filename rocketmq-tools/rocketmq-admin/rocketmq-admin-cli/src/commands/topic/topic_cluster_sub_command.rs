@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::topic::TopicClusterList;
+use rocketmq_admin_core::core::topic::TopicClusterQueryRequest;
+use rocketmq_admin_core::core::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicClusterSubCommand {
@@ -37,49 +34,26 @@ pub struct TopicClusterSubCommand {
 }
 
 impl TopicClusterSubCommand {
-    fn init_admin_ext(&self) -> DefaultMQAdminExt {
-        let mut admin_ext = DefaultMQAdminExt::new();
-        admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            admin_ext.set_namesrv_addr(addr.trim());
-        }
-        admin_ext
+    fn request(&self) -> RocketMQResult<TopicClusterQueryRequest> {
+        Ok(TopicClusterQueryRequest::try_new(self.topic.clone())?
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    async fn get_topic_clusters(&self, admin_ext: &mut DefaultMQAdminExt) -> RocketMQResult<HashSet<CheetahString>> {
-        admin_ext
-            .get_topic_cluster_list(self.topic.trim().to_string())
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "TopicClusterSubCommand: Failed to get topic cluster list: {}",
-                    e
-                ))
-            })
+    async fn get_topic_clusters(&self) -> RocketMQResult<TopicClusterList> {
+        TopicService::query_topic_clusters(self.request()?).await
     }
 
-    fn print_clusters(&self, clusters: &HashSet<CheetahString>) {
-        for cluster in clusters {
+    fn print_clusters(&self, result: &TopicClusterList) {
+        for cluster in &result.clusters {
             println!("{}", cluster);
         }
     }
 }
 impl CommandExecute for TopicClusterSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
-        let mut admin_ext = self.init_admin_ext();
-        MQAdminExt::start(&mut admin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!("TopicClusterSubCommand: Failed to start MQAdminExt: {}", e))
-        })?;
-        let operation_result = async {
-            let clusters = self.get_topic_clusters(&mut admin_ext).await?;
-            self.print_clusters(&clusters);
-            Ok(())
-        }
-        .await;
-        admin_ext.shutdown().await;
-        operation_result
+        let clusters = self.get_topic_clusters().await?;
+        self.print_clusters(&clusters);
+        Ok(())
     }
 }
 

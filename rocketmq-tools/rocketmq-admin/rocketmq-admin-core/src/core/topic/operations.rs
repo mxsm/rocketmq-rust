@@ -17,6 +17,7 @@
 //! This module contains reusable topic management operations that can be
 //! used by CLI, API, or any other interface.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
@@ -24,6 +25,9 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 
 use super::types::AllocatedMqQueryResult;
 use super::types::TopicClusterList;
+use super::types::TopicClusterQueryRequest;
+use super::types::TopicRouteQueryRequest;
+use super::types::TopicStatusQueryRequest;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::resolver::BrokerAddressResolver;
 use crate::core::RocketMQResult;
@@ -55,6 +59,56 @@ impl TopicService {
             .map_err(|_| ToolsError::topic_not_found(topic.clone()))?;
 
         Ok(TopicClusterList { clusters })
+    }
+
+    /// Query topic clusters through a complete core request lifecycle.
+    ///
+    /// The caller supplies presentation-independent request data. The service
+    /// owns the admin client lifecycle and returns a DTO that UI layers render.
+    pub async fn query_topic_clusters(request: TopicClusterQueryRequest) -> RocketMQResult<TopicClusterList> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::get_topic_cluster_list(&mut admin, request.topic().clone()).await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Query topic route through a complete core request lifecycle.
+    pub async fn query_topic_route(
+        request: TopicRouteQueryRequest,
+    ) -> RocketMQResult<Option<rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData>> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::get_topic_route(&mut admin, request.topic().clone()).await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Query topic status through a complete core request lifecycle.
+    pub async fn query_topic_status(
+        request: TopicStatusQueryRequest,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let topic = request.topic().clone();
+        let result = if let Some(cluster) = request.cluster_name() {
+            let topic_route_data = admin.examine_topic_route_info(cluster.clone()).await?;
+            let mut topic_stats_table = rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable::new();
+            if let Some(route_data) = &topic_route_data {
+                let mut total_offset_table = HashMap::new();
+                for broker_data in &route_data.broker_datas {
+                    let addr = broker_data.select_broker_addr();
+                    let offset_table = admin
+                        .examine_topic_stats(topic.clone(), addr)
+                        .await?
+                        .into_offset_table();
+                    total_offset_table.extend(offset_table);
+                }
+                topic_stats_table.set_offset_table(total_offset_table);
+            }
+            Ok(topic_stats_table)
+        } else {
+            admin.examine_topic_stats(topic, None).await
+        };
+        admin.shutdown().await;
+        result
     }
 
     /// Get topic route information

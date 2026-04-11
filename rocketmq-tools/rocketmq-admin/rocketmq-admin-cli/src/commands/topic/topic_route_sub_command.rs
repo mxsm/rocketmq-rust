@@ -17,15 +17,15 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::ToolsError;
+use rocketmq_admin_core::core::topic::TopicRouteQueryRequest;
+use rocketmq_admin_core::core::topic::TopicService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicRouteSubCommand {
@@ -95,21 +95,33 @@ impl CommandExecute for TopicRouteSubCommand {
         &self,
         _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = DefaultMQAdminExt::new();
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            default_mq_admin_ext.set_namesrv_addr(addr.trim());
-        }
-        default_mq_admin_ext.start().await?;
-
-        let topic_route_data = default_mq_admin_ext
-            .examine_topic_route_info(self.topic.clone().into())
+        let request = TopicRouteQueryRequest::try_new(self.topic.clone())?
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
+        let topic_route_data = TopicService::query_topic_route(request)
             .await?
-            .unwrap();
+            .ok_or_else(|| ToolsError::topic_not_found(self.topic.trim()))?;
         self.print_data(&topic_route_data, self.list_format.is_some())?;
-        default_mq_admin_ext.shutdown().await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_route_sub_command_parse() {
+        let cmd =
+            TopicRouteSubCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-n", "127.0.0.1:9876"]).unwrap();
+
+        assert_eq!(cmd.topic, "TestTopic");
+        assert_eq!(cmd.common_args.namesrv_addr, Some("127.0.0.1:9876".to_string()));
+    }
+
+    #[test]
+    fn topic_route_sub_command_missing_topic() {
+        let cmd = TopicRouteSubCommand::try_parse_from(["topicRoute"]);
+
+        assert!(cmd.is_err());
     }
 }
