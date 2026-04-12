@@ -4,9 +4,12 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+use rocketmq_remoting::protocol::body::lite_lag_info::LiteLagInfo;
 use rocketmq_remoting::runtime::RPCHook;
 use serde::Deserialize;
 use serde::Serialize;
@@ -197,6 +200,94 @@ pub struct LiteTopicInfoQueryResult {
     pub entries: Vec<LiteTopicInfoEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiteGroupInfoQueryRequest {
+    parent_topic: CheetahString,
+    group: CheetahString,
+    lite_topic: Option<CheetahString>,
+    top_k: i32,
+    namesrv_addr: Option<String>,
+}
+
+impl LiteGroupInfoQueryRequest {
+    pub fn try_new(
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        lite_topic: Option<String>,
+        top_k: Option<i32>,
+    ) -> RocketMQResult<Self> {
+        Ok(Self {
+            parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
+            group: trim_required_cheetah("group", group)?,
+            lite_topic: trim_optional_string(lite_topic).map(CheetahString::from),
+            top_k: top_k.unwrap_or(20),
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn parent_topic(&self) -> &CheetahString {
+        &self.parent_topic
+    }
+
+    pub fn group(&self) -> &CheetahString {
+        &self.group
+    }
+
+    pub fn lite_topic(&self) -> Option<&CheetahString> {
+        self.lite_topic.as_ref()
+    }
+
+    pub fn query_by_lite_topic(&self) -> bool {
+        self.lite_topic.is_some()
+    }
+
+    pub fn top_k(&self) -> i32 {
+        self.top_k
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiteGroupInfoEntry {
+    pub broker_name: CheetahString,
+    pub body: Option<GetLiteGroupInfoResponseBody>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiteGroupInfoQueryResult {
+    pub parent_topic: CheetahString,
+    pub group: CheetahString,
+    pub lite_topic: Option<CheetahString>,
+    pub total_lag_count: i64,
+    pub earliest_unconsumed_timestamp: i64,
+    pub lag_count_top_k: Vec<LiteLagInfo>,
+    pub lag_timestamp_top_k: Vec<LiteLagInfo>,
+    pub entries: Vec<LiteGroupInfoEntry>,
+}
+
+impl LiteGroupInfoQueryResult {
+    pub fn query_by_lite_topic(&self) -> bool {
+        self.lite_topic.is_some()
+    }
+}
+
 pub struct LiteService;
 
 impl LiteService {
@@ -362,6 +453,88 @@ impl LiteService {
         Ok(LiteTopicInfoQueryResult {
             parent_topic: request.parent_topic().clone(),
             lite_topic: request.lite_topic().clone(),
+            entries,
+        })
+    }
+
+    pub async fn query_lite_group_info_by_request_with_rpc_hook(
+        request: LiteGroupInfoQueryRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<LiteGroupInfoQueryResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::query_lite_group_info_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_lite_group_info_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &LiteGroupInfoQueryRequest,
+    ) -> RocketMQResult<LiteGroupInfoQueryResult> {
+        let route = admin
+            .examine_topic_route_info(request.parent_topic().clone())
+            .await?
+            .ok_or_else(|| {
+                ToolsError::internal(format!(
+                    "Topic route not found for parentTopic '{}'",
+                    request.parent_topic()
+                ))
+            })?;
+
+        let mut total_lag_count = 0;
+        let mut earliest_unconsumed_timestamp = current_millis() as i64;
+        let mut lag_count_top_k = Vec::new();
+        let mut lag_timestamp_top_k = Vec::new();
+        let mut entries = Vec::new();
+
+        for broker_data in &route.broker_datas {
+            let Some(broker_addr) = broker_data.select_broker_addr() else {
+                continue;
+            };
+            let broker_name = broker_data.broker_name().clone();
+            let lite_topic = request.lite_topic().cloned().unwrap_or_default();
+
+            match admin
+                .get_lite_group_info(broker_addr, request.group().clone(), lite_topic, request.top_k())
+                .await
+            {
+                Ok(body) => {
+                    if body.total_lag_count() > 0 {
+                        total_lag_count += body.total_lag_count();
+                    }
+                    if body.earliest_unconsumed_timestamp() > 0 {
+                        earliest_unconsumed_timestamp =
+                            earliest_unconsumed_timestamp.min(body.earliest_unconsumed_timestamp());
+                    }
+                    lag_count_top_k.extend_from_slice(body.lag_count_top_k());
+                    lag_timestamp_top_k.extend_from_slice(body.lag_timestamp_top_k());
+                    entries.push(LiteGroupInfoEntry {
+                        broker_name,
+                        body: Some(body),
+                        error: None,
+                    });
+                }
+                Err(error) => entries.push(LiteGroupInfoEntry {
+                    broker_name,
+                    body: None,
+                    error: Some(error.to_string()),
+                }),
+            }
+        }
+
+        lag_count_top_k.sort_by_key(|item| std::cmp::Reverse(item.lag_count()));
+        lag_timestamp_top_k.sort_by_key(|item| item.earliest_unconsumed_timestamp());
+
+        Ok(LiteGroupInfoQueryResult {
+            parent_topic: request.parent_topic().clone(),
+            group: request.group().clone(),
+            lite_topic: request.lite_topic().cloned(),
+            total_lag_count,
+            earliest_unconsumed_timestamp,
+            lag_count_top_k,
+            lag_timestamp_top_k,
             entries,
         })
     }
