@@ -1448,10 +1448,10 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_acl(
         &self,
-        _broker_addr: CheetahString,
-        _subject: CheetahString,
+        broker_addr: CheetahString,
+        subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<AclInfo> {
-        unimplemented!("get_acl not implemented yet")
+        self.default_mqadmin_ext_impl.get_acl(broker_addr, subject).await
     }
 
     async fn list_acl(
@@ -1571,6 +1571,21 @@ mod tests {
 
         let error = admin
             .get_kv_config(CheetahString::from("namespace"), CheetahString::from("key"))
+            .await
+            .expect_err("unstarted admin should return an error instead of panicking");
+
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+    }
+
+    #[tokio::test]
+    async fn get_acl_delegates_to_inner_impl() {
+        let admin = DefaultMQAdminExt::new();
+
+        let error = admin
+            .get_acl(
+                CheetahString::from("127.0.0.1:10911"),
+                CheetahString::from("user:alice"),
+            )
             .await
             .expect_err("unstarted admin should return an error instead of panicking");
 

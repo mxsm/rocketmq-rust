@@ -14,21 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::CreateAclRequest;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
-use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
-use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -92,157 +85,21 @@ pub struct CreateAclSubCommand {
     source_ip: Option<String>,
 }
 
-#[derive(Clone)]
-struct ParsedCreateAclSubCommand {
-    cluster_name: Option<CheetahString>,
-    broker_addr: Option<CheetahString>,
-    subject: CheetahString,
-    resources: Vec<CheetahString>,
-    actions: Vec<CheetahString>,
-    decision: CheetahString,
-    source_ips: Vec<CheetahString>,
-}
-
-impl ParsedCreateAclSubCommand {
-    fn new(command: &CreateAclSubCommand) -> Result<Self, RocketMQError> {
-        let cluster_name: Option<CheetahString> = command
-            .cluster_name
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.into());
-
-        let broker_addr: Option<CheetahString> = command
-            .broker_addr
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.into());
-
-        let subject: CheetahString = command.subject.trim().into();
-        let resources: Vec<CheetahString> = command
-            .resources
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.into())
-            .collect();
-        let actions: Vec<CheetahString> = command
-            .actions
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.into())
-            .collect();
-        let decision: CheetahString = command.decision.trim().into();
-        let source_ips: Vec<CheetahString> = command
-            .source_ip
-            .as_ref()
-            .map(|s| {
-                s.split(',')
-                    .map(|ip| ip.trim())
-                    .filter(|ip| !ip.is_empty())
-                    .map(|ip| ip.into())
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        Ok(Self {
-            cluster_name,
-            broker_addr,
-            subject,
-            resources,
-            actions,
-            decision,
-            source_ips,
-        })
-    }
-
-    fn build_acl_info(&self) -> AclInfo {
-        let actions_str: CheetahString = self
-            .actions
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(",")
-            .into();
-        let resources_str: CheetahString = self
-            .resources
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(",")
-            .into();
-
-        let entry = PolicyEntryInfo {
-            resource: Some(resources_str),
-            actions: Some(actions_str),
-            source_ips: if self.source_ips.is_empty() {
-                None
-            } else {
-                Some(self.source_ips.clone())
-            },
-            decision: Some(self.decision.clone()),
-        };
-
-        let policy = PolicyInfo {
-            policy_type: None,
-            entries: Some(vec![entry]),
-        };
-
-        AclInfo {
-            subject: Some(self.subject.clone()),
-            policies: Some(vec![policy]),
-        }
-    }
-}
-
 impl CommandExecute for CreateAclSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let command = ParsedCreateAclSubCommand::new(self)?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("CreateAclSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = create_acl(&command, &default_mqadmin_ext).await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
-    }
-}
-
-async fn create_acl(
-    parsed_command: &ParsedCreateAclSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-) -> Result<(), RocketMQError> {
-    let acl_info = parsed_command.build_acl_info();
-
-    if let Some(ref broker_addr) = parsed_command.broker_addr {
-        default_mqadmin_ext
-            .create_acl_with_acl_info(broker_addr.clone(), acl_info)
-            .await?;
-        println!("create acl to {} success.", broker_addr);
-    } else if let Some(ref cluster_name) = parsed_command.cluster_name {
-        let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-        let broker_addrs = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?;
-
-        for addr in broker_addrs {
-            default_mqadmin_ext
-                .create_acl_with_acl_info(addr.clone(), acl_info.clone())
-                .await?;
-            println!("create acl to {} success.", addr);
+        let request = CreateAclRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.subject.clone(),
+            self.resources.clone(),
+            self.actions.clone(),
+            self.decision.clone(),
+            self.source_ip.clone(),
+        )?;
+        let result = AuthService::create_acl_by_request_with_rpc_hook(request, rpc_hook).await?;
+        for broker_addr in result.broker_addrs {
+            println!("create acl to {} success.", broker_addr);
         }
+        Ok(())
     }
-
-    Ok(())
 }

@@ -16,19 +16,15 @@ use std::sync::Arc;
 
 use clap::ArgGroup;
 use clap::Parser;
-
-use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::GetAclRequest;
+use rocketmq_admin_core::core::auth::GetAclResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use crate::commands::target::Target;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -45,142 +41,45 @@ pub struct GetAclSubCommand {
     subject: String,
 }
 
-#[derive(Clone)]
-struct ParsedGetAclSubCommand {
-    subject: CheetahString,
-}
-
-impl ParsedGetAclSubCommand {
-    fn new(command: &GetAclSubCommand) -> Result<Self, RocketMQError> {
-        let subject = command.subject.trim();
-        if subject.is_empty() {
-            Err(RocketMQError::IllegalArgument(
-                "GetAclSubCommand: subject cannot be empty".into(),
-            ))
-        } else {
-            Ok(Self {
-                subject: subject.into(),
-            })
-        }
-    }
-}
-
 impl CommandExecute for GetAclSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let command = ParsedGetAclSubCommand::new(self)?;
-        let target = Target::new(&self.cluster_name, &self.broker_addr).map_err(|_| {
-            RocketMQError::IllegalArgument(
-                "GetAclSubCommand: Specify exactly one of --brokerAddr (-b) or --clusterName (-c)".into(),
-            )
-        })?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("GetAclSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = async {
-            match target {
-                Target::BrokerAddr(broker_addr) => {
-                    let acl_info = get_acl_from_broker(&command, &default_mqadmin_ext, &broker_addr).await?;
-                    if let Some(acl_info) = acl_info {
-                        print_header();
-                        print_acl(&acl_info);
-                    } else {
-                        eprintln!("No ACL with subject {} was found", command.subject);
-                    }
-                    Ok(())
-                }
-                Target::ClusterName(cluster_name) => {
-                    let (acl_infos, failed_broker_addr) =
-                        get_acl_from_cluster(&command, &default_mqadmin_ext, &cluster_name).await?;
-
-                    if acl_infos.is_empty() && failed_broker_addr.is_empty() {
-                        eprintln!("No ACL with subject {} was found", command.subject);
-                    } else {
-                        print_header();
-                        print_acls(&acl_infos);
-                    }
-
-                    if !failed_broker_addr.is_empty() {
-                        eprintln!(
-                            "Warning: failed to get ACL from brokers: {}",
-                            failed_broker_addr.join(", ")
-                        );
-                    }
-
-                    if !failed_broker_addr.is_empty() && acl_infos.is_empty() {
-                        Err(RocketMQError::Internal(format!(
-                            "GetAclSubCommand: Failed to get ACL for brokers {}",
-                            failed_broker_addr.join(", ")
-                        )))
-                    } else {
-                        Ok(())
-                    }
-                }
-            }
-        }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let request = GetAclRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.subject.clone(),
+        )?;
+        let result = AuthService::get_acl_by_request_with_rpc_hook(request, rpc_hook).await?;
+        render_get_acl_result(result, self.subject.trim(), self.broker_addr.is_some())
     }
 }
 
-async fn get_acl_from_broker(
-    parsed_command: &ParsedGetAclSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    broker_addr: &str,
-) -> Result<Option<AclInfo>, RocketMQError> {
-    match default_mqadmin_ext
-        .get_acl(broker_addr.into(), parsed_command.subject.clone())
-        .await
-    {
-        Ok(acl_info) => {
-            println!("Get ACL command was successful for broker {}.", broker_addr);
-            Ok(Some(acl_info))
-        }
-        Err(e) => Err(RocketMQError::Internal(format!(
-            "GetAclSubCommand: Failed to get ACL for broker {}: {}",
-            broker_addr, e
-        ))),
+fn render_get_acl_result(result: GetAclResult, subject: &str, single_broker_target: bool) -> RocketMQResult<()> {
+    if single_broker_target && result.acl_infos.is_empty() {
+        eprintln!("No ACL with subject {} was found", subject);
+        return Ok(());
     }
-}
 
-async fn get_acl_from_cluster(
-    parsed_command: &ParsedGetAclSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    cluster_name: &str,
-) -> Result<(Vec<AclInfo>, Vec<CheetahString>), RocketMQError> {
-    let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
+    if result.acl_infos.is_empty() && result.failed_broker_addrs.is_empty() {
+        eprintln!("No ACL with subject {} was found", subject);
+    } else {
+        print_header();
+        print_acls(&result.acl_infos);
+    }
 
-    match CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name) {
-        Ok(addresses) => {
-            let results: Vec<Result<Option<AclInfo>, CheetahString>> =
-                futures::future::join_all(addresses.into_iter().map(|addr| async {
-                    get_acl_from_broker(parsed_command, default_mqadmin_ext, addr.as_str())
-                        .await
-                        .map_err(|_err| addr)
-                }))
-                .await;
+    if !result.failed_broker_addrs.is_empty() {
+        eprintln!(
+            "Warning: failed to get ACL from brokers: {}",
+            result.failed_broker_addrs.join(", ")
+        );
+    }
 
-            let (acls, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
-            let acls: Vec<AclInfo> = acls.into_iter().filter_map(Result::unwrap).collect();
-            let failed_addr: Vec<CheetahString> = errors.into_iter().map(Result::unwrap_err).collect();
-
-            Ok((acls, failed_addr))
-        }
-        Err(e) => Err(RocketMQError::Internal(format!(
-            "GetAclSubCommand: Failed to get ACL: {}",
-            e
-        ))),
+    if !result.failed_broker_addrs.is_empty() && result.acl_infos.is_empty() {
+        Err(RocketMQError::Internal(format!(
+            "GetAclSubCommand: Failed to get ACL for brokers {}",
+            result.failed_broker_addrs.join(", ")
+        )))
+    } else {
+        Ok(())
     }
 }
 

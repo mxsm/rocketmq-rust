@@ -29,7 +29,6 @@ mod offset;
 mod producer;
 mod queue;
 mod stats;
-mod target;
 mod topic;
 
 use std::sync::Arc;

@@ -2444,10 +2444,21 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_acl(
         &self,
-        _broker_addr: CheetahString,
-        _subject: CheetahString,
+        broker_addr: CheetahString,
+        subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<AclInfo> {
-        unimplemented!("get_acl not implemented yet")
+        let acl_infos = self
+            .list_acl(broker_addr.clone(), subject.clone(), CheetahString::default())
+            .await?;
+        acl_infos
+            .into_iter()
+            .find(|acl_info| acl_info.subject.as_ref() == Some(&subject))
+            .ok_or_else(|| {
+                RocketMQError::illegal_argument(format!(
+                    "ACL with subject {} was not found on broker {}",
+                    subject, broker_addr
+                ))
+            })
     }
 
     async fn list_acl(

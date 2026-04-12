@@ -14,17 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::CopyAclRequest;
+use rocketmq_admin_core::core::auth::CopyAclResult;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 pub struct CopyAclSubCommand {
@@ -53,156 +50,47 @@ pub struct CopyAclSubCommand {
     subjects: Option<String>,
 }
 
-#[derive(Clone)]
-struct ParsedCopyAclSubCommand {
-    from_broker: CheetahString,
-    to_broker: CheetahString,
-    subjects: Option<Vec<CheetahString>>,
-}
-
-impl ParsedCopyAclSubCommand {
-    fn new(command: &CopyAclSubCommand) -> Result<Self, RocketMQError> {
-        let from_broker: CheetahString = {
-            let from_broker = command.from_broker.trim();
-            if from_broker.is_empty() {
-                return Err(RocketMQError::IllegalArgument(
-                    "CopyAclSubCommand: fromBroker cannot be empty".into(),
-                ));
-            }
-            from_broker.into()
-        };
-
-        let to_broker: CheetahString = {
-            let to_broker = command.to_broker.trim();
-            if to_broker.is_empty() {
-                return Err(RocketMQError::IllegalArgument(
-                    "CopyAclSubCommand: toBroker cannot be empty".into(),
-                ));
-            }
-            to_broker.into()
-        };
-
-        let subjects: Option<Vec<CheetahString>> = command
-            .subjects
-            .as_ref()
-            .map(|subjects| {
-                subjects
-                    .split(',')
-                    .map(|subject| subject.trim())
-                    .filter(|subject| !subject.is_empty())
-                    .map(|subject| subject.into())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|v: &Vec<CheetahString>| !v.is_empty());
-
-        Ok(Self {
-            from_broker,
-            to_broker,
-            subjects,
-        })
-    }
-}
-
 impl CommandExecute for CopyAclSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let command = ParsedCopyAclSubCommand::new(self)?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("CopyAclSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = copy_acls(&command, &default_mqadmin_ext).await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let request = CopyAclRequest::try_new(self.from_broker.clone(), self.to_broker.clone(), self.subjects.clone())?;
+        let from_broker = request.from_broker().clone();
+        let to_broker = request.to_broker().clone();
+        let result = AuthService::copy_acl_by_request_with_rpc_hook(request, rpc_hook).await?;
+        render_copy_acl_result(result, from_broker.as_str(), to_broker.as_str());
+        Ok(())
     }
 }
 
-async fn copy_acls(
-    parsed_command: &ParsedCopyAclSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-) -> Result<(), RocketMQError> {
-    let source_broker = parsed_command.from_broker.as_str();
-    let target_broker = parsed_command.to_broker.as_str();
-
-    let acl_infos: Vec<AclInfo> = if let Some(ref subjects) = parsed_command.subjects {
-        let mut acl_list = Vec::new();
-        for subject in subjects {
-            match default_mqadmin_ext.get_acl(source_broker.into(), subject.clone()).await {
-                Ok(acl_info) => {
-                    acl_list.push(acl_info);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to get ACL for subject {} from {}: {}",
-                        subject, source_broker, e
-                    );
-                }
-            }
-        }
-        acl_list
-    } else {
-        default_mqadmin_ext
-            .list_acl(source_broker.into(), CheetahString::default(), CheetahString::default())
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CopyAclSubCommand: Failed to list ACLs from {}: {}",
-                    source_broker, e
-                ))
-            })?
-    };
-
-    if acl_infos.is_empty() {
+fn render_copy_acl_result(result: CopyAclResult, source_broker: &str, target_broker: &str) {
+    if result.copied_subjects.is_empty() && result.skipped_subjects.is_empty() && result.failures.is_empty() {
         println!("No ACLs found to copy from {}.", source_broker);
-        return Ok(());
+        return;
     }
 
-    for acl_info in acl_infos {
-        let subject = match acl_info.subject.as_ref() {
-            Some(s) => s.clone(),
-            None => {
-                eprintln!("Warning: ACL has no subject, skipping.");
-                continue;
-            }
-        };
-
-        let target_acl_result = default_mqadmin_ext.get_acl(target_broker.into(), subject.clone()).await;
-
-        let copy_result = if target_acl_result.is_err() {
-            default_mqadmin_ext
-                .create_acl_with_acl_info(target_broker.into(), acl_info.clone())
-                .await
+    for subject in result.skipped_subjects {
+        if subject.is_empty() {
+            eprintln!("Warning: ACL has no subject, skipping.");
         } else {
-            default_mqadmin_ext
-                .update_acl_with_acl_info(target_broker.into(), acl_info.clone())
-                .await
-        };
-
-        match copy_result {
-            Ok(_) => {
-                println!(
-                    "copy acl of {} from {} to {} success.",
-                    subject, source_broker, target_broker
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "copy acl of {} from {} to {} failed: {}",
-                    subject, source_broker, target_broker, e
-                );
-            }
+            eprintln!("Warning: Could not find ACL {} at broker {}", subject, source_broker);
         }
     }
-
-    Ok(())
+    for subject in result.copied_subjects {
+        println!(
+            "copy acl of {} from {} to {} success.",
+            subject, source_broker, target_broker
+        );
+    }
+    for failure in result.failures {
+        if failure.broker_addr.as_str() == source_broker {
+            eprintln!(
+                "Warning: Failed to get ACL from {} while copying to {}: {}",
+                source_broker, target_broker, failure.error
+            );
+        } else {
+            eprintln!(
+                "copy acl from {} to {} failed: {}",
+                source_broker, target_broker, failure.error
+            );
+        }
+    }
 }
