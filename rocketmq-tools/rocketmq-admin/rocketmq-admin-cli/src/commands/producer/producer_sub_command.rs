@@ -14,16 +14,15 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
+use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
+use rocketmq_admin_core::core::producer::ProducerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ProducerSubCommand {
@@ -31,52 +30,51 @@ pub struct ProducerSubCommand {
     broker_addr: String,
 }
 
+impl ProducerSubCommand {
+    fn request(&self) -> RocketMQResult<ProducerInfoQueryRequest> {
+        ProducerInfoQueryRequest::try_new(self.broker_addr.clone())
+    }
+
+    fn print_result(request: &ProducerInfoQueryRequest, result: &ProducerInfoQueryResult) {
+        Self::print_producer_table(request.broker_addr().as_str(), &result.producer_table_info);
+    }
+
+    fn print_producer_table(broker_addr: &str, producer_table_info: &ProducerTableInfo) {
+        let data = producer_table_info.data();
+        if data.is_empty() {
+            println!("No producer groups found on broker {}", broker_addr);
+            return;
+        }
+
+        for (group, producers) in data {
+            if producers.is_empty() {
+                println!("producer group ({}) instances are empty", group);
+                continue;
+            }
+            for producer in producers {
+                println!("producer group ({}) instance : {}", group, producer);
+            }
+        }
+    }
+}
+
 impl CommandExecute for ProducerSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let request = self.request()?;
+        let result = ProducerService::query_producer_info_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        Self::print_result(&request, &result);
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("ProducerSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
+    #[test]
+    fn producer_sub_command_parse_request() {
+        let cmd = ProducerSubCommand::try_parse_from(["producer", "-b", " 127.0.0.1:10911 "]).unwrap();
 
-            let broker_addr = self.broker_addr.trim();
-            let producer_table_info = default_mqadmin_ext
-                .get_all_producer_info(CheetahString::from(broker_addr))
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!("ProducerSubCommand: Failed to get all producer info: {}", e))
-                })?;
-
-            let data = producer_table_info.data();
-            if data.is_empty() {
-                println!("No producer groups found on broker {}", broker_addr);
-                return Ok(());
-            }
-
-            for (group, producers) in data {
-                if producers.is_empty() {
-                    println!("producer group ({}) instances are empty", group);
-                    continue;
-                }
-                for producer in producers {
-                    println!("producer group ({}) instance : {}", group, producer);
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        assert_eq!(cmd.request().unwrap().broker_addr().as_str(), "127.0.0.1:10911");
     }
 }

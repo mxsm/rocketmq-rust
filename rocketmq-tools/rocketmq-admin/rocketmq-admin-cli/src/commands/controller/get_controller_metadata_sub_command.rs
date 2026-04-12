@@ -14,16 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
+use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
+use rocketmq_admin_core::core::controller::ControllerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetControllerMetadataSubCommand {
@@ -38,63 +36,63 @@ pub struct GetControllerMetadataSubCommand {
 }
 
 impl CommandExecute for GetControllerMetadataSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let result =
+            ControllerService::query_controller_metadata_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result);
+        Ok(())
+    }
+}
 
-        let controller_address: CheetahString = self.controller_address.as_str().into();
+impl GetControllerMetadataSubCommand {
+    fn request(&self) -> RocketMQResult<ControllerMetadataQueryRequest> {
+        ControllerMetadataQueryRequest::try_new(self.controller_address.clone())
+    }
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetControllerMetadataSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
+    fn print_result(result: &ControllerMetadataQueryResult) {
+        let meta_data = &result.meta_data;
 
-            let meta_data = default_mqadmin_ext
-                .get_controller_meta_data(controller_address)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "GetControllerMetadataSubCommand: Failed to get controller meta data: {}",
-                        e
-                    ))
-                })?;
+        let group = meta_data
+            .group
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or(String::from("<NONE>"));
+        println!("ControllerGroup\t{}", group);
 
-            let group = meta_data
-                .group
-                .map(|group| group.to_string())
-                .unwrap_or(String::from("<NONE>"));
-            println!("ControllerGroup\t{}", group);
+        let controller_leader_id = meta_data
+            .controller_leader_id
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or(String::from("<NONE>"));
+        println!("ControllerLeaderId\t{}", controller_leader_id);
 
-            let controller_leader_id = meta_data
-                .controller_leader_id
-                .map(|controller_leader_id| controller_leader_id.to_string())
-                .unwrap_or(String::from("<NONE>"));
-            println!("ControllerLeaderId\t{}", controller_leader_id);
+        let controller_leader_address = meta_data
+            .controller_leader_address
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or(String::from("<NONE>"));
+        println!("ControllerLeaderAddress\t{}", controller_leader_address);
 
-            let controller_leader_address = meta_data
-                .controller_leader_address
-                .map(|controller_leader_address| controller_leader_address.to_string())
-                .unwrap_or(String::from("<NONE>"));
-            println!("ControllerLeaderAddress\t{}", controller_leader_address);
+        let is_leader = meta_data.is_leader.unwrap_or(false).to_string();
+        println!("IsLeader\t{}", is_leader);
 
-            let is_leader = meta_data.is_leader.unwrap_or(false).to_string();
-            println!("IsLeader\t{}", is_leader);
-
-            if let Some(peers) = meta_data.peers {
-                peers.split(";").for_each(|peer| println!("#Peer:\t{}", peer));
-            } else {
-                println!("No peers found");
-            }
-
-            Ok(())
+        if let Some(peers) = &meta_data.peers {
+            peers.split(";").for_each(|peer| println!("#Peer:\t{}", peer));
+        } else {
+            println!("No peers found");
         }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_controller_metadata_sub_command_parse_request() {
+        let cmd = GetControllerMetadataSubCommand::try_parse_from(["getControllerMetadata", "-a", " 127.0.0.1:9878 "])
+            .unwrap();
+
+        assert_eq!(cmd.request().unwrap().controller_addr().as_str(), "127.0.0.1:9878");
     }
 }

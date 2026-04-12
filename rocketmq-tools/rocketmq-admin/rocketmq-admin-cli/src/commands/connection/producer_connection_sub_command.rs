@@ -15,13 +15,15 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_admin_core::core::connection::ConnectionService;
+use rocketmq_admin_core::core::connection::ProducerConnectionQueryRequest;
+use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ProducerConnectionSubCommand {
@@ -33,41 +35,47 @@ pub struct ProducerConnectionSubCommand {
 }
 
 impl CommandExecute for ProducerConnectionSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        default_mq_admin_ext.start().await?;
-
-        let group = self.producer_group.trim();
-        let topic = self.topic.trim();
-
-        let pc = default_mq_admin_ext
-            .examine_producer_connection_info(group.into(), topic.into())
-            .await?;
-
-        let mut connections: Vec<_> = pc.connection_set().iter().collect();
-        connections.sort_by_key(|a| a.get_client_id());
-        for (idx, conn) in connections.iter().enumerate() {
-            let version_desc = RocketMqVersion::from_ordinal(conn.get_version() as u32).name();
-            println!(
-                "{:04}  {:<32} {:<22} {:<8} {}",
-                idx + 1,
-                conn.get_client_id(),
-                conn.get_client_addr(),
-                conn.get_language(),
-                version_desc
-            );
-        }
-
-        default_mq_admin_ext.shutdown().await;
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = ProducerConnectionQueryRequest::try_new(self.producer_group.clone(), self.topic.clone())?;
+        let result = ConnectionService::query_producer_connection_by_request_with_rpc_hook(request, rpc_hook).await?;
+        render_producer_connection_result(result);
         Ok(())
+    }
+}
+
+fn render_producer_connection_result(result: ProducerConnectionQueryResult) {
+    let pc = result.connection;
+    print_producer_connection(&pc);
+}
+
+fn print_producer_connection(pc: &ProducerConnection) {
+    let mut connections: Vec<_> = pc.connection_set().iter().collect();
+    connections.sort_by_key(|a| a.get_client_id());
+    for (idx, conn) in connections.iter().enumerate() {
+        let version_desc = RocketMqVersion::from_ordinal(conn.get_version() as u32).name();
+        println!(
+            "{:04}  {:<32} {:<22} {:<8} {}",
+            idx + 1,
+            conn.get_client_id(),
+            conn.get_client_addr(),
+            conn.get_language(),
+            version_desc
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::commands::connection::producer_connection_sub_command::ProducerConnectionSubCommand;
+
+    #[test]
+    fn producer_connection_sub_command_parse() {
+        let command =
+            ProducerConnectionSubCommand::try_parse_from(["", "-g", "producer-a", "-t", "TopicTest"]).unwrap();
+
+        assert_eq!(command.producer_group, "producer-a");
+        assert_eq!(command.topic, "TopicTest");
     }
 }

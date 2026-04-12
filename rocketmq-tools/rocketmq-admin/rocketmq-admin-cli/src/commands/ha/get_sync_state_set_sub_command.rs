@@ -14,18 +14,15 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::ha::HaService;
+use rocketmq_admin_core::core::ha::SyncStateSetQueryRequest;
+use rocketmq_admin_core::core::ha::SyncStateSetQueryResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetSyncStateSetSubCommand {
@@ -67,83 +64,40 @@ pub struct GetSyncStateSetSubCommand {
 }
 
 impl CommandExecute for GetSyncStateSetSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("GetSyncStateSetSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-
-            if let Some(interval) = self.interval {
-                let flush_second = if interval > 0 { interval } else { 3 };
-                loop {
-                    self.inner_exec(&default_mqadmin_ext).await?;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
-                }
-            } else {
-                self.inner_exec(&default_mqadmin_ext).await?;
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        if let Some(interval) = self.interval {
+            let flush_second = if interval > 0 { interval } else { 3 };
+            loop {
+                let result =
+                    HaService::query_sync_state_set_by_request_with_rpc_hook(self.request()?, rpc_hook.clone()).await?;
+                Self::print_result(&result);
+                tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
-
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
-    }
-}
-
-impl GetSyncStateSetSubCommand {
-    async fn inner_exec(&self, default_mqadmin_ext: &DefaultMQAdminExt) -> RocketMQResult<()> {
-        let controller_address: CheetahString = self
-            .controller_address
-            .trim()
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .into();
-
-        if let Some(ref broker_name) = self.broker_name {
-            let brokers = vec![CheetahString::from(broker_name.trim())];
-            Self::print_data(&controller_address, brokers, default_mqadmin_ext).await?;
-        } else if let Some(ref cluster_name) = self.cluster_name {
-            let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                RocketMQError::Internal(format!("GetSyncStateSetSubCommand: Failed to get cluster info: {}", e))
-            })?;
-            let broker_names = CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, cluster_name.trim())?;
-            let brokers: Vec<CheetahString> = broker_names.into_iter().map(CheetahString::from_string).collect();
-            Self::print_data(&controller_address, brokers, default_mqadmin_ext).await?;
         } else {
-            println!("Error: either -b (brokerName) or -c (clusterName) must be specified");
+            let result = HaService::query_sync_state_set_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            Self::print_result(&result);
         }
 
         Ok(())
     }
+}
 
-    async fn print_data(
-        controller_address: &CheetahString,
-        brokers: Vec<CheetahString>,
-        default_mqadmin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<()> {
-        if brokers.is_empty() {
-            return Ok(());
+impl GetSyncStateSetSubCommand {
+    fn request(&self) -> RocketMQResult<SyncStateSetQueryRequest> {
+        SyncStateSetQueryRequest::try_new(
+            self.controller_address.clone(),
+            self.broker_name.clone(),
+            self.cluster_name.clone(),
+        )
+    }
+
+    fn print_result(result: &SyncStateSetQueryResult) {
+        if let Some(broker_replicas_info) = &result.broker_replicas_info {
+            Self::print_data(broker_replicas_info);
         }
+    }
 
-        let broker_replicas_info: BrokerReplicasInfo = default_mqadmin_ext
-            .get_in_sync_state_data(controller_address.clone(), brokers)
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetSyncStateSetSubCommand: Failed to get in sync state data: {}",
-                    e
-                ))
-            })?;
-
+    fn print_data(broker_replicas_info: &BrokerReplicasInfo) {
         let replicas_info_table = broker_replicas_info.get_replicas_info_table();
         for (broker_name, replicas_info) in replicas_info_table {
             let in_sync_replicas = replicas_info.get_in_sync_replicas();
@@ -168,7 +122,51 @@ impl GetSyncStateSetSubCommand {
                 println!("\nNotInSyncReplica:\t{}", member);
             }
         }
+    }
+}
 
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_admin_core::core::ha::SyncStateSetTarget;
+
+    use super::*;
+
+    #[test]
+    fn get_sync_state_set_sub_command_parse_broker_target() {
+        let cmd = GetSyncStateSetSubCommand::try_parse_from([
+            "getSyncStateSet",
+            "-a",
+            " 127.0.0.1:9878 ",
+            "-b",
+            " broker-a ",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+        assert_eq!(request.controller_address().as_str(), "127.0.0.1:9878");
+        assert_eq!(
+            request.target(),
+            &SyncStateSetTarget::BrokerName(CheetahString::from("broker-a"))
+        );
+    }
+
+    #[test]
+    fn get_sync_state_set_sub_command_parse_cluster_target() {
+        let cmd = GetSyncStateSetSubCommand::try_parse_from([
+            "getSyncStateSet",
+            "-a",
+            " 127.0.0.1:9878;127.0.0.2:9878 ",
+            "-c",
+            " DefaultCluster ",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+        assert_eq!(request.controller_address().as_str(), "127.0.0.1:9878");
+        assert_eq!(
+            request.target(),
+            &SyncStateSetTarget::ClusterName(CheetahString::from("DefaultCluster"))
+        );
     }
 }

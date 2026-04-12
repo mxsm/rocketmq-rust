@@ -14,15 +14,16 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_admin_core::core::connection::ConnectionService;
+use rocketmq_admin_core::core::connection::ConsumerConnectionQueryRequest;
+use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ConsumerConnectionSubCommand {
@@ -34,75 +35,74 @@ pub struct ConsumerConnectionSubCommand {
 }
 
 impl CommandExecute for ConsumerConnectionSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        default_mq_admin_ext.start().await?;
-
-        let group = self.consumer_group.trim();
-        let broker_addr = self
-            .broker_addr
-            .as_ref()
-            .map(|s| CheetahString::from_string(s.trim().to_string()));
-
-        let cc = default_mq_admin_ext
-            .examine_consumer_connection_info(group.into(), broker_addr)
-            .await?;
-
-        println!("{:<36} {:<22} {:<10} #Version", "#ClientId", "#ClientAddr", "#Language");
-
-        let mut connections: Vec<_> = cc.get_connection_set().iter().collect();
-        connections.sort_by_key(|a| a.get_client_id());
-        for conn in &connections {
-            let version_desc = RocketMqVersion::from_ordinal(conn.get_version() as u32).name();
-            println!(
-                "{:<36} {:<22} {:<10} {}",
-                conn.get_client_id(),
-                conn.get_client_addr(),
-                conn.get_language(),
-                version_desc
-            );
-        }
-
-        println!("\nBelow is subscription:");
-        println!("{:<20} #SubExpression", "#Topic");
-        for sd in cc.get_subscription_table().values() {
-            println!("{:<20} {}", sd.topic, sd.sub_string);
-        }
-
-        println!();
-        if let Some(consume_type) = cc.get_consume_type() {
-            let consume_type_str = match consume_type {
-                rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumeActively => {
-                    "CONSUME_ACTIVELY"
-                }
-                rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively => {
-                    "CONSUME_PASSIVELY"
-                }
-                rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePop => "CONSUME_POP",
-            };
-            println!("ConsumeType: {}", consume_type_str);
-        }
-        if let Some(message_model) = cc.get_message_model() {
-            println!("MessageModel: {}", message_model);
-        }
-        if let Some(consume_from_where) = cc.get_consume_from_where() {
-            let consume_from_where_str = serde_json::to_string(&consume_from_where)
-                .unwrap_or_default()
-                .trim_matches('"')
-                .to_string();
-            println!("ConsumeFromWhere: {}", consume_from_where_str);
-        }
-
-        default_mq_admin_ext.shutdown().await;
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = ConsumerConnectionQueryRequest::try_new(self.consumer_group.clone(), self.broker_addr.clone())?;
+        let result = ConnectionService::query_consumer_connection_by_request_with_rpc_hook(request, rpc_hook).await?;
+        render_consumer_connection_result(result);
         Ok(())
+    }
+}
+
+fn render_consumer_connection_result(result: ConsumerConnectionQueryResult) {
+    let cc = result.connection;
+    print_consumer_connection(&cc);
+}
+
+fn print_consumer_connection(cc: &ConsumerConnection) {
+    println!("{:<36} {:<22} {:<10} #Version", "#ClientId", "#ClientAddr", "#Language");
+
+    let mut connections: Vec<_> = cc.get_connection_set().iter().collect();
+    connections.sort_by_key(|a| a.get_client_id());
+    for conn in &connections {
+        let version_desc = RocketMqVersion::from_ordinal(conn.get_version() as u32).name();
+        println!(
+            "{:<36} {:<22} {:<10} {}",
+            conn.get_client_id(),
+            conn.get_client_addr(),
+            conn.get_language(),
+            version_desc
+        );
+    }
+
+    println!("\nBelow is subscription:");
+    println!("{:<20} #SubExpression", "#Topic");
+    for sd in cc.get_subscription_table().values() {
+        println!("{:<20} {}", sd.topic, sd.sub_string);
+    }
+
+    println!();
+    if let Some(consume_type) = cc.get_consume_type() {
+        let consume_type_str = match consume_type {
+            rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumeActively => "CONSUME_ACTIVELY",
+            rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePassively => "CONSUME_PASSIVELY",
+            rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType::ConsumePop => "CONSUME_POP",
+        };
+        println!("ConsumeType: {}", consume_type_str);
+    }
+    if let Some(message_model) = cc.get_message_model() {
+        println!("MessageModel: {}", message_model);
+    }
+    if let Some(consume_from_where) = cc.get_consume_from_where() {
+        let consume_from_where_str = serde_json::to_string(&consume_from_where)
+            .unwrap_or_default()
+            .trim_matches('"')
+            .to_string();
+        println!("ConsumeFromWhere: {}", consume_from_where_str);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::commands::connection::consumer_connection_sub_command::ConsumerConnectionSubCommand;
+
+    #[test]
+    fn consumer_connection_sub_command_parse_with_broker_addr() {
+        let command =
+            ConsumerConnectionSubCommand::try_parse_from(["", "-g", "consumer-a", "-b", "127.0.0.1:10911"]).unwrap();
+
+        assert_eq!(command.consumer_group, "consumer-a");
+        assert_eq!(command.broker_addr.as_deref(), Some("127.0.0.1:10911"));
     }
 }

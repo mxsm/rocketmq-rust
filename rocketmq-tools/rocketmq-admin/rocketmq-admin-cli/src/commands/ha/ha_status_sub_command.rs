@@ -14,19 +14,16 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string2;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::ha::HaService;
+use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
+use rocketmq_admin_core::core::ha::HaStatusQueryResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct HAStatusSubCommand {
@@ -59,73 +56,37 @@ pub struct HAStatusSubCommand {
 }
 
 impl CommandExecute for HAStatusSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("HAStatusSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-
-            if let Some(interval) = self.interval {
-                let flush_second = if interval > 0 { interval } else { 3 };
-                loop {
-                    self.inner_exec(&default_mqadmin_ext).await?;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
-                }
-            } else {
-                self.inner_exec(&default_mqadmin_ext).await?;
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        if let Some(interval) = self.interval {
+            let flush_second = if interval > 0 { interval } else { 3 };
+            loop {
+                let result =
+                    HaService::query_ha_status_by_request_with_rpc_hook(self.request()?, rpc_hook.clone()).await?;
+                Self::print_status_result(&result);
+                tokio::time::sleep(tokio::time::Duration::from_secs(flush_second)).await;
             }
-
-            Ok(())
+        } else {
+            let result = HaService::query_ha_status_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+            Self::print_status_result(&result);
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        Ok(())
     }
 }
 
 impl HAStatusSubCommand {
-    async fn inner_exec(&self, default_mqadmin_ext: &DefaultMQAdminExt) -> RocketMQResult<()> {
-        if let Some(ref broker_addr) = self.broker_addr {
-            Self::print_status(broker_addr.trim(), default_mqadmin_ext).await?;
-        } else if let Some(ref cluster_name) = self.cluster_name {
-            let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                RocketMQError::Internal(format!("HAStatusSubCommand: Failed to get cluster info: {}", e))
-            })?;
-            let master_addrs = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.trim())?;
-            for addr in master_addrs {
-                Self::print_status(&addr, default_mqadmin_ext).await?;
-            }
-        } else {
-            println!("Error: either -b (brokerAddr) or -c (clusterName) must be specified");
-        }
-
-        Ok(())
+    fn request(&self) -> RocketMQResult<HaStatusQueryRequest> {
+        HaStatusQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 
-    async fn print_status(broker_addr: &str, default_mqadmin_ext: &DefaultMQAdminExt) -> RocketMQResult<()> {
-        let ha_runtime_info: HARuntimeInfo = default_mqadmin_ext
-            .get_broker_ha_status(CheetahString::from(broker_addr))
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "HAStatusSubCommand: Failed to get broker HA status from {}: {}",
-                    broker_addr, e
-                ))
-            })?;
-
-        if ha_runtime_info.master {
-            Self::print_master_status(broker_addr, &ha_runtime_info);
-        } else {
-            Self::print_slave_status(&ha_runtime_info);
+    fn print_status_result(result: &HaStatusQueryResult) {
+        for entry in &result.entries {
+            if entry.runtime_info.master {
+                Self::print_master_status(entry.broker_addr.as_str(), &entry.runtime_info);
+            } else {
+                Self::print_slave_status(&entry.runtime_info);
+            }
         }
-
-        Ok(())
     }
 
     fn print_master_status(broker_addr: &str, info: &HARuntimeInfo) {
@@ -168,5 +129,33 @@ impl HAStatusSubCommand {
             time_millis_to_human_string2(client.last_write_timestamp as i64)
         );
         println!("#MasterFlushOffset      {}", client.master_flush_offset);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_admin_core::core::ha::HaStatusTarget;
+
+    use super::*;
+
+    #[test]
+    fn ha_status_sub_command_parse_broker_target() {
+        let cmd = HAStatusSubCommand::try_parse_from(["haStatus", "-b", " 127.0.0.1:10911 "]).unwrap();
+
+        assert_eq!(
+            cmd.request().unwrap().target(),
+            &HaStatusTarget::BrokerAddr(CheetahString::from("127.0.0.1:10911"))
+        );
+    }
+
+    #[test]
+    fn ha_status_sub_command_parse_cluster_target() {
+        let cmd = HAStatusSubCommand::try_parse_from(["haStatus", "-c", " DefaultCluster "]).unwrap();
+
+        assert_eq!(
+            cmd.request().unwrap().target(),
+            &HaStatusTarget::ClusterName(CheetahString::from("DefaultCluster"))
+        );
     }
 }

@@ -14,16 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
+use rocketmq_admin_core::core::controller::ControllerConfigQueryResult;
+use rocketmq_admin_core::core::controller::ControllerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetControllerConfigSubCommand {
@@ -38,55 +36,50 @@ pub struct GetControllerConfigSubCommand {
 }
 
 impl CommandExecute for GetControllerConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let result =
+            ControllerService::query_controller_config_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result);
+        Ok(())
+    }
+}
 
-        let controller_servers: Vec<CheetahString> = self
-            .controller_address
-            .split(';')
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| CheetahString::from(s.trim()))
-            .collect();
+impl GetControllerConfigSubCommand {
+    fn request(&self) -> RocketMQResult<ControllerConfigQueryRequest> {
+        ControllerConfigQueryRequest::try_new(self.controller_address.clone())
+    }
 
-        if controller_servers.is_empty() {
-            return Err(RocketMQError::Internal(
-                "GetControllerConfigSubCommand: No valid controller address provided".to_string(),
-            ));
-        }
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetControllerConfigSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            let controller_configs = default_mqadmin_ext
-                .get_controller_config(controller_servers)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "GetControllerConfigSubCommand: Failed to get controller config: {}",
-                        e
-                    ))
-                })?;
-
-            for (controller_addr, config) in controller_configs {
-                println!("============{}============", controller_addr);
-                for (key, value) in config {
-                    println!("{:<50}=  {}", key, value);
-                }
+    fn print_result(result: &ControllerConfigQueryResult) {
+        for (controller_addr, config) in &result.controller_configs {
+            println!("============{}============", controller_addr);
+            for (key, value) in config {
+                println!("{:<50}=  {}", key, value);
             }
-
-            Ok(())
         }
-        .await;
+    }
+}
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_controller_config_sub_command_parse_request() {
+        let cmd = GetControllerConfigSubCommand::try_parse_from([
+            "getControllerConfig",
+            "-a",
+            " 127.0.0.1:9878 ;127.0.0.2:9878 ",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cmd.request()
+                .unwrap()
+                .controller_servers()
+                .iter()
+                .map(|addr| addr.as_str())
+                .collect::<Vec<_>>(),
+            vec!["127.0.0.1:9878", "127.0.0.2:9878"]
+        );
     }
 }
