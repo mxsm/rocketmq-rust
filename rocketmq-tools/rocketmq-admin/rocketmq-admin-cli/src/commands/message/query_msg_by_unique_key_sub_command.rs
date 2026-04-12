@@ -16,10 +16,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
@@ -27,10 +24,10 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const QUERY_MAX_NUM: i32 = 32;
-const DEFAULT_QUERY_WINDOW_MS: i64 = 36 * 60 * 60 * 1000;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyRequest;
+use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
+use rocketmq_admin_core::core::message::UniqueKeyDirectStatus;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByUniqueKeySubCommand {
@@ -65,63 +62,6 @@ pub struct QueryMsgByUniqueKeySubCommand {
 }
 
 impl QueryMsgByUniqueKeySubCommand {
-    async fn query_by_id(
-        admin: &DefaultMQAdminExt,
-        cluster_name: Option<CheetahString>,
-        topic: &str,
-        msg_id: &str,
-        show_all: bool,
-        start_time: Option<&str>,
-        end_time: Option<&str>,
-    ) -> RocketMQResult<()> {
-        let query_result = if let (Some(start_time), Some(end_time)) = (start_time, end_time) {
-            let start_time_long = start_time
-                .trim()
-                .parse::<i64>()
-                .map_err(|e| RocketMQError::IllegalArgument(format!("Invalid startTime '{}': {}", start_time, e)))?;
-            let end_time_long = end_time
-                .trim()
-                .parse::<i64>()
-                .map_err(|e| RocketMQError::IllegalArgument(format!("Invalid endTime '{}': {}", end_time, e)))?;
-
-            admin
-                .query_message_by_unique_key(
-                    cluster_name,
-                    CheetahString::from(topic),
-                    CheetahString::from(msg_id),
-                    QUERY_MAX_NUM,
-                    start_time_long,
-                    end_time_long,
-                )
-                .await?
-        } else {
-            let now = current_millis() as i64;
-            admin
-                .query_message_by_unique_key(
-                    cluster_name,
-                    CheetahString::from(topic),
-                    CheetahString::from(msg_id),
-                    QUERY_MAX_NUM,
-                    now - DEFAULT_QUERY_WINDOW_MS,
-                    now + DEFAULT_QUERY_WINDOW_MS,
-                )
-                .await?
-        };
-
-        let mut list: Vec<&MessageExt> = query_result.message_list().iter().collect();
-        if list.is_empty() {
-            return Ok(());
-        }
-
-        list.sort_by_key(|msg| msg.store_timestamp());
-        let upper = if show_all { list.len() } else { 1 };
-        for (index, msg) in list.iter().take(upper).enumerate() {
-            Self::show_message(msg, index)?;
-        }
-
-        Ok(())
-    }
-
     fn show_message(msg: &MessageExt, index: usize) -> RocketMQResult<()> {
         let body_tmp_file_path = Self::create_body_file(msg, index)?;
         println!("{:<20} {}", "Topic:", msg.topic());
@@ -179,70 +119,64 @@ impl QueryMsgByUniqueKeySubCommand {
 
 impl CommandExecute for QueryMsgByUniqueKeySubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let start_time = self
+            .start_time
+            .as_deref()
+            .map(str::trim)
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .map_err(|e| RocketMQError::IllegalArgument(format!("Invalid startTime '{}': {}", value, e)))
+            })
+            .transpose()?;
+        let end_time = self
+            .end_time
+            .as_deref()
+            .map(str::trim)
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .map_err(|e| RocketMQError::IllegalArgument(format!("Invalid endTime '{}': {}", value, e)))
+            })
+            .transpose()?;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
+        let request = QueryMessageByUniqueKeyRequest::try_new(
+            self.msg_id.clone(),
+            self.consumer_group.clone(),
+            self.client_id.clone(),
+            self.topic.clone(),
+            self.show_all,
+            self.cluster.clone(),
+            start_time,
+            end_time,
+        )?;
 
-            let msg_id = self.msg_id.trim();
-            let topic = self.topic.trim();
-            let cluster_name = self.cluster.as_deref().map(|s| CheetahString::from(s.trim()));
-            let start_time = self.start_time.as_deref().map(str::trim);
-            let end_time = self.end_time.as_deref().map(str::trim);
-
-            if let (Some(consumer_group), Some(client_id)) = (&self.consumer_group, &self.client_id) {
-                let consumer_group = CheetahString::from(consumer_group.trim());
-                let client_id = CheetahString::from(client_id.trim());
-
-                let consumer_running_info = default_mqadmin_ext
-                    .get_consumer_running_info(consumer_group.clone(), client_id.clone(), false, Some(false))
-                    .await;
-
-                match consumer_running_info {
-                    Ok(info) if info.is_push_type() => {
-                        println!(
-                            "consumeMessageDirectly path is not implemented in rocketmq-rust yet, skip direct push \
-                             for client {}",
-                            client_id
-                        );
-                    }
-                    Ok(_) => {
-                        println!(
-                            "get consumer info failed or this {} client is not push consumer, not support direct push",
-                            client_id
-                        );
-                    }
-                    Err(_) => {
-                        println!("get consumer runtime info for {} client failed", client_id);
-                    }
+        match MessageService::query_message_by_unique_key_by_request_with_rpc_hook(request, rpc_hook).await? {
+            QueryMessageByUniqueKeyResult::Messages(messages) => {
+                for (index, msg) in messages.iter().enumerate() {
+                    Self::show_message(msg, index)?;
                 }
-            } else {
-                Self::query_by_id(
-                    &default_mqadmin_ext,
-                    cluster_name,
-                    topic,
-                    msg_id,
-                    self.show_all,
-                    start_time,
-                    end_time,
-                )
-                .await?;
             }
-
-            Ok(())
+            QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::PushConsumerUnsupported {
+                client_id,
+            }) => {
+                println!(
+                    "consumeMessageDirectly path is not implemented in rocketmq-rust yet, skip direct push for client \
+                     {}",
+                    client_id
+                );
+            }
+            QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::NotPushConsumer { client_id }) => {
+                println!(
+                    "get consumer info failed or this {} client is not push consumer, not support direct push",
+                    client_id
+                );
+            }
+            QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::RunningInfoFailed { client_id }) => {
+                println!("get consumer runtime info for {} client failed", client_id);
+            }
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        Ok(())
     }
 }

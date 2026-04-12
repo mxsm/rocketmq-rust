@@ -17,8 +17,6 @@ use std::sync::Arc;
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -27,8 +25,9 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::core::consumer::ConsumerService;
+use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupListRequest;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target").required(true).args(&["broker_addr", "cluster_name"])))]
@@ -58,9 +57,9 @@ pub struct UpdateSubGroupListSubCommand {
     file: PathBuf,
 }
 
-impl CommandExecute for UpdateSubGroupListSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut group_config_list_bytes = vec![];
+impl UpdateSubGroupListSubCommand {
+    async fn request(&self) -> RocketMQResult<UpdateSubscriptionGroupListRequest> {
+        let mut group_config_list_bytes = Vec::new();
         File::open(&self.file)
             .await
             .map_err(|e| RocketMQError::Internal(format!("open file error {}", e)))?
@@ -69,85 +68,47 @@ impl CommandExecute for UpdateSubGroupListSubCommand {
 
         let group_configs = serde_json::from_slice::<Vec<SubscriptionGroupConfig>>(&group_config_list_bytes)
             .map_err(|e| RocketMQError::Internal(format!("parse json error {}", e)))?;
+        UpdateSubscriptionGroupListRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), group_configs)
+    }
 
-        if group_configs.is_empty() {
+    fn print_result(result: ConsumerOperationResult) -> RocketMQResult<()> {
+        for broker_address in &result.broker_addrs {
+            println!(
+                "submit batch of subscription group config to {} success, please check the result later",
+                broker_address
+            );
+        }
+        for failure in &result.failures {
+            eprintln!(
+                "UpdateSubGroupListSubCommand: Failed to submit subscription group config to {}: {}",
+                failure.broker_addr, failure.error
+            );
+        }
+        if result.failures.is_empty() {
+            Ok(())
+        } else {
+            Err(RocketMQError::Internal(format!(
+                "UpdateSubGroupListSubCommand: Failed to update brokers: {}",
+                result
+                    .failures
+                    .iter()
+                    .map(|failure| failure.broker_addr.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
+        }
+    }
+}
+
+impl CommandExecute for UpdateSubGroupListSubCommand {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = self.request().await?;
+        if request.configs().is_empty() {
             return Ok(());
         }
-
-        let mut default_mq_admin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mq_admin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "UpdateSubGroupListSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
-        })?;
-
-        let operation_result = async {
-            if let Some(broker) = &self.broker_addr {
-                let broker_address = broker.trim();
-                default_mq_admin_ext
-                    .create_and_update_subscription_group_config_list(broker_address.into(), group_configs)
-                    .await?;
-                println!(
-                    "submit batch of group config to {} success, please check the result later",
-                    broker_address
-                );
-                Ok(())
-            } else if let Some(cluster) = &self.cluster_name {
-                let cluster_name = cluster.trim();
-                let master_set = CommandUtil::fetch_master_addr_by_cluster_name(
-                    &default_mq_admin_ext.examine_broker_cluster_info().await?,
-                    cluster_name,
-                )?;
-                let mut failed_brokers = Vec::new();
-                for broker_address in &master_set {
-                    match default_mq_admin_ext
-                        .create_and_update_subscription_group_config_list(broker_address.into(), group_configs.clone())
-                        .await
-                    {
-                        Ok(_) => {
-                            println!(
-                                "submit batch of subscription group config to {} success, please check the result \
-                                 later",
-                                broker_address
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "UpdateSubGroupListSubCommand: Failed to submit subscription group config to {}: {}",
-                                broker_address, e
-                            );
-                            failed_brokers.push(broker_address.clone());
-                        }
-                    }
-                }
-                if failed_brokers.is_empty() {
-                    Ok(())
-                } else {
-                    Err(RocketMQError::Internal(format!(
-                        "UpdateSubGroupListSubCommand: Failed to update brokers: {}",
-                        failed_brokers.join(", ")
-                    )))
-                }
-            } else {
-                Err(RocketMQError::Internal(
-                    "UpdateSubGroupListSubCommand: Specify exactly one of --brokerAddr (-b) or --clusterName (-c)"
-                        .to_string(),
-                ))
-            }
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mq_admin_ext).await;
-        operation_result
+        let result =
+            ConsumerService::update_subscription_group_list_by_request_with_rpc_hook(request, rpc_hook).await?;
+        Self::print_result(result)
     }
 }
 

@@ -14,21 +14,15 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const PULL_TIMEOUT_MILLIS: u64 = 3000;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::QueryMessageByOffsetRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByOffsetSubCommand {
@@ -63,110 +57,48 @@ pub struct QueryMsgByOffsetSubCommand {
 
 impl CommandExecute for QueryMsgByOffsetSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let request = QueryMessageByOffsetRequest::try_new(
+            self.topic.clone(),
+            self.broker_name.clone(),
+            self.queue_id,
+            self.offset,
+            self.route_topic.clone(),
+        )?;
+        let result = MessageService::query_message_by_offset_by_request_with_rpc_hook(request, rpc_hook).await?;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
-
-            let topic = self.topic.trim();
-            let broker_name = self.broker_name.trim();
-            let queue_id = self.queue_id;
-            let requested_offset = self.offset;
-            let route_topic = self.route_topic.as_deref().map(str::trim).unwrap_or(topic);
-
-            let topic_route = default_mqadmin_ext
-                .examine_topic_route_info(CheetahString::from(route_topic))
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to get topic route info: {}", e)))?
-                .ok_or_else(|| RocketMQError::Internal(format!("Topic route not found for: {}", route_topic)))?;
-
-            let broker_data = topic_route
-                .broker_datas
-                .iter()
-                .find(|bd| bd.broker_name().as_str() == broker_name)
-                .ok_or_else(|| {
-                    RocketMQError::IllegalArgument(format!(
-                        "Broker '{}' not found in topic route for '{}'",
-                        broker_name, route_topic
-                    ))
-                })?;
-
-            let broker_addr = broker_data
-                .select_broker_addr()
-                .ok_or_else(|| RocketMQError::Internal(format!("No available address for broker '{}'", broker_name)))?;
-
-            if route_topic != topic {
-                let route_mq = MessageQueue::from_parts(route_topic, broker_name, 0);
-                default_mqadmin_ext
-                    .pull_message_from_queue(broker_addr.as_str(), &route_mq, "*", 0, 1, PULL_TIMEOUT_MILLIS)
-                    .await
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to warm up route topic pull: {}", e)))?;
-            }
-
-            let mq = MessageQueue::from_parts(topic, broker_name, queue_id);
-
-            let pull_result = default_mqadmin_ext
-                .pull_message_from_queue(broker_addr.as_str(), &mq, "*", requested_offset, 1, PULL_TIMEOUT_MILLIS)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to pull message by offset: {}", e)))?;
-
-            match pull_result.pull_status() {
-                PullStatus::Found => {
-                    if let Some(msg_list) = pull_result.msg_found_list() {
-                        if let Some(first_msg) = msg_list.first() {
-                            let msg: &MessageExt = first_msg;
-                            let body_format = self.body_format.as_deref().map(str::trim).unwrap_or("UTF-8");
-                            let body = match msg.body() {
-                                Some(bytes) => {
-                                    if body_format.eq_ignore_ascii_case("UTF-8")
-                                        || body_format.eq_ignore_ascii_case("UTF8")
-                                    {
-                                        String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| "BINARY".to_string())
-                                    } else if body_format.eq_ignore_ascii_case("ISO-8859-1")
-                                        || body_format.eq_ignore_ascii_case("LATIN1")
-                                        || body_format.eq_ignore_ascii_case("LATIN-1")
-                                    {
-                                        bytes.iter().map(|&b| b as char).collect()
-                                    } else if body_format.eq_ignore_ascii_case("ASCII") {
-                                        if bytes.is_ascii() {
-                                            String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| "BINARY".to_string())
-                                        } else {
-                                            return Err(RocketMQError::IllegalArgument(format!(
-                                                "Unsupported body bytes for ASCII bodyFormat: {}",
-                                                body_format
-                                            )));
-                                        }
-                                    } else {
-                                        return Err(RocketMQError::IllegalArgument(format!(
-                                            "Unsupported bodyFormat: {}",
-                                            body_format
-                                        )));
-                                    }
-                                }
-                                None => "EMPTY".to_string(),
-                            };
-                            println!("MSGID: {} {} BODY: {}", msg.msg_id(), msg, body);
-                            return Ok(());
+        if let Some(msg) = result.message {
+            let msg: &MessageExt = &msg;
+            let body_format = self.body_format.as_deref().map(str::trim).unwrap_or("UTF-8");
+            let body = match msg.body() {
+                Some(bytes) => {
+                    if body_format.eq_ignore_ascii_case("UTF-8") || body_format.eq_ignore_ascii_case("UTF8") {
+                        String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| "BINARY".to_string())
+                    } else if body_format.eq_ignore_ascii_case("ISO-8859-1")
+                        || body_format.eq_ignore_ascii_case("LATIN1")
+                        || body_format.eq_ignore_ascii_case("LATIN-1")
+                    {
+                        bytes.iter().map(|&b| b as char).collect()
+                    } else if body_format.eq_ignore_ascii_case("ASCII") {
+                        if bytes.is_ascii() {
+                            String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| "BINARY".to_string())
+                        } else {
+                            return Err(RocketMQError::IllegalArgument(format!(
+                                "Unsupported body bytes for ASCII bodyFormat: {}",
+                                body_format
+                            )));
                         }
+                    } else {
+                        return Err(RocketMQError::IllegalArgument(format!(
+                            "Unsupported bodyFormat: {}",
+                            body_format
+                        )));
                     }
                 }
-                PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => {}
-            }
-
-            Ok(())
+                None => "EMPTY".to_string(),
+            };
+            println!("MSGID: {} {} BODY: {}", msg.msg_id(), msg, body);
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        Ok(())
     }
 }

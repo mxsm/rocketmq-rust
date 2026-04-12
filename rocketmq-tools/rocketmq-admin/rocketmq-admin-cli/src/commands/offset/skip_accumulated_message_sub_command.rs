@@ -15,18 +15,14 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const SKIP_TO_LATEST_TIMESTAMP: u64 = u64::MAX;
+use rocketmq_admin_core::core::offset::OffsetService;
+use rocketmq_admin_core::core::offset::SkipAccumulatedMessageRequest;
+use rocketmq_admin_core::core::offset::SkipAccumulatedMessageResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct SkipAccumulatedMessageSubCommand {
@@ -56,109 +52,83 @@ pub struct SkipAccumulatedMessageSubCommand {
     cluster: Option<String>,
 }
 
+impl SkipAccumulatedMessageSubCommand {
+    fn request(&self) -> RocketMQResult<SkipAccumulatedMessageRequest> {
+        SkipAccumulatedMessageRequest::try_new(
+            self.group.clone(),
+            self.topic.clone(),
+            self.cluster.clone(),
+            self.force,
+            self.common_args.namesrv_addr.clone(),
+        )
+    }
+}
+
 impl CommandExecute for SkipAccumulatedMessageSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if self.group.trim().is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "Consumer group name (--group / -g) cannot be empty".into(),
-            ));
-        }
+        let result =
+            OffsetService::skip_accumulated_message_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        print_skip_accumulated_message_result(result);
+        Ok(())
+    }
+}
 
-        if self.topic.trim().is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "Topic name (--topic / -t) cannot be empty".into(),
-            ));
-        }
-
-        let mut admin = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        admin
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            admin.set_namesrv_addr(addr.trim());
-        }
-
-        let operation_result = async {
-            let group = self.group.trim();
-            let topic = self.topic.trim();
-            let cluster = self.cluster.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            let force = self.force.unwrap_or(true);
-
-            admin.start().await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "SkipAccumulatedMessageSubCommand: Failed to start MQAdminExt: {e}"
-                ))
-            })?;
-
-            let offset_table = match admin
-                .reset_offset_by_timestamp(
-                    cluster.map(|name| name.into()),
-                    topic.into(),
-                    group.into(),
-                    SKIP_TO_LATEST_TIMESTAMP,
-                    force,
-                )
-                .await
-            {
-                Ok(offset_table) => offset_table,
-                Err(err) => {
-                    if matches!(
-                        err,
-                        RocketMQError::BrokerOperationFailed { code, .. }
-                            if ResponseCode::from(code) == ResponseCode::ConsumerNotOnline
-                    ) {
-                        let rollback_stats = admin
-                            .reset_offset_by_timestamp_old(
-                                cluster.map(|name| name.into()),
-                                group.into(),
-                                topic.into(),
-                                SKIP_TO_LATEST_TIMESTAMP,
-                                force,
-                            )
-                            .await?;
-
-                        println!(
-                            "{:<20}  {:<20}  {:<20}  {:<20}  {:<20}  {:<20}",
-                            "#brokerName",
-                            "#queueId",
-                            "#brokerOffset",
-                            "#consumerOffset",
-                            "#timestampOffset",
-                            "#rollbackOffset"
-                        );
-
-                        for stat in rollback_stats {
-                            println!(
-                                "{:<20}  {:<20}  {:<20}  {:<20}  {:<20}  {:<20}",
-                                stat.broker_name,
-                                stat.queue_id,
-                                stat.broker_offset,
-                                stat.consumer_offset,
-                                stat.timestamp_offset,
-                                stat.rollback_offset
-                            );
-                        }
-                        return Ok(());
-                    }
-                    return Err(err);
-                }
-            };
-
+fn print_skip_accumulated_message_result(result: SkipAccumulatedMessageResult) {
+    match result {
+        SkipAccumulatedMessageResult::Current(offset_table) => {
             println!("{:<40}  {:<40}  {:<40}", "#brokerName", "#queueId", "#offset");
             for (mq, offset) in offset_table {
                 println!("{:<40}  {:<40}  {:<40}", mq.broker_name(), mq.queue_id(), offset);
             }
-
-            Ok(())
         }
-        .await;
+        SkipAccumulatedMessageResult::Legacy(rollback_stats) => {
+            println!(
+                "{:<20}  {:<20}  {:<20}  {:<20}  {:<20}  {:<20}",
+                "#brokerName", "#queueId", "#brokerOffset", "#consumerOffset", "#timestampOffset", "#rollbackOffset"
+            );
 
-        admin.shutdown().await;
-        operation_result
+            for stat in rollback_stats {
+                println!(
+                    "{:<20}  {:<20}  {:<20}  {:<20}  {:<20}  {:<20}",
+                    stat.broker_name,
+                    stat.queue_id,
+                    stat.broker_offset,
+                    stat.consumer_offset,
+                    stat.timestamp_offset,
+                    stat.rollback_offset
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn parses_skip_accumulated_message_request() {
+        let cmd = SkipAccumulatedMessageSubCommand::try_parse_from([
+            "skipAccumulatedMessage",
+            "-g",
+            " TestGroup ",
+            "-t",
+            " TestTopic ",
+            "-c",
+            " DefaultCluster ",
+            "-f",
+            "false",
+            "-n",
+            " 127.0.0.1:9876 ",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
+
+        assert_eq!(request.group().as_str(), "TestGroup");
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert_eq!(request.cluster().unwrap().as_str(), "DefaultCluster");
+        assert!(!request.force());
     }
 }

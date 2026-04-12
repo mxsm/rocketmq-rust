@@ -14,17 +14,15 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerBooleanOperationResult;
+use rocketmq_admin_core::core::broker::BrokerOptionalTarget;
+use rocketmq_admin_core::core::broker::BrokerService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -39,51 +37,43 @@ pub struct DeleteExpiredCommitLogSubCommand {
     cluster_name: Option<String>,
 }
 
-impl CommandExecute for DeleteExpiredCommitLogSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "DeleteExpiredCommitLogSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
-        })?;
-
-        let operation_result = delete_expired_commit_log(&default_mqadmin_ext, self).await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+impl DeleteExpiredCommitLogSubCommand {
+    fn request(&self) -> RocketMQResult<BrokerOptionalTarget> {
+        BrokerOptionalTarget::new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 }
 
-async fn delete_expired_commit_log(
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    command: &DeleteExpiredCommitLogSubCommand,
-) -> RocketMQResult<()> {
-    let addr = command
-        .broker_addr
-        .as_ref()
-        .map(|s| CheetahString::from(s.trim().to_string()));
-    let cluster = command
-        .cluster_name
-        .as_ref()
-        .map(|s| CheetahString::from(s.trim().to_string()));
+impl CommandExecute for DeleteExpiredCommitLogSubCommand {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let result =
+            BrokerService::delete_expired_commit_log_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        print_result(&result);
+        Ok(())
+    }
+}
 
-    let result = default_mqadmin_ext.delete_expired_commit_log(cluster, addr).await?;
-
-    if result {
+fn print_result(result: &BrokerBooleanOperationResult) {
+    if result.success {
         println!("success");
     } else {
         println!("false");
     }
+}
 
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn parses_delete_expired_commit_log_optional_target() {
+        let cmd =
+            DeleteExpiredCommitLogSubCommand::try_parse_from(["deleteExpiredCommitLog", "-b", " 127.0.0.1:10911 "])
+                .unwrap();
+        let request = cmd.request().unwrap();
+
+        assert_eq!(request.broker_addr().unwrap().as_str(), "127.0.0.1:10911");
+        assert!(request.cluster_name().is_none());
+    }
 }

@@ -15,14 +15,12 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::offset::CloneGroupOffsetRequest;
+use rocketmq_admin_core::core::offset::OffsetService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct CloneGroupOffsetSubCommand {
@@ -49,72 +47,55 @@ pub struct CloneGroupOffsetSubCommand {
     offline: bool,
 }
 
+impl CloneGroupOffsetSubCommand {
+    fn request(&self) -> RocketMQResult<CloneGroupOffsetRequest> {
+        CloneGroupOffsetRequest::try_new(
+            self.src_group.clone(),
+            self.dest_group.clone(),
+            self.topic.clone(),
+            self.offline,
+        )
+    }
+}
+
 impl CommandExecute for CloneGroupOffsetSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let request = self.request()?;
+        OffsetService::clone_group_offset_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        println!(
+            "clone group offset success. srcGroup[{}], destGroup=[{}], topic[{}]",
+            request.src_group(),
+            request.dest_group(),
+            request.topic()
+        );
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("CloneGroupOffsetSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
+    use super::*;
 
-            let src_group = self.src_group.trim();
-            let dest_group = self.dest_group.trim();
-            let topic = self.topic.trim();
+    #[test]
+    fn parses_clone_group_offset_request() {
+        let cmd = CloneGroupOffsetSubCommand::try_parse_from([
+            "cloneGroupOffset",
+            "-s",
+            " SourceGroup ",
+            "-d",
+            " DestGroup ",
+            "-t",
+            " TestTopic ",
+            "-o",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
 
-            let consume_stats = default_mqadmin_ext
-                .examine_consume_stats(src_group.into(), None, None, None, None)
-                .await?;
-
-            let mqs = consume_stats.offset_table.keys().cloned().collect::<Vec<_>>();
-            if !mqs.is_empty() {
-                let topic_route = default_mqadmin_ext
-                    .examine_topic_route_info(topic.into())
-                    .await?
-                    .ok_or_else(|| {
-                        RocketMQError::Internal(format!(
-                            "CloneGroupOffsetSubCommand: Topic route not found for: {}",
-                            topic
-                        ))
-                    })?;
-
-                for mq in &mqs {
-                    let mut addr = None;
-                    for broker_data in &topic_route.broker_datas {
-                        if broker_data.broker_name() == mq.broker_name() {
-                            addr = broker_data.select_broker_addr();
-                            break;
-                        }
-                    }
-
-                    let offset = consume_stats.offset_table[mq].get_consumer_offset();
-                    if offset >= 0 {
-                        if let Some(broker_addr) = addr {
-                            default_mqadmin_ext
-                                .update_consume_offset(broker_addr, dest_group.into(), mq.clone(), offset as u64)
-                                .await?;
-                        }
-                    }
-                }
-            }
-
-            println!(
-                "clone group offset success. srcGroup[{}], destGroup=[{}], topic[{}]",
-                src_group, dest_group, topic
-            );
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        assert_eq!(request.src_group().as_str(), "SourceGroup");
+        assert_eq!(request.dest_group().as_str(), "DestGroup");
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert!(request.offline());
     }
 }

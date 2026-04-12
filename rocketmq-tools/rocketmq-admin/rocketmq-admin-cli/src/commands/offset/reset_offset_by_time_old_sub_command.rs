@@ -15,17 +15,16 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_common::UtilAll::parse_date;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::offset::OffsetService;
+use rocketmq_admin_core::core::offset::ResetOffsetByTimeOldRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ResetOffsetByTimeOldSubCommand {
@@ -64,29 +63,48 @@ pub struct ResetOffsetByTimeOldSubCommand {
 }
 
 impl ResetOffsetByTimeOldSubCommand {
-    async fn reset_offset(
-        admin: &DefaultMQAdminExt,
-        cluster_name: Option<&str>,
-        consumer_group: &str,
-        topic: &str,
-        timestamp: u64,
-        force: bool,
-        timestamp_str: &str,
-    ) -> RocketMQResult<()> {
-        let rollback_stats_list = admin
-            .reset_offset_by_timestamp_old(
-                cluster_name.map(|value| value.into()),
-                consumer_group.into(),
-                topic.into(),
-                timestamp,
-                force,
-            )
-            .await?;
+    fn request(&self) -> RocketMQResult<Option<ResetOffsetByTimeOldRequest>> {
+        let timestamp_str = self.timestamp.trim();
+        let timestamp = match timestamp_str.parse::<u64>() {
+            Ok(timestamp) => timestamp,
+            Err(_) => {
+                if let Some(date) = parse_date(timestamp_str, YYYY_MM_DD_HH_MM_SS_SSS) {
+                    let millis = date.and_utc().timestamp_millis();
+                    if millis < 0 {
+                        println!("specified timestamp invalid.");
+                        return Ok(None);
+                    }
+                    millis as u64
+                } else {
+                    println!("specified timestamp invalid.");
+                    return Ok(None);
+                }
+            }
+        };
 
+        Ok(Some(ResetOffsetByTimeOldRequest::try_new(
+            self.group.clone(),
+            self.topic.clone(),
+            timestamp,
+            self.force,
+            self.cluster.clone(),
+            self.common_args.namesrv_addr.clone(),
+        )?))
+    }
+
+    fn print_result(
+        request: &ResetOffsetByTimeOldRequest,
+        timestamp_str: &str,
+        rollback_stats_list: Vec<RollbackStats>,
+    ) {
         println!(
             "reset consumer offset by specified consumerGroup[{}], topic[{}], force[{}], timestamp(string)[{}], \
              timestamp(long)[{}]",
-            consumer_group, topic, force, timestamp_str, timestamp
+            request.group(),
+            request.topic(),
+            request.force(),
+            timestamp_str,
+            request.timestamp()
         );
         println!(
             "{:<20}  {:<20}  {:<20}  {:<20}  {:<20}  {:<20}",
@@ -111,71 +129,53 @@ impl ResetOffsetByTimeOldSubCommand {
                 rollback_stats.rollback_offset
             );
         }
-
-        Ok(())
     }
 }
 
 impl CommandExecute for ResetOffsetByTimeOldSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let consumer_group = self.group.trim();
-        let topic = self.topic.trim();
-        let timestamp_str = self.timestamp.trim();
-        let cluster_name = self.cluster.as_deref().map(str::trim).filter(|value| !value.is_empty());
-        let force = self.force.unwrap_or(true);
-
-        let timestamp = match timestamp_str.parse::<u64>() {
-            Ok(timestamp) => timestamp,
-            Err(_) => {
-                if let Some(date) = parse_date(timestamp_str, YYYY_MM_DD_HH_MM_SS_SSS) {
-                    let millis = date.and_utc().timestamp_millis();
-                    if millis < 0 {
-                        println!("specified timestamp invalid.");
-                        return Ok(());
-                    }
-                    millis as u64
-                } else {
-                    println!("specified timestamp invalid.");
-                    return Ok(());
-                }
-            }
+        let Some(request) = self.request()? else {
+            return Ok(());
         };
 
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let rollback_stats =
+            OffsetService::reset_offset_by_time_old_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        Self::print_result(&request, self.timestamp.trim(), rollback_stats);
+        Ok(())
+    }
+}
 
-        if let Some(namesrv_addr) = &self.common_args.namesrv_addr {
-            default_mqadmin_ext.set_namesrv_addr(namesrv_addr.trim());
-        }
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "ResetOffsetByTimeOldSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
+    use super::*;
 
-            Self::reset_offset(
-                &default_mqadmin_ext,
-                cluster_name,
-                consumer_group,
-                topic,
-                timestamp,
-                force,
-                timestamp_str,
-            )
-            .await
-        }
-        .await;
+    #[test]
+    fn parses_reset_offset_by_time_old_request() {
+        let cmd = ResetOffsetByTimeOldSubCommand::try_parse_from([
+            "resetOffsetByTimeOld",
+            "-g",
+            " TestGroup ",
+            "-t",
+            " TestTopic ",
+            "-s",
+            "1234",
+            "-f",
+            "false",
+            "-c",
+            " DefaultCluster ",
+            "-n",
+            " 127.0.0.1:9876 ",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap().unwrap();
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        assert_eq!(request.group().as_str(), "TestGroup");
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert_eq!(request.cluster().unwrap().as_str(), "DefaultCluster");
+        assert_eq!(request.timestamp(), 1234);
+        assert!(!request.force());
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
     }
 }

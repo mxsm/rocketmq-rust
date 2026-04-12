@@ -12,28 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_common::UtilAll::parse_date;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const PULL_BATCH_SIZE: i32 = 32;
+use rocketmq_admin_core::core::message::MessagePullEvent;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::PrintMessagesByQueueRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct PrintMsgByQueueSubCommand {
@@ -121,169 +112,36 @@ fn timestamp_format(value: &str) -> u64 {
 
 impl CommandExecute for PrintMsgByQueueSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
+        let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
+        let request = PrintMessagesByQueueRequest::try_new(
+            self.topic.clone(),
+            self.broker_name.clone(),
+            self.queue_id,
+            self.sub_expression.clone(),
+            begin_timestamp,
+            end_timestamp,
+            self.print_msg,
+            self.calculate_by_tag,
+        )?;
+        let charset_name = self.charset_name.trim().to_string();
+        let print_body = self.print_body;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
-
-            let topic = self.topic.trim();
-            let broker_name = self.broker_name.trim();
-            let queue_id = self.queue_id;
-            let charset_name = self.charset_name.trim();
-            let sub_expression = self.sub_expression.trim();
-            let print_msg = self.print_msg;
-            let print_body = self.print_body;
-            let cal_by_tag = self.calculate_by_tag;
-
-            // Resolve broker address via topic route
-            let topic_route = default_mqadmin_ext
-                .examine_topic_route_info(CheetahString::from(topic))
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to get topic route info: {}", e)))?
-                .ok_or_else(|| RocketMQError::Internal(format!("Topic route not found for: {}", topic)))?;
-
-            let broker_data = topic_route
-                .broker_datas
-                .iter()
-                .find(|bd| bd.broker_name().as_str() == broker_name)
-                .ok_or_else(|| {
-                    RocketMQError::Internal(format!(
-                        "Broker '{}' not found in topic route for '{}'",
-                        broker_name, topic
-                    ))
-                })?;
-
-            let broker_addr = broker_data
-                .select_broker_addr()
-                .ok_or_else(|| RocketMQError::Internal(format!("No available address for broker '{}'", broker_name)))?;
-
-            let mq = MessageQueue::from_parts(topic, broker_name, queue_id);
-            let timeout = 3000u64;
-
-            let mut min_offset = default_mqadmin_ext
-                .min_offset(broker_addr.clone(), mq.clone(), timeout)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to get min offset: {}", e)))?;
-
-            let mut max_offset = default_mqadmin_ext
-                .max_offset(broker_addr.clone(), mq.clone(), timeout)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to get max offset: {}", e)))?;
-
-            if let Some(ref begin_ts) = self.begin_timestamp {
-                let time_value = timestamp_format(begin_ts.trim());
-                min_offset = default_mqadmin_ext
-                    .search_offset(
-                        broker_addr.clone(),
-                        CheetahString::from(topic),
-                        queue_id,
-                        time_value,
-                        timeout,
-                    )
-                    .await
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to search begin offset: {}", e)))?
-                    as i64;
+        MessageService::print_messages_by_queue_by_request_with_rpc_hook(request, rpc_hook, |event| {
+            match event {
+                MessagePullEvent::Messages { messages } => print_messages(&messages, &charset_name, print_body),
+                MessagePullEvent::PullError { error } => eprintln!("Pull message error: {}", error),
+                MessagePullEvent::TagCounts(tag_counts) => print_calculate_by_tag(tag_counts),
+                _ => {}
             }
-
-            if let Some(ref end_ts) = self.end_timestamp {
-                let time_value = timestamp_format(end_ts.trim());
-                max_offset = default_mqadmin_ext
-                    .search_offset(
-                        broker_addr.clone(),
-                        CheetahString::from(topic),
-                        queue_id,
-                        time_value,
-                        timeout,
-                    )
-                    .await
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to search end offset: {}", e)))?
-                    as i64;
-            }
-
-            let mut tag_cal_map: HashMap<String, AtomicI64> = HashMap::new();
-            let mut offset = min_offset;
-
-            'read_queue: while offset < max_offset {
-                let pull_result = default_mqadmin_ext
-                    .pull_message_from_queue(
-                        broker_addr.as_str(),
-                        &mq,
-                        sub_expression,
-                        offset,
-                        PULL_BATCH_SIZE,
-                        timeout,
-                    )
-                    .await;
-
-                match pull_result {
-                    Ok(result) => {
-                        offset = result.next_begin_offset() as i64;
-                        match result.pull_status() {
-                            PullStatus::Found => {
-                                if let Some(msg_list) = result.msg_found_list() {
-                                    if cal_by_tag {
-                                        calculate_by_tag(msg_list, &mut tag_cal_map);
-                                    }
-                                    if print_msg {
-                                        print_messages(msg_list, charset_name, print_body);
-                                    }
-                                }
-                            }
-                            PullStatus::NoMatchedMsg | PullStatus::NoNewMsg | PullStatus::OffsetIllegal => {
-                                break 'read_queue;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Pull message error: {}", e);
-                        break;
-                    }
-                }
-            }
-
-            if cal_by_tag {
-                print_calculate_by_tag(&tag_cal_map);
-            }
-
             Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        })
+        .await
     }
 }
 
-fn calculate_by_tag(msgs: &[rocketmq_rust::ArcMut<MessageExt>], tag_cal_map: &mut HashMap<String, AtomicI64>) {
-    for msg in msgs {
-        if let Some(tag) = msg.tags() {
-            let tag_str = tag.to_string();
-            if !tag_str.is_empty() {
-                tag_cal_map
-                    .entry(tag_str)
-                    .or_insert_with(|| AtomicI64::new(0))
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-}
-
-fn print_calculate_by_tag(tag_cal_map: &HashMap<String, AtomicI64>) {
-    let mut list: Vec<(&String, i64)> = tag_cal_map
-        .iter()
-        .map(|(tag, count)| (tag, count.load(Ordering::Relaxed)))
-        .collect();
-    list.sort_by_key(|b| std::cmp::Reverse(b.1));
-    for (tag, count) in list {
+fn print_calculate_by_tag(tag_counts: Vec<(String, i64)>) {
+    for (tag, count) in tag_counts {
         println!("Tag: {:<30} Count: {}", tag, count);
     }
 }

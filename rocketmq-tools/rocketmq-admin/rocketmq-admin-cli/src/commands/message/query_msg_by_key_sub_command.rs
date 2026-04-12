@@ -14,17 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::message::MessageConst;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::QueryMessageByKeyRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByKeySubCommand {
@@ -79,93 +76,38 @@ pub struct QueryMsgByKeySubCommand {
     last_key: Option<String>,
 }
 
-fn deal_time_to_hour_stamps(timestamp: i64) -> i64 {
-    const HOUR_MS: i64 = 1000 * 60 * 60;
-    timestamp / HOUR_MS * HOUR_MS
-}
-
 impl CommandExecute for QueryMsgByKeySubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let request = QueryMessageByKeyRequest::try_new(
+            self.topic.clone(),
+            self.msg_key.clone(),
+            self.begin_timestamp,
+            self.end_timestamp,
+            self.max_num,
+            self.cluster.clone(),
+            self.key_type.clone(),
+            self.last_key.clone(),
+        )?;
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("QueryMsgByKeySubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
+        let query_result = MessageService::query_message_by_key_by_request_with_rpc_hook(request, rpc_hook)
+            .await
+            .map_err(|e| RocketMQError::Internal(format!("Failed to query message by key: {}", e)))?;
 
-            let topic = self.topic.trim();
-            let key = self.msg_key.trim();
-
-            let mut key_type = CheetahString::from_static_str(MessageConst::INDEX_KEY_TYPE);
-            if let Some(ref kt) = self.key_type {
-                let kt = kt.trim();
-                if kt != MessageConst::INDEX_KEY_TYPE && kt != MessageConst::INDEX_TAG_TYPE {
-                    println!("index type error, just support K for keys or T for tags");
-                    return Ok(());
-                }
-                key_type = CheetahString::from(kt);
+        println!(
+            "{:<50} {:>4} {:>40} {:<200}",
+            "#Message ID", "#QID", "#Offset", "#IndexKey"
+        );
+        for row in query_result.rows {
+            if let Some(index_key) = row.index_key {
+                println!(
+                    "{:<50} {:>4} {:>40} {:<200}",
+                    row.message_id, row.queue_id, row.queue_offset, index_key
+                );
+            } else {
+                println!("{:<50} {:>4} {:>40}", row.message_id, row.queue_id, row.queue_offset);
             }
-
-            let begin_timestamp = self.begin_timestamp.unwrap_or(0);
-            let end_timestamp = self.end_timestamp.unwrap_or(i64::MAX);
-            let max_num = self.max_num;
-            let cluster_name = self.cluster.as_deref().map(|s| CheetahString::from(s.trim()));
-            let last_key = self.last_key.as_deref().map(|s| CheetahString::from(s.trim()));
-
-            let query_result = default_mqadmin_ext
-                .query_message_by_key(
-                    cluster_name,
-                    CheetahString::from(topic),
-                    CheetahString::from(key),
-                    max_num,
-                    begin_timestamp,
-                    end_timestamp,
-                    key_type.clone(),
-                    last_key,
-                )
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to query message by key: {}", e)))?;
-
-            println!(
-                "{:<50} {:>4} {:>40} {:<200}",
-                "#Message ID", "#QID", "#Offset", "#IndexKey"
-            );
-            for msg in query_result.message_list() {
-                if !key_type.is_empty() {
-                    let store_timestamp = deal_time_to_hour_stamps(msg.store_timestamp());
-                    let index_last_key = format!(
-                        "{}@{}@{}@{}@{}@{}",
-                        store_timestamp,
-                        topic,
-                        key_type,
-                        key,
-                        msg.msg_id(),
-                        msg.commit_log_offset()
-                    );
-                    println!(
-                        "{:<50} {:>4} {:>40} {:<200}",
-                        msg.msg_id(),
-                        msg.queue_id(),
-                        msg.queue_offset(),
-                        index_last_key
-                    );
-                } else {
-                    println!("{:<50} {:>4} {:>40}", msg.msg_id(), msg.queue_id(), msg.queue_offset(),);
-                }
-            }
-
-            Ok(())
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        Ok(())
     }
 }

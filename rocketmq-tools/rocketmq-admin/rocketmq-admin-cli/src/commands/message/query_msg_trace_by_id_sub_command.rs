@@ -15,58 +15,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_client_rust::TraceDataEncoder;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
-use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct MessageTraceView {
-    pub msg_type: String,
-    pub group_name: String,
-    pub client_host: String,
-    pub time_stamp: i64,
-    pub cost_time: i32,
-    pub status: String,
-    pub topic: Option<String>,
-    pub tags: Option<String>,
-    pub keys: Option<String>,
-    pub store_host: Option<String>,
-}
-
-impl MessageTraceView {
-    fn format_timestamp(timestamp: i64) -> String {
-        if timestamp <= 0 {
-            return "N/A".to_string();
-        }
-        let dt = Local.timestamp_millis_opt(timestamp);
-        match dt {
-            chrono::LocalResult::Single(dt) => dt.format(YYYY_MM_DD_HH_MM_SS_SSS).to_string(),
-            _ => "N/A".to_string(),
-        }
-    }
-
-    fn status_str(is_success: bool) -> String {
-        if is_success {
-            "success".to_string()
-        } else {
-            "failed".to_string()
-        }
-    }
-}
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::QueryMessageTraceByIdRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgTraceByIdSubCommand {
@@ -111,74 +71,15 @@ pub struct QueryMsgTraceByIdSubCommand {
 }
 
 impl QueryMsgTraceByIdSubCommand {
-    async fn query_trace_by_msg_id(
-        &self,
-        admin: &mut DefaultMQAdminExt,
-        msg_id: &str,
-        trace_topic: &str,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
-    ) -> RocketMQResult<Vec<MessageTraceView>> {
-        let query_result = admin
-            .query_message_by_key(
-                None,
-                CheetahString::from(trace_topic),
-                CheetahString::from(msg_id),
-                max_num,
-                begin_timestamp,
-                end_timestamp,
-                CheetahString::from_static_str(""),
-                None,
-            )
-            .await?;
-
-        let mut trace_views = Vec::new();
-
-        for msg in query_result.message_list() {
-            if let Some(body) = msg.body() {
-                let body_str = String::from_utf8_lossy(body.as_ref());
-                if body_str.is_empty() {
-                    continue;
-                }
-
-                let trace_contexts = TraceDataEncoder::decoder_from_trace_data_string(&body_str);
-
-                for context in trace_contexts {
-                    if let Some(trace_type) = context.trace_type {
-                        if let Some(trace_beans) = &context.trace_beans {
-                            for bean in trace_beans {
-                                if bean.msg_id.as_str() != msg_id {
-                                    continue;
-                                }
-
-                                let client_host = if !bean.client_host.is_empty() {
-                                    bean.client_host.to_string()
-                                } else {
-                                    msg.born_host().to_string()
-                                };
-
-                                let trace_view = MessageTraceView {
-                                    msg_type: trace_type.to_string(),
-                                    group_name: context.group_name.to_string(),
-                                    client_host,
-                                    time_stamp: context.time_stamp as i64,
-                                    cost_time: context.cost_time,
-                                    status: MessageTraceView::status_str(context.is_success),
-                                    topic: Some(bean.topic.to_string()),
-                                    tags: Some(bean.tags.to_string()),
-                                    keys: Some(bean.keys.to_string()),
-                                    store_host: Some(bean.store_host.to_string()),
-                                };
-                                trace_views.push(trace_view);
-                            }
-                        }
-                    }
-                }
-            }
+    fn format_timestamp(timestamp: i64) -> String {
+        if timestamp <= 0 {
+            return "N/A".to_string();
         }
-
-        Ok(trace_views)
+        let dt = Local.timestamp_millis_opt(timestamp);
+        match dt {
+            chrono::LocalResult::Single(dt) => dt.format(YYYY_MM_DD_HH_MM_SS_SSS).to_string(),
+            _ => "N/A".to_string(),
+        }
     }
 
     fn print_message_trace(trace_views: Vec<MessageTraceView>) {
@@ -211,7 +112,7 @@ impl QueryMsgTraceByIdSubCommand {
                     trace.msg_type,
                     trace.group_name,
                     trace.client_host,
-                    MessageTraceView::format_timestamp(trace.time_stamp),
+                    Self::format_timestamp(trace.time_stamp),
                     format!("{}ms", trace.cost_time),
                     trace.status
                 );
@@ -237,7 +138,7 @@ impl QueryMsgTraceByIdSubCommand {
                     trace.msg_type,
                     consumer_group,
                     trace.client_host,
-                    MessageTraceView::format_timestamp(trace.time_stamp),
+                    Self::format_timestamp(trace.time_stamp),
                     format!("{}ms", trace.cost_time),
                     trace.status
                 );
@@ -253,54 +154,18 @@ impl QueryMsgTraceByIdSubCommand {
 
 impl CommandExecute for QueryMsgTraceByIdSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let request = QueryMessageTraceByIdRequest::try_new(
+            self.msg_id.clone(),
+            self.trace_topic.clone(),
+            self.begin_timestamp,
+            self.end_timestamp,
+            self.max_num,
+        )?
+        .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
 
-        if let Some(ref namesrv_addr) = self.common_args.namesrv_addr {
-            default_mqadmin_ext.set_namesrv_addr(namesrv_addr);
-        }
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
-
-            let msg_id = self.msg_id.trim();
-            let trace_topic = self
-                .trace_topic
-                .as_ref()
-                .map(|t| t.trim().to_string())
-                .unwrap_or_else(|| TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string());
-
-            let begin_timestamp = self.begin_timestamp.unwrap_or(0);
-            let end_timestamp = self.end_timestamp.unwrap_or(i64::MAX);
-            let max_num = self.max_num;
-
-            let trace_views = self
-                .query_trace_by_msg_id(
-                    &mut default_mqadmin_ext,
-                    msg_id,
-                    &trace_topic,
-                    max_num,
-                    begin_timestamp,
-                    end_timestamp,
-                )
-                .await?;
-
-            Self::print_message_trace(trace_views);
-
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let trace_views = MessageService::query_message_trace_by_id_by_request_with_rpc_hook(request, rpc_hook).await?;
+        Self::print_message_trace(trace_views);
+        Ok(())
     }
 }
 

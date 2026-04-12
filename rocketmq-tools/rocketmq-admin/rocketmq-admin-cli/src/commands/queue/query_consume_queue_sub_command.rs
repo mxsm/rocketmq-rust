@@ -14,16 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::queue::QueryConsumeQueueRequest;
+use rocketmq_admin_core::core::queue::QueueService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct QueryCqSubCommand {
@@ -52,112 +50,96 @@ pub struct QueryCqSubCommand {
     consumer_group: Option<String>,
 }
 
+impl QueryCqSubCommand {
+    fn request(&self) -> RocketMQResult<QueryConsumeQueueRequest> {
+        QueryConsumeQueueRequest::try_new(
+            self.topic.clone(),
+            self.queue_id,
+            self.index,
+            self.count,
+            self.broker.clone(),
+            self.consumer_group.clone(),
+        )
+    }
+}
+
 impl CommandExecute for QueryCqSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let request = self.request()?;
+        let index = request.index();
+        let result = QueueService::query_consume_queue_by_request_with_rpc_hook(request, rpc_hook).await?;
+        print_query_consume_queue_response(&result.response_body, index);
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let topic = self.topic.trim().to_string();
-        let queue_id = self.queue_id;
-        let index = self.index;
-        let count = self.count;
-        let consumer_group = self
-            .consumer_group
-            .as_deref()
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("QueryCqSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-
-            let broker_addr = if let Some(ref broker) = self.broker {
-                CheetahString::from_string(broker.trim().to_string())
-            } else {
-                let topic_route_data = default_mqadmin_ext
-                    .examine_topic_route_info(CheetahString::from_string(topic.clone()))
-                    .await
-                    .map_err(|e| {
-                        RocketMQError::Internal(format!("QueryCqSubCommand: Failed to examine topic route info: {}", e))
-                    })?;
-
-                let topic_route_data =
-                    topic_route_data.ok_or_else(|| RocketMQError::Internal("No topic route data!".into()))?;
-
-                if topic_route_data.broker_datas.is_empty() {
-                    return Err(RocketMQError::Internal(
-                        "No topic route data! broker_datas is empty".into(),
-                    ));
-                }
-
-                let broker_data = &topic_route_data.broker_datas[0];
-                broker_data.broker_addrs().get(&0u64).cloned().ok_or_else(|| {
-                    RocketMQError::Internal("No master broker address found in topic route data".into())
-                })?
-            };
-
-            let response_body = default_mqadmin_ext
-                .query_consume_queue(
-                    broker_addr,
-                    CheetahString::from_string(topic),
-                    queue_id,
-                    index,
-                    count,
-                    CheetahString::from_string(consumer_group),
-                )
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!("QueryCqSubCommand: Failed to query consume queue: {}", e))
-                })?;
-
-            if let Some(ref subscription_data) = response_body.subscription_data {
-                println!("Subscription data:");
-                match serde_json::to_string_pretty(subscription_data) {
-                    Ok(json) => println!("{}", json),
-                    Err(_) => println!("{:?}", subscription_data),
-                }
-                println!("======================================");
-            }
-
-            if let Some(ref filter_data) = response_body.filter_data {
-                if !filter_data.is_empty() {
-                    println!("Filter data:");
-                    println!("{}", filter_data);
-                    println!("======================================");
-                }
-            }
-
-            println!("Queue data:");
-            println!(
-                "max: {}, min: {}",
-                response_body.max_queue_index, response_body.min_queue_index
-            );
-            println!("======================================");
-
-            if let Some(ref queue_data) = response_body.queue_data {
-                for (offset, data) in queue_data.iter().enumerate() {
-                    println!("idx: {}", index + offset as u64);
-                    match serde_json::to_string_pretty(data) {
-                        Ok(json) => println!("{}", json),
-                        Err(_) => println!("{}", data),
-                    }
-                    println!("======================================");
-                }
-            }
-
-            Ok(())
+fn print_query_consume_queue_response(response_body: &QueryConsumeQueueResponseBody, index: u64) {
+    if let Some(ref subscription_data) = response_body.subscription_data {
+        println!("Subscription data:");
+        match serde_json::to_string_pretty(subscription_data) {
+            Ok(json) => println!("{}", json),
+            Err(_) => println!("{:?}", subscription_data),
         }
-        .await;
+        println!("======================================");
+    }
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    if let Some(ref filter_data) = response_body.filter_data {
+        if !filter_data.is_empty() {
+            println!("Filter data:");
+            println!("{}", filter_data);
+            println!("======================================");
+        }
+    }
+
+    println!("Queue data:");
+    println!(
+        "max: {}, min: {}",
+        response_body.max_queue_index, response_body.min_queue_index
+    );
+    println!("======================================");
+
+    if let Some(ref queue_data) = response_body.queue_data {
+        for (offset, data) in queue_data.iter().enumerate() {
+            println!("idx: {}", index + offset as u64);
+            match serde_json::to_string_pretty(data) {
+                Ok(json) => println!("{}", json),
+                Err(_) => println!("{}", data),
+            }
+            println!("======================================");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn parses_query_consume_queue_request() {
+        let cmd = QueryCqSubCommand::try_parse_from([
+            "queryCq",
+            "-t",
+            " TestTopic ",
+            "-q",
+            "1",
+            "-i",
+            "10",
+            "-c",
+            "20",
+            "-b",
+            " 127.0.0.1:10911 ",
+            "-g",
+            " TestGroup ",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
+
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert_eq!(request.broker_addr().unwrap().as_str(), "127.0.0.1:10911");
+        assert_eq!(request.consumer_group().as_str(), "TestGroup");
+        assert_eq!(request.index(), 10);
+        assert_eq!(request.count(), 20);
     }
 }

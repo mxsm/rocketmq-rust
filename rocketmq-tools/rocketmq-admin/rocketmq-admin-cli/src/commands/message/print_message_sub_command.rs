@@ -12,28 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::ArgAction;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::consumer::pull_status::PullStatus;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_common::UtilAll::parse_date;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const PULL_BATCH_SIZE: i32 = 32;
-const PULL_TIMEOUT_MILLIS: u64 = 3000;
+use rocketmq_admin_core::core::message::MessagePullEvent;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::PrintMessagesRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct PrintMessageSubCommand {
@@ -124,164 +116,38 @@ fn print_message(msgs: &[rocketmq_rust::ArcMut<MessageExt>], _charset_name: &str
 
 impl CommandExecute for PrintMessageSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
+        let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
+        let request = PrintMessagesRequest::try_new(
+            self.topic.clone(),
+            self.sub_expression.clone(),
+            begin_timestamp,
+            end_timestamp,
+            self.lmq_parent_topic.clone(),
+        )?;
+        let charset_name = self.charset_name.trim().to_string();
+        let print_body = self.print_body;
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
-
-            let topic = self.topic.trim();
-            let route_topic = self.lmq_parent_topic.as_deref().map(str::trim).unwrap_or(topic);
-            let charset_name = self.charset_name.trim();
-            let sub_expression = self.sub_expression.trim();
-            let print_body = self.print_body;
-
-            let topic_route = default_mqadmin_ext
-                .examine_topic_route_info(CheetahString::from(route_topic))
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to get topic route info: {}", e)))?
-                .ok_or_else(|| RocketMQError::Internal(format!("Topic route not found for: {}", route_topic)))?;
-
-            let mut broker_addr_map: HashMap<String, CheetahString> = HashMap::new();
-            for broker_data in &topic_route.broker_datas {
-                if let Some(addr) = broker_data.select_broker_addr() {
-                    broker_addr_map.insert(broker_data.broker_name().to_string(), addr);
+        MessageService::print_messages_by_request_with_rpc_hook(request, rpc_hook, |event| {
+            match event {
+                MessagePullEvent::QueueRange {
+                    mq,
+                    min_offset,
+                    max_offset,
+                } => println!("minOffset={}, maxOffset={}, {}", min_offset, max_offset, mq),
+                MessagePullEvent::Messages { messages } => print_message(&messages, &charset_name, print_body),
+                MessagePullEvent::NoMatched { mq, status, offset } => {
+                    println!("{} no matched msg. status={:?}, offset={}", mq, status, offset)
                 }
+                MessagePullEvent::Finished { mq, status, offset } => {
+                    println!("{} print msg finished. status={:?}, offset={}", mq, status, offset)
+                }
+                MessagePullEvent::PullError { error } => eprintln!("Pull message error: {}", error),
+                MessagePullEvent::Separator => println!("--------------------------------------------------------"),
+                _ => {}
             }
-
-            let mut message_queues: Vec<(MessageQueue, CheetahString)> = Vec::new();
-            for queue_data in &topic_route.queue_datas {
-                let broker_name = queue_data.broker_name().as_str();
-
-                let Some(broker_addr) = broker_addr_map.get(broker_name).cloned() else {
-                    continue;
-                };
-
-                let read_queue_nums = queue_data.read_queue_nums() as i32;
-                if read_queue_nums <= 0 {
-                    continue;
-                }
-
-                for queue_id in 0..read_queue_nums {
-                    message_queues.push((
-                        MessageQueue::from_parts(topic, broker_name, queue_id),
-                        broker_addr.clone(),
-                    ));
-                }
-            }
-
-            if message_queues.is_empty() {
-                return Err(RocketMQError::Internal("No available message queue found".to_string()));
-            }
-
-            for (mq, broker_addr) in message_queues {
-                let mut min_offset = default_mqadmin_ext
-                    .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
-                    .await
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to get min offset: {}", e)))?;
-
-                let mut max_offset = default_mqadmin_ext
-                    .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
-                    .await
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to get max offset: {}", e)))?;
-
-                if let Some(begin_ts) = &self.begin_timestamp {
-                    let time_value = timestamp_format(begin_ts.trim());
-                    min_offset = default_mqadmin_ext
-                        .search_offset(
-                            broker_addr.clone(),
-                            CheetahString::from(topic),
-                            mq.queue_id(),
-                            time_value,
-                            PULL_TIMEOUT_MILLIS,
-                        )
-                        .await
-                        .map_err(|e| RocketMQError::Internal(format!("Failed to search begin offset: {}", e)))?
-                        as i64;
-                }
-
-                if let Some(end_ts) = &self.end_timestamp {
-                    let time_value = timestamp_format(end_ts.trim());
-                    max_offset = default_mqadmin_ext
-                        .search_offset(
-                            broker_addr.clone(),
-                            CheetahString::from(topic),
-                            mq.queue_id(),
-                            time_value,
-                            PULL_TIMEOUT_MILLIS,
-                        )
-                        .await
-                        .map_err(|e| RocketMQError::Internal(format!("Failed to search end offset: {}", e)))?
-                        as i64;
-                }
-
-                println!("minOffset={}, maxOffset={}, {}", min_offset, max_offset, mq);
-
-                let mut offset = min_offset;
-                'read_queue: while offset < max_offset {
-                    let pull_result = default_mqadmin_ext
-                        .pull_message_from_queue(
-                            broker_addr.as_str(),
-                            &mq,
-                            sub_expression,
-                            offset,
-                            PULL_BATCH_SIZE,
-                            PULL_TIMEOUT_MILLIS,
-                        )
-                        .await;
-
-                    match pull_result {
-                        Ok(result) => {
-                            offset = result.next_begin_offset() as i64;
-                            match result.pull_status() {
-                                PullStatus::Found => {
-                                    if let Some(msg_list) = result.msg_found_list() {
-                                        print_message(msg_list, charset_name, print_body);
-                                    }
-                                }
-                                PullStatus::NoMatchedMsg => {
-                                    println!(
-                                        "{} no matched msg. status={:?}, offset={}",
-                                        mq,
-                                        result.pull_status(),
-                                        offset
-                                    );
-                                }
-                                PullStatus::NoNewMsg | PullStatus::OffsetIllegal => {
-                                    println!(
-                                        "{} print msg finished. status={:?}, offset={}",
-                                        mq,
-                                        result.pull_status(),
-                                        offset
-                                    );
-                                    break 'read_queue;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Pull message error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                println!("--------------------------------------------------------");
-            }
-
             Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        })
+        .await
     }
 }

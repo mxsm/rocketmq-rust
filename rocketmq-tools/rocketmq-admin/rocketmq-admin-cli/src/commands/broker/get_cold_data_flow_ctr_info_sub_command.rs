@@ -14,10 +14,8 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
+use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::utils::util_all::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -25,10 +23,16 @@ use rocketmq_remoting::runtime::RPCHook;
 use serde_json::Value;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerConfigSectionTarget;
+use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryRequest;
+use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoSection;
 
 #[derive(Debug, Clone, Parser)]
+#[command(group(ArgGroup::new("target")
+    .required(true)
+    .args(&["broker_addr", "cluster_name"]))
+)]
 pub struct GetColdDataFlowCtrInfoSubCommand {
     #[arg(short = 'b', long = "brokerAddr", required = false, help = "get from which broker")]
     broker_addr: Option<String>,
@@ -38,33 +42,22 @@ pub struct GetColdDataFlowCtrInfoSubCommand {
 }
 
 impl GetColdDataFlowCtrInfoSubCommand {
-    async fn get_and_print(
-        &self,
-        default_mqadmin_ext: &DefaultMQAdminExt,
-        print_prefix: &str,
-        addr: &str,
-    ) -> RocketMQResult<()> {
-        print!(" {}", print_prefix);
+    fn request(&self) -> RocketMQResult<ColdDataFlowCtrInfoQueryRequest> {
+        ColdDataFlowCtrInfoQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
+    }
 
-        let rst_str = default_mqadmin_ext
-            .get_cold_data_flow_ctr_info(CheetahString::from(addr))
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetColdDataFlowCtrInfoSubCommand: Failed to get cold data flow ctr info from broker {}: {}",
-                    addr, e
-                ))
-            })?;
+    fn print_section(section: ColdDataFlowCtrInfoSection) -> RocketMQResult<()> {
+        print!(" {}", section_prefix(&section.target));
 
-        if rst_str.is_empty() {
-            println!("Broker[{}] has no cold ctr table !", addr);
+        if section.raw_info.is_empty() {
+            println!("Broker[{}] has no cold ctr table !", section.broker_addr);
             return Ok(());
         }
 
-        let mut json_value: Value = serde_json::from_str(rst_str.as_str()).map_err(|e| {
+        let mut json_value: Value = serde_json::from_str(section.raw_info.as_str()).map_err(|e| {
             RocketMQError::Internal(format!(
                 "GetColdDataFlowCtrInfoSubCommand: Failed to parse JSON response from broker {}: {}",
-                addr, e
+                section.broker_addr, e
             ))
         })?;
 
@@ -101,90 +94,56 @@ impl GetColdDataFlowCtrInfoSubCommand {
         }
 
         let format_str = serde_json::to_string_pretty(&json_value).map_err(|e| {
-            RocketMQError::Internal(format!(
-                "GetColdDataFlowCtrInfoSubCommand: Failed to format JSON: {}",
-                e
-            ))
+            RocketMQError::Internal(format!("GetColdDataFlowCtrInfoSubCommand: Failed to format JSON: {e}"))
         })?;
-        println!("{}", format_str);
-
+        println!("{format_str}");
         Ok(())
     }
 }
 
 impl CommandExecute for GetColdDataFlowCtrInfoSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetColdDataFlowCtrInfoSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            if let Some(broker_addr) = &self.broker_addr {
-                let broker_addr = broker_addr.trim();
-                self.get_and_print(
-                    &default_mqadmin_ext,
-                    &format!("============{}============\n", broker_addr),
-                    broker_addr,
-                )
-                .await?;
-            } else if let Some(cluster_name) = &self.cluster_name {
-                let cluster_name = cluster_name.trim();
-                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "GetColdDataFlowCtrInfoSubCommand: Failed to examine broker cluster info: {}",
-                        e
-                    ))
-                })?;
-
-                let master_and_slave_map =
-                    CommandUtil::fetch_master_and_slave_distinguish(&cluster_info, cluster_name)?;
-
-                let mut sorted_masters: Vec<_> = master_and_slave_map.keys().collect();
-                sorted_masters.sort();
-
-                for master_addr in &sorted_masters {
-                    let slave_addrs = &master_and_slave_map[*master_addr];
-                    self.get_and_print(
-                        &default_mqadmin_ext,
-                        &format!("============Master: {}============\n", master_addr),
-                        master_addr.as_str(),
-                    )
-                    .await?;
-
-                    let mut sorted_slaves: Vec<_> = slave_addrs.iter().collect();
-                    sorted_slaves.sort();
-
-                    for slave_addr in &sorted_slaves {
-                        self.get_and_print(
-                            &default_mqadmin_ext,
-                            &format!(
-                                "============My Master: {}=====Slave: {}============\n",
-                                master_addr, slave_addr
-                            ),
-                            slave_addr.as_str(),
-                        )
-                        .await?;
-                    }
-                }
-            }
-            Ok(())
+        let result =
+            BrokerService::query_cold_data_flow_ctr_info_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        for section in result.sections {
+            Self::print_section(section)?;
         }
-        .await;
+        Ok(())
+    }
+}
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+fn section_prefix(target: &BrokerConfigSectionTarget) -> String {
+    match target {
+        BrokerConfigSectionTarget::Broker(addr) => format!("============{}============\n", addr),
+        BrokerConfigSectionTarget::Master(master_addr) => format!("============Master: {}============\n", master_addr),
+        BrokerConfigSectionTarget::Slave {
+            master_addr,
+            slave_addr,
+        } => format!(
+            "============My Master: {}=====Slave: {}============\n",
+            master_addr, slave_addr
+        ),
+        BrokerConfigSectionTarget::NoMaster => "============NO_MASTER============\n".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn parses_get_cold_data_flow_ctr_info_request() {
+        let command =
+            GetColdDataFlowCtrInfoSubCommand::try_parse_from(["getColdDataFlowCtrInfo", "-b", " 127.0.0.1:10911 "])
+                .unwrap();
+        let request = command.request().unwrap();
+
+        assert!(matches!(
+            request.target(),
+            rocketmq_admin_core::core::broker::BrokerTarget::BrokerAddr(addr)
+                if addr.as_str() == "127.0.0.1:10911"
+        ));
     }
 }

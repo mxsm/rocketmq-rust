@@ -19,6 +19,7 @@
 //! - [`AdminGuard`] - RAII wrapper for automatic resource cleanup
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::current_millis;
@@ -132,9 +133,12 @@ impl AdminBuilder {
     /// - Connection cannot be established
     /// - Network I/O fails
     pub async fn build_and_start(self) -> RocketMQResult<DefaultMQAdminExt> {
-        let mut admin = match self.rpc_hook {
-            Some(hook) => DefaultMQAdminExt::with_rpc_hook(hook),
-            None => DefaultMQAdminExt::new(),
+        let timeout = self.timeout_millis.map(Duration::from_millis);
+        let mut admin = match (self.rpc_hook, timeout) {
+            (Some(hook), Some(timeout)) => DefaultMQAdminExt::with_rpc_hook_and_timeout(hook, timeout),
+            (Some(hook), None) => DefaultMQAdminExt::with_rpc_hook(hook),
+            (None, Some(timeout)) => DefaultMQAdminExt::with_timeout(timeout),
+            (None, None) => DefaultMQAdminExt::new(),
         };
 
         // Apply NameServer address
@@ -148,8 +152,8 @@ impl AdminBuilder {
             .unwrap_or_else(|| format!("tools-{}", current_millis()));
         admin.client_config_mut().set_instance_name(instance_name.into());
 
-        // Note: timeout_millis and unit_name are stored but not currently applied
-        // as the corresponding setter methods are not available in ClientConfig
+        // Note: unit_name is stored but not currently applied as the
+        // corresponding setter method is not available in ClientConfig.
 
         // Start the admin client
         admin.start().await?;

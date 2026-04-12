@@ -18,15 +18,17 @@ use chrono::Local;
 use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::offset::OffsetService;
+use rocketmq_admin_core::core::offset::ResetOffsetByTimeRequest;
+use rocketmq_admin_core::core::offset::ResetOffsetByTimeResult;
 
 /// Timestamp format used by the Java reference implementation.
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d#%H:%M:%S:%3f";
@@ -40,11 +42,9 @@ fn parse_timestamp(s: &str) -> RocketMQResult<u64> {
     if s.eq_ignore_ascii_case("now") {
         return Ok(current_millis());
     }
-    // Try parsing as plain milliseconds integer first.
     if let Ok(ms) = s.parse::<u64>() {
         return Ok(ms);
     }
-    // Try parsing as formatted datetime string.
     if let Ok(ndt) = NaiveDateTime::parse_from_str(s, TIMESTAMP_FORMAT) {
         let millis = Local
             .from_local_datetime(&ndt)
@@ -64,7 +64,6 @@ fn parse_timestamp(s: &str) -> RocketMQResult<u64> {
     )))
 }
 
-/// Format a millisecond timestamp for human-readable output.
 fn format_timestamp(ms: u64) -> String {
     match Local.timestamp_millis_opt(ms as i64) {
         chrono::LocalResult::Single(dt) => dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
@@ -72,29 +71,17 @@ fn format_timestamp(ms: u64) -> String {
     }
 }
 
-/// `resetOffsetByTime` - reset consumer group offsets to a specific timestamp without
-/// requiring a client restart.
-///
-/// Resets all queues for the topic.  Active consumers are notified by the broker
-/// and apply the new offsets immediately - no restart required.
-///
-/// If the new method is unavailable (consumer group offline), the command falls back
-/// to the legacy `resetOffsetByTimestampOld` API, which **does** require a restart.
 #[derive(Debug, Clone, Parser)]
 pub struct ResetOffsetByTimeSubCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Consumer group name.
     #[arg(short = 'g', long = "group", required = true, help = "consumer group name")]
     group: String,
 
-    /// Topic name.
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
 
-    /// Target timestamp.  Accepts: `now`, milliseconds since epoch, or
-    /// `yyyy-MM-dd#HH:mm:ss:SSS` (e.g. `2024-02-19#10:00:00:000`).
     #[arg(
         short = 's',
         long = "timestamp",
@@ -105,31 +92,45 @@ pub struct ResetOffsetByTimeSubCommand {
 }
 
 impl ResetOffsetByTimeSubCommand {
-    /// Perform a topic-level reset (all queues) using the new method that does
-    /// not require a consumer restart.  Falls back to the old method on error.
-    async fn reset_topic_level(
-        admin: &mut DefaultMQAdminExt,
-        group: &str,
-        topic: &str,
-        timestamp: u64,
-    ) -> RocketMQResult<()> {
+    fn request(&self) -> RocketMQResult<ResetOffsetByTimeRequest> {
+        let group = self.group.trim();
+        if group.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "Consumer group name (--group / -g) cannot be empty".into(),
+            ));
+        }
+
+        let topic = self.topic.trim();
+        if topic.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "Topic name (--topic / -t) cannot be empty".into(),
+            ));
+        }
+
+        Ok(
+            ResetOffsetByTimeRequest::try_new(group, topic, parse_timestamp(&self.timestamp)?)?
+                .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
+        )
+    }
+
+    fn print_result(request: &ResetOffsetByTimeRequest, result: ResetOffsetByTimeResult) {
         println!("Reset Consumer Offset by Time");
         println!("==============================");
         println!();
-        println!("Consumer Group: {group}");
-        println!("Topic: {topic}");
-        println!("Target Timestamp: {} ({timestamp})", format_timestamp(timestamp));
+        println!("Consumer Group: {}", request.group());
+        println!("Topic: {}", request.topic());
+        println!(
+            "Target Timestamp: {} ({})",
+            format_timestamp(request.timestamp()),
+            request.timestamp()
+        );
         println!();
         println!("Resetting offsets...");
         println!("{}", "-".repeat(50));
         println!();
 
-        let result = admin
-            .reset_offset_by_timestamp(None, topic.into(), group.into(), timestamp, false)
-            .await;
-
         match result {
-            Ok(offset_map) => {
+            ResetOffsetByTimeResult::Current(offset_map) => {
                 let mut entries: Vec<_> = offset_map.iter().collect();
                 entries.sort_by(|(a, _), (b, _)| {
                     a.broker_name()
@@ -150,47 +151,40 @@ impl ResetOffsetByTimeSubCommand {
                 println!("{}", "-".repeat(50));
                 println!("Reset Summary:");
                 println!("  Total Queues: {}", entries.len());
-                println!("  All offsets reset to timestamp: {}", format_timestamp(timestamp));
+                println!(
+                    "  All offsets reset to timestamp: {}",
+                    format_timestamp(request.timestamp())
+                );
                 println!();
                 println!("Note: Consumers will automatically resume from new offsets (no restart required)");
-                Ok(())
             }
-            Err(e) => {
-                // Attempt the legacy fallback path.
-                eprintln!("New reset method failed ({e}). Trying legacy method.");
-                Self::reset_topic_level_old(admin, group, topic, timestamp).await
+            ResetOffsetByTimeResult::Legacy {
+                rollback_stats,
+                current_error,
+            } => {
+                eprintln!("New reset method failed ({current_error}). Trying legacy method.");
+                Self::print_legacy_result(request, rollback_stats);
             }
         }
     }
 
-    /// Fallback: old topic-level reset via `resetOffsetByTimestampOld`.
-    /// This method **requires** a consumer restart.
-    async fn reset_topic_level_old(
-        admin: &mut DefaultMQAdminExt,
-        group: &str,
-        topic: &str,
-        timestamp: u64,
-    ) -> RocketMQResult<()> {
+    fn print_legacy_result(request: &ResetOffsetByTimeRequest, rollback_stats: Vec<RollbackStats>) {
         println!();
         println!("Consumer group is offline - using legacy reset method");
         println!();
         println!("Reset consumer offset by specified:");
-        println!("  consumerGroup[{group}]");
-        println!("  topic[{topic}]");
+        println!("  consumerGroup[{}]", request.group());
+        println!("  topic[{}]", request.topic());
         println!(
             "  timestamp(string)[{}]",
             Local
-                .timestamp_millis_opt(timestamp as i64)
+                .timestamp_millis_opt(request.timestamp() as i64)
                 .single()
                 .map(|dt| dt.format(TIMESTAMP_FORMAT).to_string())
-                .unwrap_or_else(|| timestamp.to_string())
+                .unwrap_or_else(|| request.timestamp().to_string())
         );
-        println!("  timestamp(long)[{timestamp}]");
+        println!("  timestamp(long)[{}]", request.timestamp());
         println!();
-
-        let rollback_stats = admin
-            .reset_offset_by_timestamp_old(None, group.into(), topic.into(), timestamp, false)
-            .await?;
 
         println!(
             "{:<24} {:<10} {:<14} {:<16} {:<16} {:<12}",
@@ -198,7 +192,7 @@ impl ResetOffsetByTimeSubCommand {
         );
         println!("{}", "-".repeat(95));
 
-        for stat in &rollback_stats {
+        for stat in rollback_stats {
             println!(
                 "{:<24} {:<10} {:<14} {:<16} {:<16} {:<12}",
                 stat.broker_name,
@@ -212,46 +206,43 @@ impl ResetOffsetByTimeSubCommand {
 
         println!();
         println!("Note: Consumer restart required for old method to take effect");
-        Ok(())
     }
 }
 
 impl CommandExecute for ResetOffsetByTimeSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        // ── Validate arguments ───────────────────────────────────────────────
-        let group = self.group.trim();
-        if group.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "Consumer group name (--group / -g) cannot be empty".into(),
-            ));
-        }
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = self.request()?;
+        let result = OffsetService::reset_offset_by_time_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        Self::print_result(&request, result);
+        Ok(())
+    }
+}
 
-        let topic = self.topic.trim();
-        if topic.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "Topic name (--topic / -t) cannot be empty".into(),
-            ));
-        }
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
 
-        let timestamp = parse_timestamp(&self.timestamp)?;
+    use super::*;
 
-        // ── Initialise admin client ───────────────────────────────────────────
-        let mut admin = DefaultMQAdminExt::new();
-        admin
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+    #[test]
+    fn parses_reset_offset_by_time_request() {
+        let cmd = ResetOffsetByTimeSubCommand::try_parse_from([
+            "resetOffsetByTime",
+            "-g",
+            " TestGroup ",
+            "-t",
+            " TestTopic ",
+            "-s",
+            "1234",
+            "-n",
+            " 127.0.0.1:9876 ",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
 
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            admin.set_namesrv_addr(addr.trim());
-        }
-
-        admin.start().await.map_err(|e| {
-            RocketMQError::Internal(format!("ResetOffsetByTimeSubCommand: Failed to start MQAdminExt: {e}"))
-        })?;
-
-        let result = Self::reset_topic_level(&mut admin, group, topic, timestamp).await;
-
-        admin.shutdown().await;
-        result
+        assert_eq!(request.group().as_str(), "TestGroup");
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert_eq!(request.timestamp(), 1234);
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
     }
 }

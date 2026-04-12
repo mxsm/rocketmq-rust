@@ -25,6 +25,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use super::types::validate_update_value;
 use super::types::AppliedBrokerConfigUpdate;
+use super::types::BrokerBooleanOperationResult;
 use super::types::BrokerConfigEntry;
 use super::types::BrokerConfigQueryRequest;
 use super::types::BrokerConfigQueryResult;
@@ -37,12 +38,33 @@ use super::types::BrokerConfigUpdateRequest;
 use super::types::BrokerConsumeStatsQueryRequest;
 use super::types::BrokerConsumeStatsResult;
 use super::types::BrokerConsumeStatsRow;
+use super::types::BrokerEpochEntry;
+use super::types::BrokerEpochQueryRequest;
+use super::types::BrokerEpochQueryResult;
+use super::types::BrokerEpochQueryTarget;
+use super::types::BrokerEpochSection;
+use super::types::BrokerOperationFailure;
+use super::types::BrokerOperationResult;
+use super::types::BrokerOptionalTarget;
 use super::types::BrokerRuntimeStatsEntry;
 use super::types::BrokerRuntimeStatsFailure;
 use super::types::BrokerRuntimeStatsQueryRequest;
 use super::types::BrokerRuntimeStatsResult;
 use super::types::BrokerRuntimeStatsSection;
 use super::types::BrokerTarget;
+use super::types::CleanExpiredConsumeQueueReport;
+use super::types::CleanExpiredConsumeQueueRequest;
+use super::types::CleanExpiredConsumeQueueTargetResult;
+use super::types::ColdDataFlowCtrGroupConfigRemoveRequest;
+use super::types::ColdDataFlowCtrGroupConfigUpdateRequest;
+use super::types::ColdDataFlowCtrInfoQueryRequest;
+use super::types::ColdDataFlowCtrInfoQueryResult;
+use super::types::ColdDataFlowCtrInfoSection;
+use super::types::CommitLogReadAheadRequest;
+use super::types::CommitLogReadAheadResult;
+use super::types::CommitLogReadAheadSection;
+use super::types::ResetMasterFlushOffsetRequest;
+use super::types::SwitchTimerEngineRequest;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
 use crate::core::resolver::BrokerAddressResolver;
@@ -50,6 +72,11 @@ use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 
 pub struct BrokerService;
+
+const COMMIT_LOG_READ_AHEAD_MODE_KEY: &str = "commitLogReadAheadMode";
+const DATA_READ_AHEAD_ENABLE_KEY: &str = "dataReadAheadEnable";
+const DEFAULT_READ_AHEAD_SIZE_KEY: &str = "dataReadAheadSize";
+const KNOWN_READ_AHEAD_SIZE_KEYS: [&str; 3] = [DEFAULT_READ_AHEAD_SIZE_KEY, "commitLogReadAheadSize", "readAheadSize"];
 
 impl BrokerService {
     pub async fn query_broker_config_by_request(
@@ -59,6 +86,417 @@ impl BrokerService {
         let result = Self::query_broker_config_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
+    }
+
+    pub async fn delete_expired_commit_log_by_request_with_rpc_hook(
+        request: BrokerOptionalTarget,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerBooleanOperationResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = admin
+            .delete_expired_commit_log(request.cluster_name().cloned(), request.broker_addr().cloned())
+            .await
+            .map(|success| BrokerBooleanOperationResult { success })
+            .map_err(|error| {
+                RocketMQError::Internal(format!("BrokerService: failed to delete expired commit log: {error}"))
+            });
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn clean_unused_topic_by_request_with_rpc_hook(
+        request: BrokerOptionalTarget,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerBooleanOperationResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = admin
+            .clean_unused_topic(request.cluster_name().cloned(), request.broker_addr().cloned())
+            .await
+            .map(|success| BrokerBooleanOperationResult { success })
+            .map_err(|error| RocketMQError::Internal(format!("BrokerService: failed to clean unused topic: {error}")));
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn reset_master_flush_offset_by_request_with_rpc_hook(
+        request: ResetMasterFlushOffsetRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<()> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = admin
+            .reset_master_flush_offset(request.broker_addr().clone(), request.master_flush_offset())
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to reset master flush offset for {}: {}",
+                    request.broker_addr(),
+                    error
+                ))
+            });
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn switch_timer_engine_by_request_with_rpc_hook(
+        request: SwitchTimerEngineRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::switch_timer_engine_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn switch_timer_engine_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &SwitchTimerEngineRequest,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        let broker_addrs = Self::resolve_master_targets(admin, request.target()).await?;
+        let mut successes = Vec::new();
+        let mut failures = Vec::new();
+
+        for broker_addr in broker_addrs {
+            match admin
+                .switch_timer_engine(broker_addr.clone(), request.engine_type().clone())
+                .await
+            {
+                Ok(()) => successes.push(broker_addr),
+                Err(error) => failures.push(BrokerOperationFailure {
+                    broker_addr,
+                    error: error.to_string(),
+                }),
+            }
+        }
+
+        Ok(BrokerOperationResult {
+            broker_addrs: successes,
+            failures,
+        })
+    }
+
+    pub async fn update_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(
+        request: ColdDataFlowCtrGroupConfigUpdateRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::update_cold_data_flow_ctr_group_config_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn update_cold_data_flow_ctr_group_config_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ColdDataFlowCtrGroupConfigUpdateRequest,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        let broker_addrs = Self::resolve_master_targets(admin, request.target()).await?;
+        let mut successes = Vec::new();
+        let mut failures = Vec::new();
+
+        for broker_addr in broker_addrs {
+            let mut properties = HashMap::new();
+            properties.insert(request.consumer_group().clone(), request.threshold().clone());
+            match admin
+                .update_cold_data_flow_ctr_group_config(broker_addr.clone(), properties)
+                .await
+            {
+                Ok(()) => successes.push(broker_addr),
+                Err(error) => failures.push(BrokerOperationFailure {
+                    broker_addr,
+                    error: error.to_string(),
+                }),
+            }
+        }
+
+        Ok(BrokerOperationResult {
+            broker_addrs: successes,
+            failures,
+        })
+    }
+
+    pub async fn remove_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(
+        request: ColdDataFlowCtrGroupConfigRemoveRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::remove_cold_data_flow_ctr_group_config_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn remove_cold_data_flow_ctr_group_config_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ColdDataFlowCtrGroupConfigRemoveRequest,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        let broker_addrs = Self::resolve_master_targets(admin, request.target()).await?;
+        let mut successes = Vec::new();
+        let mut failures = Vec::new();
+
+        for broker_addr in broker_addrs {
+            match admin
+                .remove_cold_data_flow_ctr_group_config(broker_addr.clone(), request.consumer_group().clone())
+                .await
+            {
+                Ok(()) => successes.push(broker_addr),
+                Err(error) => failures.push(BrokerOperationFailure {
+                    broker_addr,
+                    error: error.to_string(),
+                }),
+            }
+        }
+
+        Ok(BrokerOperationResult {
+            broker_addrs: successes,
+            failures,
+        })
+    }
+
+    pub async fn query_cold_data_flow_ctr_info_by_request_with_rpc_hook(
+        request: ColdDataFlowCtrInfoQueryRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<ColdDataFlowCtrInfoQueryResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::query_cold_data_flow_ctr_info_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_cold_data_flow_ctr_info_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ColdDataFlowCtrInfoQueryRequest,
+    ) -> RocketMQResult<ColdDataFlowCtrInfoQueryResult> {
+        let mut sections = Vec::new();
+
+        match request.target() {
+            BrokerTarget::BrokerAddr(addr) => {
+                sections.push(
+                    Self::get_cold_data_flow_ctr_info_section(
+                        admin,
+                        BrokerConfigSectionTarget::Broker(addr.clone()),
+                        addr.clone(),
+                    )
+                    .await?,
+                );
+            }
+            BrokerTarget::ClusterName(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                })?;
+                let master_and_slave_map =
+                    BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
+                let mut sorted_masters: Vec<_> = master_and_slave_map.keys().cloned().collect();
+                sorted_masters.sort();
+
+                for master_addr in sorted_masters {
+                    let slave_addrs = master_and_slave_map.get(&master_addr).cloned().unwrap_or_default();
+                    if master_addr.as_str() != BrokerAddressResolver::NO_MASTER_PLACEHOLDER {
+                        sections.push(
+                            Self::get_cold_data_flow_ctr_info_section(
+                                admin,
+                                BrokerConfigSectionTarget::Master(master_addr.clone()),
+                                master_addr.clone(),
+                            )
+                            .await?,
+                        );
+                    }
+
+                    let mut sorted_slaves = slave_addrs;
+                    sorted_slaves.sort();
+                    for slave_addr in sorted_slaves {
+                        sections.push(
+                            Self::get_cold_data_flow_ctr_info_section(
+                                admin,
+                                BrokerConfigSectionTarget::Slave {
+                                    master_addr: master_addr.clone(),
+                                    slave_addr: slave_addr.clone(),
+                                },
+                                slave_addr,
+                            )
+                            .await?,
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(ColdDataFlowCtrInfoQueryResult { sections })
+    }
+
+    pub async fn query_broker_epoch_by_request_with_rpc_hook(
+        request: BrokerEpochQueryRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<BrokerEpochQueryResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::query_broker_epoch_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_broker_epoch_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &BrokerEpochQueryRequest,
+    ) -> RocketMQResult<BrokerEpochQueryResult> {
+        let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+            RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+        })?;
+        let mut broker_addrs = match request.target() {
+            BrokerEpochQueryTarget::BrokerName(broker_name) => {
+                BrokerAddressResolver::fetch_master_and_slave_addr_by_broker_name(&cluster_info, broker_name.as_str())?
+            }
+            BrokerEpochQueryTarget::ClusterName(cluster_name) => {
+                BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(
+                    &cluster_info,
+                    cluster_name.as_str(),
+                )?
+            }
+        };
+        broker_addrs.sort();
+        broker_addrs.dedup();
+
+        let mut sections = Vec::new();
+        for broker_addr in broker_addrs {
+            sections.push(Self::get_broker_epoch_section(admin, broker_addr).await?);
+        }
+
+        Ok(BrokerEpochQueryResult { sections })
+    }
+
+    pub async fn clean_expired_consume_queue_by_request_with_rpc_hook(
+        request: CleanExpiredConsumeQueueRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<CleanExpiredConsumeQueueReport> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::clean_expired_consume_queue_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn clean_expired_consume_queue_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &CleanExpiredConsumeQueueRequest,
+    ) -> RocketMQResult<CleanExpiredConsumeQueueReport> {
+        let targets = if request.is_global_mode() {
+            Self::fetch_all_broker_targets(admin).await?
+        } else {
+            Self::resolve_clean_expired_cq_targets(admin, request).await?
+        };
+
+        let mut report = CleanExpiredConsumeQueueReport {
+            scanned_brokers: targets.len(),
+            targets,
+            target_results: Vec::new(),
+            dry_run: request.dry_run(),
+            is_global_mode: request.is_global_mode(),
+            cleanup_invocations: 0,
+            cleanup_successes: 0,
+            cleanup_false_results: 0,
+            failures: Vec::new(),
+        };
+
+        if request.dry_run() {
+            return Ok(report);
+        }
+
+        if request.is_global_mode() {
+            report.cleanup_invocations = 1;
+            match admin.clean_expired_consumer_queue(None, None).await {
+                Ok(success) => {
+                    report.target_results.push(CleanExpiredConsumeQueueTargetResult {
+                        broker_addr: CheetahString::from("global"),
+                        success,
+                    });
+                    if success {
+                        report.cleanup_successes = 1;
+                    } else {
+                        report.cleanup_false_results = 1;
+                    }
+                }
+                Err(error) => report.failures.push(BrokerOperationFailure {
+                    broker_addr: CheetahString::from("global"),
+                    error: error.to_string(),
+                }),
+            }
+            return Ok(report);
+        }
+
+        if report.targets.is_empty() {
+            return Err(RocketMQError::Internal(
+                "BrokerService: no broker targets matched the cleanExpiredCQ scope".to_string(),
+            ));
+        }
+
+        for target in report.targets.clone() {
+            report.cleanup_invocations += 1;
+            match admin.clean_expired_consumer_queue(None, Some(target.clone())).await {
+                Ok(success) => {
+                    report.target_results.push(CleanExpiredConsumeQueueTargetResult {
+                        broker_addr: target,
+                        success,
+                    });
+                    if success {
+                        report.cleanup_successes += 1;
+                    } else {
+                        report.cleanup_false_results += 1;
+                    }
+                }
+                Err(error) => report.failures.push(BrokerOperationFailure {
+                    broker_addr: target,
+                    error: error.to_string(),
+                }),
+            }
+        }
+
+        Ok(report)
+    }
+
+    pub async fn set_commit_log_read_ahead_by_request_with_rpc_hook(
+        request: CommitLogReadAheadRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<CommitLogReadAheadResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::set_commit_log_read_ahead_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn set_commit_log_read_ahead_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &CommitLogReadAheadRequest,
+    ) -> RocketMQResult<CommitLogReadAheadResult> {
+        let targets = Self::resolve_commit_log_read_ahead_targets(admin, request).await?;
+        let mut sections = Vec::new();
+        let mut failures = Vec::new();
+
+        for (target, broker_addr) in targets {
+            match Self::apply_commit_log_read_ahead_to_target(admin, request, target, broker_addr.clone()).await {
+                Ok(section) => sections.push(section),
+                Err(error) => failures.push(BrokerOperationFailure {
+                    broker_addr,
+                    error: error.to_string(),
+                }),
+            }
+        }
+
+        Ok(CommitLogReadAheadResult { sections, failures })
     }
 
     pub async fn query_broker_runtime_stats_by_request(
@@ -402,6 +840,25 @@ impl BrokerService {
         }
     }
 
+    async fn resolve_master_targets(
+        admin: &DefaultMQAdminExt,
+        target: &BrokerTarget,
+    ) -> RocketMQResult<Vec<CheetahString>> {
+        match target {
+            BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
+            BrokerTarget::ClusterName(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                })?;
+                let mut broker_addrs =
+                    BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
+                broker_addrs.sort();
+                broker_addrs.dedup();
+                Ok(broker_addrs)
+            }
+        }
+    }
+
     async fn get_broker_config_entries(
         admin: &DefaultMQAdminExt,
         broker_addr: &CheetahString,
@@ -415,6 +872,280 @@ impl BrokerService {
         })?;
 
         Ok(filter_and_sort_properties(properties, key_pattern))
+    }
+
+    async fn get_cold_data_flow_ctr_info_section(
+        admin: &DefaultMQAdminExt,
+        target: BrokerConfigSectionTarget,
+        broker_addr: CheetahString,
+    ) -> RocketMQResult<ColdDataFlowCtrInfoSection> {
+        let raw_info = admin
+            .get_cold_data_flow_ctr_info(broker_addr.clone())
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to get cold data flow ctr info from {}: {}",
+                    broker_addr, error
+                ))
+            })?;
+
+        Ok(ColdDataFlowCtrInfoSection {
+            target,
+            broker_addr,
+            raw_info,
+        })
+    }
+
+    async fn get_broker_epoch_section(
+        admin: &DefaultMQAdminExt,
+        broker_addr: CheetahString,
+    ) -> RocketMQResult<BrokerEpochSection> {
+        let mut epoch_cache = admin
+            .get_broker_epoch_cache(broker_addr.clone())
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to get broker epoch cache from {}: {}",
+                    broker_addr, error
+                ))
+            })?;
+
+        let max_offset = epoch_cache.get_max_offset();
+        let epoch_list = epoch_cache.get_epoch_list_mut();
+        let len = epoch_list.len();
+        let mut epochs = Vec::with_capacity(len);
+        for (index, epoch_entry) in epoch_list.iter_mut().enumerate() {
+            if index == len.saturating_sub(1) {
+                epoch_entry.set_end_offset(max_offset as i64);
+            }
+            epochs.push(BrokerEpochEntry {
+                epoch: epoch_entry.get_epoch(),
+                start_offset: epoch_entry.get_start_offset(),
+                end_offset: epoch_entry.get_end_offset(),
+            });
+        }
+
+        Ok(BrokerEpochSection {
+            cluster_name: epoch_cache.get_cluster_name().clone(),
+            broker_name: epoch_cache.get_broker_name().clone(),
+            broker_addr,
+            broker_id: epoch_cache.get_broker_id(),
+            epochs,
+        })
+    }
+
+    async fn resolve_clean_expired_cq_targets(
+        admin: &DefaultMQAdminExt,
+        request: &CleanExpiredConsumeQueueRequest,
+    ) -> RocketMQResult<Vec<CheetahString>> {
+        if let Some(broker_addr) = request.broker_addr() {
+            if let Some(topic) = request.topic() {
+                let topic_targets = Self::fetch_topic_broker_targets(admin, topic).await?;
+                if !topic_targets.iter().any(|target| target == broker_addr) {
+                    return Err(RocketMQError::Internal(format!(
+                        "BrokerService: broker {} is not found in route info of topic {}",
+                        broker_addr, topic
+                    )));
+                }
+            }
+            return Ok(vec![broker_addr.clone()]);
+        }
+
+        let cluster_targets = if let Some(cluster_name) = request.cluster_name() {
+            let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+                RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+            })?;
+            Some(BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(
+                &cluster_info,
+                cluster_name.as_str(),
+            )?)
+        } else {
+            None
+        };
+
+        let topic_targets = if let Some(topic) = request.topic() {
+            Some(Self::fetch_topic_broker_targets(admin, topic).await?)
+        } else {
+            None
+        };
+
+        let mut targets = match (cluster_targets, topic_targets) {
+            (Some(mut cluster_targets), Some(topic_targets)) => {
+                cluster_targets.retain(|addr| topic_targets.iter().any(|topic_addr| topic_addr == addr));
+                cluster_targets
+            }
+            (Some(cluster_targets), None) => cluster_targets,
+            (None, Some(topic_targets)) => topic_targets,
+            (None, None) => Vec::new(),
+        };
+        targets.sort();
+        targets.dedup();
+        Ok(targets)
+    }
+
+    async fn fetch_all_broker_targets(admin: &DefaultMQAdminExt) -> RocketMQResult<Vec<CheetahString>> {
+        let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+            RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+        })?;
+        let mut targets = Vec::new();
+        if let Some(broker_addr_table) = cluster_info.broker_addr_table {
+            for broker_data in broker_addr_table.values() {
+                targets.extend(broker_data.broker_addrs().values().cloned());
+            }
+        }
+        targets.sort();
+        targets.dedup();
+        Ok(targets)
+    }
+
+    async fn fetch_topic_broker_targets(
+        admin: &DefaultMQAdminExt,
+        topic: &CheetahString,
+    ) -> RocketMQResult<Vec<CheetahString>> {
+        let route_data = admin
+            .examine_topic_route_info(topic.clone())
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to examine topic route info for {}: {}",
+                    topic, error
+                ))
+            })?
+            .ok_or_else(|| {
+                RocketMQError::Internal(format!("BrokerService: topic {} route info is unavailable", topic))
+            })?;
+
+        let mut targets = Vec::new();
+        for broker_data in route_data.broker_datas {
+            targets.extend(broker_data.broker_addrs().values().cloned());
+        }
+        targets.sort();
+        targets.dedup();
+        if targets.is_empty() {
+            return Err(RocketMQError::Internal(format!(
+                "BrokerService: topic {} has no broker targets",
+                topic
+            )));
+        }
+        Ok(targets)
+    }
+
+    async fn resolve_commit_log_read_ahead_targets(
+        admin: &DefaultMQAdminExt,
+        request: &CommitLogReadAheadRequest,
+    ) -> RocketMQResult<Vec<(BrokerConfigSectionTarget, CheetahString)>> {
+        match request.target() {
+            BrokerTarget::BrokerAddr(addr) => Ok(vec![(BrokerConfigSectionTarget::Broker(addr.clone()), addr.clone())]),
+            BrokerTarget::ClusterName(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
+                    RocketMQError::Internal(format!("BrokerService: failed to examine broker cluster info: {error}"))
+                })?;
+                let master_and_slave_map =
+                    BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
+                let mut sorted_masters: Vec<_> = master_and_slave_map.keys().cloned().collect();
+                sorted_masters.sort();
+
+                let mut targets = Vec::new();
+                for master_addr in sorted_masters {
+                    let slave_addrs = master_and_slave_map.get(&master_addr).cloned().unwrap_or_default();
+                    if master_addr.as_str() != BrokerAddressResolver::NO_MASTER_PLACEHOLDER {
+                        targets.push((
+                            BrokerConfigSectionTarget::Master(master_addr.clone()),
+                            master_addr.clone(),
+                        ));
+                    }
+                    let mut sorted_slaves = slave_addrs;
+                    sorted_slaves.sort();
+                    for slave_addr in sorted_slaves {
+                        targets.push((
+                            BrokerConfigSectionTarget::Slave {
+                                master_addr: master_addr.clone(),
+                                slave_addr: slave_addr.clone(),
+                            },
+                            slave_addr,
+                        ));
+                    }
+                }
+
+                if targets.is_empty() {
+                    return Err(RocketMQError::Internal(format!(
+                        "BrokerService: cluster {} has no broker address",
+                        cluster_name
+                    )));
+                }
+                Ok(targets)
+            }
+        }
+    }
+
+    async fn apply_commit_log_read_ahead_to_target(
+        admin: &DefaultMQAdminExt,
+        request: &CommitLogReadAheadRequest,
+        target: BrokerConfigSectionTarget,
+        broker_addr: CheetahString,
+    ) -> RocketMQResult<CommitLogReadAheadSection> {
+        let current_config = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
+            RocketMQError::Internal(format!(
+                "BrokerService: failed to get broker config for {}: {}",
+                broker_addr, error
+            ))
+        })?;
+        let size_key_for_update = resolve_read_ahead_size_key(request, &current_config)?;
+
+        if request.show_only() || !request.has_updates() {
+            return Ok(CommitLogReadAheadSection {
+                target,
+                broker_addr,
+                current_config,
+                updated_config: None,
+                size_key_for_update,
+                applied: false,
+            });
+        }
+
+        let mut properties = HashMap::new();
+        if let Some(mode) = request.mode() {
+            properties.insert(
+                CheetahString::from_static_str(COMMIT_LOG_READ_AHEAD_MODE_KEY),
+                CheetahString::from_static_str(mode.config_value()),
+            );
+            properties.insert(
+                CheetahString::from_static_str(DATA_READ_AHEAD_ENABLE_KEY),
+                CheetahString::from(mode.read_ahead_enabled().to_string()),
+            );
+        }
+        if let Some(read_ahead_size) = request.read_ahead_size() {
+            let size_key = size_key_for_update
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| CheetahString::from_static_str(DEFAULT_READ_AHEAD_SIZE_KEY));
+            properties.insert(size_key, CheetahString::from(read_ahead_size.to_string()));
+        }
+
+        admin
+            .update_broker_config(broker_addr.clone(), properties)
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "BrokerService: failed to update broker {}: {}",
+                    broker_addr, error
+                ))
+            })?;
+        let updated_config = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
+            RocketMQError::Internal(format!(
+                "BrokerService: failed to fetch updated broker config for {}: {}",
+                broker_addr, error
+            ))
+        })?;
+
+        Ok(CommitLogReadAheadSection {
+            target,
+            broker_addr,
+            current_config,
+            updated_config: Some(updated_config),
+            size_key_for_update,
+            applied: true,
+        })
     }
 
     async fn get_broker_runtime_stats_entries(
@@ -455,6 +1186,24 @@ fn sort_runtime_stats_entries(properties: HashMap<CheetahString, CheetahString>)
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.key.cmp(&right.key));
     entries
+}
+
+fn resolve_read_ahead_size_key(
+    request: &CommitLogReadAheadRequest,
+    config: &HashMap<CheetahString, CheetahString>,
+) -> RocketMQResult<Option<CheetahString>> {
+    if let Some(size_key) = request.read_ahead_size_key() {
+        return Ok(Some(size_key.clone()));
+    }
+    if request.read_ahead_size().is_none() {
+        return Ok(None);
+    }
+    for candidate in KNOWN_READ_AHEAD_SIZE_KEYS {
+        if config.keys().any(|key| key.as_str() == candidate) {
+            return Ok(Some(CheetahString::from(candidate)));
+        }
+    }
+    Ok(Some(CheetahString::from_static_str(DEFAULT_READ_AHEAD_SIZE_KEY)))
 }
 
 fn build_broker_consume_stats_result(source: ConsumeStatsList, diff_level: i64) -> BrokerConsumeStatsResult {

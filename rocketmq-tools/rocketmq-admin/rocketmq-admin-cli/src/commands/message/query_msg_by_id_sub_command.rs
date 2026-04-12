@@ -13,16 +13,12 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::MessageDecoder::validate_message_id;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -32,7 +28,9 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
+use rocketmq_admin_core::core::message::QueryMessageByIdRequest;
 
 const DEFAULT_TIMEOUT_MS: u64 = 3000;
 
@@ -332,63 +330,6 @@ impl QueryMsgByIdSubCommand {
         println!("Query Time: {} ms", config.query_time_ms);
         println!("Message Found: true");
     }
-
-    async fn query_single_message(
-        admin: &mut DefaultMQAdminExt,
-        msg_id: &str,
-        topic: &CheetahString,
-        cluster_name: &CheetahString,
-        charset: &str,
-        print_body: bool,
-    ) -> RocketMQResult<()> {
-        let start_time = Instant::now();
-        let msg_id = msg_id.trim().to_string();
-
-        let query_result = admin
-            .query_message(cluster_name.clone(), topic.clone(), CheetahString::from(&msg_id))
-            .await;
-
-        let query_time_ms = start_time.elapsed().as_millis() as u64;
-
-        match query_result {
-            Ok(msg) => {
-                let broker_addr = format!("{}", msg.store_host());
-                let config = MessageOutputConfig {
-                    charset,
-                    print_body,
-                    broker_addr: &broker_addr,
-                    query_time_ms,
-                };
-                Self::print_message_info(&msg, &config);
-                Ok(())
-            }
-            Err(RocketMQError::BrokerOperationFailed { code: _, message, .. })
-                if message.contains("not found")
-                    || message.contains("does not exist")
-                    || message.contains("No message") =>
-            {
-                Self::print_message_not_found(&msg_id, query_time_ms, &message);
-                Ok(())
-            }
-            Err(RocketMQError::Rpc(rpc_error)) => {
-                let err_msg = format!("{}", rpc_error);
-                if err_msg.contains("not found") || err_msg.contains("does not exist") || err_msg.contains("No message")
-                {
-                    Self::print_message_not_found(&msg_id, query_time_ms, &err_msg);
-                    Ok(())
-                } else {
-                    Err(RocketMQError::Internal(format!(
-                        "Failed to query message by ID '{}': {}",
-                        msg_id, err_msg
-                    )))
-                }
-            }
-            Err(e) => Err(RocketMQError::Internal(format!(
-                "Failed to query message by ID '{}': {}",
-                msg_id, e
-            ))),
-        }
-    }
 }
 
 impl CommandExecute for QueryMsgByIdSubCommand {
@@ -410,84 +351,57 @@ impl CommandExecute for QueryMsgByIdSubCommand {
             )));
         }
 
-        let timeout_duration = Duration::from_millis(self.timeout);
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook_and_timeout(rpc_hook, timeout_duration)
-        } else {
-            DefaultMQAdminExt::with_timeout(timeout_duration)
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let request = QueryMessageByIdRequest::try_new(self.message_ids.clone(), self.topic.clone(), self.timeout)?
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
+        let result = MessageService::query_message_by_id_by_request_with_rpc_hook(request, rpc_hook).await?;
 
-        if let Some(ref namesrv_addr) = self.common_args.namesrv_addr {
-            default_mqadmin_ext.set_namesrv_addr(namesrv_addr);
-        }
-
-        let timeout_ms = self.timeout;
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
-
-            let topic = self
-                .topic
-                .as_ref()
-                .map(|t| CheetahString::from(t.trim()))
-                .unwrap_or_else(|| CheetahString::from_static_str(""));
-
-            let cluster_name = CheetahString::from_static_str("DefaultCluster");
-
-            let total_count = self.message_ids.len();
-            let mut success_count = 0;
-            let mut fail_count = 0;
-
-            for (index, msg_id) in self.message_ids.iter().enumerate() {
-                if total_count > 1 {
-                    println!();
-                    println!(
-                        "{}Message {} of {}{}",
-                        "=".repeat(20),
-                        index + 1,
-                        total_count,
-                        "=".repeat(20)
-                    );
-                    println!();
-                }
-
-                let query_future = Self::query_single_message(
-                    &mut default_mqadmin_ext,
-                    msg_id,
-                    &topic,
-                    &cluster_name,
-                    &self.charset,
-                    self.print_body,
-                );
-
-                match tokio::time::timeout(Duration::from_millis(timeout_ms), query_future).await {
-                    Ok(Ok(())) => success_count += 1,
-                    Ok(Err(_)) => fail_count += 1,
-                    Err(_) => {
-                        eprintln!("Query timed out for message ID: {}", msg_id);
-                        fail_count += 1;
-                    }
-                }
-            }
-
+        let total_count = result.entries.len();
+        for (index, entry) in result.entries.iter().enumerate() {
             if total_count > 1 {
                 println!();
-                println!("{}Summary{}", "=".repeat(20), "=".repeat(20));
-                println!("Total: {} messages", total_count);
-                println!("Success: {}", success_count);
-                println!("Failed: {}", fail_count);
+                println!(
+                    "{}Message {} of {}{}",
+                    "=".repeat(20),
+                    index + 1,
+                    total_count,
+                    "=".repeat(20)
+                );
+                println!();
             }
 
-            Ok(())
+            match &entry.outcome {
+                QueryMessageByIdOutcome::Found {
+                    message,
+                    broker_addr,
+                    query_time_ms,
+                } => {
+                    let config = MessageOutputConfig {
+                        charset: &self.charset,
+                        print_body: self.print_body,
+                        broker_addr,
+                        query_time_ms: *query_time_ms,
+                    };
+                    Self::print_message_info(message.as_ref(), &config);
+                }
+                QueryMessageByIdOutcome::NotFound { reason, query_time_ms } => {
+                    Self::print_message_not_found(entry.message_id.as_str(), *query_time_ms, reason)
+                }
+                QueryMessageByIdOutcome::Failed { .. } => {}
+                QueryMessageByIdOutcome::TimedOut => {
+                    eprintln!("Query timed out for message ID: {}", entry.message_id);
+                }
+            }
         }
-        .await;
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        if total_count > 1 {
+            println!();
+            println!("{}Summary{}", "=".repeat(20), "=".repeat(20));
+            println!("Total: {} messages", total_count);
+            println!("Success: {}", result.success_count());
+            println!("Failed: {}", result.failure_count());
+        }
+
+        Ok(())
     }
 }
 

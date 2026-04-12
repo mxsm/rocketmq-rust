@@ -28,7 +28,11 @@ pub mod core {
     pub mod broker;
     pub mod cache;
     pub mod concurrent;
+    pub mod consumer;
+    pub mod message;
     pub mod namesrv;
+    pub mod offset;
+    pub mod queue;
     pub mod resolver;
     pub mod topic;
 

@@ -15,18 +15,16 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::mix_all::get_dlq_topic;
-use rocketmq_common::common::mix_all::get_retry_topic;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerTarget;
+use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::core::consumer::ConsumerService;
+use rocketmq_admin_core::core::consumer::DeleteSubscriptionGroupRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteSubscriptionGroupSubCommand {
@@ -65,104 +63,89 @@ pub struct DeleteSubscriptionGroupSubCommand {
 }
 
 impl DeleteSubscriptionGroupSubCommand {
-    async fn delete_from_broker(
-        admin_ext: &mut DefaultMQAdminExt,
-        broker_addr: &str,
-        group_name: &str,
-        clean_offset: bool,
-    ) -> RocketMQResult<()> {
-        admin_ext
-            .delete_subscription_group(broker_addr.into(), group_name.into(), Some(clean_offset))
-            .await?;
-        println!(
-            "delete subscription group [{}] from broker [{}] success.",
-            group_name, broker_addr
-        );
-        Ok(())
+    fn request(&self) -> RocketMQResult<DeleteSubscriptionGroupRequest> {
+        DeleteSubscriptionGroupRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.group_name.clone(),
+            self.remove_offset,
+        )
+        .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    async fn delete_from_cluster(
-        admin_ext: &mut DefaultMQAdminExt,
-        cluster_name: &str,
-        group_name: &str,
-        clean_offset: bool,
-    ) -> RocketMQResult<()> {
-        let cluster_info = admin_ext.examine_broker_cluster_info().await?;
-        let master_set = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
-
-        for master_addr in &master_set {
-            admin_ext
-                .delete_subscription_group(master_addr.clone(), group_name.into(), Some(clean_offset))
-                .await?;
-            println!(
-                "delete subscription group [{}] from broker [{}] in cluster [{}] success.",
-                group_name, master_addr, cluster_name
-            );
+    fn print_result(request: &DeleteSubscriptionGroupRequest, result: ConsumerOperationResult) -> RocketMQResult<()> {
+        match request.target() {
+            BrokerTarget::BrokerAddr(_) => {
+                for broker_addr in &result.broker_addrs {
+                    println!(
+                        "delete subscription group [{}] from broker [{}] success.",
+                        request.group_name(),
+                        broker_addr
+                    );
+                }
+            }
+            BrokerTarget::ClusterName(cluster_name) => {
+                for broker_addr in &result.broker_addrs {
+                    println!(
+                        "delete subscription group [{}] from broker [{}] in cluster [{}] success.",
+                        request.group_name(),
+                        broker_addr,
+                        cluster_name
+                    );
+                }
+                for warning in &result.warnings {
+                    eprintln!("{warning}");
+                }
+            }
         }
 
-        let retry_topic = get_retry_topic(group_name);
-        let dlq_topic = get_dlq_topic(group_name);
-
-        if let Err(e) = admin_ext
-            .delete_topic(retry_topic.clone().into(), cluster_name.into())
-            .await
-        {
-            eprintln!("{}", e);
+        if result.failures.is_empty() {
+            Ok(())
+        } else {
+            Err(RocketMQError::Internal(format!(
+                "DeleteSubscriptionGroupSubCommand: Failed to delete from brokers {}",
+                result
+                    .failures
+                    .iter()
+                    .map(|failure| failure.broker_addr.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
         }
-
-        if let Err(e) = admin_ext
-            .delete_topic(dlq_topic.clone().into(), cluster_name.into())
-            .await
-        {
-            eprintln!("{}", e);
-        }
-
-        Ok(())
     }
 }
 
 impl CommandExecute for DeleteSubscriptionGroupSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if self.broker_addr.is_none() && self.cluster_name.is_none() {
-            return Err(RocketMQError::IllegalArgument(
-                "DeleteSubscriptionGroupSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
-            ));
-        }
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = self.request()?;
+        let result =
+            ConsumerService::delete_subscription_group_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        Self::print_result(&request, result)
+    }
+}
 
-        let group_name = self.group_name.trim();
-        if group_name.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "DeleteSubscriptionGroupSubCommand: groupName (-g) cannot be empty".into(),
-            ));
-        }
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
 
-        let mut admin_ext = DefaultMQAdminExt::new();
-        admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+    use super::*;
 
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            admin_ext.set_namesrv_addr(addr.trim());
-        }
+    #[test]
+    fn parses_delete_subscription_group_request() {
+        let command = DeleteSubscriptionGroupSubCommand::try_parse_from([
+            "deleteSubGroup",
+            "-b",
+            " 127.0.0.1:10911 ",
+            "-g",
+            " GroupA ",
+            "-r",
+            "-n",
+            " 127.0.0.1:9876 ",
+        ])
+        .unwrap();
+        let request = command.request().unwrap();
 
-        admin_ext.start().await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "DeleteSubscriptionGroupSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
-        })?;
-
-        let result = if let Some(broker_addr) = &self.broker_addr {
-            Self::delete_from_broker(&mut admin_ext, broker_addr.trim(), group_name, self.remove_offset).await
-        } else if let Some(cluster_name) = &self.cluster_name {
-            Self::delete_from_cluster(&mut admin_ext, cluster_name.trim(), group_name, self.remove_offset).await
-        } else {
-            Err(RocketMQError::IllegalArgument(
-                "DeleteSubscriptionGroupSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
-            ))
-        };
-
-        admin_ext.shutdown().await;
-        result
+        assert_eq!(request.group_name().as_str(), "GroupA");
+        assert!(request.remove_offset());
     }
 }

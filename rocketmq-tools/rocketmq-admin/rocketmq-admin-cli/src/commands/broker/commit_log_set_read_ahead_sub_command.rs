@@ -18,15 +18,16 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerConfigSectionTarget;
+use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::CommitLogReadAheadRequest;
+use rocketmq_admin_core::core::broker::CommitLogReadAheadResult;
+use rocketmq_admin_core::core::broker::CommitLogReadAheadSection;
 
 const MADV_NORMAL: &str = "0";
 const MADV_RANDOM: &str = "1";
@@ -90,302 +91,90 @@ pub struct CommitLogSetReadAheadSubCommand {
     show_only: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ReadAheadMode {
-    Normal,
-    Random,
-}
-
-impl ReadAheadMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            ReadAheadMode::Normal => MADV_NORMAL,
-            ReadAheadMode::Random => MADV_RANDOM,
-        }
-    }
-
-    fn read_ahead_enabled(self) -> bool {
-        matches!(self, ReadAheadMode::Normal)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct BrokerTarget {
-    addr: String,
-    print_prefix: String,
-}
-
 impl CommitLogSetReadAheadSubCommand {
-    fn resolve_read_ahead_mode(&self) -> RocketMQResult<Option<ReadAheadMode>> {
-        if self.enable {
-            return Ok(Some(ReadAheadMode::Normal));
-        }
-        if self.disable {
-            return Ok(Some(ReadAheadMode::Random));
-        }
-
-        match self.commit_log_read_ahead_mode.as_deref().map(str::trim) {
-            Some(MADV_NORMAL) => Ok(Some(ReadAheadMode::Normal)),
-            Some(MADV_RANDOM) => Ok(Some(ReadAheadMode::Random)),
-            Some(mode) => Err(RocketMQError::IllegalArgument(format!(
-                "CommitLogSetReadAheadSubCommand: Invalid commitLogReadAheadMode '{}', expected 0 or 1",
-                mode
-            ))),
-            None => Ok(None),
-        }
+    fn request(&self) -> RocketMQResult<CommitLogReadAheadRequest> {
+        CommitLogReadAheadRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.commit_log_read_ahead_mode.clone(),
+            self.enable,
+            self.disable,
+            self.read_ahead_size.clone(),
+            self.read_ahead_size_key.clone(),
+            self.show_only,
+        )
     }
 
-    fn parse_read_ahead_size(&self) -> RocketMQResult<Option<u64>> {
-        let Some(raw_size) = self.read_ahead_size.as_deref() else {
-            return Ok(None);
-        };
-
-        let read_ahead_size = raw_size.trim().parse::<u64>().map_err(|e| {
-            RocketMQError::IllegalArgument(format!(
-                "CommitLogSetReadAheadSubCommand: Invalid readAheadSize '{}': {}",
-                raw_size, e
-            ))
-        })?;
-
-        if read_ahead_size == 0 {
-            return Err(RocketMQError::IllegalArgument(
-                "CommitLogSetReadAheadSubCommand: readAheadSize must be greater than 0".to_string(),
-            ));
+    fn print_result(request: &CommitLogReadAheadRequest, result: CommitLogReadAheadResult) -> RocketMQResult<()> {
+        for section in result.sections {
+            print_section(request, section);
         }
 
-        Ok(Some(read_ahead_size))
-    }
-
-    fn resolve_read_ahead_size_key(&self, config: &HashMap<CheetahString, CheetahString>) -> RocketMQResult<String> {
-        if let Some(size_key) = self.read_ahead_size_key.as_deref().map(str::trim) {
-            if size_key.is_empty() {
-                return Err(RocketMQError::IllegalArgument(
-                    "CommitLogSetReadAheadSubCommand: readAheadSizeKey cannot be empty".to_string(),
-                ));
-            }
-            return Ok(size_key.to_string());
-        }
-
-        for candidate in KNOWN_READ_AHEAD_SIZE_KEYS {
-            if get_config_value(config, candidate).is_some() {
-                return Ok(candidate.to_string());
-            }
-        }
-
-        Ok(DEFAULT_READ_AHEAD_SIZE_KEY.to_string())
-    }
-
-    async fn resolve_targets(&self, admin_ext: &DefaultMQAdminExt) -> RocketMQResult<Vec<BrokerTarget>> {
-        if let Some(broker_addr) = &self.broker_addr {
-            let broker_addr = broker_addr.trim();
-            if broker_addr.is_empty() {
-                return Err(RocketMQError::IllegalArgument(
-                    "CommitLogSetReadAheadSubCommand: brokerAddr cannot be empty".to_string(),
-                ));
-            }
-            return Ok(vec![BrokerTarget {
-                addr: broker_addr.to_string(),
-                print_prefix: format!("============{}============\n", broker_addr),
-            }]);
-        }
-
-        let cluster_name = self
-            .cluster_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|cluster_name| !cluster_name.is_empty())
-            .ok_or_else(|| {
-                RocketMQError::IllegalArgument(
-                    "CommitLogSetReadAheadSubCommand: clusterName cannot be empty".to_string(),
-                )
-            })?;
-
-        let cluster_info = admin_ext.examine_broker_cluster_info().await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "CommitLogSetReadAheadSubCommand: Failed to examine broker cluster info: {}",
-                e
-            ))
-        })?;
-
-        let master_and_slave_map = CommandUtil::fetch_master_and_slave_distinguish(&cluster_info, cluster_name)?;
-
-        let mut sorted_master_and_slave_map: Vec<_> = master_and_slave_map.into_iter().collect();
-        sorted_master_and_slave_map.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
-
-        let mut broker_targets = Vec::new();
-        for (master_addr, mut slave_addrs) in sorted_master_and_slave_map {
-            slave_addrs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-
-            if master_addr.as_str() != CommandUtil::NO_MASTER_PLACEHOLDER {
-                broker_targets.push(BrokerTarget {
-                    addr: master_addr.to_string(),
-                    print_prefix: format!("============Master: {}============\n", master_addr),
-                });
-            }
-
-            for slave_addr in slave_addrs {
-                broker_targets.push(BrokerTarget {
-                    addr: slave_addr.to_string(),
-                    print_prefix: format!(
-                        "============My Master: {}=====Slave: {}============\n",
-                        master_addr, slave_addr
-                    ),
-                });
-            }
-        }
-
-        if broker_targets.is_empty() {
-            return Err(RocketMQError::Internal(format!(
-                "CommitLogSetReadAheadSubCommand: Cluster {} has no broker address",
-                cluster_name
-            )));
-        }
-
-        Ok(broker_targets)
-    }
-
-    async fn apply_to_target(
-        &self,
-        admin_ext: &DefaultMQAdminExt,
-        target: &BrokerTarget,
-        mode: Option<ReadAheadMode>,
-        read_ahead_size: Option<u64>,
-        show_only: bool,
-    ) -> RocketMQResult<()> {
-        print!("{}", target.print_prefix);
-
-        let current_config = admin_ext
-            .get_broker_config(CheetahString::from(target.addr.as_str()))
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CommitLogSetReadAheadSubCommand: Failed to get broker config for {}: {}",
-                    target.addr, e
-                ))
-            })?;
-
-        let size_key_for_update = if read_ahead_size.is_some() {
-            Some(self.resolve_read_ahead_size_key(&current_config)?)
+        if result.failures.is_empty() {
+            Ok(())
         } else {
-            self.read_ahead_size_key
-                .as_deref()
-                .map(str::trim)
-                .filter(|key| !key.is_empty())
-                .map(ToString::to_string)
-        };
-
-        println!("Current read-ahead configuration:");
-        print_read_ahead_config(&current_config, size_key_for_update.as_deref());
-
-        if show_only || (mode.is_none() && read_ahead_size.is_none()) {
-            println!("No read-ahead update requested for broker {}.\n", target.addr);
-            return Ok(());
+            Err(RocketMQError::Internal(format!(
+                "CommitLogSetReadAheadSubCommand: Failed on {} broker(s): {}",
+                result.failures.len(),
+                result
+                    .failures
+                    .iter()
+                    .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )))
         }
-
-        let mut properties = HashMap::new();
-        if let Some(mode) = mode {
-            properties.insert(
-                CheetahString::from_static_str(COMMIT_LOG_READ_AHEAD_MODE_KEY),
-                CheetahString::from_static_str(mode.as_str()),
-            );
-            properties.insert(
-                CheetahString::from_static_str(DATA_READ_AHEAD_ENABLE_KEY),
-                CheetahString::from(mode.read_ahead_enabled().to_string()),
-            );
-        }
-
-        if let Some(read_ahead_size) = read_ahead_size {
-            let size_key = size_key_for_update.as_deref().unwrap_or(DEFAULT_READ_AHEAD_SIZE_KEY);
-            properties.insert(
-                CheetahString::from(size_key),
-                CheetahString::from(read_ahead_size.to_string()),
-            );
-        }
-
-        admin_ext
-            .update_broker_config(CheetahString::from(target.addr.as_str()), properties)
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CommitLogSetReadAheadSubCommand: Failed to update broker {}: {}",
-                    target.addr, e
-                ))
-            })?;
-
-        println!("Read-ahead update applied successfully.");
-
-        let updated_config = admin_ext
-            .get_broker_config(CheetahString::from(target.addr.as_str()))
-            .await
-            .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CommitLogSetReadAheadSubCommand: Failed to fetch updated config for {}: {}",
-                    target.addr, e
-                ))
-            })?;
-
-        println!("Updated read-ahead configuration:");
-        print_read_ahead_config(&updated_config, size_key_for_update.as_deref());
-        Ok(())
     }
 }
 
 impl CommandExecute for CommitLogSetReadAheadSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mode = self.resolve_read_ahead_mode()?;
-        let read_ahead_size = self.parse_read_ahead_size()?;
-        let has_updates = mode.is_some() || read_ahead_size.is_some();
+        let request = self.request()?;
+        let result =
+            BrokerService::set_commit_log_read_ahead_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        Self::print_result(&request, result)
+    }
+}
 
-        if self.show_only && has_updates {
-            return Err(RocketMQError::IllegalArgument(
-                "CommitLogSetReadAheadSubCommand: --showOnly cannot be used with update options".to_string(),
-            ));
-        }
+fn print_section(request: &CommitLogReadAheadRequest, section: CommitLogReadAheadSection) {
+    print!("{}", section_prefix(&section.target));
+    println!("Current read-ahead configuration:");
+    print_read_ahead_config(
+        &section.current_config,
+        section.size_key_for_update.as_ref().map(|key| key.as_str()),
+    );
 
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+    if !section.applied {
+        println!("No read-ahead update requested for broker {}.\n", section.broker_addr);
+        return;
+    }
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+    println!("Read-ahead update applied successfully.");
+    if let Some(updated_config) = section.updated_config.as_ref() {
+        println!("Updated read-ahead configuration:");
+        print_read_ahead_config(
+            updated_config,
+            section.size_key_for_update.as_ref().map(|key| key.as_str()),
+        );
+    }
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CommitLogSetReadAheadSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
+    if !request.has_updates() {
+        println!("No read-ahead update requested for broker {}.\n", section.broker_addr);
+    }
+}
 
-            let targets = self.resolve_targets(&default_mqadmin_ext).await?;
-            let mut failures = Vec::new();
-
-            for target in targets {
-                if let Err(error) = self
-                    .apply_to_target(&default_mqadmin_ext, &target, mode, read_ahead_size, self.show_only)
-                    .await
-                {
-                    failures.push(format!("{}: {}", target.addr, error));
-                }
-            }
-
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                Err(RocketMQError::Internal(format!(
-                    "CommitLogSetReadAheadSubCommand: Failed on {} broker(s): {}",
-                    failures.len(),
-                    failures.join("; ")
-                )))
-            }
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+fn section_prefix(target: &BrokerConfigSectionTarget) -> String {
+    match target {
+        BrokerConfigSectionTarget::Broker(addr) => format!("============{}============\n", addr),
+        BrokerConfigSectionTarget::Master(master_addr) => format!("============Master: {}============\n", master_addr),
+        BrokerConfigSectionTarget::Slave {
+            master_addr,
+            slave_addr,
+        } => format!(
+            "============My Master: {}=====Slave: {}============\n",
+            master_addr, slave_addr
+        ),
+        BrokerConfigSectionTarget::NoMaster => "============NO_MASTER============\n".to_string(),
     }
 }
 
@@ -467,119 +256,53 @@ fn print_read_ahead_config(config: &HashMap<CheetahString, CheetahString>, prefe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_admin_core::core::broker::CommitLogReadAheadMode;
 
     #[test]
     fn parse_java_compatible_mode_for_single_broker() {
-        let args = [
+        let command = CommitLogSetReadAheadSubCommand::try_parse_from([
             "setCommitLogReadAheadMode",
             "--brokerAddr",
             "127.0.0.1:10911",
             "--commitLogReadAheadMode",
             "1",
-        ];
+        ])
+        .unwrap();
+        let request = command.request().unwrap();
 
-        let command = CommitLogSetReadAheadSubCommand::try_parse_from(args).unwrap();
-
-        assert_eq!(command.broker_addr.as_deref(), Some("127.0.0.1:10911"));
-        assert!(command.cluster_name.is_none());
-        assert_eq!(
-            command.resolve_read_ahead_mode().unwrap().map(ReadAheadMode::as_str),
-            Some("1")
-        );
+        assert_eq!(request.mode(), Some(CommitLogReadAheadMode::Random));
+        assert!(request.read_ahead_size().is_none());
     }
 
     #[test]
     fn parse_enable_with_size_for_cluster() {
-        let args = [
+        let command = CommitLogSetReadAheadSubCommand::try_parse_from([
             "setCommitLogReadAheadMode",
             "-c",
             "DefaultCluster",
             "--enable",
             "--readAheadSize",
             "65536",
-        ];
+        ])
+        .unwrap();
+        let request = command.request().unwrap();
 
-        let command = CommitLogSetReadAheadSubCommand::try_parse_from(args).unwrap();
-
-        assert!(command.broker_addr.is_none());
-        assert_eq!(command.cluster_name.as_deref(), Some("DefaultCluster"));
-        assert_eq!(
-            command.resolve_read_ahead_mode().unwrap().map(ReadAheadMode::as_str),
-            Some("0")
-        );
-        assert_eq!(command.parse_read_ahead_size().unwrap(), Some(65536));
+        assert_eq!(request.mode(), Some(CommitLogReadAheadMode::Normal));
+        assert_eq!(request.read_ahead_size(), Some(65536));
     }
 
     #[test]
     fn parse_rejects_mode_conflict() {
-        let args = [
+        let result = CommitLogSetReadAheadSubCommand::try_parse_from([
             "setCommitLogReadAheadMode",
             "-b",
             "127.0.0.1:10911",
             "--enable",
             "-m",
             "0",
-        ];
+        ]);
 
-        let result = CommitLogSetReadAheadSubCommand::try_parse_from(args);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn resolve_read_ahead_mode_rejects_invalid_mode_value() {
-        let command = CommitLogSetReadAheadSubCommand {
-            broker_addr: Some("127.0.0.1:10911".to_string()),
-            cluster_name: None,
-            commit_log_read_ahead_mode: Some("2".to_string()),
-            enable: false,
-            disable: false,
-            read_ahead_size: None,
-            read_ahead_size_key: None,
-            show_only: false,
-        };
-
-        assert!(command.resolve_read_ahead_mode().is_err());
-    }
-
-    #[test]
-    fn parse_read_ahead_size_rejects_zero() {
-        let command = CommitLogSetReadAheadSubCommand {
-            broker_addr: Some("127.0.0.1:10911".to_string()),
-            cluster_name: None,
-            commit_log_read_ahead_mode: None,
-            enable: false,
-            disable: false,
-            read_ahead_size: Some("0".to_string()),
-            read_ahead_size_key: None,
-            show_only: false,
-        };
-
-        assert!(command.parse_read_ahead_size().is_err());
-    }
-
-    #[test]
-    fn resolve_size_key_prefers_existing_key() {
-        let mut config = HashMap::new();
-        config.insert(
-            CheetahString::from_static_str("commitLogReadAheadSize"),
-            CheetahString::from_static_str("4096"),
-        );
-
-        let command = CommitLogSetReadAheadSubCommand {
-            broker_addr: Some("127.0.0.1:10911".to_string()),
-            cluster_name: None,
-            commit_log_read_ahead_mode: None,
-            enable: false,
-            disable: false,
-            read_ahead_size: Some("8192".to_string()),
-            read_ahead_size_key: None,
-            show_only: false,
-        };
-
-        assert_eq!(
-            command.resolve_read_ahead_size_key(&config).unwrap(),
-            "commitLogReadAheadSize"
-        );
     }
 
     #[test]

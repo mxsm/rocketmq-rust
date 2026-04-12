@@ -17,17 +17,17 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::group_retry_policy::GroupRetryPolicy;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::core::consumer::ConsumerService;
+use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateSubGroupSubCommand {
@@ -116,152 +116,114 @@ pub struct UpdateSubGroupSubCommand {
     attributes: Option<String>,
 }
 
-impl CommandExecute for UpdateSubGroupSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if (self.broker_addr.is_none() && self.cluster_name.is_none())
-            || (self.broker_addr.is_some() && self.cluster_name.is_some())
-        {
-            return Err(RocketMQError::IllegalArgument(
-                "UpdateSubGroupSubCommand: Invalid arguments: specify exactly one of --brokerAddr (-b) or \
-                 --clusterName (-c)."
-                    .into(),
-            ));
+impl UpdateSubGroupSubCommand {
+    fn request(&self) -> RocketMQResult<UpdateSubscriptionGroupRequest> {
+        let mut subscription_group_config = SubscriptionGroupConfig::new(self.group_name.as_str().into());
+
+        if let Some(consume_enable) = self.consume_enable {
+            subscription_group_config.set_consume_enable(consume_enable);
+        }
+        if let Some(consume_from_min_enable) = self.consume_from_min_enable {
+            subscription_group_config.set_consume_from_min_enable(consume_from_min_enable);
+        }
+        if let Some(consume_broadcast_enable) = self.consume_broadcast_enable {
+            subscription_group_config.set_consume_broadcast_enable(consume_broadcast_enable);
+        }
+        if let Some(consume_message_orderly) = self.consume_message_orderly {
+            subscription_group_config.set_consume_message_orderly(consume_message_orderly);
         }
 
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-
-            let mut subscription_group_config = SubscriptionGroupConfig::new(self.group_name.as_str().into());
-
-            if let Some(consume_enable) = self.consume_enable {
-                subscription_group_config.set_consume_enable(consume_enable);
-            }
-            if let Some(consume_from_min_enable) = self.consume_from_min_enable {
-                subscription_group_config.set_consume_from_min_enable(consume_from_min_enable);
-            }
-            if let Some(consume_broadcast_enable) = self.consume_broadcast_enable {
-                subscription_group_config.set_consume_broadcast_enable(consume_broadcast_enable);
-            }
-            if let Some(consume_message_orderly) = self.consume_message_orderly {
-                subscription_group_config.set_consume_message_orderly(consume_message_orderly);
-            }
-
-            if let Some(retry_queue_nums) = self.retry_queue_nums {
-                subscription_group_config.set_retry_queue_nums(retry_queue_nums);
-            }
-            if let Some(retry_max_times) = self.retry_max_times {
-                subscription_group_config.set_retry_max_times(retry_max_times);
-            }
-            if let Some(ref group_retry_policy) = self.group_retry_policy {
-                match serde_json::from_str::<GroupRetryPolicy>(group_retry_policy.as_str()) {
-                    Ok(value) => subscription_group_config.set_group_retry_policy(value),
-                    Err(e) => {
-                        return Err(RocketMQError::Internal(format!(
-                            "UpdateSubGroupSubCommand: Failed to parse groupRetryPolicy: {}",
-                            e
-                        )));
-                    }
+        if let Some(retry_queue_nums) = self.retry_queue_nums {
+            subscription_group_config.set_retry_queue_nums(retry_queue_nums);
+        }
+        if let Some(retry_max_times) = self.retry_max_times {
+            subscription_group_config.set_retry_max_times(retry_max_times);
+        }
+        if let Some(ref group_retry_policy) = self.group_retry_policy {
+            match serde_json::from_str::<GroupRetryPolicy>(group_retry_policy.as_str()) {
+                Ok(value) => subscription_group_config.set_group_retry_policy(value),
+                Err(e) => {
+                    return Err(RocketMQError::Internal(format!(
+                        "UpdateSubGroupSubCommand: Failed to parse groupRetryPolicy: {}",
+                        e
+                    )));
                 }
             }
+        }
 
-            if let Some(broker_id) = self.broker_id {
-                subscription_group_config.set_broker_id(broker_id);
-            }
-            if let Some(which_broker_when_consume_slowly) = self.which_broker_when_consume_slowly {
-                subscription_group_config.set_which_broker_when_consume_slowly(which_broker_when_consume_slowly);
-            }
+        if let Some(broker_id) = self.broker_id {
+            subscription_group_config.set_broker_id(broker_id);
+        }
+        if let Some(which_broker_when_consume_slowly) = self.which_broker_when_consume_slowly {
+            subscription_group_config.set_which_broker_when_consume_slowly(which_broker_when_consume_slowly);
+        }
 
-            if let Some(notify_consumer_ids_changed) = self.notify_consumer_ids_changed {
-                subscription_group_config.set_notify_consumer_ids_changed_enable(notify_consumer_ids_changed);
-            }
+        if let Some(notify_consumer_ids_changed) = self.notify_consumer_ids_changed {
+            subscription_group_config.set_notify_consumer_ids_changed_enable(notify_consumer_ids_changed);
+        }
 
-            if let Some(ref attributes) = self.attributes {
-                match AttributeParser::parse_to_map(attributes.as_str()) {
-                    Ok(attributes) => {
-                        let attributes_modification = attributes
-                            .into_iter()
-                            .map(|(k, v)| (k.into(), v.into()))
-                            .collect::<HashMap<CheetahString, CheetahString>>();
-                        subscription_group_config.set_attributes(attributes_modification);
-                    }
-                    Err(e) => {
-                        return Err(RocketMQError::Internal(format!(
-                            "UpdateSubGroupSubCommand: Failed to parse attributes: {}: {}",
-                            attributes, e
-                        )));
-                    }
+        if let Some(ref attributes) = self.attributes {
+            match AttributeParser::parse_to_map(attributes.as_str()) {
+                Ok(attributes) => {
+                    let attributes_modification = attributes
+                        .into_iter()
+                        .map(|(k, v)| (k.into(), v.into()))
+                        .collect::<HashMap<CheetahString, CheetahString>>();
+                    subscription_group_config.set_attributes(attributes_modification);
+                }
+                Err(e) => {
+                    return Err(RocketMQError::Internal(format!(
+                        "UpdateSubGroupSubCommand: Failed to parse attributes: {}: {}",
+                        attributes, e
+                    )));
                 }
             }
+        }
 
-            if let Some(ref broker_addr) = self.broker_addr {
-                MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                    RocketMQError::Internal(format!("UpdateSubGroupSubCommand: Failed to start MQAdminExt: {}", e))
-                })?;
+        UpdateSubscriptionGroupRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            subscription_group_config,
+        )
+    }
 
-                match default_mqadmin_ext
-                    .create_and_update_subscription_group_config(
-                        broker_addr.as_str().into(),
-                        subscription_group_config.clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        println!("Create subscription group to {} success.", broker_addr);
-                        println!("{:#?}", subscription_group_config);
-                    }
-                    Err(e) => {
-                        return Err(RocketMQError::Internal(format!(
-                            "UpdateSubGroupSubCommand: Failed to create or update subscription group config: {}",
-                            e
-                        )));
-                    }
-                }
-            } else if let Some(ref cluster_name) = self.cluster_name {
-                MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                    RocketMQError::Internal(format!("UpdateSubGroupSubCommand: Failed to start MQAdminExt: {}", e))
-                })?;
-
-                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-                match CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str()) {
-                    Ok(addresses) => {
-                        for addr in addresses {
-                            if let Err(e) = default_mqadmin_ext
-                                .create_and_update_subscription_group_config(
-                                    addr.clone(),
-                                    subscription_group_config.clone(),
-                                )
-                                .await
-                            {
-                                eprintln!(
-                                    "UpdateSubGroupSubCommand: Failed to create or update subscription group config \
-                                     for broker with address {}: {}",
-                                    addr, e
-                                )
-                            } else {
-                                println!("Create subscription group to {} success.", addr);
-                                println!("{:#?}", subscription_group_config);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Err(RocketMQError::Internal(format!(
-                            "UpdateSubGroupSubCommand: Failed to create or update subscription group config: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-
+    fn print_result(
+        subscription_group_config: &SubscriptionGroupConfig,
+        result: ConsumerOperationResult,
+    ) -> RocketMQResult<()> {
+        for broker_addr in &result.broker_addrs {
+            println!("Create subscription group to {} success.", broker_addr);
+            println!("{:#?}", subscription_group_config);
+        }
+        for failure in &result.failures {
+            eprintln!(
+                "UpdateSubGroupSubCommand: Failed to create or update subscription group config for broker with \
+                 address {}: {}",
+                failure.broker_addr, failure.error
+            );
+        }
+        if result.failures.is_empty() {
             Ok(())
+        } else {
+            Err(RocketMQError::Internal(format!(
+                "UpdateSubGroupSubCommand: Failed to create or update subscription group config for brokers {}",
+                result
+                    .failures
+                    .iter()
+                    .map(|failure| failure.broker_addr.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
         }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    }
+}
+
+impl CommandExecute for UpdateSubGroupSubCommand {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = self.request()?;
+        let config = request.config().clone();
+        let result = ConsumerService::update_subscription_group_by_request_with_rpc_hook(request, rpc_hook).await?;
+        Self::print_result(&config, result)
     }
 }
 

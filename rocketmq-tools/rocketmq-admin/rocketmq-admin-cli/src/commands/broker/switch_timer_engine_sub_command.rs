@@ -16,19 +16,13 @@ use std::sync::Arc;
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::message::MessageConst;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const ROCKSDB_TIMELINE: &str = "ROCKSDB_TIMELINE";
-const FILE_TIME_WHEEL: &str = "FILE_TIME_WHEEL";
+use rocketmq_admin_core::core::broker::BrokerOperationResult;
+use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::SwitchTimerEngineRequest;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -51,75 +45,74 @@ pub struct SwitchTimerEngineSubCommand {
     engine_type: String,
 }
 
-impl CommandExecute for SwitchTimerEngineSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let engine_type = self.engine_type.trim().to_string();
-        if engine_type.is_empty()
-            || (engine_type != MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE
-                && engine_type != MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL)
-        {
-            println!("switchTimerEngine engineType must be R or F");
-            return Ok(());
-        }
-
-        let engine_name = if engine_type == MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE {
-            ROCKSDB_TIMELINE
-        } else {
-            FILE_TIME_WHEEL
-        };
-
-        MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "SwitchTimerEngineSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
-        })?;
-
-        let operation_result = switch_timer_engine(&default_mqadmin_ext, &engine_type, engine_name, self).await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+impl SwitchTimerEngineSubCommand {
+    fn request(&self) -> RocketMQResult<SwitchTimerEngineRequest> {
+        SwitchTimerEngineRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.engine_type.clone(),
+        )
     }
 }
 
-async fn switch_timer_engine(
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    engine_type: &str,
-    engine_name: &str,
-    command: &SwitchTimerEngineSubCommand,
-) -> RocketMQResult<()> {
-    if let Some(ref broker_addr) = command.broker_addr {
-        let broker_addr = broker_addr.trim();
-        default_mqadmin_ext
-            .switch_timer_engine(broker_addr.into(), engine_type.into())
-            .await?;
-        println!("switchTimerEngine to {} success, {}", engine_name, broker_addr);
-    } else if let Some(ref cluster_name) = command.cluster_name {
-        let cluster_name = cluster_name.trim();
-        let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-        let master_set = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
-        for broker_addr in master_set {
-            match default_mqadmin_ext
-                .switch_timer_engine(broker_addr.clone(), engine_type.into())
-                .await
-            {
-                Ok(()) => {
-                    println!("switchTimerEngine to {} success, {}", engine_name, broker_addr);
-                }
-                Err(e) => {
-                    eprintln!("switchTimerEngine to {} failed, {}: {}", engine_name, broker_addr, e);
-                }
+impl CommandExecute for SwitchTimerEngineSubCommand {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = match self.request() {
+            Ok(request) => request,
+            Err(error) if error.to_string().contains("engineType") => {
+                println!("switchTimerEngine engineType must be R or F");
+                return Ok(());
             }
-        }
+            Err(error) => return Err(error),
+        };
+
+        let engine_name = request.engine_name().clone();
+        let result = BrokerService::switch_timer_engine_by_request_with_rpc_hook(request, rpc_hook).await?;
+        print_switch_timer_engine_result(engine_name.as_str(), &result);
+        Ok(())
     }
-    Ok(())
+}
+
+fn print_switch_timer_engine_result(engine_name: &str, result: &BrokerOperationResult) {
+    for broker_addr in &result.broker_addrs {
+        println!("switchTimerEngine to {} success, {}", engine_name, broker_addr);
+    }
+    for failure in &result.failures {
+        eprintln!(
+            "switchTimerEngine to {} failed, {}: {}",
+            engine_name, failure.broker_addr, failure.error
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use rocketmq_admin_core::core::broker::BrokerTarget;
+
+    use super::*;
+
+    #[test]
+    fn parses_switch_timer_engine_request() {
+        let cmd =
+            SwitchTimerEngineSubCommand::try_parse_from(["switchTimerEngine", "-c", " DefaultCluster ", "-e", "R"])
+                .unwrap();
+        let request = cmd.request().unwrap();
+
+        assert!(matches!(
+            request.target(),
+            BrokerTarget::ClusterName(cluster) if cluster.as_str() == "DefaultCluster"
+        ));
+        assert_eq!(request.engine_type().as_str(), "R");
+        assert_eq!(request.engine_name().as_str(), "ROCKSDB_TIMELINE");
+    }
+
+    #[test]
+    fn rejects_invalid_switch_timer_engine_type() {
+        let cmd =
+            SwitchTimerEngineSubCommand::try_parse_from(["switchTimerEngine", "-b", "127.0.0.1:10911", "-e", "bad"])
+                .unwrap();
+
+        assert!(cmd.request().is_err());
+    }
 }

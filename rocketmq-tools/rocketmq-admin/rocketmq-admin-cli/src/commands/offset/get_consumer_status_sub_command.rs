@@ -15,14 +15,13 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::offset::ConsumerStatusQueryRequest;
+use rocketmq_admin_core::core::offset::ConsumerStatusResult;
+use rocketmq_admin_core::core::offset::OffsetService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetConsumerStatusSubCommand {
@@ -41,68 +40,64 @@ pub struct GetConsumerStatusSubCommand {
     origin_client_id: Option<String>,
 }
 
+impl GetConsumerStatusSubCommand {
+    fn request(&self) -> RocketMQResult<ConsumerStatusQueryRequest> {
+        ConsumerStatusQueryRequest::try_new(self.group.clone(), self.topic.clone(), self.origin_client_id.clone())
+    }
+}
+
 impl CommandExecute for GetConsumerStatusSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let request = self.request()?;
+        let result = OffsetService::query_consumer_status_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        print_consumer_status_result(&request, &result);
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+fn print_consumer_status_result(request: &ConsumerStatusQueryRequest, result: &ConsumerStatusResult) {
+    println!(
+        "get consumer status from client. group={}, topic={}, originClientId={}",
+        request.group(),
+        request.topic(),
+        request.origin_client_id()
+    );
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetConsumerStatusSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
+    println!(
+        "{:<50}  {:<15}  {:<15}  {:<20}",
+        "#clientId", "#brokerName", "#queueId", "#offset"
+    );
 
-            let group = self.group.trim();
-            let topic = self.topic.trim();
-            let origin_client_id = self.origin_client_id.as_deref().map(|s| s.trim()).unwrap_or("");
+    for row in &result.rows {
+        println!(
+            "{:<50}  {:<15}  {:<15}  {:<20}",
+            row.client_id, row.broker_name, row.queue_id, row.offset,
+        );
+    }
+}
 
-            let consumer_status_table = default_mqadmin_ext
-                .get_consume_status(topic.into(), group.into(), origin_client_id.into())
-                .await?;
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
 
-            println!(
-                "get consumer status from client. group={}, topic={}, originClientId={}",
-                group, topic, origin_client_id
-            );
+    use super::*;
 
-            println!(
-                "{:<50}  {:<15}  {:<15}  {:<20}",
-                "#clientId", "#brokerName", "#queueId", "#offset"
-            );
+    #[test]
+    fn parses_get_consumer_status_request() {
+        let cmd = GetConsumerStatusSubCommand::try_parse_from([
+            "getConsumerStatus",
+            "-g",
+            " TestGroup ",
+            "-t",
+            " TestTopic ",
+            "-i",
+            " client-a ",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
 
-            for (client_id, mq_table) in &consumer_status_table {
-                let mut entries: Vec<_> = mq_table.iter().collect();
-                entries.sort_by(|(a, _), (b, _)| {
-                    a.broker_name()
-                        .cmp(b.broker_name())
-                        .then_with(|| a.queue_id().cmp(&b.queue_id()))
-                });
-
-                for (mq, offset) in entries {
-                    println!(
-                        "{:<50}  {:<15}  {:<15}  {:<20}",
-                        client_id,
-                        mq.broker_name(),
-                        mq.queue_id(),
-                        offset,
-                    );
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        assert_eq!(request.group().as_str(), "TestGroup");
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert_eq!(request.origin_client_id().as_str(), "client-a");
     }
 }

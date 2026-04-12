@@ -14,19 +14,15 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-
-const THIRTY_DAYS_MILLIS: i64 = 30 * 24 * 60 * 60 * 1000;
+use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressRequest;
+use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
+use rocketmq_admin_core::core::queue::QueueService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct CheckRocksdbCqWriteProgressSubCommand {
@@ -43,91 +39,78 @@ pub struct CheckRocksdbCqWriteProgressSubCommand {
     check_from: Option<i64>,
 }
 
+impl CheckRocksdbCqWriteProgressSubCommand {
+    fn request(&self) -> RocketMQResult<CheckRocksdbCqWriteProgressRequest> {
+        CheckRocksdbCqWriteProgressRequest::try_new(
+            self.cluster_name.clone(),
+            self.namesrv_addr.clone(),
+            self.topic.clone(),
+            self.check_from,
+        )
+    }
+}
+
 impl CommandExecute for CheckRocksdbCqWriteProgressSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
+        let result =
+            QueueService::check_rocksdb_cq_write_progress_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        print_check_rocksdb_cq_write_progress_result(&result);
+        Ok(())
+    }
+}
+
+fn print_check_rocksdb_cq_write_progress_result(result: &CheckRocksdbCqWriteProgressResult) {
+    if !result.cluster_found {
+        println!("clusterAddrTable is empty");
+        return;
+    }
+
+    for entry in &result.entries {
+        let check_status = entry.result.get_check_status();
+        let check_result = entry.result.check_result.as_deref().unwrap_or("");
+        if check_status == CheckStatus::CheckError {
+            println!(
+                "{} check error, please check log... errInfo: {}",
+                entry.broker_name, check_result
+            );
         } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        default_mqadmin_ext.set_namesrv_addr(self.namesrv_addr.trim());
-
-        let cluster_name = self.cluster_name.trim().to_string();
-        let topic = self.topic.as_deref().map(|t| t.trim().to_string()).unwrap_or_default();
-        let check_store_time = self
-            .check_from
-            .unwrap_or_else(|| current_millis() as i64 - THIRTY_DAYS_MILLIS);
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CheckRocksdbCqWriteProgressSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CheckRocksdbCqWriteProgressSubCommand: Failed to examine broker cluster info: {}",
-                    e
-                ))
-            })?;
-
-            let cluster_addr_table = cluster_info
-                .cluster_addr_table
-                .as_ref()
-                .ok_or_else(|| RocketMQError::Internal("clusterAddrTable is empty".into()))?;
-
-            if cluster_addr_table.get(cluster_name.as_str()).is_none() {
-                println!("clusterAddrTable is empty");
-                return Ok(());
-            }
-
-            let broker_addr_table = cluster_info
-                .broker_addr_table
-                .as_ref()
-                .ok_or_else(|| RocketMQError::Internal("brokerAddrTable is empty".into()))?;
-
-            for (broker_name, broker_data) in broker_addr_table {
-                let broker_addr = match broker_data.broker_addrs().get(&0u64) {
-                    Some(addr) => addr.clone(),
-                    None => continue,
-                };
-
-                match default_mqadmin_ext
-                    .check_rocksdb_cq_write_progress(broker_addr, CheetahString::from(topic.as_str()), check_store_time)
-                    .await
-                {
-                    Ok(result) => {
-                        let check_status = result.get_check_status();
-                        let check_result = result.check_result.as_deref().unwrap_or("");
-                        if check_status == CheckStatus::CheckError {
-                            println!(
-                                "{} check error, please check log... errInfo: {}",
-                                broker_name, check_result
-                            );
-                        } else {
-                            println!(
-                                "{} check doing, please wait and get the result from log...",
-                                broker_name
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        println!("{} check error: {}", broker_name, e);
-                    }
-                }
-            }
-
-            Ok(())
+            println!(
+                "{} check doing, please wait and get the result from log...",
+                entry.broker_name
+            );
         }
-        .await;
+    }
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+    for failure in &result.failures {
+        println!("{} check error: {}", failure.broker_name, failure.error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn parses_check_rocksdb_cq_write_progress_request() {
+        let cmd = CheckRocksdbCqWriteProgressSubCommand::try_parse_from([
+            "checkRocksdbCqWriteProgress",
+            "-c",
+            " DefaultCluster ",
+            "-n",
+            " 127.0.0.1:9876 ",
+            "-t",
+            " TestTopic ",
+            "--checkFrom",
+            "1024",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
+
+        assert_eq!(request.cluster_name().as_str(), "DefaultCluster");
+        assert_eq!(request.namesrv_addr(), "127.0.0.1:9876");
+        assert_eq!(request.topic().as_str(), "TestTopic");
+        assert_eq!(request.check_store_time(), 1024);
     }
 }

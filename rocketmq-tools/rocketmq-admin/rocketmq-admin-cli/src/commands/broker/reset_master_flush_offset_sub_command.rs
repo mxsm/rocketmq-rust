@@ -15,14 +15,12 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::ResetMasterFlushOffsetRequest;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ResetMasterFlushOffsetSubCommand {
@@ -33,49 +31,40 @@ pub struct ResetMasterFlushOffsetSubCommand {
     offset: Option<i64>,
 }
 
+impl ResetMasterFlushOffsetSubCommand {
+    fn request(&self) -> RocketMQResult<ResetMasterFlushOffsetRequest> {
+        ResetMasterFlushOffsetRequest::try_new(self.broker_addr.clone(), self.offset)
+    }
+}
+
 impl CommandExecute for ResetMasterFlushOffsetSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+        let request = self.request()?;
+        BrokerService::reset_master_flush_offset_by_request_with_rpc_hook(request.clone(), rpc_hook).await?;
+        println!("reset master flush offset to {} success", request.master_flush_offset());
+        Ok(())
+    }
+}
 
-        MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "ResetMasterFlushOffsetSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
-        })?;
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
 
-        let broker_addr = self
-            .broker_addr
-            .as_ref()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| RocketMQError::Internal("brokerAddr is required".into()))?;
-        let master_flush_offset = self
-            .offset
-            .ok_or_else(|| RocketMQError::Internal("offset is required".into()))?;
+    use super::*;
 
-        let result = default_mqadmin_ext
-            .reset_master_flush_offset(broker_addr.into(), master_flush_offset as u64)
-            .await;
+    #[test]
+    fn parses_reset_master_flush_offset_request() {
+        let cmd = ResetMasterFlushOffsetSubCommand::try_parse_from([
+            "resetMasterFlushOffset",
+            "-b",
+            " 127.0.0.1:10911 ",
+            "-o",
+            "1024",
+        ])
+        .unwrap();
+        let request = cmd.request().unwrap();
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-
-        match result {
-            Ok(()) => {
-                println!("reset master flush offset to {} success", master_flush_offset);
-                Ok(())
-            }
-            Err(e) => Err(RocketMQError::Internal(format!(
-                "ResetMasterFlushOffsetSubCommand command failed: {}",
-                e
-            ))),
-        }
+        assert_eq!(request.broker_addr().as_str(), "127.0.0.1:10911");
+        assert_eq!(request.master_flush_offset(), 1024);
     }
 }
