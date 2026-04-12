@@ -14,17 +14,19 @@
 
 use std::path::PathBuf;
 
+use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::core::topic::TopicTarget;
+use rocketmq_admin_core::core::topic::UpdateTopicListRequest;
+use rocketmq_admin_core::core::topic::UpdateTopicListResult;
 
 #[derive(Parser)]
 pub struct UpdateTopicListSubCommand {
@@ -44,17 +46,40 @@ pub struct UpdateTopicListSubCommand {
     #[arg(long)]
     dry_run: bool,
 }
+
+impl UpdateTopicListSubCommand {
+    fn target(&self) -> RocketMQResult<TopicTarget> {
+        if let Some(broker) = &self.broker_addr {
+            return Ok(TopicTarget::Broker(CheetahString::from(broker.trim())));
+        }
+        if let Some(cluster) = &self.cluster {
+            return Ok(TopicTarget::Cluster(CheetahString::from(cluster.trim())));
+        }
+
+        Err(RocketMQError::Internal(
+            "a broker or cluster is required for command UpdateTopicList".to_string(),
+        ))
+    }
+
+    fn request(&self, topic_configs: Vec<TopicConfig>) -> RocketMQResult<UpdateTopicListRequest> {
+        UpdateTopicListRequest::try_new(self.target()?, topic_configs)
+    }
+
+    fn print_result(result: &UpdateTopicListResult) {
+        for broker_addr in &result.broker_addrs {
+            println!(
+                "submit batch of topic config to {} success, please check the result later",
+                broker_addr
+            );
+        }
+    }
+}
+
 impl CommandExecute for UpdateTopicListSubCommand {
     async fn execute(
         &self,
         _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut default_mq_admin_ext = DefaultMQAdminExt::new();
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-        default_mq_admin_ext.start().await?;
-
         if !self.file.is_file() {
             return Err(RocketMQError::Internal(
                 "the file path doesn't point to a valid file".to_string(),
@@ -78,36 +103,60 @@ impl CommandExecute for UpdateTopicListSubCommand {
                 ));
             };
 
-        if let Some(broker) = &self.broker_addr {
-            let broker_address = broker.trim();
-            default_mq_admin_ext
-                .create_and_update_topic_config_list(broker_address.into(), topic_configs)
-                .await?;
-            println!(
-                "submit batch of topic config to {} success, please check the result later",
-                broker_address
-            );
-        } else if let Some(cluster) = &self.cluster {
-            let cluster_name = cluster.trim();
-            let master_set = CommandUtil::fetch_master_addr_by_cluster_name(
-                &default_mq_admin_ext.examine_broker_cluster_info().await?,
-                cluster_name,
-            )?;
-            for broker_in_cluster in &master_set {
-                default_mq_admin_ext
-                    .create_and_update_topic_config_list(broker_in_cluster.into(), topic_configs.clone())
-                    .await?;
-                println!(
-                    "submit batch of topic config to {} success, please check the result later",
-                    broker_in_cluster
-                );
-            }
-        } else {
-            return Err(RocketMQError::Internal(
-                "a broker or cluster is required for command UpdateTopicList".to_string(),
-            ));
-        }
-        default_mq_admin_ext.shutdown().await;
+        let result = TopicService::update_topic_config_list_by_request(self.request(topic_configs)?).await?;
+        Self::print_result(&result);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_topic_list_sub_command_builds_broker_request() {
+        let command = UpdateTopicListSubCommand::try_parse_from([
+            "updateTopicList",
+            "-f",
+            "topics.json",
+            "-b",
+            " 127.0.0.1:10911 ",
+        ])
+        .unwrap();
+
+        let request = command.request(vec![TopicConfig::default()]).unwrap();
+
+        assert_eq!(
+            request.target(),
+            &TopicTarget::Broker(CheetahString::from_static_str("127.0.0.1:10911"))
+        );
+        assert_eq!(request.topic_configs().len(), 1);
+    }
+
+    #[test]
+    fn update_topic_list_sub_command_builds_cluster_request() {
+        let command = UpdateTopicListSubCommand::try_parse_from([
+            "updateTopicList",
+            "-f",
+            "topics.json",
+            "-c",
+            " DefaultCluster ",
+        ])
+        .unwrap();
+
+        let request = command.request(vec![TopicConfig::default()]).unwrap();
+
+        assert_eq!(
+            request.target(),
+            &TopicTarget::Cluster(CheetahString::from_static_str("DefaultCluster"))
+        );
+        assert_eq!(request.topic_configs().len(), 1);
+    }
+
+    #[test]
+    fn update_topic_list_sub_command_rejects_missing_target() {
+        let command = UpdateTopicListSubCommand::try_parse_from(["updateTopicList", "-f", "topics.json"]).unwrap();
+
+        assert!(command.request(vec![TopicConfig::default()]).is_err());
     }
 }

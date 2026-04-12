@@ -22,6 +22,7 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
 use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 
@@ -39,6 +40,8 @@ use super::types::TopicListQueryRequest;
 use super::types::TopicListResult;
 use super::types::TopicRouteQueryRequest;
 use super::types::TopicStatusQueryRequest;
+use super::types::UpdateTopicListRequest;
+use super::types::UpdateTopicListResult;
 use super::types::UpdateTopicPermRequest;
 use super::types::UpdateTopicPermResult;
 use super::types::UpdateTopicRequest;
@@ -204,6 +207,18 @@ impl TopicService {
         result
     }
 
+    /// Apply a batch of topic configs through a complete core request lifecycle.
+    pub async fn update_topic_config_list_by_request(
+        request: UpdateTopicListRequest,
+    ) -> RocketMQResult<UpdateTopicListResult> {
+        let mut admin = request.admin_builder().build_and_start().await?;
+        let target = request.target().clone();
+        let topic_configs = request.topic_configs().to_vec();
+        let result = Self::update_topic_config_list(&mut admin, target, topic_configs).await;
+        admin.shutdown().await;
+        result
+    }
+
     /// Update topic permission through a complete core request lifecycle.
     pub async fn update_topic_perm_by_request(
         request: UpdateTopicPermRequest,
@@ -282,7 +297,6 @@ impl TopicService {
         config: super::types::TopicConfig,
         target: super::types::TopicTarget,
     ) -> RocketMQResult<()> {
-        use rocketmq_common::common::config::TopicConfig as RocketMQTopicConfig;
         use rocketmq_common::common::TopicFilterType;
 
         // Convert to internal TopicConfig
@@ -334,6 +348,49 @@ impl TopicService {
                 Ok(())
             }
         }
+    }
+
+    /// Apply a batch of topic configs to one broker or every master broker in a cluster.
+    pub async fn update_topic_config_list(
+        admin: &mut DefaultMQAdminExt,
+        target: super::types::TopicTarget,
+        topic_configs: Vec<RocketMQTopicConfig>,
+    ) -> RocketMQResult<UpdateTopicListResult> {
+        if topic_configs.is_empty() {
+            return Err(ToolsError::validation_error("topicConfigs", "topicConfigs must not be empty").into());
+        }
+
+        let broker_addrs = match &target {
+            super::types::TopicTarget::Broker(broker_addr) => vec![broker_addr.clone()],
+            super::types::TopicTarget::Cluster(cluster_name) => {
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                let master_addrs =
+                    BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
+                if master_addrs.is_empty() {
+                    return Err(ToolsError::ClusterNotFound {
+                        cluster: cluster_name.to_string(),
+                    }
+                    .into());
+                }
+                master_addrs
+            }
+        };
+
+        for broker_addr in &broker_addrs {
+            admin
+                .create_and_update_topic_config_list(broker_addr.clone(), topic_configs.clone())
+                .await
+                .map_err(|e| {
+                    ToolsError::internal(format!(
+                        "Failed to submit topic config list to broker '{broker_addr}': {e}"
+                    ))
+                })?;
+        }
+
+        Ok(UpdateTopicListResult { target, broker_addrs })
     }
 
     /// Batch get cluster lists for multiple topics

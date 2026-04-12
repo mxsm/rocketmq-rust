@@ -411,32 +411,113 @@ impl HttpTinyClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
+
+    async fn spawn_http_server<F>(handler: F) -> String
+    where
+        F: FnOnce(String) -> (u16, String) + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut socket).await;
+            let (status_code, body) = handler(request);
+            let reason = if (200..300).contains(&status_code) {
+                "OK"
+            } else {
+                "ERROR"
+            };
+            let response = format!(
+                "HTTP/1.1 {status_code} {reason}\r\nContent-Length: {}\r\nContent-Type: text/plain; \
+                 charset=utf-8\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{addr}")
+    }
+
+    async fn spawn_hanging_http_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 1024];
+            let _ = socket.read(&mut buffer).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        format!("http://{addr}")
+    }
+
+    async fn read_http_request(socket: &mut TcpStream) -> String {
+        let mut buffer = Vec::new();
+        let mut chunk = [0; 1024];
+
+        loop {
+            let bytes_read = socket.read(&mut chunk).await.unwrap();
+            if bytes_read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..bytes_read]);
+
+            if request_is_complete(&buffer) {
+                break;
+            }
+        }
+
+        String::from_utf8_lossy(&buffer).into_owned()
+    }
+
+    fn request_is_complete(buffer: &[u8]) -> bool {
+        let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return false;
+        };
+        let headers = String::from_utf8_lossy(&buffer[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+
+        buffer.len() >= header_end + 4 + content_length
+    }
+
+    fn request_contains_header(request: &str, header_name: &str, header_value: &str) -> bool {
+        request.lines().any(|line| {
+            let Some((name, value)) = line.split_once(':') else {
+                return false;
+            };
+            name.eq_ignore_ascii_case(header_name) && value.trim() == header_value
+        })
+    }
 
     #[tokio::test]
     async fn test_http_get_async_basic() {
-        // Test with httpbin.org (public test API)
-        let result = HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "UTF-8", 10000).await;
+        let url = spawn_http_server(|_| (200, "ok".to_string())).await;
+        let response = HttpTinyClient::http_get_async(&url, None, None, "UTF-8", 10000)
+            .await
+            .unwrap();
 
-        match result {
-            Ok(response) => {
-                println!("Status: {}", response.code);
-                println!("Content length: {}", response.content.len());
-                // Don't assert on success if external service is down (503)
-                if response.code == 503 {
-                    eprintln!("httpbin.org is unavailable (503), skipping test");
-                } else {
-                    assert!(response.is_success());
-                }
-            }
-            Err(e) => {
-                // Network might be unavailable in CI, log but don't fail
-                eprintln!("HTTP request failed (this is OK in CI): {}", e);
-            }
-        }
+        assert!(response.is_success());
+        assert_eq!(response.content, "ok");
     }
 
     #[tokio::test]
     async fn test_http_get_async_with_query_params() {
+        let url = spawn_http_server(|request| (200, request)).await;
         let params = vec![
             "key1".to_string(),
             "value1".to_string(),
@@ -444,29 +525,18 @@ mod tests {
             "value2".to_string(),
         ];
 
-        let result =
-            HttpTinyClient::http_get_async("https://httpbin.org/get", None, Some(&params), "UTF-8", 10000).await;
+        let response = HttpTinyClient::http_get_async(&url, None, Some(&params), "UTF-8", 10000)
+            .await
+            .unwrap();
 
-        match result {
-            Ok(response) => {
-                println!("Response with params: {}", response.code);
-                if response.code == 503 {
-                    eprintln!("httpbin.org is unavailable (503), skipping test");
-                } else {
-                    assert!(response.is_success());
-                    // httpbin echoes back query params
-                    assert!(response.content.contains("key1"));
-                    assert!(response.content.contains("value1"));
-                }
-            }
-            Err(e) => {
-                eprintln!("HTTP request failed (this is OK in CI): {}", e);
-            }
-        }
+        assert!(response.is_success());
+        assert!(response.content.contains("key1=value1"));
+        assert!(response.content.contains("key2=value2"));
     }
 
     #[tokio::test]
     async fn test_http_post_async_with_form_data() {
+        let url = spawn_http_server(|request| (200, request)).await;
         let params = vec![
             "username".to_string(),
             "testuser".to_string(),
@@ -474,29 +544,18 @@ mod tests {
             "testpass".to_string(),
         ];
 
-        let result =
-            HttpTinyClient::http_post_async("https://httpbin.org/post", None, Some(&params), "UTF-8", 10000).await;
+        let response = HttpTinyClient::http_post_async(&url, None, Some(&params), "UTF-8", 10000)
+            .await
+            .unwrap();
 
-        match result {
-            Ok(response) => {
-                println!("POST response: {}", response.code);
-                if response.code == 503 {
-                    eprintln!("httpbin.org is unavailable (503), skipping test");
-                } else {
-                    assert!(response.is_success());
-                    // httpbin echoes back form data
-                    assert!(response.content.contains("username"));
-                    assert!(response.content.contains("testuser"));
-                }
-            }
-            Err(e) => {
-                eprintln!("HTTP request failed (this is OK in CI): {}", e);
-            }
-        }
+        assert!(response.is_success());
+        assert!(response.content.contains("username=testuser"));
+        assert!(response.content.contains("password=testpass"));
     }
 
     #[tokio::test]
     async fn test_http_get_async_with_custom_headers() {
+        let url = spawn_http_server(|request| (200, request)).await;
         let headers = vec![
             "User-Agent".to_string(),
             "RocketMQ-Rust/0.8.0".to_string(),
@@ -504,51 +563,29 @@ mod tests {
             "application/json".to_string(),
         ];
 
-        let result =
-            HttpTinyClient::http_get_async("https://httpbin.org/get", Some(&headers), None, "UTF-8", 10000).await;
+        let response = HttpTinyClient::http_get_async(&url, Some(&headers), None, "UTF-8", 10000)
+            .await
+            .unwrap();
 
-        match result {
-            Ok(response) => {
-                if response.code >= 500 {
-                    eprintln!(
-                        "httpbin.org is unavailable or having issues ({}), skipping test",
-                        response.code
-                    );
-                } else {
-                    assert!(response.is_success());
-                    // httpbin echoes back headers
-                    assert!(response.content.contains("RocketMQ-Rust"));
-                }
-            }
-            Err(e) => {
-                eprintln!("HTTP request failed (this is OK in CI): {}", e);
-            }
-        }
+        assert!(response.is_success());
+        assert!(response.content.contains("RocketMQ-Rust"));
+        assert!(request_contains_header(&response.content, "Accept", "application/json"));
     }
 
     #[tokio::test]
     async fn test_error_handling_timeout() {
-        let result = HttpTinyClient::http_get_async("https://httpbin.org/delay/10", None, None, "UTF-8", 2000).await;
+        let url = spawn_hanging_http_server().await;
+        let result = HttpTinyClient::http_get_async(&url, None, None, "UTF-8", 100).await;
 
         match result {
             Err(e) => {
                 println!("Expected error: {}", e);
                 assert!(matches!(e, RocketMQError::Network(_)));
             }
-            Ok(response) => {
-                // httpbin.org might return 5xx errors if service is unavailable or having issues
-                if response.code >= 500 {
-                    eprintln!(
-                        "httpbin.org is unavailable or having issues ({}), skipping timeout test",
-                        response.code
-                    );
-                } else {
-                    panic!(
-                        "Expected timeout error but got success response with code: {}",
-                        response.code
-                    );
-                }
-            }
+            Ok(response) => panic!(
+                "Expected timeout error but got success response with code: {}",
+                response.code
+            ),
         }
     }
 
@@ -764,6 +801,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_with_valid_complex_request() {
+        let url = spawn_http_server(|request| (200, request)).await;
         let headers = vec![
             "Authorization".to_string(),
             "Bearer token123".to_string(),
@@ -778,25 +816,16 @@ mod tests {
             "value2".to_string(),
         ];
 
-        // This should pass all validations (though the request itself may fail due to network)
-        let result =
-            HttpTinyClient::http_get_async("https://httpbin.org/get", Some(&headers), Some(&params), "UTF-8", 5000)
-                .await;
+        let response = HttpTinyClient::http_get_async(&url, Some(&headers), Some(&params), "UTF-8", 5000)
+            .await
+            .unwrap();
 
-        // Either success or network error, but not validation error
-        match result {
-            Ok(_) => {
-                // Success
-            }
-            Err(e) => {
-                // Should be network error, not validation error
-                let err_str = e.to_string();
-                assert!(
-                    !err_str.contains("validation") && !err_str.contains("Invalid"),
-                    "Should not be a validation error: {}",
-                    err_str
-                );
-            }
-        }
+        assert!(response.is_success());
+        assert!(request_contains_header(
+            &response.content,
+            "Authorization",
+            "Bearer token123"
+        ));
+        assert!(response.content.contains("key1=value1"));
     }
 }

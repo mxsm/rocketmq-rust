@@ -28,11 +28,13 @@ pub mod core {
     pub mod auth;
     pub mod broker;
     pub mod cache;
+    pub mod cluster;
     pub mod concurrent;
     pub mod connection;
     pub mod consumer;
     pub mod controller;
     pub mod ha;
+    pub mod lite;
     pub mod message;
     pub mod namesrv;
     pub mod offset;

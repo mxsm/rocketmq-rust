@@ -14,19 +14,16 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryRequest;
+use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryResult;
+use rocketmq_admin_core::core::lite::LiteService;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(
@@ -47,69 +44,28 @@ pub struct GetBrokerLiteInfoSubCommand {
 
 impl CommandExecute for GetBrokerLiteInfoSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetBrokerLiteInfoSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            let show_detail = self.show_detail;
-            Self::print_header();
-
-            if let Some(broker_addr) = &self.broker_addr {
-                let broker_addr = broker_addr.trim();
-                let response_body = default_mqadmin_ext
-                    .get_broker_lite_info(CheetahString::from(broker_addr))
-                    .await?;
-                Self::print_row(&response_body, broker_addr, show_detail);
-            } else if let Some(cluster_name) = &self.cluster_name {
-                let cluster_name = cluster_name.trim();
-                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "GetBrokerLiteInfoSubCommand: Failed to examine broker cluster info: {}",
-                        e
-                    ))
-                })?;
-
-                let master_set = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
-
-                for broker_addr in &master_set {
-                    match default_mqadmin_ext
-                        .get_broker_lite_info(CheetahString::from(broker_addr.as_str()))
-                        .await
-                    {
-                        Ok(response_body) => {
-                            Self::print_row(&response_body, broker_addr, show_detail);
-                        }
-                        Err(_) => {
-                            println!("[{}] error.", broker_addr);
-                        }
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let result = LiteService::query_broker_lite_info_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result, self.show_detail);
+        Ok(())
     }
 }
 
 impl GetBrokerLiteInfoSubCommand {
+    fn request(&self) -> RocketMQResult<BrokerLiteInfoQueryRequest> {
+        BrokerLiteInfoQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
+    }
+
+    fn print_result(result: &BrokerLiteInfoQueryResult, show_detail: bool) {
+        Self::print_header();
+        for entry in &result.entries {
+            if let Some(body) = &entry.body {
+                Self::print_row(body, entry.broker_addr.as_str(), show_detail);
+            } else {
+                println!("[{}] error.", entry.broker_addr);
+            }
+        }
+    }
+
     fn print_header() {
         println!(
             "{:<30} {:<17} {:<10} {:<14} {:<20} {:<17} {:<15} {:<18} {:<15}",
@@ -152,5 +108,34 @@ impl GetBrokerLiteInfoSubCommand {
                 serde_json::to_string(response_body.get_group_meta()).unwrap_or_default()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_admin_core::core::lite::BrokerLiteInfoTarget;
+
+    #[test]
+    fn get_broker_lite_info_sub_command_builds_broker_request() {
+        let cmd =
+            GetBrokerLiteInfoSubCommand::try_parse_from(["getBrokerLiteInfo", "-b", " 127.0.0.1:10911 "]).unwrap();
+
+        assert_eq!(
+            cmd.request().unwrap().target(),
+            &BrokerLiteInfoTarget::Broker("127.0.0.1:10911".into())
+        );
+    }
+
+    #[test]
+    fn get_broker_lite_info_sub_command_builds_cluster_request() {
+        let cmd =
+            GetBrokerLiteInfoSubCommand::try_parse_from(["getBrokerLiteInfo", "-c", " DefaultCluster ", "-d"]).unwrap();
+
+        assert!(cmd.show_detail);
+        assert_eq!(
+            cmd.request().unwrap().target(),
+            &BrokerLiteInfoTarget::Cluster("DefaultCluster".into())
+        );
     }
 }

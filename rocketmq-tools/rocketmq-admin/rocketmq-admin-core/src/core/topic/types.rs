@@ -498,6 +498,62 @@ pub enum TopicTarget {
     Cluster(CheetahString),
 }
 
+/// Request model for applying a batch of topic configs to a broker or cluster.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateTopicListRequest {
+    target: TopicTarget,
+    topic_configs: Vec<rocketmq_common::common::config::TopicConfig>,
+    namesrv_addr: Option<String>,
+}
+
+impl UpdateTopicListRequest {
+    pub fn try_new(
+        target: TopicTarget,
+        topic_configs: Vec<rocketmq_common::common::config::TopicConfig>,
+    ) -> RocketMQResult<Self> {
+        if topic_configs.is_empty() {
+            return Err(ToolsError::validation_error("topicConfigs", "topicConfigs must not be empty").into());
+        }
+
+        Ok(Self {
+            target,
+            topic_configs,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn target(&self) -> &TopicTarget {
+        &self.target
+    }
+
+    pub fn topic_configs(&self) -> &[rocketmq_common::common::config::TopicConfig] {
+        &self.topic_configs
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateTopicListResult {
+    pub target: TopicTarget,
+    pub broker_addrs: Vec<CheetahString>,
+}
+
 /// Request model for creating or updating a topic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateTopicRequest {

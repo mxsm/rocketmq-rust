@@ -51,6 +51,8 @@ pub use self::types::TopicRouteQueryRequest;
 pub use self::types::TopicStatus;
 pub use self::types::TopicStatusQueryRequest;
 pub use self::types::TopicTarget;
+pub use self::types::UpdateTopicListRequest;
+pub use self::types::UpdateTopicListResult;
 pub use self::types::UpdateTopicPermRequest;
 pub use self::types::UpdateTopicPermResult;
 pub use self::types::UpdateTopicRequest;

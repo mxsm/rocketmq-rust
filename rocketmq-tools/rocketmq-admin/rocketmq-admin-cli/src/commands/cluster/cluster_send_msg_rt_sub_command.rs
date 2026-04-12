@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::FixedOffset;
 use chrono::Utc;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
@@ -29,7 +27,9 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
+use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryResult;
+use rocketmq_admin_core::core::cluster::ClusterService;
 
 fn get_string_by_size(size: u64) -> Vec<u8> {
     vec![b'a'; size as usize]
@@ -97,18 +97,14 @@ pub struct ClusterSendMsgRTSubCommand {
     interval: u64,
 }
 
+impl ClusterSendMsgRTSubCommand {
+    fn request(&self) -> ClusterBrokerNameQueryRequest {
+        ClusterBrokerNameQueryRequest::new(self.cluster_name.clone())
+    }
+}
+
 impl CommandExecute for ClusterSendMsgRTSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mq_admin_ext = if let Some(ref hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(hook.clone())
-        } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
         let instance_name = format!("PID_ClusterRTCommand_{}", current_millis());
         let mut client_config = ClientConfig::default();
         client_config.set_instance_name(instance_name.into());
@@ -122,32 +118,13 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
         let mut producer = builder.build();
 
         let operation_result = async {
-            MQAdminExt::start(&mut default_mq_admin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("ClusterSendMsgRTSubCommand: Failed to start MQAdminExt: {}", e))
-            })?;
-
             producer.start().await.map_err(|e| {
                 RocketMQError::Internal(format!("ClusterSendMsgRTSubCommand: Failed to start producer: {}", e))
             })?;
 
-            let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "ClusterSendMsgRTSubCommand: Failed to examine broker cluster info: {}",
-                    e
-                ))
-            })?;
-
-            let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-                RocketMQError::Internal("ClusterSendMsgRTSubCommand: No cluster address table available.".into())
-            })?;
-
-            let cluster_names: BTreeSet<String> = if let Some(ref name) = self.cluster_name {
-                let mut set = BTreeSet::new();
-                set.insert(name.trim().to_string());
-                set
-            } else {
-                cluster_addr_table.keys().map(|k| k.to_string()).collect()
-            };
+            let broker_names =
+                ClusterService::query_cluster_broker_names_by_request_with_rpc_hook(self.request(), rpc_hook.clone())
+                    .await?;
 
             if !self.print_as_tlog {
                 println!(
@@ -157,19 +134,13 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
             }
 
             loop {
-                for cluster_name in &cluster_names {
-                    let broker_names = match cluster_addr_table.get(cluster_name.as_str()) {
-                        Some(names) => names,
-                        None => {
-                            println!("cluster [{}] not exist", cluster_name);
-                            break;
-                        }
-                    };
+                Self::print_missing_clusters(&broker_names);
 
+                for (cluster_name, broker_names) in &broker_names.broker_names_by_cluster {
                     for broker_name in broker_names {
                         let msg_body = get_string_by_size(self.size);
                         let msg = Message::builder()
-                            .topic(broker_name.as_str())
+                            .topic(broker_name)
                             .body_slice(&msg_body)
                             .build_unchecked();
 
@@ -227,8 +198,30 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
         }
         .await;
 
-        MQAdminExt::shutdown(&mut default_mq_admin_ext).await;
         producer.shutdown().await;
         operation_result
+    }
+}
+
+impl ClusterSendMsgRTSubCommand {
+    fn print_missing_clusters(result: &ClusterBrokerNameQueryResult) {
+        for cluster_name in &result.missing_clusters {
+            println!("cluster [{}] not exist", cluster_name);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cluster_send_msg_rt_sub_command_parse_request() {
+        let cmd = ClusterSendMsgRTSubCommand::try_parse_from(["clusterRT", "-c", " DefaultCluster "]).unwrap();
+
+        assert_eq!(
+            cmd.request().cluster_name().map(|name| name.as_str()),
+            Some("DefaultCluster")
+        );
     }
 }
