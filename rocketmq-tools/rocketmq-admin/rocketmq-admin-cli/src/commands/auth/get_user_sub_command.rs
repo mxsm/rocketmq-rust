@@ -18,17 +18,15 @@ use clap::ArgGroup;
 use clap::Parser;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::GetUserRequest;
+use rocketmq_admin_core::core::auth::GetUserResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use crate::commands::target::Target;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -68,106 +66,13 @@ impl ParseGetUserSubCommand {
 impl CommandExecute for GetUserSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let command = ParseGetUserSubCommand::new(self)?;
-        let target = Target::new(&self.cluster_name, &self.broker_addr).map_err(|_| {
-            RocketMQError::IllegalArgument(
-                "GetUserSubCommand: Specify exactly one of --brokerAddr (-b) or --clusterName (-c)".into(),
-            )
-        })?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("GetUserSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = async {
-            match target {
-                Target::BrokerAddr(broker_addr) => {
-                    let user_info = get_user_from_broker(&command, &default_mqadmin_ext, &broker_addr).await?;
-                    if let Some(user_info) = user_info {
-                        print_header();
-                        print_user(&user_info);
-                    } else {
-                        eprintln!("No user with username {} was found", command.username);
-                    }
-                    Ok(())
-                }
-                Target::ClusterName(cluster_name) => {
-                    let (user_info, failed_broker_addr) =
-                        get_user_from_cluster(&command, &default_mqadmin_ext, &cluster_name).await?;
-                    print_header();
-                    print_users(&user_info);
-                    if failed_broker_addr.is_empty() || !user_info.is_empty() {
-                        Ok(())
-                    } else {
-                        Err(RocketMQError::Internal(format!(
-                            "GetUserSubCommand: Failed to get user for brokers {}",
-                            failed_broker_addr.join(", ")
-                        )))
-                    }
-                }
-            }
-        }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
-    }
-}
-
-async fn get_user_from_broker(
-    parsed_command: &ParseGetUserSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    broker_addr: &str,
-) -> Result<Option<UserInfo>, RocketMQError> {
-    match default_mqadmin_ext
-        .get_user(broker_addr.into(), parsed_command.username.clone())
-        .await
-    {
-        Ok(user_info) => {
-            println!("Get user command was successful for broker {}.", broker_addr);
-            Ok(user_info)
-        }
-        Err(e) => Err(RocketMQError::Internal(format!(
-            "GetUserSubCommand: Failed to get user for broker {}: {}",
-            broker_addr, e
-        ))),
-    }
-}
-
-async fn get_user_from_cluster(
-    parsed_command: &ParseGetUserSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    cluster_name: &str,
-) -> Result<(Vec<UserInfo>, Vec<CheetahString>), RocketMQError> {
-    let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-
-    match CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name) {
-        Ok(addresses) => {
-            let results: Vec<Result<Option<UserInfo>, CheetahString>> =
-                futures::future::join_all(addresses.into_iter().map(|addr| async {
-                    get_user_from_broker(parsed_command, default_mqadmin_ext, addr.as_str())
-                        .await
-                        .map_err(|_err| addr)
-                }))
-                .await;
-
-            let (users, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
-            let users: Vec<UserInfo> = users.into_iter().filter_map(Result::unwrap).collect();
-            let failed_addr: Vec<CheetahString> = errors.into_iter().map(Result::unwrap_err).collect();
-
-            Ok((users, failed_addr))
-        }
-        Err(e) => Err(RocketMQError::Internal(format!(
-            "GetUserSubCommand: Failed to get user: {}",
-            e
-        ))),
+        let request = GetUserRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            command.username.clone().to_string(),
+        )?;
+        let result = AuthService::get_user_by_request_with_rpc_hook(request, rpc_hook).await?;
+        render_get_user_result(&command, result, self.broker_addr.is_some())
     }
 }
 
@@ -183,10 +88,6 @@ fn print_header() {
     );
 }
 
-fn print_user(user: &UserInfo) {
-    println!("{}", format_row(user));
-}
-
 fn print_users(users: &[UserInfo]) {
     users.iter().for_each(|user| println!("{}", format_row(user)));
     println!("Total users: {}", users.len());
@@ -199,6 +100,28 @@ fn format_row(user: &UserInfo) -> String {
         user.user_type.as_deref().unwrap_or(""),
         user.user_status.as_deref().unwrap_or(""),
     )
+}
+
+fn render_get_user_result(
+    command: &ParseGetUserSubCommand,
+    result: GetUserResult,
+    single_broker_target: bool,
+) -> RocketMQResult<()> {
+    if single_broker_target && result.users.is_empty() {
+        eprintln!("No user with username {} was found", command.username);
+        return Ok(());
+    }
+
+    print_header();
+    print_users(&result.users);
+    if result.failed_broker_addrs.is_empty() || !result.users.is_empty() {
+        Ok(())
+    } else {
+        Err(RocketMQError::Internal(format!(
+            "GetUserSubCommand: Failed to get user for brokers {}",
+            result.failed_broker_addrs.join(", ")
+        )))
+    }
 }
 
 #[cfg(test)]

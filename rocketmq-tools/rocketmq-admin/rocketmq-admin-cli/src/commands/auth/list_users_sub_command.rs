@@ -17,18 +17,15 @@ use std::sync::Arc;
 use clap::ArgGroup;
 use clap::Parser;
 
-use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::ListUsersRequest;
+use rocketmq_admin_core::core::auth::ListUsersResult;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use crate::commands::target::Target;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -45,124 +42,12 @@ pub struct ListUsersSubCommand {
     filter: Option<String>,
 }
 
-#[derive(Clone)]
-struct ParseListUsersSubCommand {
-    filter: Option<CheetahString>,
-}
-
-impl ParseListUsersSubCommand {
-    fn new(command: &ListUsersSubCommand) -> Result<Self, RocketMQError> {
-        let filter: Option<CheetahString> = command
-            .filter
-            .as_ref()
-            .map(|filter| filter.trim())
-            .filter(|filter| !filter.is_empty())
-            .map(|filter| filter.into());
-
-        Ok(Self { filter })
-    }
-}
-
 impl CommandExecute for ListUsersSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let command = ParseListUsersSubCommand::new(self)?;
-        let target = Target::new(&self.cluster_name, &self.broker_addr).map_err(|_| {
-            RocketMQError::IllegalArgument(
-                "ListUsersSubCommand: Specify exactly one of --brokerAddr (-b) or --clusterName (-c)".into(),
-            )
-        })?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("ListUsersSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = async {
-            match target {
-                Target::BrokerAddr(broker_addr) => {
-                    let user_info = get_list_users_broker(&command, &default_mqadmin_ext, &broker_addr).await?;
-                    print_users(user_info);
-                    Ok(())
-                }
-                Target::ClusterName(cluster_name) => {
-                    let (user_info, failed_broker_addr) =
-                        get_list_users_cluster(&command, &default_mqadmin_ext, &cluster_name).await?;
-                    print_users(user_info);
-                    if failed_broker_addr.is_empty() {
-                        Ok(())
-                    } else {
-                        Err(RocketMQError::Internal(format!(
-                            "ListUsersSubCommand: Failed to list users for brokers {}",
-                            failed_broker_addr.join(", ")
-                        )))
-                    }
-                }
-            }
-        }
-        .await;
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
-    }
-}
-
-async fn get_list_users_broker(
-    parsed_command: &ParseListUsersSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    broker_addr: &str,
-) -> Result<Vec<UserInfo>, RocketMQError> {
-    match default_mqadmin_ext
-        .list_users(
-            broker_addr.into(),
-            parsed_command.filter.clone().unwrap_or_else(|| CheetahString::from("")),
-        )
-        .await
-    {
-        Ok(user_info) => {
-            println!("List users command was successful for broker {}.", broker_addr);
-            Ok(user_info)
-        }
-        Err(e) => Err(RocketMQError::Internal(format!(
-            "ListUsersSubCommand: Failed to list users for broker {}: {}",
-            broker_addr, e
-        ))),
-    }
-}
-
-async fn get_list_users_cluster(
-    parsed_command: &ParseListUsersSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    cluster_name: &str,
-) -> Result<(Vec<UserInfo>, Vec<CheetahString>), RocketMQError> {
-    let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-
-    match CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name) {
-        Ok(addresses) => {
-            let results: Vec<Result<Vec<UserInfo>, CheetahString>> =
-                futures::future::join_all(addresses.into_iter().map(|addr| async {
-                    get_list_users_broker(parsed_command, default_mqadmin_ext, addr.as_str())
-                        .await
-                        .map_err(|_err| addr)
-                }))
-                .await;
-
-            let (users, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
-            let users: Vec<UserInfo> = users.into_iter().flat_map(Result::unwrap).collect();
-            let failed_addr: Vec<CheetahString> = errors.into_iter().map(Result::unwrap_err).collect();
-
-            Ok((users, failed_addr))
-        }
-        Err(e) => Err(RocketMQError::Internal(format!(
-            "ListUsersSubCommand: Failed to list users: {}",
-            e
-        ))),
+        let request =
+            ListUsersRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), self.filter.clone())?;
+        let result = AuthService::list_users_by_request_with_rpc_hook(request, rpc_hook).await?;
+        render_list_users_result(result)
     }
 }
 
@@ -187,6 +72,18 @@ fn format_row(user: &UserInfo) -> String {
         user.user_type.as_deref().unwrap_or(""),
         user.user_status.as_deref().unwrap_or(""),
     )
+}
+
+fn render_list_users_result(result: ListUsersResult) -> RocketMQResult<()> {
+    print_users(result.users);
+    if result.failed_broker_addrs.is_empty() {
+        Ok(())
+    } else {
+        Err(RocketMQError::Internal(format!(
+            "ListUsersSubCommand: Failed to list users for brokers {}",
+            result.failed_broker_addrs.join(", ")
+        )))
+    }
 }
 
 #[cfg(test)]

@@ -13,14 +13,10 @@
 // limitations under the License.
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::DeleteUserRequest;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 use std::sync::Arc;
@@ -56,84 +52,17 @@ pub struct DeleteUserSubCommand {
     username: String,
 }
 
-#[derive(Clone)]
-struct ParsedDeleteUserSubCommand {
-    cluster_name: Option<CheetahString>,
-    broker_addr: Option<CheetahString>,
-    username: CheetahString,
-}
-
-impl ParsedDeleteUserSubCommand {
-    fn new(command: &DeleteUserSubCommand) -> Result<Self, RocketMQError> {
-        let username = command.username.trim();
-        if username.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "DeleteUserSubCommand: username cannot be empty".into(),
-            ));
-        }
-
-        Ok(Self {
-            cluster_name: command
-                .cluster_name
-                .as_deref()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(CheetahString::from),
-            broker_addr: command
-                .broker_addr
-                .as_deref()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(CheetahString::from),
-            username: username.into(),
-        })
-    }
-}
-
 impl CommandExecute for DeleteUserSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let parsed_command = ParsedDeleteUserSubCommand::new(self)?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("DeleteUserSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = delete_user(&parsed_command, &default_mqadmin_ext).await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
-    }
-}
-
-async fn delete_user(
-    parsed_command: &ParsedDeleteUserSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-) -> RocketMQResult<()> {
-    if let Some(ref broker) = parsed_command.broker_addr {
-        default_mqadmin_ext
-            .delete_user(broker.clone(), parsed_command.username.clone())
-            .await?;
-        println!("delete user to {} success.", broker);
-    } else if let Some(ref cluster_name) = parsed_command.cluster_name {
-        let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-
-        let addresses = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
-        for address in addresses {
-            default_mqadmin_ext
-                .delete_user(address.clone(), parsed_command.username.clone())
-                .await?;
-            println!("delete user to {} success.", address);
+        let request = DeleteUserRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.username.clone(),
+        )?;
+        let result = AuthService::delete_user_by_request_with_rpc_hook(request, rpc_hook).await?;
+        for broker_addr in result.broker_addrs {
+            println!("delete user to {} success.", broker_addr);
         }
+        Ok(())
     }
-
-    Ok(())
 }

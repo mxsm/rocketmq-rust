@@ -13,14 +13,10 @@
 // limitations under the License.
 
 use crate::commands::CommandExecute;
-use crate::commands::command_util::CommandUtil;
-use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::CreateUserRequest;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 use std::sync::Arc;
@@ -72,109 +68,19 @@ pub struct CreateUserSubCommand {
     user_type: Option<String>,
 }
 
-#[derive(Clone)]
-struct ParsedCreateUserSubCommand {
-    cluster_name: Option<CheetahString>,
-    broker_addr: Option<CheetahString>,
-    username: CheetahString,
-    password: CheetahString,
-    user_type: CheetahString,
-}
-
-impl ParsedCreateUserSubCommand {
-    fn new(command: &CreateUserSubCommand) -> Result<Self, RocketMQError> {
-        let username = command.username.trim();
-        if username.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "CreateUserSubCommand: username cannot be empty".into(),
-            ));
-        }
-
-        let password = command.password.trim();
-        if password.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "CreateUserSubCommand: password cannot be empty".into(),
-            ));
-        }
-
-        Ok(Self {
-            cluster_name: command
-                .cluster_name
-                .as_deref()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(CheetahString::from),
-            broker_addr: command
-                .broker_addr
-                .as_deref()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(CheetahString::from),
-            username: username.into(),
-            password: password.into(),
-            user_type: command
-                .user_type
-                .as_deref()
-                .map(|s| CheetahString::from(s.trim()))
-                .unwrap_or_default(),
-        })
-    }
-}
-
 impl CommandExecute for CreateUserSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let parsed_command = ParsedCreateUserSubCommand::new(self)?;
-
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        MQAdminExt::start(&mut default_mqadmin_ext)
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("CreateUserSubCommand: Failed to start MQAdminExt: {}", e)))?;
-
-        let operation_result = create_user(&parsed_command, &default_mqadmin_ext).await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
-    }
-}
-
-async fn create_user(
-    parsed_command: &ParsedCreateUserSubCommand,
-    default_mqadmin_ext: &DefaultMQAdminExt,
-) -> RocketMQResult<()> {
-    if let Some(ref broker) = parsed_command.broker_addr {
-        default_mqadmin_ext
-            .create_user(
-                broker.clone(),
-                parsed_command.username.clone(),
-                parsed_command.password.clone(),
-                parsed_command.user_type.clone(),
-            )
-            .await?;
-        println!("create user to {} success.", broker);
-    } else if let Some(ref cluster_name) = parsed_command.cluster_name {
-        let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-
-        let addresses = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
-        for address in addresses {
-            default_mqadmin_ext
-                .create_user(
-                    address.clone(),
-                    parsed_command.username.clone(),
-                    parsed_command.password.clone(),
-                    parsed_command.user_type.clone(),
-                )
-                .await?;
-            println!("create user to {} success.", address);
+        let request = CreateUserRequest::try_new(
+            self.broker_addr.clone(),
+            self.cluster_name.clone(),
+            self.username.clone(),
+            self.password.clone(),
+            self.user_type.clone(),
+        )?;
+        let result = AuthService::create_user_by_request_with_rpc_hook(request, rpc_hook).await?;
+        for broker_addr in result.broker_addrs {
+            println!("create user to {} success.", broker_addr);
         }
+        Ok(())
     }
-
-    Ok(())
 }
