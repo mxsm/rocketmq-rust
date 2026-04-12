@@ -14,7 +14,6 @@
 
 #![recursion_limit = "256"]
 
-pub mod command_wrappers;
 pub mod commands;
 pub mod formatters;
 pub mod rocketmq_cli;

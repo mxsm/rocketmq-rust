@@ -55,4 +55,5 @@ pub use self::types::UpdateTopicPermRequest;
 pub use self::types::UpdateTopicPermResult;
 pub use self::types::UpdateTopicRequest;
 pub use self::types::UpdateTopicResult;
+pub use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 pub use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;

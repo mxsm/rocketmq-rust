@@ -14,27 +14,45 @@
 
 use rocketmq_admin_core::core::admin::AdminBuilder;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerConfigQueryResult;
+use rocketmq_admin_core::core::broker::BrokerConfigUpdateApplyResult;
+use rocketmq_admin_core::core::broker::BrokerConfigUpdatePlanResult;
 use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
 use rocketmq_admin_core::core::broker::BrokerConsumeStatsQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
+use rocketmq_admin_core::core::broker::BrokerService;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
+use rocketmq_admin_core::core::namesrv::KvConfigUpdateResult;
+use rocketmq_admin_core::core::namesrv::NameServerService;
 use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryRequest;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigQueryResult;
 use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateRequest;
+use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateResult;
 use rocketmq_admin_core::core::namesrv::WritePermRequest;
+use rocketmq_admin_core::core::namesrv::WritePermResult;
 use rocketmq_admin_core::core::topic::AllocateMqQueryRequest;
+use rocketmq_admin_core::core::topic::AllocatedMqQueryResult;
 use rocketmq_admin_core::core::topic::DeleteTopicRequest;
+use rocketmq_admin_core::core::topic::DeleteTopicResult;
 use rocketmq_admin_core::core::topic::OrderConfRequest;
+use rocketmq_admin_core::core::topic::OrderConfResult;
 use rocketmq_admin_core::core::topic::TopicClusterList;
 use rocketmq_admin_core::core::topic::TopicClusterQueryRequest;
 use rocketmq_admin_core::core::topic::TopicListQueryRequest;
+use rocketmq_admin_core::core::topic::TopicListResult;
 use rocketmq_admin_core::core::topic::TopicRouteData;
 use rocketmq_admin_core::core::topic::TopicRouteQueryRequest;
 use rocketmq_admin_core::core::topic::TopicService;
+use rocketmq_admin_core::core::topic::TopicStatsTable;
 use rocketmq_admin_core::core::topic::TopicStatusQueryRequest;
 use rocketmq_admin_core::core::topic::TopicTarget;
 use rocketmq_admin_core::core::topic::UpdateTopicPermRequest;
+use rocketmq_admin_core::core::topic::UpdateTopicPermResult;
 use rocketmq_admin_core::core::topic::UpdateTopicRequest;
+use rocketmq_admin_core::core::topic::UpdateTopicResult;
 use rocketmq_admin_core::core::RocketMQResult;
 
 #[derive(Debug, Clone, Default)]
@@ -233,6 +251,143 @@ impl TuiAdminFacade {
     pub async fn query_topic_route(&self, topic: impl Into<String>) -> RocketMQResult<Option<TopicRouteData>> {
         TopicService::query_topic_route(self.topic_route_request(topic)?).await
     }
+
+    pub async fn query_topic_status(
+        &self,
+        topic: impl Into<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<TopicStatsTable> {
+        TopicService::query_topic_status(self.topic_status_request(topic, cluster_name)?).await
+    }
+
+    pub async fn query_topic_list(&self, cluster_name: Option<String>) -> RocketMQResult<TopicListResult> {
+        TopicService::query_topic_list(self.topic_list_request(cluster_name)).await
+    }
+
+    pub async fn delete_topic(
+        &self,
+        topic: impl Into<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<DeleteTopicResult> {
+        TopicService::delete_topic_by_request(self.delete_topic_request(topic, cluster_name)?).await
+    }
+
+    pub async fn apply_order_conf(
+        &self,
+        topic: impl Into<String>,
+        method: impl AsRef<str>,
+        order_conf: Option<String>,
+    ) -> RocketMQResult<OrderConfResult> {
+        TopicService::apply_order_conf(self.order_conf_request(topic, method, order_conf)?).await
+    }
+
+    pub async fn query_allocated_mq(
+        &self,
+        topic: impl Into<String>,
+        ip_list: impl Into<String>,
+    ) -> RocketMQResult<AllocatedMqQueryResult> {
+        TopicService::query_allocated_mq_by_request(self.allocate_mq_request(topic, ip_list)?).await
+    }
+
+    pub async fn create_or_update_topic(&self, request: UpdateTopicRequest) -> RocketMQResult<UpdateTopicResult> {
+        TopicService::create_or_update_topic_by_request(request).await
+    }
+
+    pub async fn update_topic_perm(&self, request: UpdateTopicPermRequest) -> RocketMQResult<UpdateTopicPermResult> {
+        TopicService::update_topic_perm_by_request(request).await
+    }
+
+    pub async fn query_namesrv_config(&self) -> RocketMQResult<NamesrvConfigQueryResult> {
+        NameServerService::query_namesrv_config(self.namesrv_config_query_request()?).await
+    }
+
+    pub async fn update_namesrv_config(
+        &self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<NamesrvConfigUpdateResult> {
+        NameServerService::update_namesrv_config_by_request(self.namesrv_config_update_request(key, value)?).await
+    }
+
+    pub async fn update_kv_config(
+        &self,
+        namespace: impl Into<String>,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<KvConfigUpdateResult> {
+        NameServerService::update_kv_config_by_request(self.kv_config_update_request(namespace, key, value)?).await
+    }
+
+    pub async fn delete_kv_config(
+        &self,
+        namespace: impl Into<String>,
+        key: impl Into<String>,
+    ) -> RocketMQResult<KvConfigUpdateResult> {
+        NameServerService::delete_kv_config_by_request(self.kv_config_delete_request(namespace, key)?).await
+    }
+
+    pub async fn add_write_perm(&self, broker_name: impl Into<String>) -> RocketMQResult<WritePermResult> {
+        NameServerService::add_write_perm_by_request(self.write_perm_request(broker_name)?).await
+    }
+
+    pub async fn wipe_write_perm(&self, broker_name: impl Into<String>) -> RocketMQResult<WritePermResult> {
+        NameServerService::wipe_write_perm_by_request(self.write_perm_request(broker_name)?).await
+    }
+
+    pub async fn query_broker_config(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        key_pattern: Option<String>,
+    ) -> RocketMQResult<BrokerConfigQueryResult> {
+        BrokerService::query_broker_config_by_request(self.broker_config_query_request(
+            broker_addr,
+            cluster_name,
+            key_pattern,
+        )?)
+        .await
+    }
+
+    pub async fn build_broker_config_update_plan(
+        &self,
+        request: BrokerConfigUpdateRequest,
+    ) -> RocketMQResult<BrokerConfigUpdatePlanResult> {
+        BrokerService::build_broker_config_update_plan_by_request(request).await
+    }
+
+    pub async fn apply_broker_config_update(
+        &self,
+        request: BrokerConfigUpdateRequest,
+    ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
+        BrokerService::apply_broker_config_update_by_request(request).await
+    }
+
+    pub async fn query_broker_runtime_stats(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerRuntimeStatsResult> {
+        BrokerService::query_broker_runtime_stats_by_request(
+            self.broker_runtime_stats_request(broker_addr, cluster_name)?,
+        )
+        .await
+    }
+
+    pub async fn query_broker_consume_stats(
+        &self,
+        broker_addr: impl Into<String>,
+        timeout_millis: u64,
+        diff_level: i64,
+        is_order: bool,
+    ) -> RocketMQResult<BrokerConsumeStatsResult> {
+        BrokerService::query_broker_consume_stats_by_request(self.broker_consume_stats_request(
+            broker_addr,
+            timeout_millis,
+            diff_level,
+            is_order,
+        )?)
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -421,5 +576,74 @@ mod tests {
         assert_eq!(request.diff_level(), 42);
         assert!(request.is_order());
         assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn facade_exposes_topic_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.query_topic_clusters("TestTopic"));
+        std::mem::drop(facade.query_topic_route("TestTopic"));
+        std::mem::drop(facade.query_topic_status("TestTopic", Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.query_topic_list(Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.delete_topic("TestTopic", Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.apply_order_conf("TestTopic", "get", None));
+        std::mem::drop(facade.query_allocated_mq("TestTopic", "192.168.1.1"));
+
+        let update_topic = facade
+            .update_topic_request(
+                "TestTopic",
+                rocketmq_admin_core::core::topic::TopicTarget::Broker("127.0.0.1:10911".into()),
+                8,
+                8,
+                Some(6),
+                Some(false),
+                Some(false),
+                Some(false),
+            )
+            .unwrap();
+        std::mem::drop(facade.create_or_update_topic(update_topic));
+
+        let update_perm = facade
+            .update_topic_perm_request(
+                "TestTopic",
+                rocketmq_admin_core::core::topic::TopicTarget::Cluster("DefaultCluster".into()),
+                6,
+            )
+            .unwrap();
+        std::mem::drop(facade.update_topic_perm(update_perm));
+    }
+
+    #[test]
+    fn facade_exposes_namesrv_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.query_namesrv_config());
+        std::mem::drop(facade.update_namesrv_config("deleteWhen", "04"));
+        std::mem::drop(facade.update_kv_config("ns", "key", "value"));
+        std::mem::drop(facade.delete_kv_config("ns", "key"));
+        std::mem::drop(facade.add_write_perm("broker-a"));
+        std::mem::drop(facade.wipe_write_perm("broker-a"));
+    }
+
+    #[test]
+    fn facade_exposes_broker_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.query_broker_config(
+            None,
+            Some("DefaultCluster".to_string()),
+            Some("^flush.*".to_string()),
+        ));
+        std::mem::drop(facade.query_broker_runtime_stats(None, Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.query_broker_consume_stats("127.0.0.1:10911", 3_000, 0, false));
+
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert("flushDiskType".to_string(), "ASYNC_FLUSH".to_string());
+        let update_request = facade
+            .broker_config_update_request(Some("127.0.0.1:10911".to_string()), None, entries, true)
+            .unwrap();
+        std::mem::drop(facade.build_broker_config_update_plan(update_request.clone()));
+        std::mem::drop(facade.apply_broker_config_update(update_request));
     }
 }
