@@ -12,26 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::config::TopicConfig;
+use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
+use rocketmq_admin_core::core::export_data::ExportMetadataResult;
+use rocketmq_admin_core::core::export_data::ExportMetadataScope;
+use rocketmq_admin_core::core::export_data::ExportService;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use crate::commands::command_util::CommandUtil;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 const DEFAULT_FILE_PATH: &str = "/tmp/rocketmq/export";
-const TIMEOUT_MILLIS: u64 = 10000;
 
 #[derive(Debug, Clone, Parser)]
 pub struct ExportMetadataSubCommand {
@@ -94,131 +89,83 @@ pub struct ExportMetadataSubCommand {
 }
 
 impl ExportMetadataSubCommand {
-    async fn export_from_broker(
-        admin_ext: &DefaultMQAdminExt,
-        broker_addr: &str,
-        file_path: &str,
-        topic_only: bool,
-        subscription_group_only: bool,
-        special_topic: bool,
-    ) -> RocketMQResult<()> {
-        let addr: CheetahString = broker_addr.into();
-
-        if topic_only {
-            let export_path = format!("{}/topic.json", file_path);
-            let topic_config_wrapper = admin_ext
-                .get_user_topic_config(addr, special_topic, TIMEOUT_MILLIS)
-                .await?;
-            let json_content = serde_json::to_string_pretty(&topic_config_wrapper)
-                .map_err(|e| RocketMQError::Internal(format!("Failed to serialize topic config: {}", e)))?;
-            rocketmq_common::FileUtils::string_to_file(&json_content, &export_path)?;
-            println!("export {} success", export_path);
-        } else if subscription_group_only {
-            let export_path = format!("{}/subscriptionGroup.json", file_path);
-            let subscription_group_wrapper = admin_ext.get_user_subscription_group(addr, TIMEOUT_MILLIS).await?;
-            let json_content = serde_json::to_string_pretty(&subscription_group_wrapper).map_err(|e| {
-                RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
-            })?;
-            rocketmq_common::FileUtils::string_to_file(&json_content, &export_path)?;
-            println!("export {} success", export_path);
-        } else {
-            return Err(RocketMQError::IllegalArgument(
-                "ExportMetadataSubCommand: When using -b, you must specify -t (topic) or -g (subscriptionGroup)".into(),
-            ));
-        }
-
-        Ok(())
+    fn request(&self) -> RocketMQResult<ExportMetadataRequest> {
+        ExportMetadataRequest::try_new(
+            self.cluster_name.clone(),
+            self.broker_addr.clone(),
+            self.topic,
+            self.subscription_group,
+            self.special_topic,
+        )
+        .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    async fn export_from_cluster(
-        admin_ext: &DefaultMQAdminExt,
-        cluster_name: &str,
-        file_path: &str,
-        topic_only: bool,
-        subscription_group_only: bool,
-        special_topic: bool,
-    ) -> RocketMQResult<()> {
-        let cluster_info = admin_ext.examine_broker_cluster_info().await?;
-        let master_set = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
-
-        let mut topic_config_map: HashMap<CheetahString, TopicConfig> = HashMap::new();
-        let mut sub_group_config_map: HashMap<CheetahString, SubscriptionGroupConfig> = HashMap::new();
-
-        for addr in &master_set {
-            let topic_config_wrapper = admin_ext
-                .get_user_topic_config(addr.clone(), special_topic, TIMEOUT_MILLIS)
-                .await?;
-
-            let subscription_group_wrapper = admin_ext
-                .get_user_subscription_group(addr.clone(), TIMEOUT_MILLIS)
-                .await?;
-
-            if let Some(topic_table) = topic_config_wrapper.topic_config_table() {
-                for (key, value) in topic_table {
-                    if let Some(existing) = topic_config_map.get(key) {
-                        let mut merged = value.clone();
-                        merged.write_queue_nums = existing.write_queue_nums + value.write_queue_nums;
-                        merged.read_queue_nums = existing.read_queue_nums + value.read_queue_nums;
-                        topic_config_map.insert(key.clone(), merged);
-                    } else {
-                        topic_config_map.insert(key.clone(), value.clone());
+    fn write_result(result: &ExportMetadataResult, file_path: &str) -> RocketMQResult<()> {
+        let (export_path, json_content) = match result {
+            ExportMetadataResult::BrokerTopic { wrapper } => (
+                format!("{}/topic.json", file_path),
+                serde_json::to_string_pretty(wrapper)
+                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize topic config: {}", e)))?,
+            ),
+            ExportMetadataResult::BrokerSubscriptionGroup { wrapper } => (
+                format!("{}/subscriptionGroup.json", file_path),
+                serde_json::to_string_pretty(wrapper).map_err(|e| {
+                    RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
+                })?,
+            ),
+            ExportMetadataResult::Cluster {
+                scope,
+                topic_config_table,
+                subscription_group_table,
+                export_time_millis,
+            } => {
+                let mut output = serde_json::Map::new();
+                let export_path = match scope {
+                    ExportMetadataScope::Topic => {
+                        output.insert(
+                            "topicConfigTable".to_string(),
+                            serde_json::to_value(topic_config_table).map_err(|e| {
+                                RocketMQError::Internal(format!("Failed to serialize topic config: {}", e))
+                            })?,
+                        );
+                        format!("{}/topic.json", file_path)
                     }
-                }
+                    ExportMetadataScope::SubscriptionGroup => {
+                        output.insert(
+                            "subscriptionGroupTable".to_string(),
+                            serde_json::to_value(subscription_group_table).map_err(|e| {
+                                RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
+                            })?,
+                        );
+                        format!("{}/subscriptionGroup.json", file_path)
+                    }
+                    ExportMetadataScope::All => {
+                        output.insert(
+                            "topicConfigTable".to_string(),
+                            serde_json::to_value(topic_config_table).map_err(|e| {
+                                RocketMQError::Internal(format!("Failed to serialize topic config: {}", e))
+                            })?,
+                        );
+                        output.insert(
+                            "subscriptionGroupTable".to_string(),
+                            serde_json::to_value(subscription_group_table).map_err(|e| {
+                                RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
+                            })?,
+                        );
+                        format!("{}/metadata.json", file_path)
+                    }
+                };
+
+                output.insert(
+                    "exportTime".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(*export_time_millis)),
+                );
+
+                let json_content = serde_json::to_string_pretty(&output)
+                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize export result: {}", e)))?;
+                (export_path, json_content)
             }
-
-            for entry in subscription_group_wrapper.get_subscription_group_table().iter() {
-                let key = entry.key().clone();
-                let value = entry.value();
-                if let Some(existing) = sub_group_config_map.get(&key) {
-                    let mut merged = (**value).clone();
-                    merged.set_retry_queue_nums(existing.retry_queue_nums() + value.retry_queue_nums());
-                    sub_group_config_map.insert(key, merged);
-                } else {
-                    sub_group_config_map.insert(key, (**value).clone());
-                }
-            }
-        }
-
-        let mut result = serde_json::Map::new();
-
-        let export_path;
-        if topic_only {
-            result.insert(
-                "topicConfigTable".to_string(),
-                serde_json::to_value(&topic_config_map)
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize topic config: {}", e)))?,
-            );
-            export_path = format!("{}/topic.json", file_path);
-        } else if subscription_group_only {
-            result.insert(
-                "subscriptionGroupTable".to_string(),
-                serde_json::to_value(&sub_group_config_map).map_err(|e| {
-                    RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
-                })?,
-            );
-            export_path = format!("{}/subscriptionGroup.json", file_path);
-        } else {
-            result.insert(
-                "topicConfigTable".to_string(),
-                serde_json::to_value(&topic_config_map)
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize topic config: {}", e)))?,
-            );
-            result.insert(
-                "subscriptionGroupTable".to_string(),
-                serde_json::to_value(&sub_group_config_map).map_err(|e| {
-                    RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
-                })?,
-            );
-            export_path = format!("{}/metadata.json", file_path);
-        }
-
-        result.insert(
-            "exportTime".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(current_millis())),
-        );
-
-        let json_content = serde_json::to_string_pretty(&result)
-            .map_err(|e| RocketMQError::Internal(format!("Failed to serialize export result: {}", e)))?;
+        };
 
         rocketmq_common::FileUtils::string_to_file(&json_content, &export_path)?;
         println!("export {} success", export_path);
@@ -228,55 +175,53 @@ impl ExportMetadataSubCommand {
 }
 
 impl CommandExecute for ExportMetadataSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if self.broker_addr.is_none() && self.cluster_name.is_none() {
-            return Err(RocketMQError::IllegalArgument(
-                "ExportMetadataSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
-            ));
-        }
-
-        let mut admin_ext = DefaultMQAdminExt::new();
-        admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        if let Some(addr) = &self.common_args.namesrv_addr {
-            admin_ext.set_namesrv_addr(addr.trim());
-        }
-
-        admin_ext.start().await.map_err(|e| {
-            RocketMQError::Internal(format!("ExportMetadataSubCommand: Failed to start MQAdminExt: {}", e))
-        })?;
-
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let file_path = self.file_path.trim();
+        let result = ExportService::export_metadata_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
 
-        let result = if let Some(broker_addr) = &self.broker_addr {
-            Self::export_from_broker(
-                &admin_ext,
-                broker_addr.trim(),
-                file_path,
-                self.topic,
-                self.subscription_group,
-                self.special_topic,
-            )
-            .await
-        } else if let Some(cluster_name) = &self.cluster_name {
-            Self::export_from_cluster(
-                &admin_ext,
-                cluster_name.trim(),
-                file_path,
-                self.topic,
-                self.subscription_group,
-                self.special_topic,
-            )
-            .await
-        } else {
-            Err(RocketMQError::IllegalArgument(
-                "ExportMetadataSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
-            ))
-        };
+        Self::write_result(&result, file_path)
+    }
+}
 
-        admin_ext.shutdown().await;
-        result
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_admin_core::core::export_data::ExportMetadataTarget;
+
+    #[test]
+    fn export_metadata_sub_command_builds_cluster_request() {
+        let cmd = ExportMetadataSubCommand::try_parse_from([
+            "exportMetadata",
+            "-c",
+            " DefaultCluster ",
+            "-n",
+            " 127.0.0.1:9876 ",
+            "-s",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+
+        assert_eq!(
+            request.target(),
+            &ExportMetadataTarget::Cluster("DefaultCluster".into())
+        );
+        assert_eq!(request.scope(), ExportMetadataScope::All);
+        assert!(request.special_topic());
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn export_metadata_sub_command_builds_broker_topic_request() {
+        let cmd =
+            ExportMetadataSubCommand::try_parse_from(["exportMetadata", "-b", " 127.0.0.1:10911 ", "-t"]).unwrap();
+
+        let request = cmd.request().unwrap();
+
+        assert_eq!(
+            request.target(),
+            &ExportMetadataTarget::Broker("127.0.0.1:10911".into())
+        );
+        assert_eq!(request.scope(), ExportMetadataScope::Topic);
     }
 }

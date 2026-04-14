@@ -33,6 +33,7 @@ pub mod core {
     pub mod connection;
     pub mod consumer;
     pub mod controller;
+    pub mod export_data;
     pub mod ha;
     pub mod lite;
     pub mod message;
@@ -41,6 +42,7 @@ pub mod core {
     pub mod producer;
     pub mod queue;
     pub mod resolver;
+    pub mod stats;
     pub mod topic;
 
     pub use rocketmq_error::RocketMQError;
