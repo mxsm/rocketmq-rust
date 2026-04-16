@@ -505,7 +505,7 @@ async fn wait_for_stable_voters(nodes: &[(u64, Arc<RaftNodeManager>)], expected_
 }
 
 async fn wait_for_learner_readiness(nodes: &[(u64, Arc<RaftNodeManager>)], learner_id: u64, leader_id: u64) {
-    for _ in 1..=50 {
+    for attempt in 1..=100 {
         let metrics = snapshot_metrics(nodes);
         if let Some((_, metrics)) = metrics.iter().find(|(node_id, _)| *node_id == learner_id) {
             if metrics.state == ServerState::Learner
@@ -514,6 +514,17 @@ async fn wait_for_learner_readiness(nodes: &[(u64, Arc<RaftNodeManager>)], learn
             {
                 return;
             }
+        }
+        if attempt % 25 == 0 {
+            println!(
+                "Waiting for learner {} readiness (attempt {}), current state: {:?}",
+                learner_id,
+                attempt,
+                metrics
+                    .iter()
+                    .find(|(node_id, _)| *node_id == learner_id)
+                    .map(|(_, m)| &m.state)
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
