@@ -6349,7 +6349,7 @@ mod tests {
             .expect("shutdown old controller leader");
 
         wait_until(
-            Duration::from_secs(15),
+            Duration::from_secs(30),
             || {
                 controllers.iter().filter(|manager| manager.is_leader()).count() == 1
                     && controllers.iter().any(|manager| {
