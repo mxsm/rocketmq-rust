@@ -17,23 +17,13 @@ use std::sync::Arc;
 use chrono::FixedOffset;
 use chrono::Utc;
 use clap::Parser;
-use rocketmq_client_rust::base::client_config::ClientConfig;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::cluster::ClusterSendMessageRtRequest;
+use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
-use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryResult;
 use rocketmq_admin_core::core::cluster::ClusterService;
-
-fn get_string_by_size(size: u64) -> Vec<u8> {
-    vec![b'a'; size as usize]
-}
 
 fn get_cur_time() -> String {
     let offset = FixedOffset::east_opt(8 * 3600).unwrap();
@@ -98,113 +88,56 @@ pub struct ClusterSendMsgRTSubCommand {
 }
 
 impl ClusterSendMsgRTSubCommand {
-    fn request(&self) -> ClusterBrokerNameQueryRequest {
-        ClusterBrokerNameQueryRequest::new(self.cluster_name.clone())
+    fn request(&self) -> RocketMQResult<ClusterSendMessageRtRequest> {
+        ClusterSendMessageRtRequest::try_new(self.amount, self.size, self.cluster_name.clone())
     }
 }
 
 impl CommandExecute for ClusterSendMsgRTSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let instance_name = format!("PID_ClusterRTCommand_{}", current_millis());
-        let mut client_config = ClientConfig::default();
-        client_config.set_instance_name(instance_name.into());
-
-        let mut builder = DefaultMQProducer::builder()
-            .producer_group(current_millis().to_string())
-            .client_config(client_config);
-        if let Some(ref hook) = rpc_hook {
-            builder = builder.rpc_hook(hook.clone());
+        if !self.print_as_tlog {
+            println!(
+                "{:<24}  {:<24}  {:<4}  {:<8}  {:<8}",
+                "#Cluster Name", "#Broker Name", "#RT", "#successCount", "#failCount"
+            );
         }
-        let mut producer = builder.build();
 
-        let operation_result = async {
-            producer.start().await.map_err(|e| {
-                RocketMQError::Internal(format!("ClusterSendMsgRTSubCommand: Failed to start producer: {}", e))
-            })?;
-
-            let broker_names =
-                ClusterService::query_cluster_broker_names_by_request_with_rpc_hook(self.request(), rpc_hook.clone())
-                    .await?;
-
-            if !self.print_as_tlog {
-                println!(
-                    "{:<24}  {:<24}  {:<4}  {:<8}  {:<8}",
-                    "#Cluster Name", "#Broker Name", "#RT", "#successCount", "#failCount"
-                );
-            }
-
-            loop {
-                Self::print_missing_clusters(&broker_names);
-
-                for (cluster_name, broker_names) in &broker_names.broker_names_by_cluster {
-                    for broker_name in broker_names {
-                        let msg_body = get_string_by_size(self.size);
-                        let msg = Message::builder()
-                            .topic(broker_name)
-                            .body_slice(&msg_body)
-                            .build_unchecked();
-
-                        let mut elapsed: u64 = 0;
-                        let mut success_count: u64 = 0;
-                        let mut fail_count: u64 = 0;
-
-                        for i in 0..self.amount {
-                            let start = current_millis();
-                            match producer.send(msg.clone()).await {
-                                Ok(_) => {
-                                    success_count += 1;
-                                }
-                                Err(_) => {
-                                    fail_count += 1;
-                                }
-                            }
-                            let end = current_millis();
-
-                            if i != 0 {
-                                elapsed += end - start;
-                            }
-                        }
-
-                        let rt = if self.amount > 1 {
-                            elapsed as f64 / (self.amount - 1) as f64
-                        } else {
-                            elapsed as f64
-                        };
-
-                        if !self.print_as_tlog {
-                            println!(
-                                "{:<24}  {:<24}  {:<8}  {:<16}  {:<16}",
-                                cluster_name,
-                                broker_name,
-                                format!("{:.2}", rt),
-                                success_count,
-                                fail_count
-                            );
-                        } else {
-                            println!(
-                                "{}|{}|{}|{}|{}",
-                                get_cur_time(),
-                                self.machine_room,
-                                cluster_name,
-                                broker_name,
-                                rt.round() as u64
-                            );
-                        }
-                    }
-                }
-
-                tokio::time::sleep(tokio::time::Duration::from_secs(self.interval)).await;
-            }
+        loop {
+            let result =
+                ClusterService::send_message_rt_by_request_with_rpc_hook(self.request()?, rpc_hook.clone()).await?;
+            self.print_result(&result);
+            tokio::time::sleep(tokio::time::Duration::from_secs(self.interval)).await;
         }
-        .await;
-
-        producer.shutdown().await;
-        operation_result
     }
 }
 
 impl ClusterSendMsgRTSubCommand {
-    fn print_missing_clusters(result: &ClusterBrokerNameQueryResult) {
+    fn print_result(&self, result: &ClusterSendMessageRtResult) {
+        Self::print_missing_clusters(result);
+        for row in &result.rows {
+            if !self.print_as_tlog {
+                println!(
+                    "{:<24}  {:<24}  {:<8}  {:<16}  {:<16}",
+                    row.cluster_name,
+                    row.broker_name,
+                    format!("{:.2}", row.rt),
+                    row.success_count,
+                    row.fail_count
+                );
+            } else {
+                println!(
+                    "{}|{}|{}|{}|{}",
+                    get_cur_time(),
+                    self.machine_room,
+                    row.cluster_name,
+                    row.broker_name,
+                    row.rt.round() as u64
+                );
+            }
+        }
+    }
+
+    fn print_missing_clusters(result: &ClusterSendMessageRtResult) {
         for cluster_name in &result.missing_clusters {
             println!("cluster [{}] not exist", cluster_name);
         }
@@ -220,7 +153,7 @@ mod tests {
         let cmd = ClusterSendMsgRTSubCommand::try_parse_from(["clusterRT", "-c", " DefaultCluster "]).unwrap();
 
         assert_eq!(
-            cmd.request().cluster_name().map(|name| name.as_str()),
+            cmd.request().unwrap().cluster_name().map(|name| name.as_str()),
             Some("DefaultCluster")
         );
     }

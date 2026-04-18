@@ -20,6 +20,10 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::base::client_config::ClientConfig;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -29,7 +33,9 @@ use serde::Serialize;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
+use crate::core::ToolsError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClusterListMode {
@@ -73,6 +79,56 @@ impl ClusterBrokerNameQueryRequest {
 
     pub fn admin_builder(&self) -> AdminBuilder {
         builder_with_namesrv(self.namesrv_addr())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterSendMessageRtRequest {
+    amount: u64,
+    size: u64,
+    cluster_name: Option<CheetahString>,
+    namesrv_addr: Option<String>,
+}
+
+impl ClusterSendMessageRtRequest {
+    pub fn try_new(amount: u64, size: u64, cluster_name: Option<String>) -> RocketMQResult<Self> {
+        if amount == 0 {
+            return Err(ToolsError::validation_error("amount", "amount must be greater than 0").into());
+        }
+        Ok(Self {
+            amount,
+            size,
+            cluster_name: trim_optional_string(cluster_name).map(CheetahString::from),
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn amount(&self) -> u64 {
+        self.amount
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn cluster_name(&self) -> Option<&CheetahString> {
+        self.cluster_name.as_ref()
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    fn broker_name_query_request(&self) -> ClusterBrokerNameQueryRequest {
+        ClusterBrokerNameQueryRequest {
+            cluster_name: self.cluster_name.clone(),
+            namesrv_addr: self.namesrv_addr.clone(),
+        }
     }
 }
 
@@ -150,6 +206,21 @@ pub struct ClusterBrokerNameQueryResult {
     pub missing_clusters: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClusterSendMessageRtRow {
+    pub cluster_name: String,
+    pub broker_name: String,
+    pub rt: f64,
+    pub success_count: u64,
+    pub fail_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClusterSendMessageRtResult {
+    pub missing_clusters: Vec<String>,
+    pub rows: Vec<ClusterSendMessageRtRow>,
+}
+
 pub struct ClusterService;
 
 impl ClusterService {
@@ -208,6 +279,100 @@ impl ClusterService {
     ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         Ok(collect_cluster_broker_names(request.cluster_name(), &cluster_info))
+    }
+
+    pub async fn send_message_rt_by_request_with_rpc_hook(
+        request: ClusterSendMessageRtRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<ClusterSendMessageRtResult> {
+        let broker_names = Self::query_cluster_broker_names_by_request_with_rpc_hook(
+            request.broker_name_query_request(),
+            rpc_hook.clone(),
+        )
+        .await?;
+
+        let instance_name = format!("PID_ClusterRTCommand_{}", current_millis());
+        let mut client_config = ClientConfig::default();
+        client_config.set_instance_name(instance_name.into());
+        let mut builder = DefaultMQProducer::builder()
+            .producer_group(current_millis().to_string())
+            .client_config(client_config);
+        if let Some(hook) = rpc_hook {
+            builder = builder.rpc_hook(hook);
+        }
+        let mut producer = builder.build();
+
+        let result = Self::send_message_rt_with_producer(&mut producer, &request, &broker_names).await;
+        producer.shutdown().await;
+        result
+    }
+
+    pub async fn send_message_rt_with_producer(
+        producer: &mut DefaultMQProducer,
+        request: &ClusterSendMessageRtRequest,
+        broker_names: &ClusterBrokerNameQueryResult,
+    ) -> RocketMQResult<ClusterSendMessageRtResult> {
+        producer.start().await.map_err(|error| {
+            RocketMQError::Internal(format!("ClusterService: failed to start cluster RT producer: {error}"))
+        })?;
+
+        let mut rows = Vec::new();
+        for (cluster_name, broker_names) in &broker_names.broker_names_by_cluster {
+            for broker_name in broker_names {
+                rows.push(send_cluster_rt_to_broker(producer, cluster_name, broker_name, request).await);
+            }
+        }
+
+        Ok(ClusterSendMessageRtResult {
+            missing_clusters: broker_names.missing_clusters.clone(),
+            rows,
+        })
+    }
+}
+
+async fn send_cluster_rt_to_broker(
+    producer: &mut DefaultMQProducer,
+    cluster_name: &str,
+    broker_name: &str,
+    request: &ClusterSendMessageRtRequest,
+) -> ClusterSendMessageRtRow {
+    let msg_body = vec![b'a'; request.size() as usize];
+    let msg = Message::builder()
+        .topic(broker_name)
+        .body_slice(&msg_body)
+        .build_unchecked();
+    let mut elapsed = 0;
+    let mut success_count = 0;
+    let mut fail_count = 0;
+
+    for index in 0..request.amount() {
+        let start = current_millis();
+        match producer.send(msg.clone()).await {
+            Ok(_) => {
+                success_count += 1;
+            }
+            Err(_) => {
+                fail_count += 1;
+            }
+        }
+        let end = current_millis();
+        if index != 0 {
+            elapsed += end - start;
+        }
+    }
+
+    let rt = if request.amount() > 1 {
+        elapsed as f64 / (request.amount() - 1) as f64
+    } else {
+        elapsed as f64
+    };
+
+    ClusterSendMessageRtRow {
+        cluster_name: cluster_name.to_string(),
+        broker_name: broker_name.to_string(),
+        rt,
+        success_count,
+        fail_count,
     }
 }
 

@@ -15,32 +15,13 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::base::client_config::ClientConfig;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::core::producer::SendMessageStatusRequest;
+use rocketmq_admin_core::core::producer::SendMessageStatusResult;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-
-const PRODUCER_GROUP: &str = "PID_SMSC";
-
-fn build_message(topic: &str, message_size: usize) -> Message {
-    let mut sb = String::new();
-    let filler = "hello jodie";
-    let mut i = 0;
-    while i < message_size {
-        sb.push_str(filler);
-        i += filler.len();
-    }
-    Message::builder()
-        .topic(topic)
-        .body_slice(sb.as_bytes())
-        .build_unchecked()
-}
 
 #[derive(Debug, Clone, Parser)]
 pub struct SendMsgStatusSubCommand {
@@ -71,58 +52,42 @@ pub struct SendMsgStatusSubCommand {
     count: u32,
 }
 
+impl SendMsgStatusSubCommand {
+    fn request(&self) -> RocketMQResult<SendMessageStatusRequest> {
+        SendMessageStatusRequest::try_new(self.broker_name.clone(), self.message_size, self.count)
+    }
+
+    fn print_result(result: &SendMessageStatusResult) {
+        for row in &result.rows {
+            println!("rt={}ms, SendResult={}", row.rt_millis, row.send_result);
+        }
+    }
+}
+
 impl CommandExecute for SendMsgStatusSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let instance_name = format!("PID_SMSC_{}", current_millis());
-        let mut client_config = ClientConfig::default();
-        client_config.set_instance_name(instance_name.into());
-
-        let mut builder = DefaultMQProducer::builder()
-            .producer_group(PRODUCER_GROUP.to_string())
-            .client_config(client_config);
-        if let Some(rpc_hook) = rpc_hook {
-            builder = builder.rpc_hook(rpc_hook);
-        }
-        let mut producer = builder.build();
-
-        producer
-            .start()
-            .await
-            .map_err(|e| RocketMQError::Internal(format!("SendMsgStatusCommand: Failed to start producer: {}", e)))?;
-
-        let broker_name = self.broker_name.trim();
-
-        let warmup_result = producer.send(build_message(broker_name, 16)).await;
-        if let Err(e) = warmup_result {
-            producer.shutdown().await;
-            return Err(RocketMQError::Internal(format!(
-                "SendMsgStatusSubCommand command failed: {}",
-                e
-            )));
-        }
-
-        for _i in 0..self.count {
-            let begin = current_millis();
-            match producer.send(build_message(broker_name, self.message_size)).await {
-                Ok(result) => {
-                    let rt = current_millis() - begin;
-                    println!(
-                        "rt={}ms, SendResult={}",
-                        rt,
-                        result.map(|r| r.to_string()).unwrap_or_else(|| "None".to_string())
-                    );
-                }
-                Err(e) => {
-                    producer.shutdown().await;
-                    return Err(RocketMQError::Internal(format!(
-                        "SendMsgStatusSubCommand command failed: {}",
-                        e
-                    )));
-                }
-            }
-        }
-
-        producer.shutdown().await;
+        let result = ProducerService::send_message_status_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_msg_status_sub_command_builds_core_request() {
+        let command = SendMsgStatusSubCommand {
+            broker_name: " broker-a ".to_string(),
+            message_size: 256,
+            count: 3,
+        };
+
+        let request = command.request().unwrap();
+
+        assert_eq!(request.broker_name().as_str(), "broker-a");
+        assert_eq!(request.message_size(), 256);
+        assert_eq!(request.count(), 3);
     }
 }

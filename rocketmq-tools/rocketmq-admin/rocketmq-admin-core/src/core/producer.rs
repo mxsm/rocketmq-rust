@@ -15,9 +15,11 @@
 //! Producer admin service models and operations.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -33,6 +35,8 @@ use crate::core::admin::AdminBuilder;
 use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
+
+const SEND_MESSAGE_STATUS_PRODUCER_GROUP: &str = "PID_SMSC";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProducerInfoQueryRequest {
@@ -171,6 +175,92 @@ pub struct SendMessageResult {
     pub row: SendMessageResultRow,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendMessageStatusRequest {
+    broker_name: CheetahString,
+    message_size: usize,
+    count: u32,
+}
+
+impl SendMessageStatusRequest {
+    pub fn try_new(broker_name: impl Into<String>, message_size: usize, count: u32) -> RocketMQResult<Self> {
+        Ok(Self {
+            broker_name: trim_required_cheetah("brokerName", broker_name)?,
+            message_size,
+            count,
+        })
+    }
+
+    pub fn broker_name(&self) -> &CheetahString {
+        &self.broker_name
+    }
+
+    pub fn message_size(&self) -> usize {
+        self.message_size
+    }
+
+    pub fn count(&self) -> u32 {
+        self.count
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendMessageStatusRow {
+    pub rt_millis: u64,
+    pub send_result: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendMessageStatusResult {
+    pub rows: Vec<SendMessageStatusRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckMessageSendRtRequest {
+    topic: CheetahString,
+    amount: u64,
+    size: usize,
+}
+
+impl CheckMessageSendRtRequest {
+    pub fn try_new(topic: impl Into<String>, amount: u64, size: usize) -> RocketMQResult<Self> {
+        if amount < 2 {
+            return Err(ToolsError::validation_error("amount", "amount must be at least 2").into());
+        }
+        Ok(Self {
+            topic: trim_required_cheetah("topic", topic)?,
+            amount,
+            size,
+        })
+    }
+
+    pub fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub fn amount(&self) -> u64 {
+        self.amount
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckMessageSendRtRow {
+    pub broker_name: String,
+    pub queue_id: i32,
+    pub send_success: bool,
+    pub rt_millis: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckMessageSendRtResult {
+    pub rows: Vec<CheckMessageSendRtRow>,
+    pub avg_rt: f64,
+}
+
 pub struct ProducerService;
 
 impl ProducerService {
@@ -257,6 +347,155 @@ impl ProducerService {
 
         Ok(SendMessageResult { row })
     }
+
+    pub async fn send_message_status_by_request_with_rpc_hook(
+        request: SendMessageStatusRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<SendMessageStatusResult> {
+        let instance_name = format!("{SEND_MESSAGE_STATUS_PRODUCER_GROUP}_{}", current_millis());
+        let mut client_config = ClientConfig::default();
+        client_config.set_instance_name(instance_name.into());
+
+        let mut builder = DefaultMQProducer::builder()
+            .producer_group(SEND_MESSAGE_STATUS_PRODUCER_GROUP.to_string())
+            .client_config(client_config);
+        if let Some(rpc_hook) = rpc_hook {
+            builder = builder.rpc_hook(rpc_hook);
+        }
+        let mut producer = builder.build();
+
+        let result = Self::send_message_status_with_producer(&mut producer, &request).await;
+        producer.shutdown().await;
+        result
+    }
+
+    pub async fn send_message_status_with_producer(
+        producer: &mut DefaultMQProducer,
+        request: &SendMessageStatusRequest,
+    ) -> RocketMQResult<SendMessageStatusResult> {
+        producer
+            .start()
+            .await
+            .map_err(|error| RocketMQError::Internal(format!("ProducerService: failed to start producer: {error}")))?;
+
+        producer
+            .send(build_diagnostic_message(request.broker_name().as_str(), 16))
+            .await
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "ProducerService: failed to warm up sendMsgStatus producer: {error}"
+                ))
+            })?;
+
+        let mut rows = Vec::with_capacity(request.count() as usize);
+        for _ in 0..request.count() {
+            let begin = current_millis();
+            let send_result = producer
+                .send(build_diagnostic_message(
+                    request.broker_name().as_str(),
+                    request.message_size(),
+                ))
+                .await
+                .map_err(|error| {
+                    RocketMQError::Internal(format!("ProducerService: sendMsgStatus command failed: {error}"))
+                })?;
+            let rt_millis = current_millis() - begin;
+            rows.push(SendMessageStatusRow {
+                rt_millis,
+                send_result: send_result
+                    .map(|result| result.to_string())
+                    .unwrap_or_else(|| "None".to_string()),
+            });
+        }
+
+        Ok(SendMessageStatusResult { rows })
+    }
+
+    pub async fn check_message_send_rt_by_request_with_rpc_hook(
+        request: CheckMessageSendRtRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<CheckMessageSendRtResult> {
+        let mut builder = DefaultMQProducer::builder().producer_group(current_millis().to_string());
+        if let Some(rpc_hook) = rpc_hook {
+            builder = builder.rpc_hook(rpc_hook);
+        }
+        let mut producer = builder.build();
+
+        let result = Self::check_message_send_rt_with_producer(&mut producer, &request).await;
+        producer.shutdown().await;
+        result
+    }
+
+    pub async fn check_message_send_rt_with_producer(
+        producer: &mut DefaultMQProducer,
+        request: &CheckMessageSendRtRequest,
+    ) -> RocketMQResult<CheckMessageSendRtResult> {
+        producer
+            .start()
+            .await
+            .map_err(|error| RocketMQError::Internal(format!("ProducerService: failed to start producer: {error}")))?;
+
+        let message = Message::builder()
+            .topic(request.topic().as_str())
+            .body_slice(&vec![b'a'; request.size()])
+            .build()
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "ProducerService: failed to build checkMsgSendRT message: {error}"
+                ))
+            })?;
+        let broker_name_holder = Arc::new(Mutex::new(String::new()));
+        let queue_id_holder = Arc::new(Mutex::new(0));
+        let mut rows = Vec::with_capacity(request.amount() as usize);
+        let mut time_elapsed = 0;
+
+        for index in 0..request.amount() {
+            let start = current_millis();
+            let broker_name_holder_for_selector = broker_name_holder.clone();
+            let queue_id_holder_for_selector = queue_id_holder.clone();
+            let selector = move |mqs: &[MessageQueue], _msg: &Message, arg: &u64| -> Option<MessageQueue> {
+                if mqs.is_empty() {
+                    return None;
+                }
+                let queue_index = (*arg as usize) % mqs.len();
+                let queue = &mqs[queue_index];
+                *broker_name_holder_for_selector.lock().unwrap() = queue.broker_name().to_string();
+                *queue_id_holder_for_selector.lock().unwrap() = queue.queue_id();
+                Some(queue.clone())
+            };
+
+            let send_success = producer
+                .send_with_selector(message.clone(), selector, index)
+                .await
+                .is_ok();
+            let rt_millis = current_millis() - start;
+            if index != 0 {
+                time_elapsed += rt_millis;
+            }
+
+            rows.push(CheckMessageSendRtRow {
+                broker_name: broker_name_holder.lock().unwrap().clone(),
+                queue_id: *queue_id_holder.lock().unwrap(),
+                send_success,
+                rt_millis,
+            });
+        }
+
+        let avg_rt = time_elapsed as f64 / (request.amount() - 1) as f64;
+        Ok(CheckMessageSendRtResult { rows, avg_rt })
+    }
+}
+
+fn build_diagnostic_message(topic: &str, message_size: usize) -> Message {
+    let filler = "hello jodie";
+    let mut body = String::new();
+    while body.len() < message_size {
+        body.push_str(filler);
+    }
+    Message::builder()
+        .topic(topic)
+        .body_slice(body.as_bytes())
+        .build_unchecked()
 }
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {

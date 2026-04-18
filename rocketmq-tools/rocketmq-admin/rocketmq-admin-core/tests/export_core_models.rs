@@ -3,11 +3,15 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::core::export_data::filter_export_broker_properties;
 use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataScope;
 use rocketmq_admin_core::core::export_data::ExportMetadataTarget;
 use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
 use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
+use rocketmq_admin_core::core::export_data::ExportService;
 
 #[test]
 fn export_configs_request_trims_cluster_and_namesrv() {
@@ -123,4 +127,36 @@ fn export_pop_record_request_rejects_invalid_targets() {
         false,
     )
     .is_err());
+}
+
+#[test]
+fn export_metadata_in_rocksdb_request_trims_fields() {
+    let request = ExportMetadataInRocksDbRequest::new(" /tmp/metadata ", " topics ", true);
+
+    assert_eq!(request.path().to_string_lossy(), "/tmp/metadata");
+    assert_eq!(request.config_type(), "topics");
+    assert!(request.json_enable());
+    assert_eq!(
+        request.normalized_config_type(),
+        Some(ExportMetadataInRocksDbConfigType::Topics)
+    );
+}
+
+#[test]
+fn export_metadata_in_rocksdb_request_recognizes_subscription_groups() {
+    let request = ExportMetadataInRocksDbRequest::new("/tmp/metadata", "subscriptionGroups", false);
+
+    assert_eq!(
+        request.normalized_config_type(),
+        Some(ExportMetadataInRocksDbConfigType::SubscriptionGroups)
+    );
+}
+
+#[test]
+fn export_metadata_in_rocksdb_invalid_path_returns_structured_result() {
+    let request = ExportMetadataInRocksDbRequest::new("Z:/path/that/does/not/exist", "topics", false);
+
+    let result = ExportService::export_metadata_in_rocksdb_by_request(&request).unwrap();
+
+    assert!(matches!(result, ExportMetadataInRocksDbResult::InvalidPath));
 }

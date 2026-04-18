@@ -1,6 +1,8 @@
 //! Export admin service models and operations.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -12,6 +14,8 @@ use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionG
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use rocksdb::Options;
+use rocksdb::DB;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -41,6 +45,8 @@ const EXPORT_BROKER_PROPERTY_KEYS: &[&str] = &[
     "autoCreateSubscriptionGroup",
 ];
 const DEFAULT_EXPORT_POP_RECORD_TIMEOUT_MILLIS: u64 = 30000;
+const TOPICS_JSON_CONFIG: &str = "topics";
+const SUBSCRIPTION_GROUP_JSON_CONFIG: &str = "subscriptionGroups";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportConfigsRequest {
@@ -196,6 +202,87 @@ impl ExportMetadataRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportMetadataInRocksDbConfigType {
+    Topics,
+    SubscriptionGroups,
+}
+
+impl ExportMetadataInRocksDbConfigType {
+    pub fn from_config_type(config_type: &str) -> Option<Self> {
+        if config_type.eq_ignore_ascii_case(TOPICS_JSON_CONFIG) {
+            Some(Self::Topics)
+        } else if config_type.eq_ignore_ascii_case(SUBSCRIPTION_GROUP_JSON_CONFIG) {
+            Some(Self::SubscriptionGroups)
+        } else {
+            None
+        }
+    }
+
+    pub fn table_key(self) -> &'static str {
+        match self {
+            Self::Topics => "topicConfigTable",
+            Self::SubscriptionGroups => "subscriptionGroupTable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportMetadataInRocksDbRequest {
+    path: PathBuf,
+    config_type: String,
+    json_enable: bool,
+}
+
+impl ExportMetadataInRocksDbRequest {
+    pub fn new(path: impl Into<String>, config_type: impl Into<String>, json_enable: bool) -> Self {
+        Self {
+            path: PathBuf::from(path.into().trim()),
+            config_type: config_type.into().trim().to_string(),
+            json_enable,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn config_type(&self) -> &str {
+        &self.config_type
+    }
+
+    pub fn json_enable(&self) -> bool {
+        self.json_enable
+    }
+
+    pub fn normalized_config_type(&self) -> Option<ExportMetadataInRocksDbConfigType> {
+        ExportMetadataInRocksDbConfigType::from_config_type(&self.config_type)
+    }
+
+    pub fn full_path(&self) -> PathBuf {
+        self.path.join(&self.config_type)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportMetadataInRocksDbEntry {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportMetadataInRocksDbResult {
+    InvalidPath,
+    InvalidConfigType {
+        config_type: String,
+    },
+    Data {
+        config_type: ExportMetadataInRocksDbConfigType,
+        json_enable: bool,
+        entries: Vec<ExportMetadataInRocksDbEntry>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExportPopRecordTarget {
     Broker(CheetahString),
@@ -309,6 +396,41 @@ pub enum ExportMetadataResult {
 pub struct ExportService;
 
 impl ExportService {
+    pub fn export_metadata_in_rocksdb_by_request(
+        request: &ExportMetadataInRocksDbRequest,
+    ) -> RocketMQResult<ExportMetadataInRocksDbResult> {
+        if request.path().as_os_str().is_empty() || !request.path().exists() {
+            return Ok(ExportMetadataInRocksDbResult::InvalidPath);
+        }
+
+        let Some(config_type) = request.normalized_config_type() else {
+            return Ok(ExportMetadataInRocksDbResult::InvalidConfigType {
+                config_type: request.config_type().to_string(),
+            });
+        };
+
+        let full_path = request.full_path();
+        let mut opts = Options::default();
+        opts.create_if_missing(false);
+
+        let db = DB::open_for_read_only(&opts, &full_path, false).map_err(|error| {
+            RocketMQError::Internal(format!(
+                "ExportService: failed to open RocksDB path {}: {}",
+                full_path.display(),
+                error
+            ))
+        })?;
+
+        let entries = iterate_rocksdb_metadata(&db)?;
+        drop(db);
+
+        Ok(ExportMetadataInRocksDbResult::Data {
+            config_type,
+            json_enable: request.json_enable(),
+            entries,
+        })
+    }
+
     pub async fn export_configs_by_request_with_rpc_hook(
         request: ExportConfigsRequest,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -556,6 +678,20 @@ fn resolve_export_pop_record_targets_from_cluster_info(
     });
     targets.dedup();
     targets
+}
+
+fn iterate_rocksdb_metadata(db: &DB) -> RocketMQResult<Vec<ExportMetadataInRocksDbEntry>> {
+    let mut entries = Vec::new();
+    let iter = db.iterator(rocksdb::IteratorMode::Start);
+    for item in iter {
+        let (key, value) =
+            item.map_err(|error| RocketMQError::Internal(format!("ExportService: RocksDB iterator error: {error}")))?;
+        entries.push(ExportMetadataInRocksDbEntry {
+            key: String::from_utf8_lossy(&key).to_string(),
+            value: String::from_utf8_lossy(&value).to_string(),
+        });
+    }
+    Ok(entries)
 }
 
 pub fn filter_export_broker_properties(properties: &HashMap<CheetahString, CheetahString>) -> HashMap<String, String> {
