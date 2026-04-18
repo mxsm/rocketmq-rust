@@ -14,7 +14,9 @@ use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionG
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
+#[cfg(feature = "rocksdb-export")]
 use rocksdb::Options;
+#[cfg(feature = "rocksdb-export")]
 use rocksdb::DB;
 use serde::Deserialize;
 use serde::Serialize;
@@ -409,26 +411,37 @@ impl ExportService {
             });
         };
 
-        let full_path = request.full_path();
-        let mut opts = Options::default();
-        opts.create_if_missing(false);
+        #[cfg(not(feature = "rocksdb-export"))]
+        {
+            let _ = config_type;
+            return Err(RocketMQError::Internal(
+                "ExportService: RocksDB metadata export requires the rocksdb-export feature".to_string(),
+            ));
+        }
 
-        let db = DB::open_for_read_only(&opts, &full_path, false).map_err(|error| {
-            RocketMQError::Internal(format!(
-                "ExportService: failed to open RocksDB path {}: {}",
-                full_path.display(),
-                error
-            ))
-        })?;
+        #[cfg(feature = "rocksdb-export")]
+        {
+            let full_path = request.full_path();
+            let mut opts = Options::default();
+            opts.create_if_missing(false);
 
-        let entries = iterate_rocksdb_metadata(&db)?;
-        drop(db);
+            let db = DB::open_for_read_only(&opts, &full_path, false).map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "ExportService: failed to open RocksDB path {}: {}",
+                    full_path.display(),
+                    error
+                ))
+            })?;
 
-        Ok(ExportMetadataInRocksDbResult::Data {
-            config_type,
-            json_enable: request.json_enable(),
-            entries,
-        })
+            let entries = iterate_rocksdb_metadata(&db)?;
+            drop(db);
+
+            Ok(ExportMetadataInRocksDbResult::Data {
+                config_type,
+                json_enable: request.json_enable(),
+                entries,
+            })
+        }
     }
 
     pub async fn export_configs_by_request_with_rpc_hook(
@@ -680,6 +693,7 @@ fn resolve_export_pop_record_targets_from_cluster_info(
     targets
 }
 
+#[cfg(feature = "rocksdb-export")]
 fn iterate_rocksdb_metadata(db: &DB) -> RocketMQResult<Vec<ExportMetadataInRocksDbEntry>> {
     let mut entries = Vec::new();
     let iter = db.iterator(rocksdb::IteratorMode::Start);

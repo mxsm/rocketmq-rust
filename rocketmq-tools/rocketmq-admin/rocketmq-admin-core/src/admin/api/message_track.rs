@@ -85,7 +85,6 @@ mod tests {
         assert_eq!(message_track.get_track_type(), Some(TrackType::Consumed));
 
         let display = format!("{}", message_track);
-        println!("{}", display);
         assert_eq!(
             display,
             "MessageTrack [consumerGroup=test_consumer_group, trackType=CONSUMED, exceptionDesc=test_exception_desc]"

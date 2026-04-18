@@ -38,3 +38,18 @@ fn core_does_not_expose_cli_or_terminal_ui_modules() {
         "rocketmq-admin-core should not expose terminal UI modules"
     );
 }
+
+#[test]
+fn core_gates_rocksdb_metadata_export_behind_feature() {
+    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("read rocketmq-admin-core Cargo.toml");
+
+    assert!(
+        manifest.contains("rocksdb-export"),
+        "rocketmq-admin-core should expose a named RocksDB metadata export feature"
+    );
+    assert!(
+        manifest.contains("rocksdb") && manifest.contains("optional = true"),
+        "rocketmq-admin-core should keep rocksdb optional instead of pulling it into every consumer"
+    );
+}

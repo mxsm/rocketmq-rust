@@ -33,6 +33,10 @@ readme = "README.md"
 description = "Reusable RocketMQ admin capability layer"
 rust-version.workspace = true
 
+[features]
+default        = []
+rocksdb-export = ["dep:rocksdb"]
+
 [dependencies]
 rocketmq-common      = { workspace = true }
 rocketmq-remoting    = { workspace = true }
@@ -49,4 +53,4 @@ cheetah-string = { workspace = true }
 futures        = "0.3.32"
 regex          = "1.12.3"
 bytes          = { workspace = true }
-rocksdb        = "0.24"
+rocksdb        = { version = "0.24", optional = true }

@@ -28,7 +28,7 @@ description            = "Command-line interface for managing RocketMQ-Rust and 
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-admin-core = { path = "../rocketmq-admin-core" }
+rocketmq-admin-core = { path = "../rocketmq-admin-core", features = ["rocksdb-export"] }
 rocketmq-common     = { workspace = true }
 rocketmq-error      = { workspace = true }
 rocketmq-remoting   = { workspace = true }
