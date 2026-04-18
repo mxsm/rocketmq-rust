@@ -16,6 +16,20 @@ for both platforms.
 
 This CLI tool is built on top of [`rocketmq-admin-core`](../rocketmq-admin-core), which provides the core business logic.
 
+## Current Crate Boundary
+
+`rocketmq-admin-cli` is the command-line adapter. It owns `clap` command parsing, shell completion, confirmation prompts, progress/output rendering, and CLI-compatible command names. Business operations should flow through `rocketmq-admin-core` request DTOs and services.
+
+```text
+CLI args
+  -> core request DTO
+  -> core service
+  -> structured result
+  -> CLI renderer
+```
+
+Future TUI/GUI adapters should depend on `rocketmq-admin-core`, not on this CLI crate.
+
 ## ✨ Features
 
 - 🚀 **High Performance**: Built with Rust for blazing-fast execution
@@ -297,16 +311,17 @@ cargo build --release
 
 ### Adding New Commands
 
-1. Add command definition in `rocketmq-admin-core/src/commands/`
-2. Implement the `CommandExecute` trait
-3. Add command to appropriate category enum
-4. Update documentation and tests
+1. Add CLI argument parsing and rendering in `rocketmq-admin-cli/src/commands/`.
+2. Add or reuse request/response DTOs and service methods in `rocketmq-admin-core/src/core/`.
+3. Convert CLI args into core requests, call the core service, then render structured results in the CLI layer.
+4. Add core service tests plus CLI parse/help/smoke tests.
 
 Example:
 
 ```rust
-// In rocketmq-admin-core/src/commands/topic_commands/my_command.rs
+// In rocketmq-admin-cli/src/commands/topic/my_command.rs
 use crate::commands::CommandExecute;
+use rocketmq_admin_core::core::topic::TopicService;
 
 #[derive(clap::Args)]
 pub struct MyTopicCommand {
@@ -316,7 +331,9 @@ pub struct MyTopicCommand {
 
 impl CommandExecute for MyTopicCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        // Implementation here
+        let request = self.request()?;
+        let result = TopicService::some_operation_by_request_with_rpc_hook(request, rpc_hook).await?;
+        Self::print_result(result);
         Ok(())
     }
 }

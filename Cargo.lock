@@ -3587,6 +3587,8 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rocketmq-admin-core",
+ "rocketmq-common",
+ "rocketmq-remoting",
  "rocketmq-rust",
  "serde",
  "strum 0.28.0",

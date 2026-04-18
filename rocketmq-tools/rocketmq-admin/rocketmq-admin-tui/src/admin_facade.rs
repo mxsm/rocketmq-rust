@@ -23,6 +23,33 @@ use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
 use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
+use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryResult;
+use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
+use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
+use rocketmq_admin_core::core::cluster::ClusterSendMessageRtRequest;
+use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
+use rocketmq_admin_core::core::cluster::ClusterService;
+use rocketmq_admin_core::core::connection::ConnectionService;
+use rocketmq_admin_core::core::connection::ConsumerConnectionQueryRequest;
+use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
+use rocketmq_admin_core::core::connection::ProducerConnectionQueryRequest;
+use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
+use rocketmq_admin_core::core::consumer::ConsumerConfigQueryRequest;
+use rocketmq_admin_core::core::consumer::ConsumerConfigQueryResult;
+use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
+use rocketmq_admin_core::core::consumer::ConsumerProgressRequest;
+use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
+use rocketmq_admin_core::core::consumer::ConsumerRunningInfoRequest;
+use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
+use rocketmq_admin_core::core::consumer::ConsumerService;
+use rocketmq_admin_core::core::consumer::DeleteSubscriptionGroupRequest;
+use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
+use rocketmq_admin_core::core::ha::HaService;
+use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
+use rocketmq_admin_core::core::ha::HaStatusQueryResult;
+use rocketmq_admin_core::core::ha::SyncStateSetQueryRequest;
+use rocketmq_admin_core::core::ha::SyncStateSetQueryResult;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateResult;
@@ -33,6 +60,26 @@ use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateRequest;
 use rocketmq_admin_core::core::namesrv::NamesrvConfigUpdateResult;
 use rocketmq_admin_core::core::namesrv::WritePermRequest;
 use rocketmq_admin_core::core::namesrv::WritePermResult;
+use rocketmq_admin_core::core::offset::CloneGroupOffsetRequest;
+use rocketmq_admin_core::core::offset::ConsumerStatusQueryRequest;
+use rocketmq_admin_core::core::offset::ConsumerStatusResult;
+use rocketmq_admin_core::core::offset::OffsetService;
+use rocketmq_admin_core::core::offset::ResetOffsetByTimeOldRequest;
+use rocketmq_admin_core::core::offset::ResetOffsetByTimeRequest;
+use rocketmq_admin_core::core::offset::ResetOffsetByTimeResult;
+use rocketmq_admin_core::core::offset::SkipAccumulatedMessageRequest;
+use rocketmq_admin_core::core::offset::SkipAccumulatedMessageResult;
+use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
+use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
+use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressRequest;
+use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
+use rocketmq_admin_core::core::queue::QueryConsumeQueueRequest;
+use rocketmq_admin_core::core::queue::QueryConsumeQueueResult;
+use rocketmq_admin_core::core::queue::QueueService;
+use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
+use rocketmq_admin_core::core::stats::StatsAllQueryResult;
+use rocketmq_admin_core::core::stats::StatsService;
 use rocketmq_admin_core::core::topic::AllocateMqQueryRequest;
 use rocketmq_admin_core::core::topic::AllocatedMqQueryResult;
 use rocketmq_admin_core::core::topic::DeleteTopicRequest;
@@ -54,6 +101,8 @@ use rocketmq_admin_core::core::topic::UpdateTopicPermResult;
 use rocketmq_admin_core::core::topic::UpdateTopicRequest;
 use rocketmq_admin_core::core::topic::UpdateTopicResult;
 use rocketmq_admin_core::core::RocketMQResult;
+use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiAdminFacade {
@@ -159,6 +208,215 @@ impl TuiAdminFacade {
             BrokerConsumeStatsQueryRequest::try_new(broker_addr, timeout_millis, diff_level, is_order)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
         )
+    }
+
+    pub fn cluster_list_request(&self, more_stats: bool, cluster_name: Option<String>) -> ClusterListQueryRequest {
+        ClusterListQueryRequest::new(more_stats, cluster_name).with_optional_namesrv_addr(self.namesrv_addr.clone())
+    }
+
+    pub fn cluster_broker_names_request(&self, cluster_name: Option<String>) -> ClusterBrokerNameQueryRequest {
+        ClusterBrokerNameQueryRequest::new(cluster_name).with_optional_namesrv_addr(self.namesrv_addr.clone())
+    }
+
+    pub fn cluster_send_message_rt_request(
+        &self,
+        amount: u64,
+        size: u64,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<ClusterSendMessageRtRequest> {
+        Ok(ClusterSendMessageRtRequest::try_new(amount, size, cluster_name)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn consumer_connection_request(
+        &self,
+        consumer_group: impl Into<String>,
+        broker_addr: Option<String>,
+    ) -> RocketMQResult<ConsumerConnectionQueryRequest> {
+        Ok(ConsumerConnectionQueryRequest::try_new(consumer_group, broker_addr)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn producer_connection_request(
+        &self,
+        producer_group: impl Into<String>,
+        topic: impl Into<String>,
+    ) -> RocketMQResult<ProducerConnectionQueryRequest> {
+        Ok(ProducerConnectionQueryRequest::try_new(producer_group, topic)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn consumer_config_request(&self, group_name: impl Into<String>) -> RocketMQResult<ConsumerConfigQueryRequest> {
+        Ok(ConsumerConfigQueryRequest::try_new(group_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn delete_subscription_group_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        group_name: impl Into<String>,
+        remove_offset: bool,
+    ) -> RocketMQResult<DeleteSubscriptionGroupRequest> {
+        Ok(
+            DeleteSubscriptionGroupRequest::try_new(broker_addr, cluster_name, group_name, remove_offset)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn set_consume_mode_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        topic_name: impl Into<String>,
+        group_name: impl Into<String>,
+        mode: MessageRequestMode,
+        pop_share_queue_num: Option<i32>,
+    ) -> RocketMQResult<SetConsumeModeRequest> {
+        Ok(SetConsumeModeRequest::try_new(
+            broker_addr,
+            cluster_name,
+            topic_name,
+            group_name,
+            mode,
+            pop_share_queue_num,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn consumer_running_info_request(
+        &self,
+        group_name: impl Into<String>,
+        client_id: Option<String>,
+        broker_addr: Option<String>,
+        jstack: bool,
+    ) -> RocketMQResult<ConsumerRunningInfoRequest> {
+        ConsumerRunningInfoRequest::try_new(group_name, client_id, broker_addr, jstack, self.namesrv_addr.clone())
+    }
+
+    pub fn consumer_progress_request(
+        &self,
+        consumer_group: Option<String>,
+        topic_name: Option<String>,
+        show_client_ip: bool,
+        cluster: Option<String>,
+    ) -> RocketMQResult<ConsumerProgressRequest> {
+        ConsumerProgressRequest::try_new(
+            consumer_group,
+            topic_name,
+            show_client_ip,
+            cluster,
+            self.namesrv_addr.clone(),
+        )
+    }
+
+    pub fn clone_group_offset_request(
+        &self,
+        src_group: impl Into<String>,
+        dest_group: impl Into<String>,
+        topic: impl Into<String>,
+        offline: bool,
+    ) -> RocketMQResult<CloneGroupOffsetRequest> {
+        Ok(CloneGroupOffsetRequest::try_new(src_group, dest_group, topic, offline)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn consumer_status_request(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        origin_client_id: Option<String>,
+    ) -> RocketMQResult<ConsumerStatusQueryRequest> {
+        Ok(ConsumerStatusQueryRequest::try_new(group, topic, origin_client_id)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn skip_accumulated_message_request(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        cluster: Option<String>,
+        force: Option<bool>,
+    ) -> RocketMQResult<SkipAccumulatedMessageRequest> {
+        SkipAccumulatedMessageRequest::try_new(group, topic, cluster, force, self.namesrv_addr.clone())
+    }
+
+    pub fn reset_offset_by_time_request(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        timestamp: u64,
+    ) -> RocketMQResult<ResetOffsetByTimeRequest> {
+        Ok(ResetOffsetByTimeRequest::try_new(group, topic, timestamp)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn reset_offset_by_time_old_request(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        timestamp: u64,
+        force: Option<bool>,
+        cluster: Option<String>,
+    ) -> RocketMQResult<ResetOffsetByTimeOldRequest> {
+        ResetOffsetByTimeOldRequest::try_new(group, topic, timestamp, force, cluster, self.namesrv_addr.clone())
+    }
+
+    pub fn query_consume_queue_request(
+        &self,
+        topic: impl Into<String>,
+        queue_id: i32,
+        index: u64,
+        count: i32,
+        broker_addr: Option<String>,
+        consumer_group: Option<String>,
+    ) -> RocketMQResult<QueryConsumeQueueRequest> {
+        Ok(
+            QueryConsumeQueueRequest::try_new(topic, queue_id, index, count, broker_addr, consumer_group)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn check_rocksdb_cq_write_progress_request(
+        &self,
+        cluster_name: impl Into<String>,
+        topic: Option<String>,
+        check_from: Option<i64>,
+    ) -> RocketMQResult<CheckRocksdbCqWriteProgressRequest> {
+        CheckRocksdbCqWriteProgressRequest::try_new(
+            cluster_name,
+            self.namesrv_addr.clone().unwrap_or_default(),
+            topic,
+            check_from,
+        )
+    }
+
+    pub fn ha_status_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<HaStatusQueryRequest> {
+        Ok(HaStatusQueryRequest::try_new(broker_addr, cluster_name)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn sync_state_set_request(
+        &self,
+        controller_address: impl Into<String>,
+        broker_name: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<SyncStateSetQueryRequest> {
+        Ok(
+            SyncStateSetQueryRequest::try_new(controller_address, broker_name, cluster_name)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn stats_all_request(&self, active_topic: bool, topic: Option<String>) -> StatsAllQueryRequest {
+        StatsAllQueryRequest::new(active_topic, topic).with_optional_namesrv_addr(self.namesrv_addr.clone())
+    }
+
+    pub fn producer_info_request(&self, broker_addr: impl Into<String>) -> RocketMQResult<ProducerInfoQueryRequest> {
+        Ok(ProducerInfoQueryRequest::try_new(broker_addr)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
@@ -387,6 +645,272 @@ impl TuiAdminFacade {
             is_order,
         )?)
         .await
+    }
+
+    pub async fn query_cluster_list(
+        &self,
+        more_stats: bool,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<ClusterListQueryResult> {
+        ClusterService::query_cluster_list_by_request_with_rpc_hook(
+            self.cluster_list_request(more_stats, cluster_name),
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_cluster_broker_names(
+        &self,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
+        ClusterService::query_cluster_broker_names_by_request_with_rpc_hook(
+            self.cluster_broker_names_request(cluster_name),
+            None,
+        )
+        .await
+    }
+
+    pub async fn check_cluster_send_message_rt(
+        &self,
+        amount: u64,
+        size: u64,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<ClusterSendMessageRtResult> {
+        ClusterService::send_message_rt_by_request_with_rpc_hook(
+            self.cluster_send_message_rt_request(amount, size, cluster_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_consumer_connection(
+        &self,
+        consumer_group: impl Into<String>,
+        broker_addr: Option<String>,
+    ) -> RocketMQResult<ConsumerConnectionQueryResult> {
+        ConnectionService::query_consumer_connection_by_request_with_rpc_hook(
+            self.consumer_connection_request(consumer_group, broker_addr)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_producer_connection(
+        &self,
+        producer_group: impl Into<String>,
+        topic: impl Into<String>,
+    ) -> RocketMQResult<ProducerConnectionQueryResult> {
+        ConnectionService::query_producer_connection_by_request_with_rpc_hook(
+            self.producer_connection_request(producer_group, topic)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_consumer_config(
+        &self,
+        group_name: impl Into<String>,
+    ) -> RocketMQResult<ConsumerConfigQueryResult> {
+        ConsumerService::query_consumer_config_by_request_with_rpc_hook(self.consumer_config_request(group_name)?, None)
+            .await
+    }
+
+    pub async fn delete_subscription_group(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        group_name: impl Into<String>,
+        remove_offset: bool,
+    ) -> RocketMQResult<ConsumerOperationResult> {
+        ConsumerService::delete_subscription_group_by_request_with_rpc_hook(
+            self.delete_subscription_group_request(broker_addr, cluster_name, group_name, remove_offset)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn set_consume_mode(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        topic_name: impl Into<String>,
+        group_name: impl Into<String>,
+        mode: MessageRequestMode,
+        pop_share_queue_num: Option<i32>,
+    ) -> RocketMQResult<ConsumerOperationResult> {
+        ConsumerService::set_consume_mode_by_request_with_rpc_hook(
+            self.set_consume_mode_request(
+                broker_addr,
+                cluster_name,
+                topic_name,
+                group_name,
+                mode,
+                pop_share_queue_num,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_consumer_running_info(
+        &self,
+        group_name: impl Into<String>,
+        client_id: Option<String>,
+        broker_addr: Option<String>,
+        jstack: bool,
+    ) -> RocketMQResult<ConsumerRunningInfoResult> {
+        ConsumerService::query_consumer_running_info_by_request_with_rpc_hook(
+            self.consumer_running_info_request(group_name, client_id, broker_addr, jstack)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_consumer_progress(
+        &self,
+        consumer_group: Option<String>,
+        topic_name: Option<String>,
+        show_client_ip: bool,
+        cluster: Option<String>,
+    ) -> RocketMQResult<ConsumerProgressResult> {
+        ConsumerService::query_consumer_progress_by_request_with_rpc_hook(
+            self.consumer_progress_request(consumer_group, topic_name, show_client_ip, cluster)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn clone_group_offset(
+        &self,
+        src_group: impl Into<String>,
+        dest_group: impl Into<String>,
+        topic: impl Into<String>,
+        offline: bool,
+    ) -> RocketMQResult<()> {
+        OffsetService::clone_group_offset_by_request_with_rpc_hook(
+            self.clone_group_offset_request(src_group, dest_group, topic, offline)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_consumer_status(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        origin_client_id: Option<String>,
+    ) -> RocketMQResult<ConsumerStatusResult> {
+        OffsetService::query_consumer_status_by_request_with_rpc_hook(
+            self.consumer_status_request(group, topic, origin_client_id)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn skip_accumulated_message(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        cluster: Option<String>,
+        force: Option<bool>,
+    ) -> RocketMQResult<SkipAccumulatedMessageResult> {
+        OffsetService::skip_accumulated_message_by_request_with_rpc_hook(
+            self.skip_accumulated_message_request(group, topic, cluster, force)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn reset_offset_by_time(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        timestamp: u64,
+    ) -> RocketMQResult<ResetOffsetByTimeResult> {
+        OffsetService::reset_offset_by_time_by_request_with_rpc_hook(
+            self.reset_offset_by_time_request(group, topic, timestamp)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn reset_offset_by_time_old(
+        &self,
+        group: impl Into<String>,
+        topic: impl Into<String>,
+        timestamp: u64,
+        force: Option<bool>,
+        cluster: Option<String>,
+    ) -> RocketMQResult<Vec<RollbackStats>> {
+        OffsetService::reset_offset_by_time_old_by_request_with_rpc_hook(
+            self.reset_offset_by_time_old_request(group, topic, timestamp, force, cluster)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_consume_queue(
+        &self,
+        topic: impl Into<String>,
+        queue_id: i32,
+        index: u64,
+        count: i32,
+        broker_addr: Option<String>,
+        consumer_group: Option<String>,
+    ) -> RocketMQResult<QueryConsumeQueueResult> {
+        QueueService::query_consume_queue_by_request_with_rpc_hook(
+            self.query_consume_queue_request(topic, queue_id, index, count, broker_addr, consumer_group)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn check_rocksdb_cq_write_progress(
+        &self,
+        cluster_name: impl Into<String>,
+        topic: Option<String>,
+        check_from: Option<i64>,
+    ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
+        QueueService::check_rocksdb_cq_write_progress_by_request_with_rpc_hook(
+            self.check_rocksdb_cq_write_progress_request(cluster_name, topic, check_from)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_ha_status(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<HaStatusQueryResult> {
+        HaService::query_ha_status_by_request_with_rpc_hook(self.ha_status_request(broker_addr, cluster_name)?, None)
+            .await
+    }
+
+    pub async fn query_sync_state_set(
+        &self,
+        controller_address: impl Into<String>,
+        broker_name: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<SyncStateSetQueryResult> {
+        HaService::query_sync_state_set_by_request_with_rpc_hook(
+            self.sync_state_set_request(controller_address, broker_name, cluster_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_stats_all(
+        &self,
+        active_topic: bool,
+        topic: Option<String>,
+    ) -> RocketMQResult<StatsAllQueryResult> {
+        StatsService::query_stats_all_by_request_with_rpc_hook(self.stats_all_request(active_topic, topic), None).await
+    }
+
+    pub async fn query_producer_info(&self, broker_addr: impl Into<String>) -> RocketMQResult<ProducerInfoQueryResult> {
+        ProducerService::query_producer_info_by_request_with_rpc_hook(self.producer_info_request(broker_addr)?, None)
+            .await
     }
 }
 
@@ -645,5 +1169,115 @@ mod tests {
             .unwrap();
         std::mem::drop(facade.build_broker_config_update_plan(update_request.clone()));
         std::mem::drop(facade.apply_broker_config_update(update_request));
+    }
+
+    #[test]
+    fn facade_builds_operational_requests_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+
+        let cluster_list = facade.cluster_list_request(true, Some(" DefaultCluster ".to_string()));
+        assert_eq!(cluster_list.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(
+            cluster_list.cluster_name().map(|value| value.as_str()),
+            Some("DefaultCluster")
+        );
+
+        let consumer_connection = facade
+            .consumer_connection_request(" GroupA ", Some(" 127.0.0.1:10911 ".to_string()))
+            .unwrap();
+        assert_eq!(consumer_connection.consumer_group().as_str(), "GroupA");
+        assert_eq!(consumer_connection.broker_addr(), Some("127.0.0.1:10911"));
+
+        let progress = facade
+            .consumer_progress_request(
+                Some(" GroupA ".to_string()),
+                Some(" TopicA ".to_string()),
+                true,
+                Some(" DefaultCluster ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(progress.consumer_group().unwrap().as_str(), "GroupA");
+        assert!(progress.show_client_ip());
+
+        let reset = facade
+            .reset_offset_by_time_request(" GroupA ", " TopicA ", 1234)
+            .unwrap();
+        assert_eq!(reset.group().as_str(), "GroupA");
+        assert_eq!(reset.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let queue = facade
+            .query_consume_queue_request(
+                " TopicA ",
+                1,
+                10,
+                20,
+                Some(" 127.0.0.1:10911 ".to_string()),
+                Some(" GroupA ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(queue.topic().as_str(), "TopicA");
+        assert_eq!(queue.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let ha = facade
+            .ha_status_request(Some(" 127.0.0.1:10911 ".to_string()), None)
+            .unwrap();
+        assert_eq!(ha.namesrv_addr(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn facade_exposes_operational_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.query_cluster_list(false, Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.query_cluster_broker_names(Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.check_cluster_send_message_rt(2, 128, Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.query_consumer_connection("GroupA", Some("127.0.0.1:10911".to_string())));
+        std::mem::drop(facade.query_producer_connection("ProducerGroupA", "TopicA"));
+        std::mem::drop(facade.query_consumer_config("GroupA"));
+        std::mem::drop(facade.query_consumer_running_info(
+            "GroupA",
+            Some("client-a".to_string()),
+            Some("127.0.0.1:10911".to_string()),
+            false,
+        ));
+        std::mem::drop(facade.query_consumer_progress(
+            Some("GroupA".to_string()),
+            Some("TopicA".to_string()),
+            false,
+            Some("DefaultCluster".to_string()),
+        ));
+        std::mem::drop(facade.clone_group_offset("SourceGroup", "DestGroup", "TopicA", false));
+        std::mem::drop(facade.query_consumer_status("GroupA", "TopicA", Some("client-a".to_string())));
+        std::mem::drop(facade.skip_accumulated_message(
+            "GroupA",
+            "TopicA",
+            Some("DefaultCluster".to_string()),
+            Some(true),
+        ));
+        std::mem::drop(facade.reset_offset_by_time("GroupA", "TopicA", 1234));
+        std::mem::drop(facade.reset_offset_by_time_old(
+            "GroupA",
+            "TopicA",
+            1234,
+            Some(true),
+            Some("DefaultCluster".to_string()),
+        ));
+        std::mem::drop(facade.query_consume_queue(
+            "TopicA",
+            1,
+            10,
+            20,
+            Some("127.0.0.1:10911".to_string()),
+            Some("GroupA".to_string()),
+        ));
+        std::mem::drop(facade.check_rocksdb_cq_write_progress(
+            "DefaultCluster",
+            Some("TopicA".to_string()),
+            Some(1000),
+        ));
+        std::mem::drop(facade.query_ha_status(Some("127.0.0.1:10911".to_string()), None));
+        std::mem::drop(facade.query_sync_state_set("127.0.0.1:9878", Some("broker-a".to_string()), None));
+        std::mem::drop(facade.query_stats_all(false, Some("TopicA".to_string())));
+        std::mem::drop(facade.query_producer_info("127.0.0.1:10911"));
     }
 }
