@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use clap::Parser;
+use rocketmq_admin_core::core::consumer::ConsumerService;
+use rocketmq_admin_core::core::consumer::StartMonitoringRequest;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
@@ -30,8 +32,28 @@ pub struct StartMonitoringSubCommand {
     namesrv_addr: Option<String>,
 }
 
+impl StartMonitoringSubCommand {
+    fn request(&self) -> StartMonitoringRequest {
+        StartMonitoringRequest::new(self.namesrv_addr.clone())
+    }
+}
+
 impl CommandExecute for StartMonitoringSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
-        todo!("Depends on MonitorService implementation")
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
+        ConsumerService::start_monitoring_by_request_with_rpc_hook(self.request(), rpc_hook)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_monitoring_sub_command_builds_request() {
+        let command = StartMonitoringSubCommand::try_parse_from(["startMonitoring", "-n", " 127.0.0.1:9876 "]).unwrap();
+
+        let request = command.request();
+
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
     }
 }

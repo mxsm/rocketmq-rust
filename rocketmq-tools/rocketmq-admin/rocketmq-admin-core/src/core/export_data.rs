@@ -7,6 +7,7 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -39,6 +40,7 @@ const EXPORT_BROKER_PROPERTY_KEYS: &[&str] = &[
     "autoCreateTopicEnable",
     "autoCreateSubscriptionGroup",
 ];
+const DEFAULT_EXPORT_POP_RECORD_TIMEOUT_MILLIS: u64 = 30000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportConfigsRequest {
@@ -194,6 +196,100 @@ impl ExportMetadataRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportPopRecordTarget {
+    Broker(CheetahString),
+    Cluster(CheetahString),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportPopRecordRequest {
+    target: ExportPopRecordTarget,
+    dry_run: bool,
+    timeout_millis: u64,
+    namesrv_addr: Option<String>,
+}
+
+impl ExportPopRecordRequest {
+    pub fn try_new(cluster_name: Option<String>, broker_addr: Option<String>, dry_run: bool) -> RocketMQResult<Self> {
+        let cluster_name = trim_optional_string(cluster_name);
+        let broker_addr = trim_optional_string(broker_addr);
+        let target = match (cluster_name, broker_addr) {
+            (Some(cluster_name), None) => ExportPopRecordTarget::Cluster(CheetahString::from(cluster_name)),
+            (None, Some(broker_addr)) => ExportPopRecordTarget::Broker(CheetahString::from(broker_addr)),
+            (None, None) => {
+                return Err(ToolsError::validation_error(
+                    "target",
+                    "either brokerAddr or clusterName must be provided",
+                )
+                .into());
+            }
+            (Some(_), Some(_)) => {
+                return Err(ToolsError::validation_error(
+                    "target",
+                    "brokerAddr and clusterName cannot be provided together",
+                )
+                .into());
+            }
+        };
+
+        Ok(Self {
+            target,
+            dry_run,
+            timeout_millis: DEFAULT_EXPORT_POP_RECORD_TIMEOUT_MILLIS,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn with_timeout_millis(mut self, timeout_millis: u64) -> Self {
+        self.timeout_millis = timeout_millis;
+        self
+    }
+
+    pub fn target(&self) -> &ExportPopRecordTarget {
+        &self.target
+    }
+
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    pub fn timeout_millis(&self) -> u64 {
+        self.timeout_millis
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportPopRecordTargetResult {
+    pub broker_name: String,
+    pub broker_addr: String,
+    pub dry_run: bool,
+    pub exported: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportPopRecordResult {
+    pub targets: Vec<ExportPopRecordTargetResult>,
+}
+
 #[derive(Debug)]
 pub enum ExportMetadataResult {
     BrokerTopic {
@@ -341,6 +437,125 @@ impl ExportService {
             }
         }
     }
+
+    pub async fn export_pop_records_by_request_with_rpc_hook(
+        request: ExportPopRecordRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<ExportPopRecordResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::export_pop_records_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn export_pop_records_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ExportPopRecordRequest,
+    ) -> RocketMQResult<ExportPopRecordResult> {
+        let targets = match request.target() {
+            ExportPopRecordTarget::Broker(broker_addr) => {
+                vec![Self::resolve_export_pop_record_broker_target(admin, broker_addr).await]
+            }
+            ExportPopRecordTarget::Cluster(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await?;
+                resolve_export_pop_record_targets_from_cluster_info(&cluster_info, cluster_name.as_str())
+            }
+        };
+
+        let mut results = Vec::with_capacity(targets.len());
+        for target in targets {
+            let (exported, error) = if request.dry_run() {
+                (false, None)
+            } else {
+                match admin
+                    .export_pop_records(
+                        CheetahString::from(target.broker_addr.as_str()),
+                        request.timeout_millis(),
+                    )
+                    .await
+                {
+                    Ok(()) => (true, None),
+                    Err(error) => (false, Some(error.to_string())),
+                }
+            };
+
+            results.push(ExportPopRecordTargetResult {
+                broker_name: target.broker_name,
+                broker_addr: target.broker_addr,
+                dry_run: request.dry_run(),
+                exported,
+                error,
+            });
+        }
+
+        Ok(ExportPopRecordResult { targets: results })
+    }
+
+    async fn resolve_export_pop_record_broker_target(
+        admin: &DefaultMQAdminExt,
+        broker_addr: &CheetahString,
+    ) -> ExportPopRecordBrokerTarget {
+        let broker_name = admin
+            .get_broker_config(broker_addr.clone())
+            .await
+            .ok()
+            .and_then(|properties| {
+                properties
+                    .get(&CheetahString::from_static_str("brokerName"))
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_default();
+
+        ExportPopRecordBrokerTarget {
+            broker_name,
+            broker_addr: broker_addr.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExportPopRecordBrokerTarget {
+    broker_name: String,
+    broker_addr: String,
+}
+
+fn resolve_export_pop_record_targets_from_cluster_info(
+    cluster_info: &ClusterInfo,
+    cluster_name: &str,
+) -> Vec<ExportPopRecordBrokerTarget> {
+    let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
+        return Vec::new();
+    };
+    let Some(broker_name_set) = cluster_addr_table.get(cluster_name) else {
+        return Vec::new();
+    };
+    let Some(broker_addr_table) = cluster_info.broker_addr_table.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut targets = Vec::new();
+    for broker_name in broker_name_set {
+        let Some(broker_data) = broker_addr_table.get(broker_name) else {
+            continue;
+        };
+
+        for broker_addr in broker_data.broker_addrs().values() {
+            targets.push(ExportPopRecordBrokerTarget {
+                broker_name: broker_name.to_string(),
+                broker_addr: broker_addr.to_string(),
+            });
+        }
+    }
+
+    targets.sort_by(|left, right| {
+        left.broker_name
+            .cmp(&right.broker_name)
+            .then_with(|| left.broker_addr.cmp(&right.broker_addr))
+    });
+    targets.dedup();
+    targets
 }
 
 pub fn filter_export_broker_properties(properties: &HashMap<CheetahString, CheetahString>) -> HashMap<String, String> {

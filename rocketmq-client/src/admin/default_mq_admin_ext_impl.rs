@@ -2067,7 +2067,9 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         _broker_addr: CheetahString,
         _timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("export_pop_records not implemented yet")
+        Err(RocketMQError::Internal(
+            "export_pop_records not implemented yet".to_string(),
+        ))
     }
 
     async fn switch_timer_engine(

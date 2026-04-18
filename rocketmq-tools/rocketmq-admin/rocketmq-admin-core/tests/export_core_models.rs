@@ -6,6 +6,8 @@ use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataScope;
 use rocketmq_admin_core::core::export_data::ExportMetadataTarget;
+use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
+use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
 
 #[test]
 fn export_configs_request_trims_cluster_and_namesrv() {
@@ -85,4 +87,40 @@ fn export_metadata_request_rejects_invalid_targets() {
     )
     .is_err());
     assert!(ExportMetadataRequest::try_new(None, Some("127.0.0.1:10911".to_string()), false, false, false).is_err());
+}
+
+#[test]
+fn export_pop_record_request_trims_broker_target() {
+    let request = ExportPopRecordRequest::try_new(None, Some(" 127.0.0.1:10911 ".to_string()), true)
+        .unwrap()
+        .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()));
+
+    assert_eq!(
+        request.target(),
+        &ExportPopRecordTarget::Broker("127.0.0.1:10911".into())
+    );
+    assert!(request.dry_run());
+    assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+}
+
+#[test]
+fn export_pop_record_request_trims_cluster_target() {
+    let request = ExportPopRecordRequest::try_new(Some(" DefaultCluster ".to_string()), None, false).unwrap();
+
+    assert_eq!(
+        request.target(),
+        &ExportPopRecordTarget::Cluster("DefaultCluster".into())
+    );
+    assert!(!request.dry_run());
+}
+
+#[test]
+fn export_pop_record_request_rejects_invalid_targets() {
+    assert!(ExportPopRecordRequest::try_new(None, None, false).is_err());
+    assert!(ExportPopRecordRequest::try_new(
+        Some("DefaultCluster".to_string()),
+        Some("127.0.0.1:10911".to_string()),
+        false,
+    )
+    .is_err());
 }

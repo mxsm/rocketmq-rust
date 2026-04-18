@@ -39,6 +39,7 @@ use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
 use crate::core::broker::BrokerTarget;
 use crate::core::resolver::BrokerAddressResolver;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -390,6 +391,27 @@ impl ConsumerProgressRequest {
 
     pub fn admin_builder(&self) -> AdminBuilder {
         builder_with_namesrv(self.namesrv_addr.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartMonitoringRequest {
+    namesrv_addr: Option<String>,
+}
+
+impl StartMonitoringRequest {
+    pub fn new(namesrv_addr: Option<String>) -> Self {
+        Self {
+            namesrv_addr: trim_optional_string(namesrv_addr),
+        }
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr())
     }
 }
 
@@ -855,6 +877,15 @@ impl ConsumerService {
             Ok(ConsumerProgressResult::All(results))
         }
     }
+
+    pub fn start_monitoring_by_request_with_rpc_hook(
+        _request: StartMonitoringRequest,
+        _rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<()> {
+        Err(RocketMQError::Internal(
+            "ConsumerService: MonitorService is not implemented yet".to_string(),
+        ))
+    }
 }
 
 async fn get_message_queue_allocation_result_with_admin(
@@ -991,5 +1022,14 @@ mod tests {
 
         assert_eq!(request.consumer_group().unwrap().as_str(), "GroupA");
         assert!(request.show_client_ip());
+    }
+
+    #[test]
+    fn start_monitoring_request_trims_namesrv() {
+        let request = StartMonitoringRequest::new(Some(" 127.0.0.1:9876 ".into()));
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let request = StartMonitoringRequest::new(Some(" ".into()));
+        assert_eq!(request.namesrv_addr(), None);
     }
 }
