@@ -1,37 +1,87 @@
 # RocketMQ Admin Core
 
-`rocketmq-admin-core` is the reusable admin capability layer for RocketMQ Rust tools.
+`rocketmq-admin-core` is the reusable capability layer for RocketMQ admin operations. It contains admin domain models, request/response DTOs, service orchestration, validation, and shared helpers used by `rocketmq-admin-cli` and `rocketmq-admin-tui`.
 
-## Responsibilities
+This crate is not a command-line or terminal UI crate.
 
-- Defines admin request/response DTOs and service APIs.
-- Owns RocketMQ admin RPC orchestration and domain validation.
-- Provides reusable helpers for broker, cluster, topic, consumer, offset, queue, HA, stats, export, auth, controller, and related admin domains.
-- Exposes structured results for adapters such as CLI and TUI.
-
-## Non-Responsibilities
-
-- CLI argument parsing.
-- Shell completion generation.
-- Terminal prompt, progress bar, color, or table rendering.
-- TUI state, layout, event handling, or view-model rendering.
-
-## Adapter Boundary
-
-The intended call chain is:
+## Role in the Admin Stack
 
 ```text
-adapter args or UI state
+rocketmq-admin-cli      rocketmq-admin-tui
+        |                       |
+        | adapter args/UI state |
+        v                       v
+        rocketmq-admin-core service/DTO layer
+                     |
+                     v
+       RocketMQ admin client and remoting APIs
+```
+
+The stable call chain is:
+
+```text
+adapter input
   -> core request DTO
   -> core service
   -> structured result
   -> adapter renderer or view model
 ```
 
-`rocketmq-admin-cli` owns `clap`, completion, terminal rendering, confirmation prompts, and command-line output. `rocketmq-admin-tui` owns Ratatui UI state and calls core services through its facade.
+## Responsibilities
 
-## Features
+- Define admin request and result types for each command domain.
+- Validate domain inputs without depending on CLI parser objects.
+- Orchestrate RocketMQ admin RPC calls through reusable service methods.
+- Return structured data that can be rendered by CLI, TUI, tests, or future adapters.
+- Provide shared resolver/helper logic for cluster, broker, topic, consumer, offset, queue, HA, stats, export, auth, controller, and related admin domains.
 
-- Default build avoids the RocksDB dependency.
-- `rocksdb-export` enables RocksDB metadata export support for CLI commands that need it.
+## Non-Responsibilities
+
+- CLI argument parsing with `clap`.
+- Shell completion generation.
+- Terminal table, color, progress bar, prompt, or confirmation rendering.
+- TUI state management, layout, event handling, or Ratatui view rendering.
+- Any dependency on `rocketmq-admin-cli`.
+
+## Public API Shape
+
+Each domain should expose explicit request/result structs and service methods:
+
+```rust
+let request = SomeDomainRequest::try_new(/* domain values */)?;
+let result = SomeDomainService::some_operation_by_request_with_rpc_hook(request, rpc_hook).await?;
+```
+
+Do not pass CLI parameter structs into core. If an operation needs to support both CLI and TUI, the shared input belongs in a core DTO.
+
+## Feature Flags
+
+| Feature | Default | Purpose |
+|---|---:|---|
+| `rocksdb-export` | No | Enables RocksDB metadata export support for CLI commands that need direct RocksDB reading. |
+
+The default build intentionally avoids pulling RocksDB into every core consumer.
+
+## Development Rules
+
+- Keep this crate free of `clap`, `clap_complete`, `tabled`, `colored`, `indicatif`, `dialoguer`, and `ratatui`.
+- Put display formatting in adapter crates, not here.
+- Add unit tests for request validation and helper behavior when adding a new service.
+- Keep service methods async where they perform admin RPC or other I/O.
+- Prefer concrete request/result structs over broad command registries or CLI-specific trait objects.
+
+## Validation
+
+Run targeted core tests after changing this crate:
+
+```bash
+cargo test -p rocketmq-admin-core
+```
+
+For root workspace Rust changes, also run the repository-required formatting and clippy commands from the workspace root:
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+```
 

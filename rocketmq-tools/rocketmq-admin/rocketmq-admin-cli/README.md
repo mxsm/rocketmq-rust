@@ -1,385 +1,152 @@
-# RocketMQ-Rust Admin CLI
+# RocketMQ Admin CLI
 
-A powerful command-line interface for managing both RocketMQ-Rust and Apache RocketMQ clusters, implemented in Rust. This is the Rust implementation
-of [Apache RocketMQ Tools](https://github.com/apache/rocketmq/tree/develop/tools), providing a fast, safe, and ergonomic CLI experience with full compatibility
-for both platforms.
+`rocketmq-admin-cli` is the command-line adapter for RocketMQ admin operations. It owns CLI parsing, command grouping, shell completion, confirmation prompts, progress display, and terminal rendering. Shared admin behavior is delegated to `rocketmq-admin-core`.
 
-## 📖 Overview
-
-`rocketmq-admin-cli` is a comprehensive admin tool that provides full management capabilities for RocketMQ clusters, including:
-
-- **Topic Management**: Create, update, delete, and query topics
-- **Consumer Management**: Manage consumer groups and monitor consumption
-- **NameServer Operations**: Query and manage NameServer metadata
-- **Controller Operations**: Interact with RocketMQ controllers
-- **ACL/Auth Management**: Manage access control and authentication
-
-This CLI tool is built on top of [`rocketmq-admin-core`](../rocketmq-admin-core), which provides the core business logic.
-
-## Current Crate Boundary
-
-`rocketmq-admin-cli` is the command-line adapter. It owns `clap` command parsing, shell completion, confirmation prompts, progress/output rendering, and CLI-compatible command names. Business operations should flow through `rocketmq-admin-core` request DTOs and services.
+## Role in the Admin Stack
 
 ```text
-CLI args
-  -> core request DTO
-  -> core service
+shell command
+  -> clap args in rocketmq-admin-cli
+  -> rocketmq-admin-core request DTO
+  -> rocketmq-admin-core service
   -> structured result
   -> CLI renderer
 ```
 
-Future TUI/GUI adapters should depend on `rocketmq-admin-core`, not on this CLI crate.
+Future TUI or GUI adapters should depend on `rocketmq-admin-core`, not on this crate.
 
-## ✨ Features
+## Responsibilities
 
-- 🚀 **High Performance**: Built with Rust for blazing-fast execution
-- 🛡️ **Type Safety**: Leverages Rust's type system to prevent errors
-- 📝 **Rich Output Formats**: Support for Table, JSON, YAML output
-- 🔧 **Auto-completion**: Shell completion for Bash, Zsh, Fish
-- 💡 **Intuitive Commands**: Well-organized command hierarchy
-- 🔄 **Compatible**: Implements all Apache RocketMQ Tools commands
-- ⚡ **Async Runtime**: Built on Tokio for efficient I/O operations
+- Define CLI commands and subcommands with `clap`.
+- Preserve Apache RocketMQ tool-compatible command names and flags where supported.
+- Convert CLI args into `rocketmq-admin-core` request DTOs.
+- Call core services and render structured results for terminal users.
+- Own shell completion generation.
+- Own confirmation prompts, progress bars, table/JSON/YAML output, and command-line error messages.
 
-## 📦 Installation
+## Non-Responsibilities
 
-### Prerequisites
+- RocketMQ admin RPC orchestration that can be shared by other frontends.
+- Domain request/result types shared with TUI or tests.
+- Ratatui UI state or view models.
+- Direct implementation of new admin business logic when a core service should exist.
 
-- Rust 1.75 or higher
-- A running RocketMQ cluster (NameServer + Broker)
+## Build and Run
 
-### Build from Source
+From the repository root:
 
 ```bash
-# Clone the repository
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust
+cargo run -p rocketmq-admin-cli -- --help
+cargo run -p rocketmq-admin-cli -- topic --help
+```
 
-# Build the CLI tool
+Build a release binary:
+
+```bash
 cargo build --release -p rocketmq-admin-cli
-
-# The binary will be available at:
-# target/release/rocketmq-admin-cli
 ```
 
-### Install via Cargo
+The release binary is written to:
 
-```bash
-cargo install --path rocketmq-tools/rocketmq-admin/rocketmq-admin-cli
+```text
+target/release/rocketmq-admin-cli
 ```
 
-## 🚀 Quick Start
-
-### Basic Usage
+## Common Commands
 
 ```bash
-# Show help information
+# Show top-level help
 rocketmq-admin-cli --help
 
-# Show all available command categories
-rocketmq-admin-cli show
-
-# Topic commands help
-rocketmq-admin-cli topic --help
-```
-
-### Common Operations
-
-#### Topic Management
-
-```bash
-# List all topics
-rocketmq-admin-cli topic topicList -n 127.0.0.1:9876
-
-# Get topic cluster list
-rocketmq-admin-cli topic topicClusterList -t MyTopic -n 127.0.0.1:9876
-
-# Get topic route information
-rocketmq-admin-cli topic topicRoute -t MyTopic -n 127.0.0.1:9876
-
-# Create/Update topic
-rocketmq-admin-cli topic updateTopic \
-    -t MyTopic \
-    -c DefaultCluster \
-    -r 8 \
-    -w 8 \
-    -n 127.0.0.1:9876
-
-# Delete topic
-rocketmq-admin-cli topic deleteTopic -t MyTopic -c DefaultCluster -n 127.0.0.1:9876
-```
-
-#### Consumer Management
-
-```bash
-# Query consumer group information
-rocketmq-admin-cli consumer consumerProgress -g MyConsumerGroup -n 127.0.0.1:9876
-
-# Get consumer connection
-rocketmq-admin-cli consumer consumerConnection -g MyConsumerGroup -n 127.0.0.1:9876
-
-# Get consumer status
-rocketmq-admin-cli consumer consumerStatus -g MyConsumerGroup -n 127.0.0.1:9876
-
-# Update subscription group
-rocketmq-admin-cli consumer updateSubGroup \
-    -g MyConsumerGroup \
-    -c DefaultCluster \
-    -n 127.0.0.1:9876
-
-# Delete subscription group
-rocketmq-admin-cli consumer deleteSubGroup -g MyConsumerGroup -c DefaultCluster -n 127.0.0.1:9876
-```
-
-#### NameServer Operations
-
-```bash
-# Get KV config
-rocketmq-admin-cli nameserver getKVConfig -s namespace -k key -n 127.0.0.1:9876
-
-# Update KV config
-rocketmq-admin-cli nameserver updateKVConfig -s namespace -k key -v value -n 127.0.0.1:9876
-
-# Delete KV config
-rocketmq-admin-cli nameserver deleteKVConfig -s namespace -k key -n 127.0.0.1:9876
-
-# Wipe write permission
-rocketmq-admin-cli nameserver wipeWritePerm -b BrokerName -n 127.0.0.1:9876
-
-# Add write permission
-rocketmq-admin-cli nameserver addWritePerm -b BrokerName -n 127.0.0.1:9876
-```
-
-#### Controller Operations
-
-```bash
-# Get controller configuration
-rocketmq-admin-cli controller getControllerConfig -a 127.0.0.1:9878
-
-# Update controller configuration
-rocketmq-admin-cli controller updateControllerConfig -k key -v value -a 127.0.0.1:9878
-
-# Get controller metadata
-rocketmq-admin-cli controller getControllerMetadata -a 127.0.0.1:9878
-```
-
-#### ACL/Auth Management
-
-```bash
-# Get all ACL configuration
-rocketmq-admin-cli auth getAcl -n 127.0.0.1:9876
-
-# Get user ACL
-rocketmq-admin-cli auth getUserAcl -u username -n 127.0.0.1:9876
-
-# Update ACL
-rocketmq-admin-cli auth updateAcl \
-    -u username \
-    -p password \
-    -t topic \
-    --perm PUB|SUB \
-    -n 127.0.0.1:9876
-
-# Delete ACL
-rocketmq-admin-cli auth deleteAcl -u username -t topic -n 127.0.0.1:9876
-```
-
-## 📋 Command Categories
-
-The CLI organizes commands into logical categories:
-
-| Category       | Description                 | Example Commands                                                             |
-|----------------|-----------------------------|------------------------------------------------------------------------------|
-| **topic**      | Topic management operations | `topicList`, `updateTopic`, `deleteTopic`, `topicRoute`, `topicStatus`       |
-| **consumer**   | Consumer group management   | `consumerProgress`, `consumerConnection`, `updateSubGroup`, `deleteSubGroup` |
-| **nameserver** | NameServer operations       | `getKVConfig`, `updateKVConfig`, `deleteKVConfig`, `wipeWritePerm`           |
-| **controller** | Controller management       | `getControllerConfig`, `updateControllerConfig`, `getControllerMetadata`     |
-| **auth**       | ACL and authentication      | `getAcl`, `getUserAcl`, `updateAcl`, `deleteAcl`, `copyAcl`                  |
-
-### View All Command Categories
-
-```bash
 # Show categorized command table
 rocketmq-admin-cli show
+
+# Generate shell completion
+rocketmq-admin-cli --generate-completion bash
+rocketmq-admin-cli --generate-completion zsh
+rocketmq-admin-cli --generate-completion fish
+
+# Topic commands
+rocketmq-admin-cli topic topicList -n 127.0.0.1:9876
+rocketmq-admin-cli topic topicRoute -t MyTopic -n 127.0.0.1:9876
+rocketmq-admin-cli topic updateTopic -t MyTopic -c DefaultCluster -r 8 -w 8 -n 127.0.0.1:9876
+rocketmq-admin-cli topic deleteTopic -t MyTopic -c DefaultCluster -n 127.0.0.1:9876
+
+# NameServer commands
+rocketmq-admin-cli nameserver getKVConfig -s namespace -k key -n 127.0.0.1:9876
+rocketmq-admin-cli nameserver updateKVConfig -s namespace -k key -v value -n 127.0.0.1:9876
+
+# Broker config commands
+rocketmq-admin-cli broker getBrokerConfig -c DefaultCluster -n 127.0.0.1:9876
+rocketmq-admin-cli broker updateBrokerConfig -c DefaultCluster -k flushDiskType -v ASYNC_FLUSH -n 127.0.0.1:9876
 ```
 
-## 🔧 Advanced Features
+## Command Domains
 
-### Shell Completion
+| Domain | Purpose |
+|---|---|
+| `topic` | Topic create/update/delete/query and static topic operations. |
+| `nameserver` | NameServer config, KV config, and write permission operations. |
+| `broker` | Broker config, status, cleanup, cold-data, timer, and commit-log operations. |
+| `cluster` | Cluster listing and cluster send-RT diagnostics. |
+| `consumer` | Subscription group, consumer progress, running info, and consume mode operations. |
+| `connection` | Consumer and producer connection inspection. |
+| `offset` | Clone, reset, skip, and query consumer offsets. |
+| `queue` | ConsumeQueue query and RocksDB CQ write-progress checks. |
+| `message` | Message query, decode, print, consume, and send diagnostics. |
+| `producer` | Producer info and send diagnostic operations. |
+| `controller` | Controller config and metadata operations. |
+| `auth` | User and ACL management. |
+| `ha` | HA status and sync-state-set inspection. |
+| `stats` | Cluster-wide topic and consumer statistics. |
+| `export` | Config, metadata, pop-record, and optional RocksDB metadata export. |
+| `lite` | Lite topic/group/client inspection and dispatch operations. |
 
-Generate shell completion scripts for better command-line experience:
+## Environment
+
+Most commands accept `-n` or `--namesrvAddr`. You can also set the NameServer address through the standard RocketMQ environment variable when supported by the command path:
 
 ```bash
-# Bash
-rocketmq-admin-cli --generate-completion bash > /etc/bash_completion.d/rocketmq-admin-cli
-
-# Zsh
-rocketmq-admin-cli --generate-completion zsh > ~/.zsh/completion/_rocketmq-admin-cli
-
-# Fish
-rocketmq-admin-cli --generate-completion fish > ~/.config/fish/completions/rocketmq-admin-cli.fish
-```
-
-### Environment Variables
-
-You can set the NameServer address via environment variable:
-
-```bash
-# Set default NameServer address
-export ROCKETMQ_NAMESRV_ADDR="127.0.0.1:9876;127.0.0.1:9877"
-
-# Now you can omit -n flag
+set ROCKETMQ_NAMESRV_ADDR=127.0.0.1:9876
 rocketmq-admin-cli topic topicList
 ```
 
-### Skip Confirmation Prompts
-
-For dangerous operations (like delete), use `-y` or `--yes` to skip confirmation:
+On Unix shells:
 
 ```bash
-# Delete topic without confirmation
-rocketmq-admin-cli topic deleteTopic -t MyTopic -c DefaultCluster -n 127.0.0.1:9876 -y
+export ROCKETMQ_NAMESRV_ADDR=127.0.0.1:9876
+rocketmq-admin-cli topic topicList
 ```
 
-### Output Formatting
+## Adding or Migrating a Command
 
-Control output format with appropriate flags (implementation may vary by command):
+Use this flow for new commands and for continuing old command migration:
+
+1. Add or reuse a request/result DTO in `rocketmq-admin-core/src/core/<domain>.rs`.
+2. Add or reuse a service method in `rocketmq-admin-core`.
+3. Add CLI args and rendering in `rocketmq-admin-cli/src/commands/<domain>/`.
+4. Convert CLI args into the core request DTO.
+5. Call the core service and render the structured result.
+6. Add core request/service tests and CLI parse/help/smoke tests.
+
+Do not put shared admin RPC orchestration directly in CLI command files if the operation can be reused by TUI or future adapters.
+
+## Validation
+
+Run targeted CLI tests after changing this crate:
 
 ```bash
-# JSON output (if supported)
-rocketmq-admin-cli topic topicList -n 127.0.0.1:9876 --output json
-
-# YAML output (if supported)
-rocketmq-admin-cli topic topicList -n 127.0.0.1:9876 --output yaml
-
-# Table output (default)
-rocketmq-admin-cli topic topicList -n 127.0.0.1:9876
+cargo test -p rocketmq-admin-cli
 ```
 
-## 🏗️ Architecture
-
-```text
-┌─────────────────────────────────────────┐
-│       rocketmq-admin-cli (binary)       │
-│  - CLI entry point (main.rs)            │
-│  - Command-line argument parsing        │
-└─────────────────┬───────────────────────┘
-                  │
-                  ▼
-┌─────────────────────────────────────────┐
-│     rocketmq-admin-core (library)       │
-│  - Core business logic                  │
-│  - Command implementations              │
-│  - Output formatters                    │
-└─────────────────┬───────────────────────┘
-                  │
-                  ▼
-┌─────────────────────────────────────────┐
-│      rocketmq-client (library)          │
-│  - DefaultMQAdminExt                    │
-│  - MQAdminExt trait                     │
-│  - Admin API implementations            │
-└─────────────────────────────────────────┘
-```
-
-## 📚 Documentation
-
-- [RocketMQ Rust Documentation](https://mxsm.github.io/rocketmq-rust/)
-- [Apache RocketMQ Documentation](https://rocketmq.apache.org/docs/)
-- [RocketMQ Admin Core README](../rocketmq-admin-core/README.md)
-- [API Guidelines](https://github.com/mxsm/rocketmq-rust/blob/main/CONTRIBUTING.md)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please see our [Contributing Guide](../../../CONTRIBUTING.md) for details.
-
-### Development Setup
+For root workspace Rust changes, also run:
 
 ```bash
-# Clone the repository
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli
-
-# Run in development mode
-cargo run -- topic topicList -n 127.0.0.1:9876
-
-# Run tests
-cargo test
-
-# Build release version
-cargo build --release
+cargo fmt --all
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 ```
 
-### Adding New Commands
+## Related Crates
 
-1. Add CLI argument parsing and rendering in `rocketmq-admin-cli/src/commands/`.
-2. Add or reuse request/response DTOs and service methods in `rocketmq-admin-core/src/core/`.
-3. Convert CLI args into core requests, call the core service, then render structured results in the CLI layer.
-4. Add core service tests plus CLI parse/help/smoke tests.
-
-Example:
-
-```rust
-// In rocketmq-admin-cli/src/commands/topic/my_command.rs
-use crate::commands::CommandExecute;
-use rocketmq_admin_core::core::topic::TopicService;
-
-#[derive(clap::Args)]
-pub struct MyTopicCommand {
-    #[arg(short, long)]
-    topic_name: String,
-}
-
-impl CommandExecute for MyTopicCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let request = self.request()?;
-        let result = TopicService::some_operation_by_request_with_rpc_hook(request, rpc_hook).await?;
-        Self::print_result(result);
-        Ok(())
-    }
-}
-```
-
-## 📄 License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](../../../LICENSE-APACHE) file for details.
-
-## 🔗 Related Projects
-
-- [rocketmq-rust](https://github.com/mxsm/rocketmq-rust) - The main RocketMQ Rust implementation
-- [Apache RocketMQ](https://github.com/apache/rocketmq) - Original Java implementation
-- [rocketmq-admin-core](../rocketmq-admin-core) - Core admin library
-- [rocketmq-admin-tui](../rocketmq-admin-tui) - Terminal UI for admin operations
-
-## 🙋 Support
-
-- GitHub Issues: [Report bugs or request features](https://github.com/mxsm/rocketmq-rust/issues)
-- Discussions: [Ask questions and share ideas](https://github.com/mxsm/rocketmq-rust/discussions)
-- Apache RocketMQ Community: [Join the community](https://rocketmq.apache.org/community/)
-
-## 📈 Roadmap
-
-- [x] Basic topic management commands
-- [x] Consumer management commands
-- [x] NameServer operations
-- [x] Controller operations
-- [x] ACL/Auth management
-- [ ] Broker management commands
-- [ ] Message query and resend commands
-- [ ] Cluster monitoring commands
-- [ ] Performance testing tools
-- [ ] Interactive mode (REPL)
-- [ ] Configuration file support
-- [ ] Batch operations support
-
-## 🌟 Acknowledgments
-
-This project is inspired by and aims to be compatible with:
-
-- [Apache RocketMQ Tools](https://github.com/apache/rocketmq/tree/develop/tools)
-- [RocketMQ Console](https://github.com/apache/rocketmq-dashboard)
-
-Special thanks to all contributors who have helped make this project better!
-
----
-
-Made with ❤️ by the RocketMQ Rust Community
+- [`rocketmq-admin-core`](../rocketmq-admin-core): reusable admin capability layer.
+- [`rocketmq-admin-tui`](../rocketmq-admin-tui): terminal UI adapter built on core services.
