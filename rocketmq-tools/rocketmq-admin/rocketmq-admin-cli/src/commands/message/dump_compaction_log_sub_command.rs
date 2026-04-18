@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use clap::Parser;
-use rocketmq_common::common::message::message_decoder;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::message::DumpCompactionLogRequest;
+use rocketmq_admin_core::core::message::MessageService;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
@@ -31,57 +28,39 @@ pub struct DumpCompactionLogSubCommand {
     file: Option<String>,
 }
 
+impl DumpCompactionLogSubCommand {
+    fn request(&self) -> DumpCompactionLogRequest {
+        DumpCompactionLogRequest::try_new(self.file.clone())
+    }
+}
+
 impl CommandExecute for DumpCompactionLogSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if let Some(file_name) = &self.file {
-            let file_path = Path::new(file_name);
-
-            if !file_path.exists() {
-                return Err(RocketMQError::Internal(format!("file {} not exist.", file_name)));
-            }
-
-            if file_path.is_dir() {
-                return Err(RocketMQError::Internal(format!("file {} is a directory.", file_name)));
-            }
-
-            let data = fs::read(file_name)
-                .map_err(|e| RocketMQError::Internal(format!("Failed to read file {}: {}", file_name, e)))?;
-
-            let file_size = data.len();
-            let mut buf = Bytes::from(data);
-            let mut current = 0usize;
-
-            while current < file_size {
-                if buf.len() < 4 {
-                    break;
-                }
-
-                let size = i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-
-                if size <= 0 || size as usize > file_size {
-                    break;
-                }
-
-                if buf.len() < size as usize {
-                    break;
-                }
-
-                let mut msg_bytes = buf.split_to(size as usize);
-
-                match message_decoder::decode(&mut msg_bytes, false, false, false, false, false) {
-                    Some(message_ext) => {
-                        current += size as usize;
-                        println!("{}", message_ext);
-                    }
-                    None => {
-                        break;
-                    }
-                }
-            }
-        } else {
+        let result = MessageService::dump_compaction_log_by_request(&self.request())?;
+        if result.missing_file_name {
             println!("miss dump log file name");
+            return Ok(());
+        }
+
+        for message in result.messages {
+            println!("{}", message);
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dump_compaction_log_sub_command_builds_core_request() {
+        let command =
+            DumpCompactionLogSubCommand::try_parse_from(["dumpCompactionLog", "-f", " ./compact.log "]).unwrap();
+
+        let request = command.request();
+
+        assert_eq!(request.file().unwrap().to_string_lossy(), "./compact.log");
     }
 }

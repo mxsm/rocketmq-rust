@@ -16,18 +16,24 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::TraceDataEncoder;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::MessageDecoder::decode_message_id;
 use rocketmq_common::MessageDecoder::validate_message_id;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::runtime::RPCHook;
@@ -75,6 +81,34 @@ fn admin_builder_with_rpc_hook(builder: AdminBuilder, rpc_hook: Option<Arc<dyn R
         Some(hook) => builder.rpc_hook(hook),
         None => builder,
     }
+}
+
+fn decode_compaction_log_messages(data: Vec<u8>) -> Vec<MessageExt> {
+    let file_size = data.len();
+    let mut buf = Bytes::from(data);
+    let mut current = 0usize;
+    let mut messages = Vec::new();
+
+    while current < file_size {
+        if buf.len() < 4 {
+            break;
+        }
+
+        let size = i32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
+        if size <= 0 || size as usize > file_size || buf.len() < size as usize {
+            break;
+        }
+
+        let mut msg_bytes = buf.split_to(size as usize);
+        let Some(message_ext) = message_decoder::decode(&mut msg_bytes, false, false, false, false, false) else {
+            break;
+        };
+
+        current += size as usize;
+        messages.push(message_ext);
+    }
+
+    messages
 }
 
 fn deal_time_to_hour_stamps(timestamp: i64) -> i64 {
@@ -345,6 +379,78 @@ impl QueryMessageByIdResult {
     pub fn failure_count(&self) -> usize {
         self.entries.len().saturating_sub(self.success_count())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecodeMessageIdRequest {
+    message_ids: Vec<CheetahString>,
+}
+
+impl DecodeMessageIdRequest {
+    pub fn try_new(message_ids: Vec<String>) -> RocketMQResult<Self> {
+        let message_ids = message_ids
+            .into_iter()
+            .filter_map(|message_id| trim_optional_string(Some(message_id)))
+            .map(CheetahString::from)
+            .collect::<Vec<_>>();
+
+        if message_ids.is_empty() {
+            return Err(ToolsError::validation_error("messageId", "At least one message ID is required").into());
+        }
+
+        Ok(Self { message_ids })
+    }
+
+    pub fn message_ids(&self) -> &[CheetahString] {
+        &self.message_ids
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DecodeMessageIdOutcome {
+    Decoded {
+        broker_ip: String,
+        broker_port: u16,
+        commit_log_offset: i64,
+        offset_hex: String,
+    },
+    Invalid {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecodeMessageIdEntry {
+    pub message_id: CheetahString,
+    pub outcome: DecodeMessageIdOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecodeMessageIdResult {
+    pub entries: Vec<DecodeMessageIdEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DumpCompactionLogRequest {
+    file: Option<PathBuf>,
+}
+
+impl DumpCompactionLogRequest {
+    pub fn try_new(file: Option<String>) -> Self {
+        Self {
+            file: trim_optional_string(file).map(PathBuf::from),
+        }
+    }
+
+    pub fn file(&self) -> Option<&Path> {
+        self.file.as_deref()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DumpCompactionLogResult {
+    pub messages: Vec<MessageExt>,
+    pub missing_file_name: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -701,6 +807,65 @@ pub enum MessagePullEvent {
 pub struct MessageService;
 
 impl MessageService {
+    pub fn decode_message_ids(request: &DecodeMessageIdRequest) -> DecodeMessageIdResult {
+        let entries = request
+            .message_ids()
+            .iter()
+            .map(|message_id| {
+                let outcome = validate_message_id(message_id.as_str())
+                    .and_then(|_| decode_message_id(message_id.as_str()))
+                    .map(|decoded| DecodeMessageIdOutcome::Decoded {
+                        broker_ip: decoded.address.ip().to_string(),
+                        broker_port: decoded.address.port(),
+                        commit_log_offset: decoded.offset,
+                        offset_hex: format!("{:#018X}", decoded.offset),
+                    })
+                    .unwrap_or_else(|error| DecodeMessageIdOutcome::Invalid { error });
+
+                DecodeMessageIdEntry {
+                    message_id: message_id.clone(),
+                    outcome,
+                }
+            })
+            .collect();
+
+        DecodeMessageIdResult { entries }
+    }
+
+    pub fn dump_compaction_log_by_request(
+        request: &DumpCompactionLogRequest,
+    ) -> RocketMQResult<DumpCompactionLogResult> {
+        let Some(file_path) = request.file() else {
+            return Ok(DumpCompactionLogResult {
+                messages: Vec::new(),
+                missing_file_name: true,
+            });
+        };
+
+        if !file_path.exists() {
+            return Err(RocketMQError::Internal(format!(
+                "file {} not exist.",
+                file_path.display()
+            )));
+        }
+
+        if file_path.is_dir() {
+            return Err(RocketMQError::Internal(format!(
+                "file {} is a directory.",
+                file_path.display()
+            )));
+        }
+
+        let data = fs::read(file_path).map_err(|error| {
+            RocketMQError::Internal(format!("Failed to read file {}: {}", file_path.display(), error))
+        })?;
+
+        Ok(DumpCompactionLogResult {
+            messages: decode_compaction_log_messages(data),
+            missing_file_name: false,
+        })
+    }
+
     pub async fn query_message_by_key_by_request_with_rpc_hook(
         request: QueryMessageByKeyRequest,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -1547,5 +1712,51 @@ mod tests {
     fn consume_request_requires_broker_before_queue() {
         let result = ConsumeMessagesRequest::try_new("topic", None, Some(0), None, None, None, None, 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_message_id_request_trims_and_skips_blank_ids() {
+        let request =
+            DecodeMessageIdRequest::try_new(vec![" 7F0000010007D8260BF075769D36C348 ".into(), " ".into()]).unwrap();
+
+        assert_eq!(request.message_ids(), ["7F0000010007D8260BF075769D36C348"]);
+    }
+
+    #[test]
+    fn decode_message_ids_returns_decoded_and_invalid_entries() {
+        let request =
+            DecodeMessageIdRequest::try_new(vec!["7F0000010007D8260BF075769D36C348".into(), "invalid".into()]).unwrap();
+
+        let result = MessageService::decode_message_ids(&request);
+
+        assert_eq!(result.entries.len(), 2);
+        assert!(matches!(
+            &result.entries[0].outcome,
+            DecodeMessageIdOutcome::Decoded {
+                broker_ip,
+                broker_port: 55334,
+                commit_log_offset: 860316681131967304,
+                ..
+            } if broker_ip == "127.0.0.1"
+        ));
+        assert!(matches!(
+            &result.entries[1].outcome,
+            DecodeMessageIdOutcome::Invalid { error } if error.contains("Invalid message ID length")
+        ));
+    }
+
+    #[test]
+    fn dump_compaction_log_request_trims_file_name() {
+        let request = DumpCompactionLogRequest::try_new(Some(" ./compact.log ".into()));
+        assert_eq!(request.file().unwrap().to_string_lossy(), "./compact.log");
+    }
+
+    #[test]
+    fn dump_compaction_log_without_file_returns_missing_file_name_result() {
+        let request = DumpCompactionLogRequest::try_new(None);
+        let result = MessageService::dump_compaction_log_by_request(&request).unwrap();
+
+        assert!(result.missing_file_name);
+        assert!(result.messages.is_empty());
     }
 }

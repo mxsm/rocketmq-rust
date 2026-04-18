@@ -48,3 +48,4 @@ tracing              = { workspace = true }
 cheetah-string = { workspace = true }
 futures        = "0.3.32"
 regex          = "1.12.3"
+bytes          = { workspace = true }

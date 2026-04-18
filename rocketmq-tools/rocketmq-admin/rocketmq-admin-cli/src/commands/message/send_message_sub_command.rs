@@ -15,12 +15,9 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::core::producer::SendMessageRequest;
+use rocketmq_admin_core::core::producer::SendMessageResult;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
@@ -66,89 +63,76 @@ pub struct SendMessageSubCommand {
     msg_trace_enable: bool,
 }
 
+impl SendMessageSubCommand {
+    fn request(&self) -> RocketMQResult<SendMessageRequest> {
+        SendMessageRequest::try_new(
+            self.topic.clone(),
+            self.body.clone(),
+            self.keys.clone(),
+            self.tags.clone(),
+            self.broker_name.clone(),
+            self.queue_id,
+            self.msg_trace_enable,
+        )
+    }
+
+    fn print_result(result: &SendMessageResult) {
+        println!(
+            "{:<32}  {:<4}  {:<20}    #MsgId",
+            "#Broker Name", "#QID", "#Send Result"
+        );
+        println!(
+            "{:<32}  {:<4}  {:<20}    {}",
+            result.row.broker_name, result.row.queue_id, result.row.send_status, result.row.msg_id
+        );
+    }
+}
+
 impl CommandExecute for SendMessageSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let topic = self.topic.trim();
-        let body = self.body.trim();
-
         if self.queue_id.is_some() && self.broker_name.is_none() {
             println!("Broker name must be set if the queue is chosen!");
             return Ok(());
         }
 
-        let tag = self.tags.as_deref().map(|t| t.trim());
-        let keys = self.keys.as_deref().map(|k| k.trim());
+        let result = ProducerService::send_message_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result);
+        Ok(())
+    }
+}
 
-        let msg = Message::builder().topic(topic).body(body.as_bytes().to_vec());
-        let msg = if let Some(tag) = tag { msg.tags(tag) } else { msg };
-        let msg = if let Some(keys) = keys { msg.key(keys) } else { msg };
-        let msg = msg
-            .build()
-            .map_err(|e| RocketMQError::Internal(format!("SendMessageSubCommand command failed: {}", e)))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let mut builder = DefaultMQProducer::builder().producer_group(current_millis().to_string());
-        if let Some(rpc_hook) = rpc_hook {
-            builder = builder.rpc_hook(rpc_hook);
-        }
-        let mut producer = builder.build();
+    #[test]
+    fn send_message_sub_command_builds_core_request() {
+        let command = SendMessageSubCommand::try_parse_from([
+            "sendMessage",
+            "-t",
+            " TopicA ",
+            "-p",
+            " body ",
+            "-k",
+            " key ",
+            "-c",
+            " tag ",
+            "-b",
+            " broker-a ",
+            "-i",
+            "1",
+            "-m",
+        ])
+        .unwrap();
 
-        let operation_result = async {
-            producer
-                .start()
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("SendMessageSubCommand command failed: {}", e)))?;
+        let request = command.request().unwrap();
 
-            let result = if let (Some(broker_name), Some(queue_id)) = (&self.broker_name, self.queue_id) {
-                let message_queue = MessageQueue::from_parts(topic, broker_name.trim(), queue_id);
-                producer.send_to_queue(msg, message_queue).await
-            } else {
-                producer.send(msg).await
-            };
-
-            match result {
-                Ok(send_result) => {
-                    println!(
-                        "{:<32}  {:<4}  {:<20}    #MsgId",
-                        "#Broker Name", "#QID", "#Send Result"
-                    );
-                    if let Some(ref result) = send_result {
-                        let broker_name = result
-                            .message_queue
-                            .as_ref()
-                            .map(|mq| mq.broker_name().to_string())
-                            .unwrap_or_else(|| "Unknown".to_string());
-                        let queue_id = result
-                            .message_queue
-                            .as_ref()
-                            .map(|mq| mq.queue_id().to_string())
-                            .unwrap_or_else(|| "Unknown".to_string());
-                        let send_status = format!("{:?}", result.send_status);
-                        let msg_id = result
-                            .msg_id
-                            .as_ref()
-                            .map(|id| id.to_string())
-                            .unwrap_or_else(|| "None".to_string());
-                        println!(
-                            "{:<32}  {:<4}  {:<20}    {}",
-                            broker_name, queue_id, send_status, msg_id
-                        );
-                    } else {
-                        println!("{:<32}  {:<4}  {:<20}    None", "Unknown", "Unknown", "Failed");
-                    }
-                }
-                Err(e) => {
-                    return Err(RocketMQError::Internal(format!(
-                        "SendMessageSubCommand command failed: {}",
-                        e
-                    )));
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        producer.shutdown().await;
-        operation_result
+        assert_eq!(request.topic().as_str(), "TopicA");
+        assert_eq!(request.body(), "body");
+        assert_eq!(request.keys(), Some("key"));
+        assert_eq!(request.tags(), Some("tag"));
+        assert_eq!(request.broker_name().unwrap().as_str(), "broker-a");
+        assert_eq!(request.queue_id(), Some(1));
+        assert!(request.msg_trace_enable());
     }
 }

@@ -15,9 +15,10 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_common::MessageDecoder::decode_message_id;
-use rocketmq_common::MessageDecoder::validate_message_id;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
+use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
+use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+use rocketmq_admin_core::core::message::MessageService;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
@@ -35,44 +36,61 @@ pub struct DecodeMessageIdSubCommand {
     message_id: Vec<String>,
 }
 
-impl CommandExecute for DecodeMessageIdSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        for msg_id in &self.message_id {
-            let msg_id = msg_id.trim();
+impl DecodeMessageIdSubCommand {
+    fn request(&self) -> RocketMQResult<DecodeMessageIdRequest> {
+        DecodeMessageIdRequest::try_new(self.message_id.clone())
+    }
 
-            if msg_id.is_empty() {
-                continue;
-            }
-
-            if let Err(e) = validate_message_id(msg_id) {
-                eprintln!("Invalid message ID: {}. {}", msg_id, e);
-                continue;
-            }
-
-            match decode_message_id(msg_id) {
-                Ok(message_id) => {
-                    let ip = message_id.address.ip();
-                    let port = message_id.address.port();
-                    let offset = message_id.offset;
-
-                    println!("MessageId: {}", msg_id);
+    fn print_result(result: &DecodeMessageIdResult) {
+        for entry in &result.entries {
+            match &entry.outcome {
+                DecodeMessageIdOutcome::Decoded {
+                    broker_ip,
+                    broker_port,
+                    commit_log_offset,
+                    offset_hex,
+                } => {
+                    println!("MessageId: {}", entry.message_id);
                     println!();
                     println!("Decoded Information:");
-                    println!("  Broker IP: {}", ip);
-                    println!("  Broker Port: {}", port);
-                    println!("  Commit Log Offset: {}", offset);
-                    println!("  Offset Hex: {:#018X}", offset);
+                    println!("  Broker IP: {}", broker_ip);
+                    println!("  Broker Port: {}", broker_port);
+                    println!("  Commit Log Offset: {}", commit_log_offset);
+                    println!("  Offset Hex: {}", offset_hex);
                     println!();
                 }
-                Err(e) => {
-                    return Err(RocketMQError::Internal(format!(
-                        "DecodeMessageIdSubCommand command failed: failed to decode message ID '{}': {}",
-                        msg_id, e
-                    )));
+                DecodeMessageIdOutcome::Invalid { error } => {
+                    eprintln!("Invalid message ID: {}. {}", entry.message_id, error);
                 }
             }
         }
+    }
+}
 
+impl CommandExecute for DecodeMessageIdSubCommand {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let result = MessageService::decode_message_ids(&self.request()?);
+        Self::print_result(&result);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_message_id_sub_command_builds_core_request() {
+        let command = DecodeMessageIdSubCommand::try_parse_from([
+            "decodeMessageId",
+            "-i",
+            " 7F0000010007D8260BF075769D36C348 ",
+            " ",
+        ])
+        .unwrap();
+
+        let request = command.request().unwrap();
+
+        assert_eq!(request.message_ids(), ["7F0000010007D8260BF075769D36C348"]);
     }
 }
