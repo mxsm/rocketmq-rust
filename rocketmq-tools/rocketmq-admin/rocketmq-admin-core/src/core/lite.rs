@@ -6,6 +6,7 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
@@ -288,6 +289,148 @@ impl LiteGroupInfoQueryResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiteClientInfoQueryRequest {
+    parent_topic: CheetahString,
+    group: CheetahString,
+    client_id: CheetahString,
+    namesrv_addr: Option<String>,
+}
+
+impl LiteClientInfoQueryRequest {
+    pub fn try_new(
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        client_id: impl Into<String>,
+    ) -> RocketMQResult<Self> {
+        Ok(Self {
+            parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
+            group: trim_required_cheetah("group", group)?,
+            client_id: trim_required_cheetah("clientId", client_id)?,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn parent_topic(&self) -> &CheetahString {
+        &self.parent_topic
+    }
+
+    pub fn group(&self) -> &CheetahString {
+        &self.group
+    }
+
+    pub fn client_id(&self) -> &CheetahString {
+        &self.client_id
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiteClientInfoEntry {
+    pub broker_name: CheetahString,
+    pub body: Option<GetLiteClientInfoResponseBody>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiteClientInfoQueryResult {
+    pub parent_topic: CheetahString,
+    pub group: CheetahString,
+    pub client_id: CheetahString,
+    pub entries: Vec<LiteClientInfoEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerLiteDispatchRequest {
+    parent_topic: CheetahString,
+    group: CheetahString,
+    client_id: Option<CheetahString>,
+    broker_name: Option<CheetahString>,
+    namesrv_addr: Option<String>,
+}
+
+impl TriggerLiteDispatchRequest {
+    pub fn try_new(
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        client_id: Option<String>,
+        broker_name: Option<String>,
+    ) -> RocketMQResult<Self> {
+        Ok(Self {
+            parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
+            group: trim_required_cheetah("group", group)?,
+            client_id: trim_optional_string(client_id).map(CheetahString::from),
+            broker_name: trim_optional_string(broker_name).map(CheetahString::from),
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn parent_topic(&self) -> &CheetahString {
+        &self.parent_topic
+    }
+
+    pub fn group(&self) -> &CheetahString {
+        &self.group
+    }
+
+    pub fn client_id(&self) -> Option<&CheetahString> {
+        self.client_id.as_ref()
+    }
+
+    pub fn broker_name(&self) -> Option<&CheetahString> {
+        self.broker_name.as_ref()
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerLiteDispatchEntry {
+    pub broker_name: CheetahString,
+    pub dispatched: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerLiteDispatchResult {
+    pub parent_topic: CheetahString,
+    pub group: CheetahString,
+    pub client_id: Option<CheetahString>,
+    pub broker_name: Option<CheetahString>,
+    pub entries: Vec<TriggerLiteDispatchEntry>,
+}
+
 pub struct LiteService;
 
 impl LiteService {
@@ -535,6 +678,133 @@ impl LiteService {
             earliest_unconsumed_timestamp,
             lag_count_top_k,
             lag_timestamp_top_k,
+            entries,
+        })
+    }
+
+    pub async fn query_lite_client_info_by_request_with_rpc_hook(
+        request: LiteClientInfoQueryRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<LiteClientInfoQueryResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::query_lite_client_info_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn query_lite_client_info_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &LiteClientInfoQueryRequest,
+    ) -> RocketMQResult<LiteClientInfoQueryResult> {
+        let route = admin
+            .examine_topic_route_info(request.parent_topic().clone())
+            .await?
+            .ok_or_else(|| {
+                ToolsError::internal(format!(
+                    "Topic route not found for parentTopic '{}'",
+                    request.parent_topic()
+                ))
+            })?;
+
+        let mut entries = Vec::new();
+        for broker_data in &route.broker_datas {
+            let Some(broker_addr) = broker_data.select_broker_addr() else {
+                continue;
+            };
+            let broker_name = broker_data.broker_name().clone();
+            match admin
+                .get_lite_client_info(
+                    broker_addr,
+                    request.parent_topic().clone(),
+                    request.group().clone(),
+                    request.client_id().clone(),
+                )
+                .await
+            {
+                Ok(body) => entries.push(LiteClientInfoEntry {
+                    broker_name,
+                    body: Some(body),
+                    error: None,
+                }),
+                Err(error) => entries.push(LiteClientInfoEntry {
+                    broker_name,
+                    body: None,
+                    error: Some(error.to_string()),
+                }),
+            }
+        }
+
+        Ok(LiteClientInfoQueryResult {
+            parent_topic: request.parent_topic().clone(),
+            group: request.group().clone(),
+            client_id: request.client_id().clone(),
+            entries,
+        })
+    }
+
+    pub async fn trigger_lite_dispatch_by_request_with_rpc_hook(
+        request: TriggerLiteDispatchRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<TriggerLiteDispatchResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::trigger_lite_dispatch_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn trigger_lite_dispatch_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &TriggerLiteDispatchRequest,
+    ) -> RocketMQResult<TriggerLiteDispatchResult> {
+        let route = admin
+            .examine_topic_route_info(request.parent_topic().clone())
+            .await?
+            .ok_or_else(|| {
+                ToolsError::internal(format!(
+                    "Topic route not found for parentTopic '{}'",
+                    request.parent_topic()
+                ))
+            })?;
+
+        let mut entries = Vec::new();
+        for broker_data in &route.broker_datas {
+            let Some(broker_addr) = broker_data.select_broker_addr() else {
+                continue;
+            };
+            if let Some(filter) = request.broker_name() {
+                if filter != broker_data.broker_name() {
+                    continue;
+                }
+            }
+
+            let broker_name = broker_data.broker_name().clone();
+            let client_id = request.client_id().cloned().unwrap_or_default();
+            match admin
+                .trigger_lite_dispatch(broker_addr, request.group().clone(), client_id)
+                .await
+            {
+                Ok(()) => entries.push(TriggerLiteDispatchEntry {
+                    broker_name,
+                    dispatched: true,
+                    error: None,
+                }),
+                Err(error) => entries.push(TriggerLiteDispatchEntry {
+                    broker_name,
+                    dispatched: false,
+                    error: Some(error.to_string()),
+                }),
+            }
+        }
+
+        Ok(TriggerLiteDispatchResult {
+            parent_topic: request.parent_topic().clone(),
+            group: request.group().clone(),
+            client_id: request.client_id().cloned(),
+            broker_name: request.broker_name().cloned(),
             entries,
         })
     }

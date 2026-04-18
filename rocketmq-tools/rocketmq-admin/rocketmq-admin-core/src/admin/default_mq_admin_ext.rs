@@ -871,7 +871,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_controller_config(properties, controllers)
+            .await
     }
 
     async fn clean_controller_broker_data(
@@ -882,7 +884,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_controller_ids_to_clean: Option<CheetahString>,
         is_clean_living_broker: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .clean_controller_broker_data(
+                controller_addr,
+                cluster_name,
+                broker_name,
+                broker_controller_ids_to_clean,
+                is_clean_living_broker,
+            )
+            .await
     }
 
     async fn update_cold_data_flow_ctr_group_config(
@@ -1176,11 +1186,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn trigger_lite_dispatch(
         &self,
-        _broker_addr: CheetahString,
-        _group: CheetahString,
-        _client_id: CheetahString,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("trigger_lite_dispatch not implemented yet")
+        self.default_mqadmin_ext_impl
+            .trigger_lite_dispatch(broker_addr, group, client_id)
+            .await
     }
 
     async fn search_offset(
@@ -1495,12 +1507,14 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_lite_client_info(
         &self,
-        _broker_addr: CheetahString,
-        _parent_topic: CheetahString,
-        _group: CheetahString,
-        _client_id: CheetahString,
+        broker_addr: CheetahString,
+        parent_topic: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetLiteClientInfoResponseBody> {
-        unimplemented!("get_lite_client_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_lite_client_info(broker_addr, parent_topic, group, client_id)
+            .await
     }
 
     async fn get_lite_group_info(

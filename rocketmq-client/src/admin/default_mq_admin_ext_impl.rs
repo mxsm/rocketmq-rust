@@ -1713,7 +1713,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .update_controller_config(properties, controllers, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn clean_controller_broker_data(
@@ -1724,7 +1731,21 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_controller_ids_to_clean: Option<CheetahString>,
         is_clean_living_broker: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .clean_controller_broker_data(
+                    controller_addr,
+                    cluster_name,
+                    broker_name,
+                    broker_controller_ids_to_clean,
+                    is_clean_living_broker,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn update_cold_data_flow_ctr_group_config(
@@ -2059,11 +2080,16 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn trigger_lite_dispatch(
         &self,
-        _broker_addr: CheetahString,
-        _group: CheetahString,
-        _client_id: CheetahString,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("trigger_lite_dispatch not implemented yet")
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .trigger_lite_dispatch(&broker_addr, group, client_id, self.timeout_millis.as_millis() as u64)
+            .await
     }
     #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(
@@ -2529,12 +2555,23 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_lite_client_info(
         &self,
-        _broker_addr: CheetahString,
-        _parent_topic: CheetahString,
-        _group: CheetahString,
-        _client_id: CheetahString,
+        broker_addr: CheetahString,
+        parent_topic: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetLiteClientInfoResponseBody> {
-        unimplemented!("get_lite_client_info not implemented yet")
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_lite_client_info(
+                &broker_addr,
+                parent_topic,
+                group,
+                client_id,
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn get_lite_group_info(

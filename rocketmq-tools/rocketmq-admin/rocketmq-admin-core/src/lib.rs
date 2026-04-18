@@ -42,6 +42,7 @@ pub mod core {
     pub mod producer;
     pub mod queue;
     pub mod resolver;
+    pub mod static_topic;
     pub mod stats;
     pub mod topic;
 

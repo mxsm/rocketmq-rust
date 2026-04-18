@@ -75,6 +75,62 @@ pub struct ControllerConfigQueryResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerConfigUpdateRequest {
+    controller_servers: Vec<CheetahString>,
+    properties: HashMap<CheetahString, CheetahString>,
+    namesrv_addr: Option<String>,
+}
+
+impl ControllerConfigUpdateRequest {
+    pub fn try_new(
+        controller_address: impl Into<String>,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<Self> {
+        let controller_servers = split_controller_addresses(controller_address);
+        if controller_servers.is_empty() {
+            return Err(ToolsError::validation_error(
+                "controllerAddress",
+                "controllerAddress must contain at least one address",
+            )
+            .into());
+        }
+
+        let key = trim_required_cheetah("key", key)?;
+        let value = trim_required_cheetah("value", value)?;
+        let mut properties = HashMap::new();
+        properties.insert(key, value);
+
+        Ok(Self {
+            controller_servers,
+            properties,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn controller_servers(&self) -> &[CheetahString] {
+        &self.controller_servers
+    }
+
+    pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
+        &self.properties
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControllerMetadataQueryRequest {
     controller_addr: CheetahString,
     namesrv_addr: Option<String>,
@@ -111,6 +167,82 @@ pub struct ControllerMetadataQueryResult {
     pub meta_data: GetMetaDataResponseHeader,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerMetadataCleanRequest {
+    controller_addr: CheetahString,
+    broker_name: CheetahString,
+    broker_controller_ids_to_clean: Option<CheetahString>,
+    cluster_name: Option<CheetahString>,
+    clean_living_broker: bool,
+    namesrv_addr: Option<String>,
+}
+
+impl ControllerMetadataCleanRequest {
+    pub fn try_new(
+        controller_addr: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_controller_ids_to_clean: Option<String>,
+        cluster_name: Option<String>,
+        clean_living_broker: bool,
+    ) -> RocketMQResult<Self> {
+        let controller_addr = trim_required_cheetah("controllerAddress", controller_addr)?;
+        let broker_name = trim_required_cheetah("brokerName", broker_name)?;
+        let cluster_name = trim_optional_cheetah(cluster_name);
+        if !clean_living_broker && cluster_name.is_none() {
+            return Err(ToolsError::validation_error(
+                "clusterName",
+                "clusterName must not be empty when cleanLivingBroker is false",
+            )
+            .into());
+        }
+
+        let broker_controller_ids_to_clean =
+            normalize_broker_controller_ids(broker_controller_ids_to_clean.as_deref())?;
+
+        Ok(Self {
+            controller_addr,
+            broker_name,
+            broker_controller_ids_to_clean,
+            cluster_name,
+            clean_living_broker,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn controller_addr(&self) -> &CheetahString {
+        &self.controller_addr
+    }
+
+    pub fn broker_name(&self) -> &CheetahString {
+        &self.broker_name
+    }
+
+    pub fn broker_controller_ids_to_clean(&self) -> Option<&CheetahString> {
+        self.broker_controller_ids_to_clean.as_ref()
+    }
+
+    pub fn cluster_name(&self) -> Option<&CheetahString> {
+        self.cluster_name.as_ref()
+    }
+
+    pub fn clean_living_broker(&self) -> bool {
+        self.clean_living_broker
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr())
+    }
+}
+
 pub struct ControllerService;
 
 impl ControllerService {
@@ -134,6 +266,27 @@ impl ControllerService {
         Ok(ControllerConfigQueryResult { controller_configs })
     }
 
+    pub async fn update_controller_config_by_request_with_rpc_hook(
+        request: ControllerConfigUpdateRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<()> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::update_controller_config_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn update_controller_config_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ControllerConfigUpdateRequest,
+    ) -> RocketMQResult<()> {
+        admin
+            .update_controller_config(request.properties.clone(), request.controller_servers.clone())
+            .await
+    }
+
     pub async fn query_controller_metadata_by_request_with_rpc_hook(
         request: ControllerMetadataQueryRequest,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -153,6 +306,33 @@ impl ControllerService {
         let meta_data = admin.get_controller_meta_data(request.controller_addr.clone()).await?;
         Ok(ControllerMetadataQueryResult { meta_data })
     }
+
+    pub async fn clean_controller_metadata_by_request_with_rpc_hook(
+        request: ControllerMetadataCleanRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<()> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::clean_controller_metadata_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn clean_controller_metadata_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ControllerMetadataCleanRequest,
+    ) -> RocketMQResult<()> {
+        admin
+            .clean_controller_broker_data(
+                request.controller_addr.clone(),
+                request.cluster_name.clone().unwrap_or_default(),
+                request.broker_name.clone(),
+                request.broker_controller_ids_to_clean.clone(),
+                request.clean_living_broker,
+            )
+            .await
+    }
 }
 
 fn split_controller_addresses(controller_address: impl Into<String>) -> Vec<CheetahString> {
@@ -171,6 +351,10 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn trim_optional_cheetah(value: Option<String>) -> Option<CheetahString> {
+    trim_optional_string(value).map(CheetahString::from)
+}
+
 fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
@@ -178,6 +362,29 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Rocke
         return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
     }
     Ok(CheetahString::from(value))
+}
+
+fn normalize_broker_controller_ids(value: Option<&str>) -> RocketMQResult<Option<CheetahString>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let mut ids = Vec::new();
+    for id in value.split(';').map(str::trim).filter(|id| !id.is_empty()) {
+        id.parse::<i64>().map_err(|_| {
+            ToolsError::validation_error(
+                "brokerControllerIdsToClean",
+                format!("brokerControllerIdsToClean contains invalid id: {id}"),
+            )
+        })?;
+        ids.push(id);
+    }
+
+    if ids.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(CheetahString::from(ids.join(";"))))
+    }
 }
 
 fn builder_with_namesrv(namesrv_addr: Option<&str>) -> AdminBuilder {

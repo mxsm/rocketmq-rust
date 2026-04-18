@@ -1,8 +1,10 @@
 use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryRequest;
 use rocketmq_admin_core::core::lite::BrokerLiteInfoTarget;
+use rocketmq_admin_core::core::lite::LiteClientInfoQueryRequest;
 use rocketmq_admin_core::core::lite::LiteGroupInfoQueryRequest;
 use rocketmq_admin_core::core::lite::LiteTopicInfoQueryRequest;
 use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
+use rocketmq_admin_core::core::lite::TriggerLiteDispatchRequest;
 
 #[test]
 fn broker_lite_info_query_request_trims_broker_target() {
@@ -88,4 +90,45 @@ fn lite_group_info_query_request_trims_fields_and_defaults_top_k() {
 fn lite_group_info_query_request_rejects_blank_required_fields() {
     assert!(LiteGroupInfoQueryRequest::try_new(" ", "GroupA", None, Some(5)).is_err());
     assert!(LiteGroupInfoQueryRequest::try_new("ParentTopic", " ", None, Some(5)).is_err());
+}
+
+#[test]
+fn lite_client_info_query_request_trims_required_fields() {
+    let request = LiteClientInfoQueryRequest::try_new(" ParentTopic ", " GroupA ", " ClientA ")
+        .unwrap()
+        .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()));
+
+    assert_eq!(request.parent_topic().as_str(), "ParentTopic");
+    assert_eq!(request.group().as_str(), "GroupA");
+    assert_eq!(request.client_id().as_str(), "ClientA");
+    assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+}
+
+#[test]
+fn lite_client_info_query_request_rejects_blank_fields() {
+    assert!(LiteClientInfoQueryRequest::try_new(" ", "GroupA", "ClientA").is_err());
+    assert!(LiteClientInfoQueryRequest::try_new("ParentTopic", " ", "ClientA").is_err());
+    assert!(LiteClientInfoQueryRequest::try_new("ParentTopic", "GroupA", " ").is_err());
+}
+
+#[test]
+fn trigger_lite_dispatch_request_trims_optional_filters() {
+    let request = TriggerLiteDispatchRequest::try_new(
+        " ParentTopic ",
+        " GroupA ",
+        Some(" ClientA ".to_string()),
+        Some(" BrokerA ".to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(request.parent_topic().as_str(), "ParentTopic");
+    assert_eq!(request.group().as_str(), "GroupA");
+    assert_eq!(request.client_id().map(|client| client.as_str()), Some("ClientA"));
+    assert_eq!(request.broker_name().map(|broker| broker.as_str()), Some("BrokerA"));
+}
+
+#[test]
+fn trigger_lite_dispatch_request_rejects_blank_required_fields() {
+    assert!(TriggerLiteDispatchRequest::try_new(" ", "GroupA", None, None).is_err());
+    assert!(TriggerLiteDispatchRequest::try_new("ParentTopic", " ", None, None).is_err());
 }

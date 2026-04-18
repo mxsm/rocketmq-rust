@@ -15,16 +15,15 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string2;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::lite::LiteClientInfoQueryRequest;
+use rocketmq_admin_core::core::lite::LiteClientInfoQueryResult;
+use rocketmq_admin_core::core::lite::LiteService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct GetLiteClientInfoSubCommand {
@@ -43,73 +42,32 @@ pub struct GetLiteClientInfoSubCommand {
 
 impl CommandExecute for GetLiteClientInfoSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
-
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "GetLiteClientInfoSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            let parent_topic = self.parent_topic.trim();
-            let group = self.group.trim();
-            let client_id = self.client_id.trim();
-            let show_detail = self.show_detail;
-
-            let topic_route_data = default_mqadmin_ext
-                .examine_topic_route_info(parent_topic.into())
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "GetLiteClientInfoSubCommand: Failed to examine topic route info: {}",
-                        e
-                    ))
-                })?;
-
-            println!("Lite Client Info: [{}] [{}] [{}]", parent_topic, group, client_id);
-            Self::print_header();
-
-            if let Some(route_data) = topic_route_data {
-                for broker_data in &route_data.broker_datas {
-                    let broker_addr = broker_data.select_broker_addr();
-                    let broker_name = broker_data.broker_name();
-
-                    if let Some(addr) = broker_addr {
-                        match default_mqadmin_ext
-                            .get_lite_client_info(addr, parent_topic.into(), group.into(), client_id.into())
-                            .await
-                        {
-                            Ok(body) => {
-                                Self::print_row(&body, broker_name.as_str(), show_detail);
-                            }
-                            Err(_) => {
-                                println!("[{}] error.", broker_name);
-                            }
-                        }
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let result = LiteService::query_lite_client_info_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result, self.show_detail);
+        Ok(())
     }
 }
 
 impl GetLiteClientInfoSubCommand {
+    fn request(&self) -> RocketMQResult<LiteClientInfoQueryRequest> {
+        LiteClientInfoQueryRequest::try_new(self.parent_topic.clone(), self.group.clone(), self.client_id.clone())
+    }
+
+    fn print_result(result: &LiteClientInfoQueryResult, show_detail: bool) {
+        println!(
+            "Lite Client Info: [{}] [{}] [{}]",
+            result.parent_topic, result.group, result.client_id
+        );
+        Self::print_header();
+
+        for entry in &result.entries {
+            match &entry.body {
+                Some(body) => Self::print_row(body, entry.broker_name.as_str(), show_detail),
+                None => println!("[{}] error.", entry.broker_name),
+            }
+        }
+    }
+
     fn print_header() {
         println!(
             "{:<30} {:<20} {:<30} {:<30}",
@@ -144,5 +102,31 @@ impl GetLiteClientInfoSubCommand {
         if show_detail && !response_body.lite_topic_set().is_empty() {
             println!("Lite Topics: {:?}\n", response_body.lite_topic_set());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_lite_client_info_sub_command_builds_request() {
+        let cmd = GetLiteClientInfoSubCommand::try_parse_from([
+            "getLiteClientInfo",
+            "-p",
+            " ParentTopic ",
+            "-g",
+            " GroupA ",
+            "-c",
+            " ClientA ",
+            "-s",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+        assert_eq!(request.parent_topic().as_str(), "ParentTopic");
+        assert_eq!(request.group().as_str(), "GroupA");
+        assert_eq!(request.client_id().as_str(), "ClientA");
+        assert!(cmd.show_detail);
     }
 }

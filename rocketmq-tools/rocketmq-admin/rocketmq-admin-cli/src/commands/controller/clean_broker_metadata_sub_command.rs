@@ -15,14 +15,12 @@
 use std::sync::Arc;
 
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
+use rocketmq_admin_core::core::controller::ControllerService;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 
 #[derive(Debug, Clone, Parser)]
 pub struct CleanBrokerMetadataSubCommand {
@@ -68,75 +66,58 @@ pub struct CleanBrokerMetadataSubCommand {
     clean_living_broker: bool,
 }
 
-impl CleanBrokerMetadataSubCommand {
-    fn validate_broker_controller_ids(ids: &str) -> RocketMQResult<()> {
-        for id_str in ids.split(';') {
-            let trimmed = id_str.trim();
-            if !trimmed.is_empty() {
-                trimmed.parse::<i64>().map_err(|_| {
-                    RocketMQError::IllegalArgument(format!(
-                        "please set the option <brokerControllerIdsToClean> according to the format, invalid id: {}",
-                        id_str
-                    ))
-                })?;
-            }
-        }
+impl CommandExecute for CleanBrokerMetadataSubCommand {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let request = self.request()?;
+        let broker_name = request.broker_name().to_string();
+        ControllerService::clean_controller_metadata_by_request_with_rpc_hook(request, rpc_hook).await?;
+        println!("clear broker {} metadata from controller success!", broker_name);
         Ok(())
     }
 }
 
-impl CommandExecute for CleanBrokerMetadataSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let controller_address = self.controller_address.trim();
-        let broker_name = self.broker_name.trim();
+impl CleanBrokerMetadataSubCommand {
+    fn request(&self) -> RocketMQResult<ControllerMetadataCleanRequest> {
+        ControllerMetadataCleanRequest::try_new(
+            self.controller_address.clone(),
+            self.broker_name.clone(),
+            self.broker_controller_ids_to_clean.clone(),
+            self.cluster_name.clone(),
+            self.clean_living_broker,
+        )
+    }
+}
 
-        if let Some(ref ids) = self.broker_controller_ids_to_clean {
-            Self::validate_broker_controller_ids(ids)?;
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        if !self.clean_living_broker && self.cluster_name.is_none() {
-            return Err(RocketMQError::IllegalArgument(
-                "cleanLivingBroker option is false, clusterName option can not be empty.".to_string(),
-            ));
-        }
+    #[test]
+    fn clean_broker_metadata_sub_command_builds_core_request() {
+        let cmd = CleanBrokerMetadataSubCommand::try_parse_from([
+            "cleanBrokerMetadata",
+            "-a",
+            " 127.0.0.1:9878 ",
+            "--brokerName",
+            " broker-a ",
+            "-c",
+            " cluster-a ",
+            "-b",
+            " 1 ; ; 2 ",
+        ])
+        .unwrap();
 
-        let cluster_name = self.cluster_name.clone().unwrap_or_default();
-
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "CleanBrokerMetadataSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            default_mqadmin_ext
-                .clean_controller_broker_data(
-                    controller_address.into(),
-                    cluster_name.into(),
-                    broker_name.into(),
-                    self.broker_controller_ids_to_clean.clone().map(Into::into),
-                    self.clean_living_broker,
-                )
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "CleanBrokerMetadataSubCommand: Failed to clean broker metadata: {}",
-                        e
-                    ))
-                })?;
-
-            println!("clear broker {} metadata from controller success!", broker_name);
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let request = cmd.request().unwrap();
+        assert_eq!(request.controller_addr().as_str(), "127.0.0.1:9878");
+        assert_eq!(request.broker_name().as_str(), "broker-a");
+        assert_eq!(
+            request.cluster_name().map(|cluster| cluster.as_str()),
+            Some("cluster-a")
+        );
+        assert_eq!(
+            request.broker_controller_ids_to_clean().map(|ids| ids.as_str()),
+            Some("1;2")
+        );
+        assert!(!request.clean_living_broker());
     }
 }

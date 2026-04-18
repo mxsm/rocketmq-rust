@@ -78,6 +78,7 @@ use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientReq
 use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
@@ -101,6 +102,7 @@ use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
@@ -113,6 +115,7 @@ use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+use rocketmq_remoting::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
@@ -157,6 +160,7 @@ use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::Reset
 use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 
 use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
@@ -778,6 +782,61 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
+    }
+
+    pub(crate) async fn get_lite_client_info(
+        &self,
+        addr: &CheetahString,
+        parent_topic: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetLiteClientInfoResponseBody> {
+        let request_header = GetLiteClientInfoRequestHeader {
+            parent_topic: Some(parent_topic),
+            group: Some(group),
+            client_id: Some(client_id),
+            max_count: 1000,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetLiteClientInfo, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return GetLiteClientInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn trigger_lite_dispatch(
+        &self,
+        addr: &CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = TriggerLiteDispatchRequestHeader {
+            group,
+            client_id: if client_id.is_empty() { None } else { Some(client_id) },
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     pub(crate) async fn get_lite_topic_info(
@@ -3494,6 +3553,77 @@ impl MQClientAPIImpl {
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub async fn update_controller_config(
+        &self,
+        properties: HashMap<CheetahString, CheetahString>,
+        controllers: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let body = mix_all::properties_to_string(&properties);
+        if body.is_empty() || controllers.is_empty() {
+            return Ok(());
+        }
+
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig).set_body(body.to_string());
+        let mut err_response = None;
+        for controller_addr in controllers {
+            let response = self
+                .remoting_client
+                .invoke_request(Some(&controller_addr), request.clone(), timeout_millis)
+                .await?;
+            match ResponseCode::from(response.code()) {
+                ResponseCode::Success => {}
+                _ => err_response = Some(response),
+            }
+        }
+
+        if let Some(err_response) = err_response {
+            return Err(mq_client_err!(
+                err_response.code(),
+                err_response
+                    .remark()
+                    .map_or_else(String::new, |remark| remark.to_string())
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn clean_controller_broker_data(
+        &self,
+        controller_addr: CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_controller_ids_to_clean: Option<CheetahString>,
+        clean_living_broker: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = CleanBrokerDataRequestHeader {
+            cluster_name: if cluster_name.is_empty() {
+                None
+            } else {
+                Some(cluster_name)
+            },
+            broker_name,
+            broker_controller_ids_to_clean,
+            clean_living_broker,
+            ..Default::default()
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::CleanBrokerData, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&controller_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
             )),
         }
     }

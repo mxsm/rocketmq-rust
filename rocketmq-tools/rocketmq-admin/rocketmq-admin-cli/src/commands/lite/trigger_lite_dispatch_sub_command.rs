@@ -14,16 +14,14 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::lite::LiteService;
+use rocketmq_admin_core::core::lite::TriggerLiteDispatchRequest;
+use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TriggerLiteDispatchSubCommand {
@@ -42,68 +40,58 @@ pub struct TriggerLiteDispatchSubCommand {
 
 impl CommandExecute for TriggerLiteDispatchSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
-        } else {
-            DefaultMQAdminExt::new()
-        };
+        let result = LiteService::trigger_lite_dispatch_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        Self::print_result(&result);
+        Ok(())
+    }
+}
 
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+impl TriggerLiteDispatchSubCommand {
+    fn request(&self) -> RocketMQResult<TriggerLiteDispatchRequest> {
+        TriggerLiteDispatchRequest::try_new(
+            self.parent_topic.clone(),
+            self.group.clone(),
+            self.client_id.clone(),
+            self.broker_name.clone(),
+        )
+    }
 
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "TriggerLiteDispatchSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
+    fn print_result(result: &TriggerLiteDispatchResult) {
+        println!("Group And Topic Info: [{}] [{}]\n", result.group, result.parent_topic);
 
-            let parent_topic = self.parent_topic.trim();
-            let group = self.group.trim();
-            let client_id = self.client_id.as_deref().map(|s| s.trim());
-            let broker_name = self.broker_name.as_deref().map(|s| s.trim());
-
-            let topic_route_data = default_mqadmin_ext
-                .examine_topic_route_info(CheetahString::from(parent_topic))
-                .await?;
-
-            println!("Group And Topic Info: [{}] [{}]\n", group, parent_topic);
-
-            if let Some(topic_route_data) = topic_route_data {
-                for broker_data in &topic_route_data.broker_datas {
-                    let broker_addr = match broker_data.select_broker_addr() {
-                        Some(addr) => addr,
-                        None => continue,
-                    };
-
-                    if let Some(bn) = broker_name {
-                        if bn != broker_data.broker_name().as_str() {
-                            continue;
-                        }
-                    }
-
-                    let client_id_param = client_id.map(CheetahString::from).unwrap_or_default();
-
-                    let success = default_mqadmin_ext
-                        .trigger_lite_dispatch(broker_addr, CheetahString::from(group), client_id_param)
-                        .await
-                        .is_ok();
-
-                    println!(
-                        "{:<30} {:<12}",
-                        broker_data.broker_name(),
-                        if success { "dispatched" } else { "error" }
-                    );
-                }
-            }
-
-            Ok(())
+        for entry in &result.entries {
+            println!(
+                "{:<30} {:<12}",
+                entry.broker_name,
+                if entry.dispatched { "dispatched" } else { "error" }
+            );
         }
-        .await;
+    }
+}
 
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trigger_lite_dispatch_sub_command_builds_request() {
+        let cmd = TriggerLiteDispatchSubCommand::try_parse_from([
+            "triggerLiteDispatch",
+            "-p",
+            " ParentTopic ",
+            "-g",
+            " GroupA ",
+            "-c",
+            " ClientA ",
+            "-b",
+            " BrokerA ",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+        assert_eq!(request.parent_topic().as_str(), "ParentTopic");
+        assert_eq!(request.group().as_str(), "GroupA");
+        assert_eq!(request.client_id().map(|client| client.as_str()), Some("ClientA"));
+        assert_eq!(request.broker_name().map(|broker| broker.as_str()), Some("BrokerA"));
     }
 }

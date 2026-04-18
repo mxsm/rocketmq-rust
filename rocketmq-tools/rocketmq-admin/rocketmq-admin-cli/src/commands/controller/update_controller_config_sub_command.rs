@@ -1,13 +1,9 @@
 use crate::commands::CommandExecute;
-use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::current_millis;
-use rocketmq_error::RocketMQError;
+use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::core::controller::ControllerService;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Parser)]
@@ -29,65 +25,45 @@ pub struct UpdateControllerConfigSubCommand {
 }
 
 impl CommandExecute for UpdateControllerConfigSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
-        default_mqadmin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        ControllerService::update_controller_config_by_request_with_rpc_hook(self.request()?, rpc_hook).await?;
+        println!("updated controller config successfully");
+        Ok(())
+    }
+}
 
-        let controller_address: CheetahString = self.controller_address.trim().into();
+impl UpdateControllerConfigSubCommand {
+    fn request(&self) -> RocketMQResult<ControllerConfigUpdateRequest> {
+        ControllerConfigUpdateRequest::try_new(self.controller_address.clone(), self.key.clone(), self.value.clone())
+    }
+}
 
-        let key: CheetahString = self.key.trim().into();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let value: CheetahString = self.value.trim().into();
+    #[test]
+    fn update_controller_config_sub_command_builds_core_request() {
+        let cmd = UpdateControllerConfigSubCommand::try_parse_from([
+            "updateControllerConfig",
+            "-a",
+            " 127.0.0.1:9878 ;127.0.0.2:9878 ",
+            "-k",
+            " maxElectTimeMs ",
+            "-v",
+            " 5000 ",
+        ])
+        .unwrap();
 
-        if key.is_empty() {
-            return Err(RocketMQError::Internal("config key is empty".to_string()));
-        }
-        if value.is_empty() {
-            return Err(RocketMQError::Internal("config value is empty".to_string()));
-        }
-
-        let mut properties: HashMap<CheetahString, CheetahString> = HashMap::new();
-
-        properties.insert(key, value);
-
-        if controller_address.is_empty() {
-            return Err(RocketMQError::Internal("controller address is empty".to_string()));
-        }
-
-        let server_array: Vec<CheetahString> = controller_address
-            .split(";")
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(CheetahString::from)
-            .collect();
-
-        if server_array.is_empty() {
-            return Err(RocketMQError::Internal("controller address is empty".to_string()));
-        }
-
-        let server_list: Vec<CheetahString> = server_array;
-
-        let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "UpdateControllerConfigSubCommand: Failed to start MQAdminExt: {}",
-                    e
-                ))
-            })?;
-
-            default_mqadmin_ext
-                .update_controller_config(properties, server_list)
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to update controller config settings: {}", e)))?;
-
-            println!("updated controller config successfully");
-            Ok(())
-        }
-        .await;
-
-        MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+        let request = cmd.request().unwrap();
+        assert_eq!(
+            request
+                .controller_servers()
+                .iter()
+                .map(|addr| addr.as_str())
+                .collect::<Vec<_>>(),
+            vec!["127.0.0.1:9878", "127.0.0.2:9878"]
+        );
+        assert_eq!(request.properties().get("maxElectTimeMs").unwrap().as_str(), "5000");
     }
 }
