@@ -392,7 +392,7 @@ pub async fn execute_command(
                     form.bool_value("is_order")?,
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::broker_consume_stats(spec.title, &result)
         }
         "broker.epoch" => {
             let result = facade
@@ -416,7 +416,7 @@ pub async fn execute_command(
             let result = facade
                 .query_cluster_list(form.bool_value("more_stats")?, form.optional_string("cluster_name"))
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::cluster_list(spec.title, &result)
         }
         "cluster.broker_names" => {
             let result = facade
@@ -439,7 +439,7 @@ pub async fn execute_command(
                     form.optional_string("cluster_name"),
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::cluster_send_message_rt(spec.title, &result)
         }
         "controller.config.query" => {
             let result = facade
@@ -494,7 +494,7 @@ pub async fn execute_command(
                     form.optional_string("cluster"),
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::consumer_progress(spec.title, &result)
         }
         "consumer.delete_subscription_group" => {
             let group = form.required_string("group_name")?;
@@ -609,7 +609,7 @@ pub async fn execute_command(
                     form.optional_string("consumer_group"),
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::consume_queue(spec.title, &result)
         }
         "queue.rocksdb_cq_progress" => {
             let result = facade
@@ -619,7 +619,7 @@ pub async fn execute_command(
                     form.optional_i64("check_from")?,
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::rocksdb_cq_progress(spec.title, &result)
         }
         "ha.status" => {
             let result = facade
@@ -697,7 +697,7 @@ pub async fn execute_command(
         }
         "message.decode_id" => {
             let result = facade.decode_message_id(form.required_string("message_ids")?)?;
-            CommandResultViewModel::from_serializable(spec.title, &result)
+            CommandResultViewModel::decoded_message_ids(spec.title, &result)
         }
         "message.query_by_key" => {
             let result = facade
@@ -712,7 +712,7 @@ pub async fn execute_command(
                     form.optional_string("last_key"),
                 )
                 .await?;
-            CommandResultViewModel::from_serializable(spec.title, &result)
+            CommandResultViewModel::message_query_by_key(spec.title, &result)
         }
         "message.query_by_offset" => {
             let result = facade
@@ -736,7 +736,7 @@ pub async fn execute_command(
                     form.number_i32("max_num")?,
                 )
                 .await?;
-            CommandResultViewModel::from_serializable(spec.title, &result)
+            CommandResultViewModel::message_trace(spec.title, &result)
         }
         unknown => bail!("unknown command id: {unknown}"),
     };
@@ -1170,7 +1170,7 @@ fn broker_commands(commands: &mut Vec<CommandSpec>) {
                 ),
                 bool_arg("is_order", "Is Order", "Whether this is ordered consumption.", false),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1361,7 +1361,7 @@ fn consumer_commands(commands: &mut Vec<CommandSpec>) {
                 bool_arg("show_client_ip", "Show Client IP", "Show client IP in rows.", false),
                 optional_string("cluster", "Cluster", "Optional cluster name.", "DefaultCluster"),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1512,7 +1512,7 @@ fn queue_commands(commands: &mut Vec<CommandSpec>) {
                 ),
                 optional_string("consumer_group", "Consumer Group", "Optional consumer group.", "GroupA"),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1533,7 +1533,7 @@ fn queue_commands(commands: &mut Vec<CommandSpec>) {
                     Some(0),
                 ),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
     ]);
@@ -1693,7 +1693,7 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
                 "Message IDs separated by comma, semicolon, or whitespace.",
                 "7F0000010007D8260BF075769D36C348",
             )],
-            ResultViewKind::Json,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1733,7 +1733,7 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
                 enum_arg("key_type", "Key Type", "K for key, T for tag.", &["K", "T"], "K"),
                 optional_string("last_key", "Last Key", "Optional pagination key.", "last-key"),
             ],
-            ResultViewKind::Json,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1796,7 +1796,7 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
                     Some(1),
                 ),
             ],
-            ResultViewKind::Json,
+            ResultViewKind::Table,
             None,
         ),
     ]);
