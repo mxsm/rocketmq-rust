@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(unused_variables)]
-
 mod action;
 mod admin_facade;
+mod commands;
+mod event;
 mod rocketmq_tui_app;
+mod state;
 mod ui;
+mod view_model;
 
 use rocketmq_rust::rocketmq;
 
@@ -28,7 +28,8 @@ use crate::rocketmq_tui_app::RocketmqTuiApp;
 #[rocketmq::main]
 async fn main() -> anyhow::Result<()> {
     let terminal = ratatui::try_init()?;
-    let result = RocketmqTuiApp::default().run(terminal).await;
+    let local = tokio::task::LocalSet::new();
+    let result = local.run_until(RocketmqTuiApp::default().run(terminal)).await;
     ratatui::try_restore()?;
     result
 }

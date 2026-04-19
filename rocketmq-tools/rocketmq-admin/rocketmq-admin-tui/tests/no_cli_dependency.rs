@@ -24,7 +24,8 @@ fn tui_depends_on_core_not_cli_adapter() {
 fn tui_facade_does_not_reach_into_cli_modules() {
     let facade_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/admin_facade.rs"))
         .expect("read rocketmq-admin-tui src/admin_facade.rs");
-    let main_rs = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")).expect("read main.rs");
+    let commands_rs =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs")).expect("read src/commands.rs");
 
     assert!(
         facade_rs.contains("rocketmq_admin_core::core::"),
@@ -39,7 +40,7 @@ fn tui_facade_does_not_reach_into_cli_modules() {
         "TuiAdminFacade should not call CLI command modules"
     );
     assert!(
-        !main_rs.contains("mod commands"),
-        "rocketmq-admin-tui should not carry a CLI command tree"
+        !commands_rs.contains("rocketmq_admin_cli") && !commands_rs.contains("clap::"),
+        "rocketmq-admin-tui command catalog should not call into CLI command modules or parsers"
     );
 }

@@ -1,58 +1,56 @@
-// Copyright 2023 The RocketMQ Rust Authors
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use std::time::Duration;
 
 use ratatui::crossterm::event::Event;
 use ratatui::crossterm::event::EventStream;
 use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::KeyEvent;
 use ratatui::crossterm::event::KeyEventKind;
-use ratatui::layout::Constraint;
-use ratatui::layout::Direction;
-use ratatui::layout::Layout;
-use ratatui::widgets::Block;
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
+use crate::action::Action;
 use crate::admin_facade::TuiAdminFacade;
-use crate::ui::search_input_widget::SearchInputWidget;
+use crate::commands::execute_command;
+use crate::event::is_ctrl;
+use crate::event::key_char;
+use crate::state::AppState;
+use crate::state::CommandExecutionState;
+use crate::state::FocusArea;
 
-#[derive(Default)]
 pub struct RocketmqTuiApp {
     admin_facade: TuiAdminFacade,
     should_quit: bool,
-    search_input: SearchInputWidget,
+    state: AppState,
+    action_tx: mpsc::UnboundedSender<Action>,
+    action_rx: mpsc::UnboundedReceiver<Action>,
+}
+
+impl Default for RocketmqTuiApp {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RocketmqTuiApp {
     pub fn new() -> Self {
-        Self {
-            admin_facade: Default::default(),
-            should_quit: false,
-            search_input: Default::default(),
-        }
+        Self::with_admin_facade(TuiAdminFacade::default())
     }
 
     pub fn with_admin_facade(admin_facade: TuiAdminFacade) -> Self {
+        let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let state = AppState::new(admin_facade.namesrv_addr());
         Self {
             admin_facade,
             should_quit: false,
-            search_input: Default::default(),
+            state,
+            action_tx,
+            action_rx,
         }
     }
 
+    #[allow(dead_code)]
     pub fn admin_facade(&self) -> &TuiAdminFacade {
         &self.admin_facade
     }
@@ -67,16 +65,17 @@ impl RocketmqTuiApp {
 }
 
 impl RocketmqTuiApp {
-    const FRAMES_PER_SECOND: f32 = 60.0;
+    const FRAMES_PER_SECOND: f32 = 30.0;
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> anyhow::Result<()> {
         let period = Duration::from_secs_f32(1.0 / Self::FRAMES_PER_SECOND);
         let mut interval = tokio::time::interval(period);
         let mut events = EventStream::new();
-        while !self.should_quit {
+        while !self.should_quit() {
             tokio::select! {
                 _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
                 Some(Ok(event)) = events.next() => self.handle_event(&event),
+                Some(action) = self.action_rx.recv() => self.apply_action(action),
             }
         }
         Ok(())
@@ -85,86 +84,430 @@ impl RocketmqTuiApp {
     fn handle_event(&mut self, event: &Event) {
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-                    _ => {}
+                self.handle_key_event(*key);
+            }
+        }
+    }
+
+    fn handle_key_event(&mut self, key: KeyEvent) {
+        if self.state.show_help {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') => {
+                    self.apply_action(Action::HelpToggled);
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if matches!(self.state.execution, CommandExecutionState::Confirming { .. }) {
+            self.handle_confirmation_key(key);
+            return;
+        }
+
+        if is_ctrl(&key, 'l') {
+            self.apply_action(Action::ResultCleared);
+            return;
+        }
+        if is_ctrl(&key, 'r') {
+            self.apply_action(Action::ExecuteRequested);
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('?') => self.apply_action(Action::HelpToggled),
+            KeyCode::Char('q') => self.apply_action(Action::Quit),
+            KeyCode::Esc => self.handle_escape(),
+            KeyCode::Tab => self.apply_action(Action::FocusNext),
+            KeyCode::BackTab => self.apply_action(Action::FocusPrevious),
+            KeyCode::Char('n') if self.state.focus != FocusArea::Args => self.apply_action(Action::FocusNamesrv),
+            KeyCode::Char('/') if self.state.focus != FocusArea::Args => self.apply_action(Action::FocusSearch),
+            KeyCode::Char('s') if self.state.focus == FocusArea::CommandTree => self.apply_action(Action::FocusSearch),
+            KeyCode::Enter => self.handle_enter(),
+            KeyCode::Down | KeyCode::Char('j') => self.move_down(),
+            KeyCode::Up | KeyCode::Char('k') => self.move_up(),
+            KeyCode::Left => self.move_left(),
+            KeyCode::Right => self.move_right(),
+            KeyCode::Backspace => self.handle_backspace(),
+            KeyCode::Char(' ') => self.handle_space(),
+            _ => {
+                if let Some(value) = key_char(&key) {
+                    self.handle_char(value);
                 }
             }
         }
     }
 
+    fn handle_confirmation_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                if let CommandExecutionState::Confirming {
+                    execution_id,
+                    command_id,
+                    ..
+                } = self.state.execution.clone()
+                {
+                    self.apply_action(Action::CancelExecution {
+                        execution_id,
+                        command_id,
+                    });
+                }
+            }
+            KeyCode::Enter => {
+                if let CommandExecutionState::Confirming {
+                    execution_id,
+                    command_id,
+                    expected,
+                } = self.state.execution.clone()
+                {
+                    if self.state.confirm_input.trim() == expected {
+                        self.start_execution(execution_id, command_id);
+                    } else {
+                        self.state.last_error = Some(format!("confirmation must match '{expected}'"));
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                self.state.confirm_input.pop();
+            }
+            _ => {
+                if let Some(value) = key_char(&key) {
+                    self.state.confirm_input.push(value);
+                }
+            }
+        }
+    }
+
+    fn handle_escape(&mut self) {
+        match self.state.execution.clone() {
+            CommandExecutionState::Running {
+                execution_id,
+                command_id,
+            } => self.apply_action(Action::CancelExecution {
+                execution_id,
+                command_id,
+            }),
+            _ => self.apply_action(Action::Quit),
+        }
+    }
+
+    fn handle_enter(&mut self) {
+        match self.state.focus {
+            FocusArea::CommandTree => {
+                self.state.reset_form_for_selected_command();
+                self.state.focus = FocusArea::Args;
+            }
+            FocusArea::Args | FocusArea::Search | FocusArea::Namesrv => self.apply_action(Action::ExecuteRequested),
+            FocusArea::Result => {
+                self.state.result_scroll = 0;
+                self.state.result_horizontal_scroll = 0;
+            }
+        }
+    }
+
+    fn move_down(&mut self) {
+        match self.state.focus {
+            FocusArea::CommandTree => {
+                self.state.select_next_command();
+                self.apply_action(Action::CommandSelected(self.state.selected_command().id.to_string()));
+            }
+            FocusArea::Args => {
+                let command = self.state.selected_command().clone();
+                self.state.form.focus_next_arg(&command);
+            }
+            FocusArea::Result => self.state.result_scroll = self.state.result_scroll.saturating_add(1),
+            FocusArea::Namesrv | FocusArea::Search => {}
+        }
+    }
+
+    fn move_up(&mut self) {
+        match self.state.focus {
+            FocusArea::CommandTree => {
+                self.state.select_previous_command();
+                self.apply_action(Action::CommandSelected(self.state.selected_command().id.to_string()));
+            }
+            FocusArea::Args => self.state.form.focus_previous_arg(),
+            FocusArea::Result => self.state.result_scroll = self.state.result_scroll.saturating_sub(1),
+            FocusArea::Namesrv | FocusArea::Search => {}
+        }
+    }
+
+    fn move_left(&mut self) {
+        match self.state.focus {
+            FocusArea::Args => {
+                let command = self.state.selected_command().clone();
+                self.state.form.cycle_enum_current(&command, true);
+            }
+            FocusArea::Result => {
+                self.state.result_horizontal_scroll = self.state.result_horizontal_scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn move_right(&mut self) {
+        match self.state.focus {
+            FocusArea::Args => {
+                let command = self.state.selected_command().clone();
+                self.state.form.cycle_enum_current(&command, false);
+            }
+            FocusArea::Result => {
+                self.state.result_horizontal_scroll = self.state.result_horizontal_scroll.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_backspace(&mut self) {
+        match self.state.focus {
+            FocusArea::Namesrv => {
+                self.state.namesrv_addr.pop();
+                self.apply_action(Action::NamesrvChanged(self.state.namesrv_addr.clone()));
+            }
+            FocusArea::Search => {
+                let mut search = self.state.search.clone();
+                search.pop();
+                self.apply_action(Action::SearchChanged(search));
+            }
+            FocusArea::Args => {
+                let command = self.state.selected_command().clone();
+                self.state.form.backspace_current(&command);
+                self.emit_current_arg_changed(&command);
+            }
+            FocusArea::CommandTree | FocusArea::Result => {}
+        }
+    }
+
+    fn handle_space(&mut self) {
+        if self.state.focus == FocusArea::Args {
+            let command = self.state.selected_command().clone();
+            self.state.form.toggle_bool_current(&command);
+            self.emit_current_arg_changed(&command);
+        }
+    }
+
+    fn handle_char(&mut self, value: char) {
+        match self.state.focus {
+            FocusArea::Namesrv => {
+                self.state.namesrv_addr.push(value);
+                self.apply_action(Action::NamesrvChanged(self.state.namesrv_addr.clone()));
+            }
+            FocusArea::Search => {
+                let mut search = self.state.search.clone();
+                search.push(value);
+                self.apply_action(Action::SearchChanged(search));
+            }
+            FocusArea::Args => {
+                let command = self.state.selected_command().clone();
+                self.state.form.append_to_current(&command, value);
+                self.emit_current_arg_changed(&command);
+            }
+            FocusArea::CommandTree | FocusArea::Result => {}
+        }
+    }
+
+    fn apply_action(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.quit(),
+            Action::FocusNext => self.focus_next(),
+            Action::FocusPrevious => self.focus_previous(),
+            Action::FocusSearch => self.state.focus = FocusArea::Search,
+            Action::FocusNamesrv => self.state.focus = FocusArea::Namesrv,
+            Action::SearchChanged(search) => self.state.set_search(search),
+            Action::NamesrvChanged(namesrv_addr) => {
+                self.admin_facade.set_namesrv_addr(Some(namesrv_addr.clone()));
+                self.state.namesrv_addr = namesrv_addr;
+            }
+            Action::ExecuteRequested => self.prepare_execution(),
+            Action::ConfirmRequested {
+                execution_id,
+                command_id,
+                expected,
+            } => {
+                self.state.confirm_input.clear();
+                self.state.execution = CommandExecutionState::Confirming {
+                    execution_id,
+                    command_id,
+                    expected,
+                };
+            }
+            Action::CommandStarted {
+                execution_id,
+                command_id,
+            } => {
+                self.state.last_error = None;
+                self.state.progress_message = Some(format!("started {command_id}"));
+                self.state.result = None;
+                self.state.execution = CommandExecutionState::Running {
+                    execution_id,
+                    command_id,
+                };
+            }
+            Action::CommandSucceeded {
+                execution_id,
+                command_id,
+                result,
+            } => {
+                if self.is_current_running_execution(execution_id) {
+                    self.state.result = Some(result);
+                    self.state.progress_message = Some(format!("finished {command_id}"));
+                    self.state.result_scroll = 0;
+                    self.state.result_horizontal_scroll = 0;
+                    self.state.execution = CommandExecutionState::Succeeded {
+                        execution_id,
+                        command_id,
+                    };
+                }
+            }
+            Action::CommandFailed {
+                execution_id,
+                command_id,
+                error,
+            } => {
+                if self.is_current_running_execution(execution_id) {
+                    self.state.last_error = Some(error.clone());
+                    self.state.progress_message = Some(format!("failed {command_id}"));
+                    self.state.result = Some(crate::view_model::CommandResultViewModel::error(
+                        "Command Failed",
+                        error,
+                    ));
+                    self.state.execution = CommandExecutionState::Failed {
+                        execution_id,
+                        command_id,
+                    };
+                }
+            }
+            Action::CancelExecution {
+                execution_id,
+                command_id,
+            } => {
+                self.state.execution = CommandExecutionState::Cancelled {
+                    execution_id,
+                    command_id,
+                };
+                self.state.progress_message = Some("cancelled locally; late result will be ignored".to_string());
+                self.state.confirm_input.clear();
+            }
+            Action::HelpToggled => self.state.show_help = !self.state.show_help,
+            Action::ResultCleared => {
+                self.state.result = None;
+                self.state.last_error = None;
+                self.state.progress_message = None;
+                self.state.result_scroll = 0;
+                self.state.result_horizontal_scroll = 0;
+            }
+            Action::CommandSelected(command_id) => {
+                if let Some(position) = self
+                    .state
+                    .visible_command_indices()
+                    .iter()
+                    .position(|index| self.state.commands()[*index].id == command_id)
+                {
+                    self.state.select_visible_command_at(position);
+                }
+            }
+            Action::ArgChanged { name, value } => self.state.form.set_value(&name, value),
+            Action::ProgressUpdated { execution_id, message } => {
+                if self.is_current_running_execution(execution_id) {
+                    self.state.progress_message = Some(message);
+                }
+            }
+        }
+    }
+
+    fn focus_next(&mut self) {
+        self.state.focus = match self.state.focus {
+            FocusArea::Namesrv => FocusArea::Search,
+            FocusArea::Search => FocusArea::CommandTree,
+            FocusArea::CommandTree => FocusArea::Args,
+            FocusArea::Args => FocusArea::Result,
+            FocusArea::Result => FocusArea::Namesrv,
+        };
+    }
+
+    fn focus_previous(&mut self) {
+        self.state.focus = match self.state.focus {
+            FocusArea::Namesrv => FocusArea::Result,
+            FocusArea::Search => FocusArea::Namesrv,
+            FocusArea::CommandTree => FocusArea::Search,
+            FocusArea::Args => FocusArea::CommandTree,
+            FocusArea::Result => FocusArea::Args,
+        };
+    }
+
+    fn prepare_execution(&mut self) {
+        if !self.state.validate_selected_form() {
+            self.state.last_error = Some("fix argument validation errors before executing".to_string());
+            self.state.focus = FocusArea::Args;
+            return;
+        }
+
+        let execution_id = self.state.next_execution_id();
+        let command = self.state.selected_command().clone();
+        if let Some(expected) = command.expected_confirmation(&self.state.form) {
+            self.apply_action(Action::ConfirmRequested {
+                execution_id,
+                command_id: command.id.to_string(),
+                expected,
+            });
+        } else {
+            self.start_execution(execution_id, command.id.to_string());
+        }
+    }
+
+    fn start_execution(&mut self, execution_id: u64, command_id: String) {
+        self.apply_action(Action::CommandStarted {
+            execution_id,
+            command_id: command_id.clone(),
+        });
+        let _ = self.action_tx.send(Action::ProgressUpdated {
+            execution_id,
+            message: format!("started {command_id}"),
+        });
+
+        let command = self.state.selected_command().clone();
+        let form = self.state.form.clone();
+        let facade = self.admin_facade.clone();
+        let tx = self.action_tx.clone();
+        tokio::task::spawn_local(async move {
+            let action = match execute_command(&facade, &command, &form).await {
+                Ok(result) => Action::CommandSucceeded {
+                    execution_id,
+                    command_id,
+                    result,
+                },
+                Err(error) => Action::CommandFailed {
+                    execution_id,
+                    command_id,
+                    error: error.to_string(),
+                },
+            };
+            let _ = tx.send(action);
+        });
+    }
+
+    fn is_current_running_execution(&self, execution_id: u64) -> bool {
+        matches!(
+            self.state.execution,
+            CommandExecutionState::Running {
+                execution_id: current,
+                ..
+            } if current == execution_id
+        )
+    }
+
+    fn emit_current_arg_changed(&mut self, command: &crate::commands::CommandSpec) {
+        if let Some(arg) = self.state.form.current_arg(command) {
+            let value = self.state.form.raw_value(arg.name).unwrap_or_default().to_string();
+            self.apply_action(Action::ArgChanged {
+                name: arg.name.to_string(),
+                value,
+            });
+        }
+    }
+
     fn draw(&self, frame: &mut Frame) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(
-                [
-                    Constraint::Percentage(5),
-                    Constraint::Percentage(92),
-                    Constraint::Percentage(3),
-                ]
-                .as_ref(),
-            )
-            .split(frame.area());
-
-        let search = chunks[0];
-        let middle = chunks[1];
-        let progress_bar = chunks[2];
-
-        let middle_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
-            .split(middle);
-
-        let command_tree = middle_chunks[0];
-        let middle_right = middle_chunks[1];
-
-        let middle_right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(
-                [
-                    Constraint::Percentage(50),
-                    Constraint::Percentage(15),
-                    Constraint::Percentage(35),
-                ]
-                .as_ref(),
-            )
-            .split(middle_right);
-
-        let command_detail = middle_right_chunks[0];
-        let command_args = middle_right_chunks[1];
-        let execute_command_result = middle_right_chunks[2];
-
-        frame.render_widget(&self.search_input, search);
-        frame.render_widget(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .title("Command Tree"),
-            command_tree,
-        );
-        frame.render_widget(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .title("Command Detail"),
-            command_detail,
-        );
-        frame.render_widget(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .title("Command Args"),
-            command_args,
-        );
-        frame.render_widget(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .title("Execute Command Result"),
-            execute_command_result,
-        );
-        frame.render_widget(
-            Block::default()
-                .borders(ratatui::widgets::Borders::ALL)
-                .title("Progress Bar"),
-            progress_bar,
-        );
+        crate::ui::render(frame, &self.state);
     }
 }
 
@@ -179,5 +522,26 @@ mod tests {
         let app = RocketmqTuiApp::with_admin_facade(facade);
 
         assert_eq!(app.admin_facade().namesrv_addr(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn namesrv_action_updates_facade_and_state() {
+        let mut app = RocketmqTuiApp::new();
+
+        app.apply_action(Action::NamesrvChanged(" 127.0.0.1:9876 ".to_string()));
+
+        assert_eq!(app.admin_facade().namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(app.state.namesrv_addr, " 127.0.0.1:9876 ");
+    }
+
+    #[test]
+    fn execution_requires_valid_args() {
+        let mut app = RocketmqTuiApp::new();
+        app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
+        app.state.select_next_command();
+        app.apply_action(Action::ExecuteRequested);
+
+        assert!(app.state.last_error.is_some());
+        assert_eq!(app.state.focus, FocusArea::Args);
     }
 }

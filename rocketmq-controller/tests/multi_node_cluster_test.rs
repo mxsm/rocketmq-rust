@@ -17,7 +17,10 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::net::TcpListener;
 use std::path::Path;
+use std::sync::atomic::AtomicU16;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,6 +58,36 @@ fn raft_node(node_id: u64, base_port: u16) -> Node {
         node_id,
         rpc_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
     }
+}
+
+const TEST_PORT_BLOCK_SIZE: u16 = 100;
+static NEXT_TEST_BASE_PORT: AtomicU16 = AtomicU16::new(15_000);
+
+fn allocate_base_port(node_count: u64) -> u16 {
+    let node_count = u16::try_from(node_count).expect("test node count should fit in u16");
+
+    for _ in 0..128 {
+        let base_port = NEXT_TEST_BASE_PORT.fetch_add(TEST_PORT_BLOCK_SIZE, Ordering::SeqCst);
+        if test_ports_available(base_port, node_count) {
+            return base_port;
+        }
+    }
+
+    panic!("failed to allocate a free local port block for {node_count} test nodes");
+}
+
+fn test_ports_available(base_port: u16, node_count: u16) -> bool {
+    let mut listeners = Vec::with_capacity(node_count as usize);
+    for node_id in 1..=node_count {
+        let Some(port) = base_port.checked_add(node_id) else {
+            return false;
+        };
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => listeners.push(listener),
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 struct ManagedNode {
@@ -517,19 +550,45 @@ async fn wait_for_learner_readiness(nodes: &[(u64, Arc<RaftNodeManager>)], learn
         }
         if attempt % 25 == 0 {
             println!(
-                "Waiting for learner {} readiness (attempt {}), current state: {:?}",
+                "Waiting for learner {} readiness (attempt {}), current snapshot: {:?}",
                 learner_id,
                 attempt,
                 metrics
                     .iter()
-                    .find(|(node_id, _)| *node_id == learner_id)
-                    .map(|(_, m)| &m.state)
+                    .map(|(node_id, metrics)| {
+                        (
+                            *node_id,
+                            metrics.state,
+                            metrics.current_leader,
+                            metrics.last_log_index,
+                            metrics.last_applied,
+                            membership_voters(metrics),
+                            metrics.to_string(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
             );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    panic!("Learner node {learner_id} failed to become ready under leader {leader_id}");
+    panic!(
+        "Learner node {learner_id} failed to become ready under leader {leader_id}; final snapshot: {:?}",
+        snapshot_metrics(nodes)
+            .iter()
+            .map(|(node_id, metrics)| {
+                (
+                    *node_id,
+                    metrics.state,
+                    metrics.current_leader,
+                    metrics.last_log_index,
+                    metrics.last_applied,
+                    membership_voters(metrics),
+                    metrics.to_string(),
+                )
+            })
+            .collect::<Vec<_>>()
+    );
 }
 
 async fn wait_for_failover_leader(
@@ -644,10 +703,10 @@ async fn bootstrap_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<Raf
 
 #[tokio::test]
 async fn test_three_node_cluster_formation() {
-    const BASE_PORT: u16 = 50000;
+    let base_port = allocate_base_port(3);
 
     // Create 3 nodes
-    let nodes = bootstrap_cluster(3, BASE_PORT).await;
+    let nodes = bootstrap_cluster(3, base_port).await;
 
     // Wait for leader election
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -686,10 +745,10 @@ async fn test_three_node_cluster_formation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_cluster_client_write() {
-    const BASE_PORT: u16 = 51000;
+    let base_port = allocate_base_port(3);
 
     // Create and initialize 3-node cluster
-    let nodes = bootstrap_cluster(3, BASE_PORT).await;
+    let nodes = bootstrap_cluster(3, base_port).await;
 
     // Wait longer for leader election and vote commit
     println!("Waiting for leader election and vote commit...");
@@ -792,10 +851,10 @@ async fn test_cluster_client_write() {
 
 #[tokio::test]
 async fn test_cluster_follower_redirect() {
-    const BASE_PORT: u16 = 52000;
+    let base_port = allocate_base_port(3);
 
     // Create and initialize 3-node cluster
-    let nodes = bootstrap_cluster(3, BASE_PORT).await;
+    let nodes = bootstrap_cluster(3, base_port).await;
 
     // Wait for leader election
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -837,10 +896,10 @@ async fn test_cluster_follower_redirect() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_five_node_cluster() {
-    const BASE_PORT: u16 = 53000;
+    let base_port = allocate_base_port(5);
 
     // Create 5 nodes for better fault tolerance
-    let nodes = bootstrap_cluster(5, BASE_PORT).await;
+    let nodes = bootstrap_cluster(5, base_port).await;
 
     // Wait for leader election and vote commit - increased timeout for 5-node cluster
     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -901,10 +960,10 @@ async fn test_five_node_cluster() {
 
 #[tokio::test]
 async fn test_cluster_metrics() {
-    const BASE_PORT: u16 = 54000;
+    let base_port = allocate_base_port(3);
 
     // Create 3-node cluster
-    let nodes = bootstrap_cluster(3, BASE_PORT).await;
+    let nodes = bootstrap_cluster(3, base_port).await;
 
     // Wait for leader election and cluster stabilization
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -945,9 +1004,9 @@ async fn test_cluster_metrics() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
-    const BASE_PORT: u16 = 55000;
+    let base_port = allocate_base_port(3);
 
-    let nodes = bootstrap_cluster(3, BASE_PORT).await;
+    let nodes = bootstrap_cluster(3, base_port).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let mut old_leader = None;
@@ -1030,10 +1089,10 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_three_node_cluster_persistent_restart_recovers_controller_state() {
-    const BASE_PORT: u16 = 58000;
+    let base_port = allocate_base_port(3);
 
     let storage_root = tempfile::tempdir().expect("create persistent multi-node storage root");
-    let mut nodes = bootstrap_persistent_cluster(3, BASE_PORT, storage_root.path()).await;
+    let mut nodes = bootstrap_persistent_cluster(3, base_port, storage_root.path()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let leader_node = find_leader_node(&nodes).await;
@@ -1055,12 +1114,12 @@ async fn test_three_node_cluster_persistent_restart_recovers_controller_state() 
         node.shutdown().await;
     }
 
-    let all_peers = cluster_peers(3, BASE_PORT);
+    let all_peers = cluster_peers(3, base_port);
     let mut restarted_nodes = Vec::new();
     for peer in &all_peers {
         restarted_nodes.push(
             start_managed_node(
-                persistent_config(peer.id, BASE_PORT, &all_peers, storage_root.path(), true),
+                persistent_config(peer.id, base_port, &all_peers, storage_root.path(), true),
                 true,
             )
             .await,
@@ -1099,11 +1158,11 @@ async fn test_three_node_cluster_persistent_restart_recovers_controller_state() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_persistent_follower_restart_rejoins_and_catches_up() {
-    const BASE_PORT: u16 = 57000;
+    let base_port = allocate_base_port(3);
 
     let storage_root = tempfile::tempdir().expect("create node rejoin storage root");
-    let all_peers = cluster_peers(3, BASE_PORT);
-    let mut nodes = bootstrap_persistent_cluster(3, BASE_PORT, storage_root.path()).await;
+    let all_peers = cluster_peers(3, base_port);
+    let mut nodes = bootstrap_persistent_cluster(3, base_port, storage_root.path()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let leader_index = find_leader_index(&nodes).await;
@@ -1136,7 +1195,7 @@ async fn test_persistent_follower_restart_rejoins_and_catches_up() {
     assert_eq!(gap_write.data.response_code, ResponseCode::Success as i32);
 
     let restarted_follower = start_managed_node(
-        persistent_config(follower_id, BASE_PORT, &all_peers, storage_root.path(), true),
+        persistent_config(follower_id, base_port, &all_peers, storage_root.path(), true),
         true,
     )
     .await;
