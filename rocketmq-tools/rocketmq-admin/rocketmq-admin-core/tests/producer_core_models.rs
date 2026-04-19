@@ -39,6 +39,9 @@ fn send_message_request_trims_fields_and_keeps_queue_target() {
     assert_eq!(request.broker_name().unwrap().as_str(), "broker-a");
     assert_eq!(request.queue_id(), Some(1));
     assert!(request.msg_trace_enable());
+
+    let request = request.with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()));
+    assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
 }
 
 #[test]

@@ -1,8 +1,13 @@
 use std::collections::HashMap;
+use std::fs;
+use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::core::export_data::filter_export_broker_properties;
 use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
+use rocketmq_admin_core::core::export_data::ExportConfigsResult;
+use rocketmq_admin_core::core::export_data::ExportFileOverwritePolicy;
+use rocketmq_admin_core::core::export_data::ExportFileWriteRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
@@ -159,4 +164,68 @@ fn export_metadata_in_rocksdb_invalid_path_returns_structured_result() {
     let result = ExportService::export_metadata_in_rocksdb_by_request(&request).unwrap();
 
     assert!(matches!(result, ExportMetadataInRocksDbResult::InvalidPath));
+}
+
+#[test]
+fn export_file_write_request_validates_path_and_overwrite_policy() {
+    assert!(ExportFileWriteRequest::try_new(" ", ExportFileOverwritePolicy::CreateNew).is_err());
+
+    let path = unique_temp_export_path("existing-no-overwrite");
+    fs::write(&path, b"existing").unwrap();
+
+    let request =
+        ExportFileWriteRequest::try_new(path.to_string_lossy(), ExportFileOverwritePolicy::CreateNew).unwrap();
+    let result = ExportService::write_json_export_file(&request, &sample_export_configs_result());
+    assert!(result.is_err());
+
+    let request =
+        ExportFileWriteRequest::try_new(path.to_string_lossy(), ExportFileOverwritePolicy::Overwrite).unwrap();
+    let result = ExportService::write_json_export_file(&request, &sample_export_configs_result()).unwrap();
+    assert!(result.overwritten());
+    assert!(result.bytes_written() > 0);
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn export_file_writer_creates_pretty_json_output() {
+    let path = unique_temp_export_path("new-output");
+    let _ = fs::remove_file(&path);
+
+    let request =
+        ExportFileWriteRequest::try_new(path.to_string_lossy(), ExportFileOverwritePolicy::CreateNew).unwrap();
+    let result = ExportService::write_json_export_file(&request, &sample_export_configs_result()).unwrap();
+
+    assert_eq!(result.output_path(), path.as_path());
+    assert!(!result.overwritten());
+    assert!(result.bytes_written() > 0);
+
+    let written = fs::read_to_string(&path).unwrap();
+    assert!(written.contains("\"broker-a\""));
+    assert!(written.contains('\n'));
+
+    let _ = fs::remove_file(path);
+}
+
+fn sample_export_configs_result() -> ExportConfigsResult {
+    ExportConfigsResult {
+        name_servers: vec!["127.0.0.1:9876".to_string()],
+        broker_configs: HashMap::from([(
+            "broker-a".to_string(),
+            HashMap::from([("brokerName".to_string(), "broker-a".to_string())]),
+        )]),
+        master_broker_size: 1,
+        slave_broker_size: 0,
+    }
+}
+
+fn unique_temp_export_path(label: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "rocketmq-admin-core-{label}-{}-{nanos}.json",
+        std::process::id()
+    ))
 }

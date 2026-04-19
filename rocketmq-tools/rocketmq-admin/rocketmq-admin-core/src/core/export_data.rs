@@ -1,6 +1,8 @@
 //! Export admin service models and operations.
 
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -379,7 +381,7 @@ pub struct ExportPopRecordResult {
     pub targets: Vec<ExportPopRecordTargetResult>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum ExportMetadataResult {
     BrokerTopic {
         wrapper: TopicConfigSerializeWrapper,
@@ -393,6 +395,69 @@ pub enum ExportMetadataResult {
         subscription_group_table: HashMap<CheetahString, SubscriptionGroupConfig>,
         export_time_millis: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportFileOverwritePolicy {
+    CreateNew,
+    Overwrite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportFileWriteRequest {
+    output_path: PathBuf,
+    overwrite_policy: ExportFileOverwritePolicy,
+}
+
+impl ExportFileWriteRequest {
+    pub fn try_new(
+        output_path: impl Into<String>,
+        overwrite_policy: ExportFileOverwritePolicy,
+    ) -> RocketMQResult<Self> {
+        let output_path = output_path.into();
+        let output_path = output_path.trim();
+        if output_path.is_empty() {
+            return Err(ToolsError::validation_error("outputPath", "outputPath must not be empty").into());
+        }
+
+        Ok(Self {
+            output_path: PathBuf::from(output_path),
+            overwrite_policy,
+        })
+    }
+
+    pub fn output_path(&self) -> &Path {
+        &self.output_path
+    }
+
+    pub fn overwrite_policy(&self) -> ExportFileOverwritePolicy {
+        self.overwrite_policy
+    }
+
+    pub fn overwrite(&self) -> bool {
+        matches!(self.overwrite_policy, ExportFileOverwritePolicy::Overwrite)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportFileWriteResult {
+    output_path: PathBuf,
+    bytes_written: u64,
+    overwritten: bool,
+}
+
+impl ExportFileWriteResult {
+    pub fn output_path(&self) -> &Path {
+        &self.output_path
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    pub fn overwritten(&self) -> bool {
+        self.overwritten
+    }
 }
 
 pub struct ExportService;
@@ -626,6 +691,68 @@ impl ExportService {
         }
 
         Ok(ExportPopRecordResult { targets: results })
+    }
+
+    pub fn write_json_export_file<T>(
+        request: &ExportFileWriteRequest,
+        value: &T,
+    ) -> RocketMQResult<ExportFileWriteResult>
+    where
+        T: Serialize + ?Sized,
+    {
+        let output_path = request.output_path();
+        if output_path.is_dir() {
+            return Err(RocketMQError::Internal(format!(
+                "ExportService: output path {} is a directory",
+                output_path.display()
+            )));
+        }
+
+        if let Some(parent) = output_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            if !parent.exists() {
+                return Err(RocketMQError::Internal(format!(
+                    "ExportService: output directory {} does not exist",
+                    parent.display()
+                )));
+            }
+        }
+
+        let overwritten = output_path.exists();
+        if overwritten && !request.overwrite() {
+            return Err(RocketMQError::Internal(format!(
+                "ExportService: output file {} already exists; enable overwrite to replace it",
+                output_path.display()
+            )));
+        }
+
+        let bytes = serde_json::to_vec_pretty(value)
+            .map_err(|error| RocketMQError::Internal(format!("ExportService: failed to serialize export: {error}")))?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(request.overwrite())
+            .create_new(!request.overwrite())
+            .open(output_path)
+            .map_err(|error| {
+                RocketMQError::Internal(format!(
+                    "ExportService: failed to open output file {}: {}",
+                    output_path.display(),
+                    error
+                ))
+            })?;
+        file.write_all(&bytes).map_err(|error| {
+            RocketMQError::Internal(format!(
+                "ExportService: failed to write output file {}: {}",
+                output_path.display(),
+                error
+            ))
+        })?;
+
+        Ok(ExportFileWriteResult {
+            output_path: output_path.to_path_buf(),
+            bytes_written: bytes.len() as u64,
+            overwritten,
+        })
     }
 
     async fn resolve_export_pop_record_broker_target(

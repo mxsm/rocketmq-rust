@@ -89,6 +89,18 @@ use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
 use rocketmq_admin_core::core::controller::ControllerService;
+use rocketmq_admin_core::core::export_data::ExportConfigsRequest;
+use rocketmq_admin_core::core::export_data::ExportConfigsResult;
+use rocketmq_admin_core::core::export_data::ExportFileOverwritePolicy;
+use rocketmq_admin_core::core::export_data::ExportFileWriteRequest;
+use rocketmq_admin_core::core::export_data::ExportFileWriteResult;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
+use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
+use rocketmq_admin_core::core::export_data::ExportMetadataResult;
+use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
+use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
+use rocketmq_admin_core::core::export_data::ExportService;
 use rocketmq_admin_core::core::ha::HaService;
 use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
 use rocketmq_admin_core::core::ha::HaStatusQueryResult;
@@ -107,10 +119,16 @@ use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
 use rocketmq_admin_core::core::lite::ParentTopicInfoQueryResult;
 use rocketmq_admin_core::core::lite::TriggerLiteDispatchRequest;
 use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
+use rocketmq_admin_core::core::message::ConsumeMessagesRequest;
 use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+use rocketmq_admin_core::core::message::DumpCompactionLogRequest;
+use rocketmq_admin_core::core::message::DumpCompactionLogResult;
+use rocketmq_admin_core::core::message::MessagePullEvent;
 use rocketmq_admin_core::core::message::MessageService;
 use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::PrintMessagesByQueueRequest;
+use rocketmq_admin_core::core::message::PrintMessagesRequest;
 use rocketmq_admin_core::core::message::QueryMessageByIdRequest;
 use rocketmq_admin_core::core::message::QueryMessageByIdResult;
 use rocketmq_admin_core::core::message::QueryMessageByKeyRequest;
@@ -144,6 +162,8 @@ use rocketmq_admin_core::core::producer::CheckMessageSendRtResult;
 use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
 use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
 use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::core::producer::SendMessageRequest;
+use rocketmq_admin_core::core::producer::SendMessageResult;
 use rocketmq_admin_core::core::producer::SendMessageStatusRequest;
 use rocketmq_admin_core::core::producer::SendMessageStatusResult;
 use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressRequest;
@@ -178,14 +198,23 @@ use rocketmq_admin_core::core::topic::UpdateTopicPermRequest;
 use rocketmq_admin_core::core::topic::UpdateTopicPermResult;
 use rocketmq_admin_core::core::topic::UpdateTopicRequest;
 use rocketmq_admin_core::core::topic::UpdateTopicResult;
+use rocketmq_admin_core::core::RocketMQError;
 use rocketmq_admin_core::core::RocketMQResult;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiAdminFacade {
     namesrv_addr: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MessagePullCapture {
+    pub events: Vec<MessagePullEvent>,
+    pub event_limit: usize,
+    pub truncated: bool,
 }
 
 impl TuiAdminFacade {
@@ -897,6 +926,23 @@ impl TuiAdminFacade {
         Ok(ProducerInfoQueryRequest::try_new(broker_addr)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_message_request(
+        &self,
+        topic: impl Into<String>,
+        body: impl Into<String>,
+        keys: Option<String>,
+        tags: Option<String>,
+        broker_name: Option<String>,
+        queue_id: Option<i32>,
+        msg_trace_enable: bool,
+    ) -> RocketMQResult<SendMessageRequest> {
+        Ok(
+            SendMessageRequest::try_new(topic, body, keys, tags, broker_name, queue_id, msg_trace_enable)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
     pub fn send_message_status_request(
         &self,
         broker_name: impl Into<String>,
@@ -1094,6 +1140,135 @@ impl TuiAdminFacade {
             QueryMessageTraceByIdRequest::try_new(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
         )
+    }
+
+    pub fn dump_compaction_log_request(&self, file: Option<String>) -> DumpCompactionLogRequest {
+        DumpCompactionLogRequest::try_new(file)
+    }
+
+    pub fn export_configs_request(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsRequest> {
+        Ok(ExportConfigsRequest::try_new(cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn export_metadata_request(
+        &self,
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        topic_only: bool,
+        subscription_group_only: bool,
+        special_topic: bool,
+    ) -> RocketMQResult<ExportMetadataRequest> {
+        Ok(ExportMetadataRequest::try_new(
+            cluster_name,
+            broker_addr,
+            topic_only,
+            subscription_group_only,
+            special_topic,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn export_metadata_rocksdb_request(
+        &self,
+        path: impl Into<String>,
+        config_type: impl Into<String>,
+        json_enable: bool,
+    ) -> ExportMetadataInRocksDbRequest {
+        ExportMetadataInRocksDbRequest::new(path, config_type, json_enable)
+    }
+
+    pub fn export_pop_record_request(
+        &self,
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        dry_run: bool,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<ExportPopRecordRequest> {
+        let request = ExportPopRecordRequest::try_new(cluster_name, broker_addr, dry_run)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone());
+        Ok(match timeout_millis {
+            Some(timeout_millis) => request.with_timeout_millis(timeout_millis),
+            None => request,
+        })
+    }
+
+    pub fn export_file_write_request(
+        &self,
+        output_path: impl Into<String>,
+        overwrite: bool,
+    ) -> RocketMQResult<ExportFileWriteRequest> {
+        ExportFileWriteRequest::try_new(
+            output_path,
+            if overwrite {
+                ExportFileOverwritePolicy::Overwrite
+            } else {
+                ExportFileOverwritePolicy::CreateNew
+            },
+        )
+    }
+
+    pub fn print_messages_request(
+        &self,
+        topic: impl Into<String>,
+        sub_expression: impl Into<String>,
+        begin_timestamp: Option<u64>,
+        end_timestamp: Option<u64>,
+        lmq_parent_topic: Option<String>,
+    ) -> RocketMQResult<PrintMessagesRequest> {
+        Ok(
+            PrintMessagesRequest::try_new(topic, sub_expression, begin_timestamp, end_timestamp, lmq_parent_topic)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn print_messages_by_queue_request(
+        &self,
+        topic: impl Into<String>,
+        broker_name: impl Into<String>,
+        queue_id: i32,
+        sub_expression: impl Into<String>,
+        begin_timestamp: Option<u64>,
+        end_timestamp: Option<u64>,
+        print_messages: bool,
+        calculate_by_tag: bool,
+    ) -> RocketMQResult<PrintMessagesByQueueRequest> {
+        Ok(PrintMessagesByQueueRequest::try_new(
+            topic,
+            broker_name,
+            queue_id,
+            sub_expression,
+            begin_timestamp,
+            end_timestamp,
+            print_messages,
+            calculate_by_tag,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn consume_messages_request(
+        &self,
+        topic: impl Into<String>,
+        broker_name: Option<String>,
+        queue_id: Option<i32>,
+        offset: Option<i64>,
+        consumer_group: Option<String>,
+        begin_timestamp: Option<i64>,
+        end_timestamp: Option<i64>,
+        message_number: i64,
+    ) -> RocketMQResult<ConsumeMessagesRequest> {
+        Ok(ConsumeMessagesRequest::try_new(
+            topic,
+            broker_name,
+            queue_id,
+            offset,
+            consumer_group,
+            begin_timestamp,
+            end_timestamp,
+            message_number,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
@@ -2057,6 +2232,24 @@ impl TuiAdminFacade {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_message(
+        &self,
+        topic: impl Into<String>,
+        body: impl Into<String>,
+        keys: Option<String>,
+        tags: Option<String>,
+        broker_name: Option<String>,
+        queue_id: Option<i32>,
+        msg_trace_enable: bool,
+    ) -> RocketMQResult<SendMessageResult> {
+        ProducerService::send_message_by_request_with_rpc_hook(
+            self.send_message_request(topic, body, keys, tags, broker_name, queue_id, msg_trace_enable)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn send_message_status(
         &self,
         broker_name: impl Into<String>,
@@ -2290,6 +2483,251 @@ impl TuiAdminFacade {
         )
         .await
     }
+
+    pub fn dump_compaction_log(&self, file: Option<String>) -> RocketMQResult<DumpCompactionLogResult> {
+        let request = self.dump_compaction_log_request(file);
+        MessageService::dump_compaction_log_by_request(&request)
+    }
+
+    pub async fn export_configs(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsResult> {
+        ExportService::export_configs_by_request_with_rpc_hook(self.export_configs_request(cluster_name)?, None).await
+    }
+
+    pub async fn export_metadata(
+        &self,
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        topic_only: bool,
+        subscription_group_only: bool,
+        special_topic: bool,
+    ) -> RocketMQResult<ExportMetadataResult> {
+        ExportService::export_metadata_by_request_with_rpc_hook(
+            self.export_metadata_request(
+                cluster_name,
+                broker_addr,
+                topic_only,
+                subscription_group_only,
+                special_topic,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    pub fn export_metadata_rocksdb(
+        &self,
+        path: impl Into<String>,
+        config_type: impl Into<String>,
+        json_enable: bool,
+    ) -> RocketMQResult<ExportMetadataInRocksDbResult> {
+        let request = self.export_metadata_rocksdb_request(path, config_type, json_enable);
+        ExportService::export_metadata_in_rocksdb_by_request(&request)
+    }
+
+    pub async fn export_pop_records(
+        &self,
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        dry_run: bool,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<ExportPopRecordResult> {
+        ExportService::export_pop_records_by_request_with_rpc_hook(
+            self.export_pop_record_request(cluster_name, broker_addr, dry_run, timeout_millis)?,
+            None,
+        )
+        .await
+    }
+
+    pub fn write_export_json_file<T>(
+        &self,
+        output_path: impl Into<String>,
+        overwrite: bool,
+        value: &T,
+    ) -> RocketMQResult<ExportFileWriteResult>
+    where
+        T: Serialize + ?Sized,
+    {
+        let request = self.export_file_write_request(output_path, overwrite)?;
+        ExportService::write_json_export_file(&request, value)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn print_messages_with_progress<F>(
+        &self,
+        topic: impl Into<String>,
+        sub_expression: impl Into<String>,
+        begin_timestamp: Option<u64>,
+        end_timestamp: Option<u64>,
+        lmq_parent_topic: Option<String>,
+        max_events: usize,
+        mut progress: F,
+    ) -> RocketMQResult<MessagePullCapture>
+    where
+        F: FnMut(String),
+    {
+        let request =
+            self.print_messages_request(topic, sub_expression, begin_timestamp, end_timestamp, lmq_parent_topic)?;
+        let mut events = Vec::new();
+        let mut event_count = 0usize;
+        let result = MessageService::print_messages_by_request_with_rpc_hook(request, None, |event| {
+            event_count += 1;
+            progress(message_pull_progress_message(event_count, &event));
+            capture_message_pull_event(&mut events, max_events, event)
+        })
+        .await;
+        message_pull_capture_from_result(events, max_events, result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn print_messages_by_queue_with_progress<F>(
+        &self,
+        topic: impl Into<String>,
+        broker_name: impl Into<String>,
+        queue_id: i32,
+        sub_expression: impl Into<String>,
+        begin_timestamp: Option<u64>,
+        end_timestamp: Option<u64>,
+        print_messages: bool,
+        calculate_by_tag: bool,
+        max_events: usize,
+        mut progress: F,
+    ) -> RocketMQResult<MessagePullCapture>
+    where
+        F: FnMut(String),
+    {
+        let request = self.print_messages_by_queue_request(
+            topic,
+            broker_name,
+            queue_id,
+            sub_expression,
+            begin_timestamp,
+            end_timestamp,
+            print_messages,
+            calculate_by_tag,
+        )?;
+        let mut events = Vec::new();
+        let mut event_count = 0usize;
+        let result = MessageService::print_messages_by_queue_by_request_with_rpc_hook(request, None, |event| {
+            event_count += 1;
+            progress(message_pull_progress_message(event_count, &event));
+            capture_message_pull_event(&mut events, max_events, event)
+        })
+        .await;
+        message_pull_capture_from_result(events, max_events, result)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn consume_messages_with_progress<F>(
+        &self,
+        topic: impl Into<String>,
+        broker_name: Option<String>,
+        queue_id: Option<i32>,
+        offset: Option<i64>,
+        consumer_group: Option<String>,
+        begin_timestamp: Option<i64>,
+        end_timestamp: Option<i64>,
+        message_number: i64,
+        max_events: usize,
+        mut progress: F,
+    ) -> RocketMQResult<MessagePullCapture>
+    where
+        F: FnMut(String),
+    {
+        let request = self.consume_messages_request(
+            topic,
+            broker_name,
+            queue_id,
+            offset,
+            consumer_group,
+            begin_timestamp,
+            end_timestamp,
+            message_number,
+        )?;
+        let mut events = Vec::new();
+        let mut event_count = 0usize;
+        let result = MessageService::consume_messages_by_request_with_rpc_hook(request, None, |event| {
+            event_count += 1;
+            progress(message_pull_progress_message(event_count, &event));
+            capture_message_pull_event(&mut events, max_events, event)
+        })
+        .await;
+        message_pull_capture_from_result(events, max_events, result)
+    }
+}
+
+const MESSAGE_EVENT_LIMIT_REACHED: &str = "__rocketmq_admin_tui_message_event_limit_reached__";
+
+fn message_pull_progress_message(event_count: usize, event: &MessagePullEvent) -> String {
+    let detail = match event {
+        MessagePullEvent::QueueRange {
+            mq,
+            min_offset,
+            max_offset,
+        } => format!(
+            "queue {}:{} range {min_offset}..{max_offset}",
+            mq.broker_name(),
+            mq.queue_id()
+        ),
+        MessagePullEvent::Messages { messages } => format!("received {} messages", messages.len()),
+        MessagePullEvent::ConsumeOk => "consume ok".to_string(),
+        MessagePullEvent::CountLimit {
+            message_number,
+            queue_id,
+        } => match queue_id {
+            Some(queue_id) => format!("count limit {message_number} on queue {queue_id}"),
+            None => format!("count limit {message_number}"),
+        },
+        MessagePullEvent::OffsetNotMatched { mq, offset } => {
+            format!("offset {offset} not matched for {}:{}", mq.broker_name(), mq.queue_id())
+        }
+        MessagePullEvent::NoMatched { mq, status, offset } => format!(
+            "no matched message at {}:{} offset {offset} status {status:?}",
+            mq.broker_name(),
+            mq.queue_id()
+        ),
+        MessagePullEvent::Finished { mq, status, offset } => format!(
+            "finished {}:{} at offset {offset} status {status:?}",
+            mq.broker_name(),
+            mq.queue_id()
+        ),
+        MessagePullEvent::PullError { error } => format!("pull error: {error}"),
+        MessagePullEvent::Separator => "separator".to_string(),
+        MessagePullEvent::TagCounts(tag_counts) => format!("{} tag count rows", tag_counts.len()),
+    };
+    format!("message pull event {event_count}: {detail}")
+}
+
+fn capture_message_pull_event(
+    events: &mut Vec<MessagePullEvent>,
+    event_limit: usize,
+    event: MessagePullEvent,
+) -> RocketMQResult<()> {
+    events.push(event);
+    if event_limit > 0 && events.len() >= event_limit {
+        Err(RocketMQError::Internal(MESSAGE_EVENT_LIMIT_REACHED.to_string()))
+    } else {
+        Ok(())
+    }
+}
+
+fn message_pull_capture_from_result(
+    events: Vec<MessagePullEvent>,
+    event_limit: usize,
+    result: RocketMQResult<()>,
+) -> RocketMQResult<MessagePullCapture> {
+    match result {
+        Ok(()) => Ok(MessagePullCapture {
+            events,
+            event_limit,
+            truncated: false,
+        }),
+        Err(error) if error.to_string().contains(MESSAGE_EVENT_LIMIT_REACHED) => Ok(MessagePullCapture {
+            events,
+            event_limit,
+            truncated: true,
+        }),
+        Err(error) => Err(error),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2343,6 +2781,7 @@ fn split_message_ids(value: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::TuiAdminFacade;
+    use rocketmq_admin_core::core::message::MessagePullEvent;
 
     #[test]
     fn facade_builds_topic_cluster_request_without_cli_types() {
@@ -2654,6 +3093,20 @@ mod tests {
         assert_eq!(send_status.message_size(), 128);
         assert_eq!(send_status.count(), 2);
 
+        let send_message = facade
+            .send_message_request(
+                " TopicA ",
+                " body ",
+                Some(" key ".to_string()),
+                Some(" tag ".to_string()),
+                Some(" broker-a ".to_string()),
+                Some(1),
+                true,
+            )
+            .unwrap();
+        assert_eq!(send_message.topic().as_str(), "TopicA");
+        assert_eq!(send_message.namesrv_addr(), Some("127.0.0.1:9876"));
+
         let send_rt = facade.check_message_send_rt_request(" TopicA ", 2, 128).unwrap();
         assert_eq!(send_rt.topic().as_str(), "TopicA");
         assert_eq!(send_rt.amount(), 2);
@@ -2715,6 +3168,15 @@ mod tests {
         std::mem::drop(facade.query_sync_state_set("127.0.0.1:9878", Some("broker-a".to_string()), None));
         std::mem::drop(facade.query_stats_all(false, Some("TopicA".to_string())));
         std::mem::drop(facade.query_producer_info("127.0.0.1:10911"));
+        std::mem::drop(facade.send_message(
+            "TopicA",
+            "body",
+            Some("key".to_string()),
+            Some("tag".to_string()),
+            None,
+            None,
+            false,
+        ));
         std::mem::drop(facade.send_message_status("broker-a", 128, 2));
         std::mem::drop(facade.check_message_send_rt("TopicA", 2, 128));
     }
@@ -3002,6 +3464,104 @@ mod tests {
         ));
         std::mem::drop(facade.update_static_topic("StaticTopic", "broker-a", "4", Some("DefaultCluster".to_string())));
         std::mem::drop(facade.remapping_static_topic("StaticTopic", Some("broker-a".to_string()), None, Some(false)));
+    }
+
+    #[test]
+    fn facade_builds_phase_four_complex_workflow_requests_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+
+        let export_configs = facade.export_configs_request(" DefaultCluster ").unwrap();
+        assert_eq!(export_configs.cluster_name().as_str(), "DefaultCluster");
+        assert_eq!(export_configs.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let export_metadata = facade
+            .export_metadata_request(Some(" DefaultCluster ".to_string()), None, false, true, true)
+            .unwrap();
+        assert_eq!(export_metadata.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert!(export_metadata.special_topic());
+
+        let rocksdb = facade.export_metadata_rocksdb_request(" ./store/config ", " topics ", true);
+        assert_eq!(rocksdb.config_type(), "topics");
+        assert!(rocksdb.json_enable());
+
+        let pop_record = facade
+            .export_pop_record_request(None, Some(" 127.0.0.1:10911 ".to_string()), true, Some(5000))
+            .unwrap();
+        assert!(pop_record.dry_run());
+        assert_eq!(pop_record.timeout_millis(), 5000);
+        assert_eq!(pop_record.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let dump = facade.dump_compaction_log_request(Some(" ./compact.log ".to_string()));
+        assert_eq!(dump.file().unwrap().to_string_lossy(), "./compact.log");
+
+        let print = facade
+            .print_messages_request(
+                " TopicA ",
+                " TagA ",
+                Some(1_700_000_000_000),
+                Some(1_700_000_100_000),
+                Some(" ParentTopic ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(print.topic().as_str(), "TopicA");
+        assert_eq!(print.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let consume = facade
+            .consume_messages_request(
+                " TopicA ",
+                Some(" broker-a ".to_string()),
+                Some(0),
+                Some(10),
+                Some(" GroupA ".to_string()),
+                None,
+                None,
+                32,
+            )
+            .unwrap();
+        assert_eq!(consume.topic().as_str(), "TopicA");
+        assert_eq!(consume.namesrv_addr(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn facade_exposes_phase_four_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.export_configs("DefaultCluster"));
+        std::mem::drop(facade.export_metadata(Some("DefaultCluster".to_string()), None, false, false, false));
+        std::mem::drop(facade.export_pop_records(None, Some("127.0.0.1:10911".to_string()), true, Some(5000)));
+        std::mem::drop(facade.print_messages_with_progress("TopicA", "*", None, None, None, 64, |_| {}));
+        std::mem::drop(facade.print_messages_by_queue_with_progress(
+            "TopicA",
+            "broker-a",
+            0,
+            "*",
+            None,
+            None,
+            true,
+            false,
+            64,
+            |_| {},
+        ));
+        std::mem::drop(facade.consume_messages_with_progress(
+            "TopicA",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            64,
+            |_| {},
+        ));
+    }
+
+    #[test]
+    fn phase_four_message_pull_progress_messages_include_event_counts() {
+        let message = super::message_pull_progress_message(3, &MessagePullEvent::Separator);
+
+        assert!(message.contains("3"));
+        assert!(message.contains("separator"));
     }
 
     #[test]

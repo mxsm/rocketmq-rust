@@ -16,9 +16,18 @@ use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
 use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
 use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
 use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
+use rocketmq_admin_core::core::export_data::ExportConfigsResult;
+use rocketmq_admin_core::core::export_data::ExportFileWriteResult;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
+use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
+use rocketmq_admin_core::core::export_data::ExportMetadataResult;
+use rocketmq_admin_core::core::export_data::ExportMetadataScope;
+use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
 use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+use rocketmq_admin_core::core::message::DumpCompactionLogResult;
+use rocketmq_admin_core::core::message::MessagePullEvent;
 use rocketmq_admin_core::core::message::MessageTraceView;
 use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
 use rocketmq_admin_core::core::message::QueryMessageByIdResult;
@@ -28,6 +37,7 @@ use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
 use rocketmq_admin_core::core::message::UniqueKeyDirectStatus;
 use rocketmq_admin_core::core::producer::CheckMessageSendRtResult;
 use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
+use rocketmq_admin_core::core::producer::SendMessageResult;
 use rocketmq_admin_core::core::producer::SendMessageStatusResult;
 use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
 use rocketmq_admin_core::core::queue::QueryConsumeQueueResult;
@@ -35,6 +45,8 @@ use rocketmq_admin_core::core::stats::StatsAllQueryResult;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use serde::Serialize;
+
+use crate::admin_facade::MessagePullCapture;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableViewModel {
@@ -204,6 +216,18 @@ impl CommandResultViewModel {
             targets,
             errors,
         })
+    }
+
+    pub fn export_file_written(title: impl Into<String>, result: &ExportFileWriteResult) -> Self {
+        Self::operation_success(
+            title,
+            vec![format!(
+                "{} ({} bytes, overwritten: {})",
+                result.output_path().display(),
+                result.bytes_written(),
+                result.overwritten()
+            )],
+        )
     }
 
     pub fn error(title: impl Into<String>, body: impl Into<String>) -> Self {
@@ -737,6 +761,19 @@ impl CommandResultViewModel {
         )
     }
 
+    pub fn send_message(title: impl Into<String>, result: &SendMessageResult) -> Self {
+        Self::table(
+            title,
+            &["Broker", "Queue ID", "Status", "Message ID"],
+            vec![vec![
+                result.row.broker_name.clone(),
+                result.row.queue_id.clone(),
+                result.row.send_status.clone(),
+                result.row.msg_id.clone(),
+            ]],
+        )
+    }
+
     pub fn check_message_send_rt(title: impl Into<String>, result: &CheckMessageSendRtResult) -> Self {
         let mut rows = result
             .rows
@@ -805,6 +842,185 @@ impl CommandResultViewModel {
                 })
                 .collect(),
         )
+    }
+
+    pub fn dump_compaction_log(title: impl Into<String>, result: &DumpCompactionLogResult) -> Self {
+        if result.missing_file_name {
+            return Self::operation_summary(title, 0, 1, Vec::new(), vec!["file name is required".to_string()]);
+        }
+
+        Self::table(
+            title,
+            &MESSAGE_DETAIL_HEADERS,
+            result
+                .messages
+                .iter()
+                .map(|message| message_detail_row("decoded", message, "compaction log"))
+                .collect(),
+        )
+    }
+
+    pub fn message_pull_events(title: impl Into<String>, result: &MessagePullCapture) -> Self {
+        let mut rows = result.events.iter().map(message_pull_event_row).collect::<Vec<_>>();
+        if result.truncated {
+            rows.push(vec![
+                "truncated".to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                format!("truncated after {} events", result.event_limit),
+            ]);
+        }
+        Self::table(
+            title,
+            &["Event", "Topic", "Broker", "Queue", "Offset", "Status", "Detail"],
+            rows,
+        )
+    }
+
+    pub fn export_configs(title: impl Into<String>, result: &ExportConfigsResult) -> Self {
+        let mut rows = result
+            .name_servers
+            .iter()
+            .map(|name_server| {
+                vec![
+                    "name-server".to_string(),
+                    String::new(),
+                    "address".to_string(),
+                    name_server.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        rows.push(vec![
+            "summary".to_string(),
+            String::new(),
+            "master_broker_size".to_string(),
+            result.master_broker_size.to_string(),
+        ]);
+        rows.push(vec![
+            "summary".to_string(),
+            String::new(),
+            "slave_broker_size".to_string(),
+            result.slave_broker_size.to_string(),
+        ]);
+        for (broker_name, configs) in &result.broker_configs {
+            let mut entries = configs.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            rows.extend(entries.into_iter().map(|(key, value)| {
+                vec![
+                    "broker-config".to_string(),
+                    broker_name.clone(),
+                    key.clone(),
+                    value.clone(),
+                ]
+            }));
+        }
+        Self::table(title, &["Type", "Target", "Key", "Value"], rows)
+    }
+
+    pub fn export_metadata(title: impl Into<String>, result: &ExportMetadataResult) -> Self {
+        match result {
+            ExportMetadataResult::BrokerTopic { wrapper } => {
+                let topic_count = wrapper
+                    .topic_config_table()
+                    .map(|table| table.len())
+                    .unwrap_or_default();
+                Self::operation_summary(
+                    title,
+                    topic_count,
+                    0,
+                    vec![format!("broker topics: {topic_count}")],
+                    Vec::new(),
+                )
+            }
+            ExportMetadataResult::BrokerSubscriptionGroup { wrapper } => {
+                let group_count = wrapper.get_subscription_group_table().len();
+                Self::operation_summary(
+                    title,
+                    group_count,
+                    0,
+                    vec![format!("broker subscription groups: {group_count}")],
+                    Vec::new(),
+                )
+            }
+            ExportMetadataResult::Cluster {
+                scope,
+                topic_config_table,
+                subscription_group_table,
+                export_time_millis,
+            } => Self::operation_summary(
+                title,
+                topic_config_table.len() + subscription_group_table.len(),
+                0,
+                vec![
+                    format!("scope: {}", export_metadata_scope_name(*scope)),
+                    format!("topics: {}", topic_config_table.len()),
+                    format!("subscription groups: {}", subscription_group_table.len()),
+                    format!("export_time_millis: {export_time_millis}"),
+                ],
+                Vec::new(),
+            ),
+        }
+    }
+
+    pub fn export_metadata_rocksdb(title: impl Into<String>, result: &ExportMetadataInRocksDbResult) -> Self {
+        match result {
+            ExportMetadataInRocksDbResult::InvalidPath => Self::operation_summary(
+                title,
+                0,
+                1,
+                Vec::new(),
+                vec!["RocksDB path is empty or does not exist".to_string()],
+            ),
+            ExportMetadataInRocksDbResult::InvalidConfigType { config_type } => Self::operation_summary(
+                title,
+                0,
+                1,
+                Vec::new(),
+                vec![format!("invalid config type: {config_type}")],
+            ),
+            ExportMetadataInRocksDbResult::Data {
+                config_type,
+                json_enable,
+                entries,
+            } => Self::table(
+                title,
+                &["Config Type", "Format", "Key", "Value"],
+                entries
+                    .iter()
+                    .map(|entry| {
+                        vec![
+                            export_rocksdb_config_type_name(*config_type).to_string(),
+                            if *json_enable { "json" } else { "raw" }.to_string(),
+                            entry.key.clone(),
+                            entry.value.clone(),
+                        ]
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    pub fn export_pop_records(title: impl Into<String>, result: &ExportPopRecordResult) -> Self {
+        let targets = result
+            .targets
+            .iter()
+            .filter(|target| target.exported || target.dry_run)
+            .map(|target| format!("{} {}", target.broker_name, target.broker_addr))
+            .collect::<Vec<_>>();
+        let errors = result
+            .targets
+            .iter()
+            .filter_map(|target| {
+                target
+                    .error
+                    .as_ref()
+                    .map(|error| format!("{} {}: {error}", target.broker_name, target.broker_addr))
+            })
+            .collect::<Vec<_>>();
+        Self::operation_summary(title, targets.len(), errors.len(), targets, errors)
     }
 
     pub fn consume_queue(title: impl Into<String>, result: &QueryConsumeQueueResult) -> Self {
@@ -1209,6 +1425,126 @@ fn empty_message_detail_row(message_id: &str, status: &str, note: &str) -> Vec<S
     ]
 }
 
+fn message_pull_event_row(event: &MessagePullEvent) -> Vec<String> {
+    match event {
+        MessagePullEvent::QueueRange {
+            mq,
+            min_offset,
+            max_offset,
+        } => vec![
+            "queue-range".to_string(),
+            mq.topic().to_string(),
+            mq.broker_name().to_string(),
+            mq.queue_id().to_string(),
+            format!("{min_offset}..{max_offset}"),
+            String::new(),
+            String::new(),
+        ],
+        MessagePullEvent::Messages { messages } => {
+            let first_message_id = messages
+                .first()
+                .map(|message| message.msg_id().to_string())
+                .unwrap_or_default();
+            vec![
+                "messages".to_string(),
+                messages
+                    .first()
+                    .map(|message| message.topic().to_string())
+                    .unwrap_or_default(),
+                messages
+                    .first()
+                    .map(|message| message.broker_name().to_string())
+                    .unwrap_or_default(),
+                messages
+                    .first()
+                    .map(|message| message.queue_id().to_string())
+                    .unwrap_or_default(),
+                String::new(),
+                messages.len().to_string(),
+                first_message_id,
+            ]
+        }
+        MessagePullEvent::ConsumeOk => empty_message_event_row("consume-ok", "", "consume status is OK"),
+        MessagePullEvent::CountLimit {
+            message_number,
+            queue_id,
+        } => vec![
+            "count-limit".to_string(),
+            String::new(),
+            String::new(),
+            queue_id.map(|queue_id| queue_id.to_string()).unwrap_or_default(),
+            String::new(),
+            String::new(),
+            format!("message_number={message_number}"),
+        ],
+        MessagePullEvent::OffsetNotMatched { mq, offset } => vec![
+            "offset-not-matched".to_string(),
+            mq.topic().to_string(),
+            mq.broker_name().to_string(),
+            mq.queue_id().to_string(),
+            offset.to_string(),
+            String::new(),
+            String::new(),
+        ],
+        MessagePullEvent::NoMatched { mq, status, offset } => vec![
+            "no-matched".to_string(),
+            mq.topic().to_string(),
+            mq.broker_name().to_string(),
+            mq.queue_id().to_string(),
+            offset.to_string(),
+            status.to_string(),
+            String::new(),
+        ],
+        MessagePullEvent::Finished { mq, status, offset } => vec![
+            "finished".to_string(),
+            mq.topic().to_string(),
+            mq.broker_name().to_string(),
+            mq.queue_id().to_string(),
+            offset.to_string(),
+            status.to_string(),
+            String::new(),
+        ],
+        MessagePullEvent::PullError { error } => empty_message_event_row("pull-error", "", error),
+        MessagePullEvent::Separator => empty_message_event_row("separator", "", ""),
+        MessagePullEvent::TagCounts(tag_counts) => empty_message_event_row(
+            "tag-counts",
+            &tag_counts.len().to_string(),
+            &tag_counts
+                .iter()
+                .map(|(tag, count)| format!("{tag}={count}"))
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+    }
+}
+
+fn empty_message_event_row(event: &str, status: &str, detail: &str) -> Vec<String> {
+    vec![
+        event.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        status.to_string(),
+        detail.to_string(),
+    ]
+}
+
+fn export_metadata_scope_name(scope: ExportMetadataScope) -> &'static str {
+    match scope {
+        ExportMetadataScope::Topic => "topic",
+        ExportMetadataScope::SubscriptionGroup => "subscription-group",
+        ExportMetadataScope::All => "all",
+    }
+}
+
+fn export_rocksdb_config_type_name(config_type: ExportMetadataInRocksDbConfigType) -> &'static str {
+    match config_type {
+        ExportMetadataInRocksDbConfigType::Topics => "Topics",
+        ExportMetadataInRocksDbConfigType::SubscriptionGroups => "SubscriptionGroups",
+    }
+}
+
 fn message_property(message: &MessageExt, key: &str) -> String {
     message
         .properties()
@@ -1262,9 +1598,16 @@ mod tests {
     use rocketmq_admin_core::core::consumer::ConsumerProgressRow;
     use rocketmq_admin_core::core::consumer::ConsumerRunningInfoItem;
     use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
+    use rocketmq_admin_core::core::export_data::ExportConfigsResult;
+    use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
+    use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry;
+    use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
+    use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
+    use rocketmq_admin_core::core::export_data::ExportPopRecordTargetResult;
     use rocketmq_admin_core::core::message::DecodeMessageIdEntry;
     use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
     use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+    use rocketmq_admin_core::core::message::MessagePullEvent;
     use rocketmq_admin_core::core::message::MessageTraceView;
     use rocketmq_admin_core::core::message::QueryMessageByIdEntry;
     use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
@@ -1275,6 +1618,8 @@ mod tests {
     use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
     use rocketmq_admin_core::core::message::UniqueKeyDirectStatus;
     use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
+    use rocketmq_admin_core::core::producer::SendMessageResult;
+    use rocketmq_admin_core::core::producer::SendMessageResultRow;
     use rocketmq_admin_core::core::producer::SendMessageStatusResult;
     use rocketmq_admin_core::core::producer::SendMessageStatusRow;
     use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressEntry;
@@ -1307,6 +1652,8 @@ mod tests {
     use rocketmq_rust::ArcMut;
 
     use std::collections::HashMap;
+
+    use crate::admin_facade::MessagePullCapture;
 
     use super::CommandResultViewModel;
     use super::KeyValueViewModel;
@@ -2086,6 +2433,23 @@ mod tests {
 
     #[test]
     fn phase_two_producer_diagnostics_results_render_as_tables() {
+        let send_message = CommandResultViewModel::send_message(
+            "Send Message",
+            &SendMessageResult {
+                row: SendMessageResultRow {
+                    broker_name: "broker-a".to_string(),
+                    queue_id: "1".to_string(),
+                    send_status: "SEND_OK".to_string(),
+                    msg_id: "MSGID".to_string(),
+                },
+            },
+        );
+        assert_table(
+            &send_message,
+            &["Broker", "Queue ID", "Status", "Message ID"],
+            &["broker-a", "1", "SEND_OK", "MSGID"],
+        );
+
         let result = CommandResultViewModel::send_message_status(
             "Send Message Status",
             &SendMessageStatusResult {
@@ -2139,6 +2503,98 @@ mod tests {
             &["127.0.0.1:10911", "warning: retry topic cleanup failed"],
             &["127.0.0.1:10912: rejected"],
         );
+    }
+
+    #[test]
+    fn phase_four_export_and_message_workflow_results_render_structured_output() {
+        let export_configs = CommandResultViewModel::export_configs(
+            "Export Configs",
+            &ExportConfigsResult {
+                name_servers: vec!["127.0.0.1:9876".to_string()],
+                broker_configs: HashMap::from([(
+                    "broker-a".to_string(),
+                    HashMap::from([("brokerRole".to_string(), "ASYNC_MASTER".to_string())]),
+                )]),
+                master_broker_size: 1,
+                slave_broker_size: 0,
+            },
+        );
+        assert_table(
+            &export_configs,
+            &["Type", "Target", "Key", "Value"],
+            &["name-server", "", "address", "127.0.0.1:9876"],
+        );
+
+        let rocksdb = CommandResultViewModel::export_metadata_rocksdb(
+            "Export Metadata In RocksDB",
+            &ExportMetadataInRocksDbResult::Data {
+                config_type: ExportMetadataInRocksDbConfigType::Topics,
+                json_enable: true,
+                entries: vec![ExportMetadataInRocksDbEntry {
+                    key: "TopicA".to_string(),
+                    value: "{\"readQueueNums\":4}".to_string(),
+                }],
+            },
+        );
+        assert_table(
+            &rocksdb,
+            &["Config Type", "Format", "Key", "Value"],
+            &["Topics", "json", "TopicA", "{\"readQueueNums\":4}"],
+        );
+
+        let pop_records = CommandResultViewModel::export_pop_records(
+            "Export Pop Records",
+            &ExportPopRecordResult {
+                targets: vec![
+                    ExportPopRecordTargetResult {
+                        broker_name: "broker-a".to_string(),
+                        broker_addr: "127.0.0.1:10911".to_string(),
+                        dry_run: false,
+                        exported: true,
+                        error: None,
+                    },
+                    ExportPopRecordTargetResult {
+                        broker_name: "broker-b".to_string(),
+                        broker_addr: "127.0.0.1:10912".to_string(),
+                        dry_run: false,
+                        exported: false,
+                        error: Some("timeout".to_string()),
+                    },
+                ],
+            },
+        );
+        assert_summary(
+            &pop_records,
+            1,
+            1,
+            &["broker-a 127.0.0.1:10911"],
+            &["broker-b 127.0.0.1:10912: timeout"],
+        );
+
+        let pull_events = CommandResultViewModel::message_pull_events(
+            "Print Messages",
+            &MessagePullCapture {
+                events: vec![
+                    MessagePullEvent::QueueRange {
+                        mq: MessageQueue::from_parts("TopicA", "broker-a", 1),
+                        min_offset: 10,
+                        max_offset: 20,
+                    },
+                    MessagePullEvent::CountLimit {
+                        message_number: 10,
+                        queue_id: Some(1),
+                    },
+                ],
+                event_limit: 2,
+                truncated: true,
+            },
+        );
+        assert_table(
+            &pull_events,
+            &["Event", "Topic", "Broker", "Queue", "Offset", "Status", "Detail"],
+            &["queue-range", "TopicA", "broker-a", "1", "10..20", "", ""],
+        );
+        assert!(pull_events.text_body().contains("truncated after 2 events"));
     }
 
     fn assert_table(result: &CommandResultViewModel, headers: &[&str], first_row: &[&str]) {

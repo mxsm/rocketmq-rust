@@ -8,11 +8,12 @@ use ratatui::crossterm::event::KeyEventKind;
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio_stream::StreamExt;
 
 use crate::action::Action;
 use crate::admin_facade::TuiAdminFacade;
-use crate::commands::execute_command;
+use crate::commands::execute_command_with_progress;
 use crate::event::is_ctrl;
 use crate::event::key_char;
 use crate::state::AppState;
@@ -26,6 +27,12 @@ pub struct RocketmqTuiApp {
     state: AppState,
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
+    running_task: Option<RunningCommandTask>,
+}
+
+struct RunningCommandTask {
+    execution_id: u64,
+    handle: JoinHandle<()>,
 }
 
 impl Default for RocketmqTuiApp {
@@ -48,6 +55,7 @@ impl RocketmqTuiApp {
             state,
             action_tx,
             action_rx,
+            running_task: None,
         }
     }
 
@@ -61,6 +69,7 @@ impl RocketmqTuiApp {
     }
 
     pub fn quit(&mut self) {
+        self.abort_running_task();
         self.should_quit = true;
     }
 }
@@ -356,6 +365,7 @@ impl RocketmqTuiApp {
                 result,
             } => {
                 if self.is_current_running_execution(execution_id) {
+                    self.clear_running_task(execution_id);
                     self.state.result = Some(result);
                     self.state.progress_message = Some(format!("finished {command_id}"));
                     self.state.result_scroll = 0;
@@ -372,6 +382,7 @@ impl RocketmqTuiApp {
                 error,
             } => {
                 if self.is_current_running_execution(execution_id) {
+                    self.clear_running_task(execution_id);
                     self.state.last_error = Some(error.clone());
                     self.state.progress_message = Some(format!("failed {command_id}"));
                     self.state.result = Some(crate::view_model::CommandResultViewModel::error(
@@ -388,12 +399,16 @@ impl RocketmqTuiApp {
                 execution_id,
                 command_id,
             } => {
-                self.state.execution = CommandExecutionState::Cancelled {
-                    execution_id,
-                    command_id,
-                };
-                self.state.progress_message = Some("cancelled locally; late result will be ignored".to_string());
-                self.state.confirm_input.clear();
+                if self.state.execution.execution_id() == Some(execution_id) {
+                    self.abort_running_task_if_matches(execution_id);
+                    self.state.execution = CommandExecutionState::Cancelled {
+                        execution_id,
+                        command_id,
+                    };
+                    self.state.progress_message =
+                        Some("cancelled locally; running task aborted and late result will be ignored".to_string());
+                    self.state.confirm_input.clear();
+                }
             }
             Action::HelpToggled => self.state.show_help = !self.state.show_help,
             Action::ResultCleared => {
@@ -463,6 +478,7 @@ impl RocketmqTuiApp {
     }
 
     fn start_execution(&mut self, execution_id: u64, command_id: String) {
+        self.abort_running_task();
         self.apply_action(Action::CommandStarted {
             execution_id,
             command_id: command_id.clone(),
@@ -476,8 +492,13 @@ impl RocketmqTuiApp {
         let form = self.state.form.clone();
         let facade = self.admin_facade.clone();
         let tx = self.action_tx.clone();
-        tokio::task::spawn_local(async move {
-            let action = match execute_command(&facade, &command, &form).await {
+        let progress_tx = tx.clone();
+        let handle = tokio::task::spawn_local(async move {
+            let action = match execute_command_with_progress(&facade, &command, &form, |message| {
+                let _ = progress_tx.send(Action::ProgressUpdated { execution_id, message });
+            })
+            .await
+            {
                 Ok(result) => Action::CommandSucceeded {
                     execution_id,
                     command_id,
@@ -491,6 +512,7 @@ impl RocketmqTuiApp {
             };
             let _ = tx.send(action);
         });
+        self.running_task = Some(RunningCommandTask { execution_id, handle });
     }
 
     fn is_current_running_execution(&self, execution_id: u64) -> bool {
@@ -501,6 +523,32 @@ impl RocketmqTuiApp {
                 ..
             } if current == execution_id
         )
+    }
+
+    fn abort_running_task(&mut self) {
+        if let Some(task) = self.running_task.take() {
+            task.handle.abort();
+        }
+    }
+
+    fn abort_running_task_if_matches(&mut self, execution_id: u64) {
+        if self
+            .running_task
+            .as_ref()
+            .is_some_and(|task| task.execution_id == execution_id)
+        {
+            self.abort_running_task();
+        }
+    }
+
+    fn clear_running_task(&mut self, execution_id: u64) {
+        if self
+            .running_task
+            .as_ref()
+            .is_some_and(|task| task.execution_id == execution_id)
+        {
+            self.running_task = None;
+        }
     }
 
     fn emit_current_arg_changed(&mut self, command: &crate::commands::CommandSpec) {
@@ -526,6 +574,13 @@ impl RocketmqTuiApp {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::rc::Rc;
+    use std::task::Context;
+    use std::task::Poll;
+
     use super::*;
     use crate::admin_facade::TuiAdminFacade;
 
@@ -556,5 +611,54 @@ mod tests {
 
         assert!(app.state.last_error.is_some());
         assert_eq!(app.state.focus, FocusArea::Args);
+    }
+
+    #[test]
+    fn cancel_execution_aborts_tracked_local_task() {
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(&tokio::runtime::Builder::new_current_thread().build().unwrap(), async {
+            let aborted = Rc::new(Cell::new(false));
+            let handle = tokio::task::spawn_local(AbortProbe {
+                aborted: aborted.clone(),
+            });
+
+            let mut app = RocketmqTuiApp::new();
+            app.running_task = Some(RunningCommandTask {
+                execution_id: 7,
+                handle,
+            });
+            app.state.execution = CommandExecutionState::Running {
+                execution_id: 7,
+                command_id: "message.consume".to_string(),
+            };
+
+            app.apply_action(Action::CancelExecution {
+                execution_id: 7,
+                command_id: "message.consume".to_string(),
+            });
+            tokio::task::yield_now().await;
+
+            assert!(aborted.get());
+            assert!(app.running_task.is_none());
+        });
+    }
+
+    struct AbortProbe {
+        aborted: Rc<Cell<bool>>,
+    }
+
+    impl Future for AbortProbe {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for AbortProbe {
+        fn drop(&mut self) {
+            self.aborted.set(true);
+        }
     }
 }

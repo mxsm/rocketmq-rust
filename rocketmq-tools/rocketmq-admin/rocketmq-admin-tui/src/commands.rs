@@ -4,6 +4,7 @@ use anyhow::bail;
 use anyhow::Context;
 use rocketmq_admin_core::core::topic::TopicTarget;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use serde::Serialize;
 
 use crate::admin_facade::TuiAdminFacade;
 use crate::state::CommandFormState;
@@ -26,6 +27,7 @@ pub enum CommandCategory {
     Producer,
     Lite,
     Message,
+    Export,
     StaticTopic,
 }
 
@@ -47,6 +49,7 @@ impl CommandCategory {
             Self::Producer => "Producer",
             Self::Lite => "Lite",
             Self::Message => "Message",
+            Self::Export => "Export",
             Self::StaticTopic => "Static Topic",
         }
     }
@@ -207,15 +210,20 @@ pub fn command_catalog() -> Vec<CommandSpec> {
     producer_commands(&mut commands);
     lite_commands(&mut commands);
     message_commands(&mut commands);
+    export_commands(&mut commands);
     static_topic_commands(&mut commands);
     commands
 }
 
-pub async fn execute_command(
+pub async fn execute_command_with_progress<F>(
     facade: &TuiAdminFacade,
     spec: &CommandSpec,
     form: &CommandFormState,
-) -> anyhow::Result<CommandResultViewModel> {
+    mut progress: F,
+) -> anyhow::Result<CommandResultViewModel>
+where
+    F: FnMut(String),
+{
     let result = match spec.id {
         "topic.list" => {
             let result = facade.query_topic_list(form.optional_string("cluster_name")).await?;
@@ -907,6 +915,20 @@ pub async fn execute_command(
             let result = facade.query_producer_info(form.required_string("broker_addr")?).await?;
             CommandResultViewModel::producer_info(spec.title, &result)
         }
+        "producer.send_message" => {
+            let result = facade
+                .send_message(
+                    form.required_string("topic")?,
+                    form.required_string("body")?,
+                    form.optional_string("keys"),
+                    form.optional_string("tags"),
+                    form.optional_string("broker_name"),
+                    form.optional_i32("queue_id")?,
+                    form.bool_value("msg_trace_enable")?,
+                )
+                .await?;
+            CommandResultViewModel::send_message(spec.title, &result)
+        }
         "producer.send_message_status" => {
             let result = facade
                 .send_message_status(
@@ -1050,6 +1072,117 @@ pub async fn execute_command(
                 )
                 .await?;
             CommandResultViewModel::message_trace(spec.title, &result)
+        }
+        "message.dump_compaction_log" => {
+            let result = facade.dump_compaction_log(Some(form.required_string("file")?))?;
+            CommandResultViewModel::dump_compaction_log(spec.title, &result)
+        }
+        "message.print" => {
+            let result = facade
+                .print_messages_with_progress(
+                    form.required_string("topic")?,
+                    form.required_string("sub_expression")?,
+                    optional_u64_arg(form, "begin_timestamp")?,
+                    optional_u64_arg(form, "end_timestamp")?,
+                    form.optional_string("lmq_parent_topic"),
+                    number_usize_arg(form, "max_events")?,
+                    &mut progress,
+                )
+                .await?;
+            CommandResultViewModel::message_pull_events(spec.title, &result)
+        }
+        "message.print_by_queue" => {
+            let result = facade
+                .print_messages_by_queue_with_progress(
+                    form.required_string("topic")?,
+                    form.required_string("broker_name")?,
+                    form.number_i32("queue_id")?,
+                    form.required_string("sub_expression")?,
+                    optional_u64_arg(form, "begin_timestamp")?,
+                    optional_u64_arg(form, "end_timestamp")?,
+                    form.bool_value("print_messages")?,
+                    form.bool_value("calculate_by_tag")?,
+                    number_usize_arg(form, "max_events")?,
+                    &mut progress,
+                )
+                .await?;
+            CommandResultViewModel::message_pull_events(spec.title, &result)
+        }
+        "message.consume" => {
+            let result = facade
+                .consume_messages_with_progress(
+                    form.required_string("topic")?,
+                    form.optional_string("broker_name"),
+                    form.optional_i32("queue_id")?,
+                    form.optional_i64("offset")?,
+                    form.optional_string("consumer_group"),
+                    form.optional_i64("begin_timestamp")?,
+                    form.optional_i64("end_timestamp")?,
+                    form.number_i64("message_number")?,
+                    number_usize_arg(form, "max_events")?,
+                    &mut progress,
+                )
+                .await?;
+            CommandResultViewModel::message_pull_events(spec.title, &result)
+        }
+        "export.configs" => {
+            let result = facade.export_configs(form.required_string("cluster_name")?).await?;
+            export_output_or_view(
+                facade,
+                spec.title,
+                form,
+                &result,
+                CommandResultViewModel::export_configs(spec.title, &result),
+            )?
+        }
+        "export.metadata" => {
+            let result = facade
+                .export_metadata(
+                    form.optional_string("cluster_name"),
+                    form.optional_string("broker_addr"),
+                    form.bool_value("topic_only")?,
+                    form.bool_value("subscription_group_only")?,
+                    form.bool_value("special_topic")?,
+                )
+                .await?;
+            export_output_or_view(
+                facade,
+                spec.title,
+                form,
+                &result,
+                CommandResultViewModel::export_metadata(spec.title, &result),
+            )?
+        }
+        "export.metadata_rocksdb" => {
+            let result = facade.export_metadata_rocksdb(
+                form.required_string("path")?,
+                form.enum_string("config_type")?,
+                form.bool_value("json_enable")?,
+            )?;
+            export_output_or_view(
+                facade,
+                spec.title,
+                form,
+                &result,
+                CommandResultViewModel::export_metadata_rocksdb(spec.title, &result),
+            )?
+        }
+        "export.pop_record" => {
+            let result = facade
+                .export_pop_records(
+                    form.optional_string("cluster_name"),
+                    form.optional_string("broker_addr"),
+                    form.bool_value("dry_run")?,
+                    optional_u64_arg(form, "timeout_millis")?,
+                )
+                .await?;
+            export_output_or_view(
+                facade,
+                spec.title,
+                form,
+                &result,
+                CommandResultViewModel::export_pop_records(spec.title, &result),
+            )?
         }
         "static_topic.update" => {
             let topic = form.required_string("topic")?;
@@ -2293,6 +2426,36 @@ fn producer_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "producer.send_message",
+            CommandCategory::Producer,
+            "Send Message",
+            "Send one message to a topic or a specific broker queue.",
+            RiskLevel::Mutating,
+            vec![
+                required_string("topic", "Topic", "Target topic.", "TopicA"),
+                required_string("body", "Body", "Message body text.", "hello RocketMQ"),
+                optional_string("keys", "Keys", "Optional message keys.", "KeyA"),
+                optional_string("tags", "Tags", "Optional message tags.", "TagA"),
+                optional_string(
+                    "broker_name",
+                    "Broker Name",
+                    "Optional broker queue target.",
+                    "broker-a",
+                ),
+                number(
+                    "queue_id",
+                    "Queue ID",
+                    "Optional queue id; requires broker name.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                bool_arg("msg_trace_enable", "Trace", "Enable message trace flag.", false),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
             "producer.send_message_status",
             CommandCategory::Producer,
             "Send Message Status",
@@ -2613,7 +2776,219 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
             ResultViewKind::Table,
             None,
         ),
+        spec(
+            "message.dump_compaction_log",
+            CommandCategory::Message,
+            "Dump Compaction Log",
+            "Decode messages from a local compaction log file.",
+            RiskLevel::Safe,
+            vec![required_string(
+                "file",
+                "File",
+                "Local compaction log file path.",
+                "./compact.log",
+            )],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "message.print",
+            CommandCategory::Message,
+            "Print Messages",
+            "Pull and display messages for a topic with a local event cap.",
+            RiskLevel::Safe,
+            message_stream_args(vec![optional_string(
+                "lmq_parent_topic",
+                "LMQ Parent Topic",
+                "Optional parent topic for LMQ route lookup.",
+                "ParentTopicA",
+            )]),
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "message.print_by_queue",
+            CommandCategory::Message,
+            "Print Messages By Queue",
+            "Pull and display messages from one topic queue with a local event cap.",
+            RiskLevel::Safe,
+            message_stream_args(vec![
+                required_string("broker_name", "Broker Name", "Broker name.", "broker-a"),
+                number("queue_id", "Queue ID", "Queue id.", true, Some(0), Some(0)),
+                bool_arg(
+                    "print_messages",
+                    "Print Messages",
+                    "Include message batches in the result.",
+                    true,
+                ),
+                bool_arg("calculate_by_tag", "Calculate By Tag", "Return tag counters.", false),
+            ]),
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "message.consume",
+            CommandCategory::Message,
+            "Consume Messages",
+            "Pull messages by route or queue using Java consumeMessage-style targeting.",
+            RiskLevel::Safe,
+            vec![
+                required_string("topic", "Topic", "Topic name.", "TopicA"),
+                optional_string("broker_name", "Broker Name", "Optional broker name.", "broker-a"),
+                number("queue_id", "Queue ID", "Optional queue id.", false, None, Some(0)),
+                number("offset", "Offset", "Optional queue offset.", false, None, Some(0)),
+                optional_string("consumer_group", "Consumer Group", "Optional consumer group.", "GroupA"),
+                number(
+                    "begin_timestamp",
+                    "Begin Timestamp",
+                    "Optional begin timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "end_timestamp",
+                    "End Timestamp",
+                    "Optional end timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "message_number",
+                    "Message Number",
+                    "Maximum messages to consume.",
+                    true,
+                    Some(32),
+                    Some(1),
+                ),
+                number(
+                    "max_events",
+                    "Max Events",
+                    "Maximum pull events retained by the TUI.",
+                    true,
+                    Some(128),
+                    Some(1),
+                ),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
     ]);
+}
+
+fn export_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "export.configs",
+            CommandCategory::Export,
+            "Export Configs",
+            "Export broker config values for a cluster into a structured result.",
+            RiskLevel::Safe,
+            with_export_output_args(vec![required_string(
+                "cluster_name",
+                "Cluster",
+                "Cluster name.",
+                "DefaultCluster",
+            )]),
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "export.metadata",
+            CommandCategory::Export,
+            "Export Metadata",
+            "Export topic and subscription metadata from a broker or cluster.",
+            RiskLevel::Safe,
+            with_export_output_args(vec![
+                optional_string("cluster_name", "Cluster", "Cluster name target.", "DefaultCluster"),
+                optional_string(
+                    "broker_addr",
+                    "Broker Addr",
+                    "Broker address target.",
+                    "127.0.0.1:10911",
+                ),
+                bool_arg("topic_only", "Topic Only", "Export topic configs only.", false),
+                bool_arg(
+                    "subscription_group_only",
+                    "Subscription Only",
+                    "Export subscription groups only.",
+                    false,
+                ),
+                bool_arg("special_topic", "Special Topic", "Include special topics.", false),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "export.metadata_rocksdb",
+            CommandCategory::Export,
+            "Export Metadata In RocksDB",
+            "Read metadata entries from a local RocksDB config directory.",
+            RiskLevel::Safe,
+            with_export_output_args(vec![
+                required_string("path", "Path", "Local config directory path.", "./store/config"),
+                enum_arg(
+                    "config_type",
+                    "Config Type",
+                    "RocksDB config type.",
+                    &["topics", "subscriptionGroups"],
+                    "topics",
+                ),
+                bool_arg(
+                    "json_enable",
+                    "JSON",
+                    "Render values as JSON data where supported.",
+                    true,
+                ),
+            ]),
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "export.pop_record",
+            CommandCategory::Export,
+            "Export POP Records",
+            "Trigger broker-side POP record export or dry-run target resolution.",
+            RiskLevel::Mutating,
+            with_export_output_args(vec![
+                optional_string("cluster_name", "Cluster", "Cluster name target.", "DefaultCluster"),
+                optional_string(
+                    "broker_addr",
+                    "Broker Addr",
+                    "Broker address target.",
+                    "127.0.0.1:10911",
+                ),
+                bool_arg("dry_run", "Dry Run", "Resolve targets without exporting.", true),
+                number(
+                    "timeout_millis",
+                    "Timeout",
+                    "Optional broker request timeout in milliseconds.",
+                    false,
+                    None,
+                    Some(1),
+                ),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+    ]);
+}
+
+fn with_export_output_args(mut args: Vec<ArgSpec>) -> Vec<ArgSpec> {
+    args.push(optional_string(
+        "output_path",
+        "Output Path",
+        "Optional JSON file path for writing the export result.",
+        "./rocketmq-export.json",
+    ));
+    args.push(optional_bool_arg(
+        "overwrite",
+        "Overwrite",
+        "Replace the output file when it already exists.",
+        false,
+    ));
+    args
 }
 
 fn static_topic_commands(commands: &mut Vec<CommandSpec>) {
@@ -2742,6 +3117,16 @@ fn bool_arg(name: &'static str, label: &'static str, help: &'static str, default
         label,
         help,
         required: true,
+        kind: ArgKind::Bool { default },
+    }
+}
+
+fn optional_bool_arg(name: &'static str, label: &'static str, help: &'static str, default: bool) -> ArgSpec {
+    ArgSpec {
+        name,
+        label,
+        help,
+        required: false,
         kind: ArgKind::Bool { default },
     }
 }
@@ -2877,6 +3262,39 @@ fn subscription_group_args(
     ])
 }
 
+fn message_stream_args(mut extra: Vec<ArgSpec>) -> Vec<ArgSpec> {
+    let mut args = vec![
+        required_string("topic", "Topic", "Topic name.", "TopicA"),
+        required_string("sub_expression", "Sub Expression", "Tag expression.", "*"),
+        number(
+            "begin_timestamp",
+            "Begin Timestamp",
+            "Optional begin timestamp in milliseconds.",
+            false,
+            None,
+            Some(0),
+        ),
+        number(
+            "end_timestamp",
+            "End Timestamp",
+            "Optional end timestamp in milliseconds.",
+            false,
+            None,
+            Some(0),
+        ),
+        number(
+            "max_events",
+            "Max Events",
+            "Maximum pull events retained by the TUI.",
+            true,
+            Some(128),
+            Some(1),
+        ),
+    ];
+    args.append(&mut extra);
+    args
+}
+
 fn topic_target(form: &CommandFormState) -> anyhow::Result<TopicTarget> {
     let target = form.required_string("target")?;
     match form.enum_string("target_type")?.as_str() {
@@ -2916,6 +3334,38 @@ fn operation_target_label(broker_addr: Option<String>, cluster_name: Option<Stri
         .unwrap_or_else(|| fallback.to_string())
 }
 
+fn optional_u64_arg(form: &CommandFormState, name: &str) -> anyhow::Result<Option<u64>> {
+    form.optional_string(name)
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| anyhow::anyhow!("{name} must be an unsigned integer: {error}"))
+        })
+        .transpose()
+}
+
+fn number_usize_arg(form: &CommandFormState, name: &str) -> anyhow::Result<usize> {
+    let value = form.number_u64(name)?;
+    usize::try_from(value).map_err(|error| anyhow::anyhow!("{name} is out of range for usize: {error}"))
+}
+
+fn export_output_or_view<T>(
+    facade: &TuiAdminFacade,
+    title: &str,
+    form: &CommandFormState,
+    value: &T,
+    view: CommandResultViewModel,
+) -> anyhow::Result<CommandResultViewModel>
+where
+    T: Serialize + ?Sized,
+{
+    let Some(output_path) = form.optional_string("output_path") else {
+        return Ok(view);
+    };
+    let result = facade.write_export_json_file(output_path, form.bool_value("overwrite")?, value)?;
+    Ok(CommandResultViewModel::export_file_written(title, &result))
+}
+
 trait DebugTail {
     fn with_debug_tail(self, value: &impl std::fmt::Debug) -> CommandResultViewModel;
 }
@@ -2937,6 +3387,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::command_catalog;
+    use super::ArgKind;
+    use super::ResultViewKind;
     use super::RiskLevel;
     use crate::state::CommandFormState;
 
@@ -2987,6 +3439,7 @@ mod tests {
             "ha.sync_state_set",
             "stats.all",
             "producer.info",
+            "producer.send_message",
             "producer.send_message_status",
             "producer.check_message_send_rt",
             "auth.user.get",
@@ -3106,5 +3559,75 @@ mod tests {
         let mut form = CommandFormState::for_command(command);
         form.set_value("broker_name", "broker-a".to_string());
         assert_eq!(command.expected_confirmation(&form), Some("broker-a".to_string()));
+    }
+
+    #[test]
+    fn phase_four_catalog_exposes_core_ready_complex_workflows() {
+        let catalog = command_catalog();
+        let ids = catalog.iter().map(|command| command.id).collect::<HashSet<_>>();
+
+        for expected in [
+            "producer.send_message",
+            "message.dump_compaction_log",
+            "message.print",
+            "message.print_by_queue",
+            "message.consume",
+            "export.configs",
+            "export.metadata",
+            "export.metadata_rocksdb",
+            "export.pop_record",
+        ] {
+            assert!(ids.contains(expected), "missing command {expected}");
+        }
+    }
+
+    #[test]
+    fn phase_four_message_workflows_have_local_or_limit_guardrails() {
+        let catalog = command_catalog();
+        let dump = catalog
+            .iter()
+            .find(|command| command.id == "message.dump_compaction_log")
+            .unwrap();
+        assert!(dump.args.iter().any(|arg| arg.name == "file" && arg.required));
+
+        for command_id in ["message.print", "message.print_by_queue", "message.consume"] {
+            let command = catalog.iter().find(|command| command.id == command_id).unwrap();
+            assert_eq!(command.result_view_kind, ResultViewKind::Table);
+            assert!(command.args.iter().any(|arg| arg.name == "max_events" && arg.required));
+        }
+
+        let send_message = catalog
+            .iter()
+            .find(|command| command.id == "producer.send_message")
+            .unwrap();
+        assert_eq!(send_message.risk_level, RiskLevel::Mutating);
+        assert!(send_message.args.iter().any(|arg| arg.name == "body" && arg.required));
+
+        let pop_record = catalog
+            .iter()
+            .find(|command| command.id == "export.pop_record")
+            .unwrap();
+        assert_eq!(pop_record.risk_level, RiskLevel::Mutating);
+        assert_eq!(pop_record.confirmation_field, None);
+    }
+
+    #[test]
+    fn phase_four_export_commands_include_file_output_controls() {
+        let catalog = command_catalog();
+
+        for command_id in [
+            "export.configs",
+            "export.metadata",
+            "export.metadata_rocksdb",
+            "export.pop_record",
+        ] {
+            let command = catalog.iter().find(|command| command.id == command_id).unwrap();
+            assert!(command.args.iter().any(|arg| {
+                arg.name == "output_path" && !arg.required && matches!(arg.kind, ArgKind::OptionalString { .. })
+            }));
+            assert!(command.args.iter().any(|arg| {
+                arg.name == "overwrite" && !arg.required && matches!(arg.kind, ArgKind::Bool { default: false })
+            }));
+        }
     }
 }

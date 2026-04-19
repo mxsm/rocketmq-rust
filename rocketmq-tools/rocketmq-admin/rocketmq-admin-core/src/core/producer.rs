@@ -84,6 +84,7 @@ pub struct SendMessageRequest {
     broker_name: Option<CheetahString>,
     queue_id: Option<i32>,
     msg_trace_enable: bool,
+    namesrv_addr: Option<String>,
 }
 
 impl SendMessageRequest {
@@ -113,6 +114,7 @@ impl SendMessageRequest {
                 .transpose()?,
             queue_id,
             msg_trace_enable,
+            namesrv_addr: None,
         })
     }
 
@@ -142,6 +144,15 @@ impl SendMessageRequest {
 
     pub fn msg_trace_enable(&self) -> bool {
         self.msg_trace_enable
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
     }
 
     fn message(&self) -> RocketMQResult<Message> {
@@ -289,6 +300,9 @@ impl ProducerService {
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> RocketMQResult<SendMessageResult> {
         let mut builder = DefaultMQProducer::builder().producer_group(current_millis().to_string());
+        if let Some(namesrv_addr) = request.namesrv_addr() {
+            builder = builder.name_server_addr(namesrv_addr);
+        }
         if let Some(rpc_hook) = rpc_hook {
             builder = builder.rpc_hook(rpc_hook);
         }

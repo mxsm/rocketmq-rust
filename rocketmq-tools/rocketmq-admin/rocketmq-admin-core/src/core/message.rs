@@ -119,6 +119,7 @@ fn deal_time_to_hour_stamps(timestamp: i64) -> i64 {
 fn build_consume_admin(
     rpc_hook: Option<Arc<dyn RPCHook>>,
     consumer_group: Option<&CheetahString>,
+    namesrv_addr: Option<&str>,
 ) -> DefaultMQAdminExt {
     let mut admin = match (rpc_hook, consumer_group) {
         (Some(hook), Some(group)) => DefaultMQAdminExt::with_admin_ext_group_and_rpc_hook(group.clone(), hook),
@@ -126,17 +127,9 @@ fn build_consume_admin(
         (None, Some(group)) => DefaultMQAdminExt::with_admin_ext_group(group.clone()),
         (None, None) => DefaultMQAdminExt::new(),
     };
-    admin
-        .client_config_mut()
-        .set_instance_name(current_millis().to_string().into());
-    admin
-}
-
-fn build_default_admin(rpc_hook: Option<Arc<dyn RPCHook>>) -> DefaultMQAdminExt {
-    let mut admin = match rpc_hook {
-        Some(hook) => DefaultMQAdminExt::with_rpc_hook(hook),
-        None => DefaultMQAdminExt::new(),
-    };
+    if let Some(addr) = namesrv_addr.map(str::trim).filter(|addr| !addr.is_empty()) {
+        admin.set_namesrv_addr(addr);
+    }
     admin
         .client_config_mut()
         .set_instance_name(current_millis().to_string().into());
@@ -627,6 +620,7 @@ pub struct PrintMessagesRequest {
     begin_timestamp: Option<u64>,
     end_timestamp: Option<u64>,
     lmq_parent_topic: Option<CheetahString>,
+    namesrv_addr: Option<String>,
 }
 
 impl PrintMessagesRequest {
@@ -645,7 +639,25 @@ impl PrintMessagesRequest {
             lmq_parent_topic: trim_optional_string(lmq_parent_topic)
                 .map(|lmq_parent_topic| trim_required_cheetah("lmqParentTopic", lmq_parent_topic))
                 .transpose()?,
+            namesrv_addr: None,
         })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr.as_deref())
     }
 }
 
@@ -659,6 +671,7 @@ pub struct PrintMessagesByQueueRequest {
     end_timestamp: Option<u64>,
     print_messages: bool,
     calculate_by_tag: bool,
+    namesrv_addr: Option<String>,
 }
 
 impl PrintMessagesByQueueRequest {
@@ -682,7 +695,33 @@ impl PrintMessagesByQueueRequest {
             end_timestamp,
             print_messages,
             calculate_by_tag,
+            namesrv_addr: None,
         })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub fn broker_name(&self) -> &CheetahString {
+        &self.broker_name
+    }
+
+    pub fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr.as_deref())
     }
 }
 
@@ -696,6 +735,7 @@ pub struct ConsumeMessagesRequest {
     begin_timestamp: Option<i64>,
     end_timestamp: Option<i64>,
     message_number: i64,
+    namesrv_addr: Option<String>,
 }
 
 impl ConsumeMessagesRequest {
@@ -764,7 +804,21 @@ impl ConsumeMessagesRequest {
             begin_timestamp,
             end_timestamp,
             message_number,
+            namesrv_addr: None,
         })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
     }
 }
 
@@ -1211,8 +1265,9 @@ impl MessageService {
     where
         F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
     {
-        let mut admin = build_default_admin(rpc_hook);
-        admin.start().await?;
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
         let result = Self::print_messages_with_admin(&admin, &request, sink).await;
         admin.shutdown().await;
         result
@@ -1339,8 +1394,9 @@ impl MessageService {
     where
         F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
     {
-        let mut admin = build_default_admin(rpc_hook);
-        admin.start().await?;
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
         let result = Self::print_messages_by_queue_with_admin(&admin, &request, sink).await;
         admin.shutdown().await;
         result
@@ -1463,7 +1519,7 @@ impl MessageService {
     where
         F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
     {
-        let mut admin = build_consume_admin(rpc_hook, request.consumer_group.as_ref());
+        let mut admin = build_consume_admin(rpc_hook, request.consumer_group.as_ref(), request.namesrv_addr());
         admin.start().await?;
         let result = Self::consume_messages_with_admin(&admin, &request, sink).await;
         admin.shutdown().await;
@@ -1712,6 +1768,39 @@ mod tests {
     fn consume_request_requires_broker_before_queue() {
         let result = ConsumeMessagesRequest::try_new("topic", None, Some(0), None, None, None, None, 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn streaming_message_requests_carry_optional_namesrv() {
+        let print = PrintMessagesRequest::try_new(" TopicA ", " * ", None, None, Some(" ParentTopic ".into()))
+            .unwrap()
+            .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+        assert_eq!(print.topic().as_str(), "TopicA");
+        assert_eq!(print.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let by_queue =
+            PrintMessagesByQueueRequest::try_new(" TopicA ", " broker-a ", 1, " * ", None, None, true, false)
+                .unwrap()
+                .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+        assert_eq!(by_queue.topic().as_str(), "TopicA");
+        assert_eq!(by_queue.broker_name().as_str(), "broker-a");
+        assert_eq!(by_queue.queue_id(), 1);
+        assert_eq!(by_queue.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let consume = ConsumeMessagesRequest::try_new(
+            " TopicA ",
+            Some(" broker-a ".into()),
+            Some(1),
+            Some(10),
+            Some(" GroupA ".into()),
+            None,
+            None,
+            32,
+        )
+        .unwrap()
+        .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+        assert_eq!(consume.topic().as_str(), "TopicA");
+        assert_eq!(consume.namesrv_addr(), Some("127.0.0.1:9876"));
     }
 
     #[test]
