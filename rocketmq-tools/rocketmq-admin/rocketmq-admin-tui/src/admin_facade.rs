@@ -79,7 +79,10 @@ use rocketmq_admin_core::core::consumer::ConsumerRunningInfoRequest;
 use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
 use rocketmq_admin_core::core::consumer::ConsumerService;
 use rocketmq_admin_core::core::consumer::DeleteSubscriptionGroupRequest;
+use rocketmq_admin_core::core::consumer::MonitoringEvent;
+use rocketmq_admin_core::core::consumer::MonitoringResult;
 use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
+use rocketmq_admin_core::core::consumer::StartMonitoringRequest;
 use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupListRequest;
 use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupRequest;
 use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
@@ -813,6 +816,24 @@ impl TuiAdminFacade {
             show_client_ip,
             cluster,
             self.namesrv_addr.clone(),
+        )
+    }
+
+    pub fn start_monitoring_request(
+        &self,
+        round_count: u32,
+        round_interval_millis: u64,
+        include_undone_msgs: bool,
+        include_running_info: bool,
+        max_events: Option<usize>,
+    ) -> RocketMQResult<StartMonitoringRequest> {
+        StartMonitoringRequest::try_new(
+            self.namesrv_addr.clone(),
+            round_count,
+            round_interval_millis,
+            include_undone_msgs,
+            include_running_info,
+            max_events,
         )
     }
 
@@ -2099,6 +2120,34 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn start_monitoring_with_progress<F>(
+        &self,
+        round_count: u32,
+        round_interval_millis: u64,
+        include_undone_msgs: bool,
+        include_running_info: bool,
+        max_events: usize,
+        mut progress: F,
+    ) -> RocketMQResult<MonitoringResult>
+    where
+        F: FnMut(String),
+    {
+        let request = self.start_monitoring_request(
+            round_count,
+            round_interval_millis,
+            include_undone_msgs,
+            include_running_info,
+            Some(max_events),
+        )?;
+        let mut event_count = 0usize;
+        ConsumerService::start_monitoring_with_event_sink_by_request_with_rpc_hook(request, None, |event| {
+            event_count += 1;
+            progress(monitoring_progress_message(event_count, event));
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn clone_group_offset(
         &self,
         src_group: impl Into<String>,
@@ -2655,6 +2704,47 @@ impl TuiAdminFacade {
     }
 }
 
+fn monitoring_progress_message(event_count: usize, event: &MonitoringEvent) -> String {
+    let detail = match event {
+        MonitoringEvent::BeginRound { round, .. } => format!("begin round {round}"),
+        MonitoringEvent::UndoneMsgs {
+            round,
+            consumer_group,
+            topic,
+            undone_msgs_total,
+            ..
+        } => format!("round {round} {consumer_group}/{topic} lag {undone_msgs_total}"),
+        MonitoringEvent::ConsumerRunningInfo {
+            round,
+            consumer_group,
+            client_count,
+            subscription_consistent,
+            ..
+        } => format!(
+            "round {round} {consumer_group} running clients {client_count}, subscription consistent: {}",
+            subscription_consistent
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        MonitoringEvent::Error {
+            round,
+            consumer_group,
+            operation,
+            error,
+        } => format!(
+            "round {round} {} {operation} failed: {error}",
+            consumer_group.as_deref().unwrap_or("cluster")
+        ),
+        MonitoringEvent::EndRound {
+            round,
+            elapsed_millis,
+            groups_scanned,
+            ..
+        } => format!("end round {round}, scanned {groups_scanned} groups in {elapsed_millis} ms"),
+    };
+    format!("monitor event {event_count}: {detail}")
+}
+
 const MESSAGE_EVENT_LIMIT_REACHED: &str = "__rocketmq_admin_tui_message_event_limit_reached__";
 
 fn message_pull_progress_message(event_count: usize, event: &MessagePullEvent) -> String {
@@ -2781,6 +2871,7 @@ fn split_message_ids(value: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::TuiAdminFacade;
+    use rocketmq_admin_core::core::consumer::MonitoringEvent;
     use rocketmq_admin_core::core::message::MessagePullEvent;
 
     #[test]
@@ -3064,6 +3155,16 @@ mod tests {
         assert_eq!(progress.consumer_group().unwrap().as_str(), "GroupA");
         assert!(progress.show_client_ip());
 
+        let monitoring = facade
+            .start_monitoring_request(2, 1_000, true, false, Some(32))
+            .unwrap();
+        assert_eq!(monitoring.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(monitoring.round_count(), 2);
+        assert_eq!(monitoring.round_interval_millis(), 1_000);
+        assert!(monitoring.include_undone_msgs());
+        assert!(!monitoring.include_running_info());
+        assert_eq!(monitoring.max_events(), Some(32));
+
         let reset = facade
             .reset_offset_by_time_request(" GroupA ", " TopicA ", 1234)
             .unwrap();
@@ -3135,6 +3236,7 @@ mod tests {
             false,
             Some("DefaultCluster".to_string()),
         ));
+        std::mem::drop(facade.start_monitoring_with_progress(1, 1_000, true, true, 16, |_| {}));
         std::mem::drop(facade.clone_group_offset("SourceGroup", "DestGroup", "TopicA", false));
         std::mem::drop(facade.query_consumer_status("GroupA", "TopicA", Some("client-a".to_string())));
         std::mem::drop(facade.skip_accumulated_message(
@@ -3562,6 +3664,25 @@ mod tests {
 
         assert!(message.contains("3"));
         assert!(message.contains("separator"));
+    }
+
+    #[test]
+    fn phase_five_monitoring_progress_messages_include_event_context() {
+        let message = super::monitoring_progress_message(
+            2,
+            &MonitoringEvent::UndoneMsgs {
+                round: 1,
+                consumer_group: "GroupA".to_string(),
+                topic: "TopicA".to_string(),
+                undone_msgs_total: 42,
+                undone_msgs_single_mq: 40,
+                undone_msgs_delay_time_millis: None,
+            },
+        );
+
+        assert!(message.contains("2"));
+        assert!(message.contains("GroupA/TopicA"));
+        assert!(message.contains("42"));
     }
 
     #[test]

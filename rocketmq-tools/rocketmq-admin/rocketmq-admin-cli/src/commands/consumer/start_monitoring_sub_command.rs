@@ -40,7 +40,11 @@ impl StartMonitoringSubCommand {
 
 impl CommandExecute for StartMonitoringSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
-        ConsumerService::start_monitoring_by_request_with_rpc_hook(self.request(), rpc_hook)
+        let result = ConsumerService::start_monitoring_by_request_with_rpc_hook(self.request(), rpc_hook).await?;
+        for event in result.events {
+            println!("{event:?}");
+        }
+        Ok(())
     }
 }
 

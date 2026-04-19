@@ -16,6 +16,8 @@ use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
 use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
 use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
 use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
+use rocketmq_admin_core::core::consumer::MonitoringEvent;
+use rocketmq_admin_core::core::consumer::MonitoringResult;
 use rocketmq_admin_core::core::export_data::ExportConfigsResult;
 use rocketmq_admin_core::core::export_data::ExportFileWriteResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
@@ -609,6 +611,21 @@ impl CommandResultViewModel {
                     .collect(),
             ),
         }
+    }
+
+    pub fn consumer_monitoring(title: impl Into<String>, result: &MonitoringResult) -> Self {
+        let mut rows = result.events.iter().map(monitoring_event_row).collect::<Vec<_>>();
+        if result.truncated {
+            rows.push(vec![
+                "truncated".to_string(),
+                result.rounds_completed.to_string(),
+                String::new(),
+                String::new(),
+                "max events reached".to_string(),
+                format!("groups: {}, errors: {}", result.groups_scanned, result.error_count),
+            ]);
+        }
+        Self::table(title, &["Event", "Round", "Group", "Topic", "Metric", "Detail"], rows)
     }
 
     pub fn message_query_by_key(title: impl Into<String>, result: &QueryMessageByKeyResult) -> Self {
@@ -1425,6 +1442,85 @@ fn empty_message_detail_row(message_id: &str, status: &str, note: &str) -> Vec<S
     ]
 }
 
+fn monitoring_event_row(event: &MonitoringEvent) -> Vec<String> {
+    match event {
+        MonitoringEvent::BeginRound {
+            round,
+            timestamp_millis,
+        } => vec![
+            "begin-round".to_string(),
+            round.to_string(),
+            String::new(),
+            String::new(),
+            "timestamp_millis".to_string(),
+            timestamp_millis.to_string(),
+        ],
+        MonitoringEvent::UndoneMsgs {
+            round,
+            consumer_group,
+            topic,
+            undone_msgs_total,
+            undone_msgs_single_mq,
+            undone_msgs_delay_time_millis,
+        } => vec![
+            "undone-msgs".to_string(),
+            round.to_string(),
+            consumer_group.clone(),
+            topic.clone(),
+            format!("total={undone_msgs_total}, single_mq={undone_msgs_single_mq}"),
+            undone_msgs_delay_time_millis
+                .map(|delay| format!("delay_ms={delay}"))
+                .unwrap_or_else(|| "delay_ms=not-sampled".to_string()),
+        ],
+        MonitoringEvent::ConsumerRunningInfo {
+            round,
+            consumer_group,
+            client_count,
+            subscription_consistent,
+            process_queue_analysis,
+        } => vec![
+            "running-info".to_string(),
+            round.to_string(),
+            consumer_group.clone(),
+            String::new(),
+            format!("clients={client_count}"),
+            format!(
+                "subscription_consistent={}, analysis={}",
+                subscription_consistent
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                process_queue_analysis.join("; ")
+            ),
+        ],
+        MonitoringEvent::Error {
+            round,
+            consumer_group,
+            operation,
+            error,
+        } => vec![
+            "error".to_string(),
+            round.to_string(),
+            consumer_group.clone().unwrap_or_default(),
+            String::new(),
+            operation.clone(),
+            error.clone(),
+        ],
+        MonitoringEvent::EndRound {
+            round,
+            elapsed_millis,
+            groups_scanned,
+            events_emitted,
+        } => vec![
+            "end-round".to_string(),
+            round.to_string(),
+            String::new(),
+            String::new(),
+            format!("groups={groups_scanned}, events={events_emitted}"),
+            format!("elapsed_ms={elapsed_millis}"),
+        ],
+    }
+}
+
 fn message_pull_event_row(event: &MessagePullEvent) -> Vec<String> {
     match event {
         MessagePullEvent::QueueRange {
@@ -1598,6 +1694,8 @@ mod tests {
     use rocketmq_admin_core::core::consumer::ConsumerProgressRow;
     use rocketmq_admin_core::core::consumer::ConsumerRunningInfoItem;
     use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
+    use rocketmq_admin_core::core::consumer::MonitoringEvent;
+    use rocketmq_admin_core::core::consumer::MonitoringResult;
     use rocketmq_admin_core::core::export_data::ExportConfigsResult;
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry;
@@ -2595,6 +2693,49 @@ mod tests {
             &["queue-range", "TopicA", "broker-a", "1", "10..20", "", ""],
         );
         assert!(pull_events.text_body().contains("truncated after 2 events"));
+    }
+
+    #[test]
+    fn phase_five_monitoring_events_render_as_table() {
+        let result = CommandResultViewModel::consumer_monitoring(
+            "Start Monitoring",
+            &MonitoringResult {
+                events: vec![
+                    MonitoringEvent::BeginRound {
+                        round: 1,
+                        timestamp_millis: 1234,
+                    },
+                    MonitoringEvent::UndoneMsgs {
+                        round: 1,
+                        consumer_group: "GroupA".to_string(),
+                        topic: "TopicA".to_string(),
+                        undone_msgs_total: 42,
+                        undone_msgs_single_mq: 40,
+                        undone_msgs_delay_time_millis: None,
+                    },
+                    MonitoringEvent::ConsumerRunningInfo {
+                        round: 1,
+                        consumer_group: "GroupA".to_string(),
+                        client_count: 2,
+                        subscription_consistent: Some(false),
+                        process_queue_analysis: vec!["client-a stalled".to_string()],
+                    },
+                ],
+                rounds_completed: 1,
+                groups_scanned: 1,
+                error_count: 0,
+                truncated: true,
+            },
+        );
+
+        assert_table(
+            &result,
+            &["Event", "Round", "Group", "Topic", "Metric", "Detail"],
+            &["begin-round", "1", "", "", "timestamp_millis", "1234"],
+        );
+        assert!(result.text_body().contains("undone-msgs"));
+        assert!(result.text_body().contains("client-a stalled"));
+        assert!(result.text_body().contains("max events reached"));
     }
 
     fn assert_table(result: &CommandResultViewModel, headers: &[&str], first_row: &[&str]) {

@@ -18,6 +18,10 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
@@ -39,7 +43,6 @@ use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::core::admin::AdminBuilder;
 use crate::core::broker::BrokerTarget;
 use crate::core::resolver::BrokerAddressResolver;
-use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 use crate::core::ToolsError;
 
@@ -47,6 +50,13 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn current_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
@@ -397,22 +407,130 @@ impl ConsumerProgressRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartMonitoringRequest {
     namesrv_addr: Option<String>,
+    round_count: u32,
+    round_interval_millis: u64,
+    include_undone_msgs: bool,
+    include_running_info: bool,
+    max_events: Option<usize>,
 }
 
 impl StartMonitoringRequest {
+    pub const DEFAULT_ROUND_COUNT: u32 = 1;
+    pub const DEFAULT_ROUND_INTERVAL_MILLIS: u64 = 60_000;
+
     pub fn new(namesrv_addr: Option<String>) -> Self {
         Self {
             namesrv_addr: trim_optional_string(namesrv_addr),
+            round_count: Self::DEFAULT_ROUND_COUNT,
+            round_interval_millis: Self::DEFAULT_ROUND_INTERVAL_MILLIS,
+            include_undone_msgs: true,
+            include_running_info: true,
+            max_events: None,
         }
+    }
+
+    pub fn try_new(
+        namesrv_addr: Option<String>,
+        round_count: u32,
+        round_interval_millis: u64,
+        include_undone_msgs: bool,
+        include_running_info: bool,
+        max_events: Option<usize>,
+    ) -> RocketMQResult<Self> {
+        if round_count == 0 {
+            return Err(ToolsError::validation_error("roundCount", "roundCount must be greater than zero").into());
+        }
+        if round_interval_millis == 0 {
+            return Err(ToolsError::validation_error(
+                "roundIntervalMillis",
+                "roundIntervalMillis must be greater than zero",
+            )
+            .into());
+        }
+        if max_events == Some(0) {
+            return Err(ToolsError::validation_error("maxEvents", "maxEvents must be greater than zero").into());
+        }
+        Ok(Self {
+            namesrv_addr: trim_optional_string(namesrv_addr),
+            round_count,
+            round_interval_millis,
+            include_undone_msgs,
+            include_running_info,
+            max_events,
+        })
     }
 
     pub fn namesrv_addr(&self) -> Option<&str> {
         self.namesrv_addr.as_deref()
     }
 
+    pub fn round_count(&self) -> u32 {
+        self.round_count
+    }
+
+    pub fn round_interval_millis(&self) -> u64 {
+        self.round_interval_millis
+    }
+
+    pub fn include_undone_msgs(&self) -> bool {
+        self.include_undone_msgs
+    }
+
+    pub fn include_running_info(&self) -> bool {
+        self.include_running_info
+    }
+
+    pub fn max_events(&self) -> Option<usize> {
+        self.max_events
+    }
+
     pub fn admin_builder(&self) -> AdminBuilder {
         builder_with_namesrv(self.namesrv_addr())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MonitoringEvent {
+    BeginRound {
+        round: u32,
+        timestamp_millis: u64,
+    },
+    UndoneMsgs {
+        round: u32,
+        consumer_group: String,
+        topic: String,
+        undone_msgs_total: i64,
+        undone_msgs_single_mq: i64,
+        undone_msgs_delay_time_millis: Option<i64>,
+    },
+    ConsumerRunningInfo {
+        round: u32,
+        consumer_group: String,
+        client_count: usize,
+        subscription_consistent: Option<bool>,
+        process_queue_analysis: Vec<String>,
+    },
+    Error {
+        round: u32,
+        consumer_group: Option<String>,
+        operation: String,
+        error: String,
+    },
+    EndRound {
+        round: u32,
+        elapsed_millis: u64,
+        groups_scanned: usize,
+        events_emitted: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitoringResult {
+    pub events: Vec<MonitoringEvent>,
+    pub rounds_completed: u32,
+    pub groups_scanned: usize,
+    pub error_count: usize,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -878,13 +996,261 @@ impl ConsumerService {
         }
     }
 
-    pub fn start_monitoring_by_request_with_rpc_hook(
-        _request: StartMonitoringRequest,
-        _rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> RocketMQResult<()> {
-        Err(RocketMQError::Internal(
-            "ConsumerService: MonitorService is not implemented yet".to_string(),
-        ))
+    pub async fn start_monitoring_by_request_with_rpc_hook(
+        request: StartMonitoringRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<MonitoringResult> {
+        Self::start_monitoring_with_event_sink_by_request_with_rpc_hook(request, rpc_hook, |_| Ok(())).await
+    }
+
+    pub async fn start_monitoring_with_event_sink_by_request_with_rpc_hook<F>(
+        request: StartMonitoringRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        mut event_sink: F,
+    ) -> RocketMQResult<MonitoringResult>
+    where
+        F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
+    {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::start_monitoring_with_admin(&admin, &request, &mut event_sink).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn start_monitoring_with_admin<F>(
+        admin: &DefaultMQAdminExt,
+        request: &StartMonitoringRequest,
+        event_sink: &mut F,
+    ) -> RocketMQResult<MonitoringResult>
+    where
+        F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
+    {
+        let mut events = Vec::new();
+        let mut truncated = false;
+        let mut groups_scanned = 0_usize;
+        let mut error_count = 0_usize;
+        let mut rounds_completed = 0_u32;
+
+        for round in 1..=request.round_count() {
+            let round_start = Instant::now();
+            let events_before_round = events.len();
+            Self::emit_monitoring_event(
+                &mut events,
+                request.max_events(),
+                &mut truncated,
+                event_sink,
+                MonitoringEvent::BeginRound {
+                    round,
+                    timestamp_millis: current_time_millis(),
+                },
+            )?;
+
+            match admin.fetch_all_topic_list().await {
+                Ok(topic_list) => {
+                    let mut retry_topics = topic_list
+                        .topic_list
+                        .into_iter()
+                        .filter(|topic| topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX))
+                        .collect::<Vec<_>>();
+                    retry_topics.sort();
+
+                    for retry_topic in retry_topics {
+                        let consumer_group = KeyBuilder::parse_group(&retry_topic);
+                        groups_scanned += 1;
+                        if request.include_undone_msgs() {
+                            match Self::query_consumer_progress_with_admin(
+                                admin,
+                                &ConsumerProgressRequest::try_new(
+                                    Some(consumer_group.clone()),
+                                    None,
+                                    false,
+                                    None,
+                                    None,
+                                )?,
+                            )
+                            .await
+                            {
+                                Ok(progress) => {
+                                    for event in
+                                        Self::monitoring_events_from_progress_result(round, &consumer_group, &progress)
+                                    {
+                                        Self::emit_monitoring_event(
+                                            &mut events,
+                                            request.max_events(),
+                                            &mut truncated,
+                                            event_sink,
+                                            event,
+                                        )?;
+                                    }
+                                }
+                                Err(error) => {
+                                    error_count += 1;
+                                    Self::emit_monitoring_event(
+                                        &mut events,
+                                        request.max_events(),
+                                        &mut truncated,
+                                        event_sink,
+                                        MonitoringEvent::Error {
+                                            round,
+                                            consumer_group: Some(consumer_group.clone()),
+                                            operation: "examineConsumeStats".to_string(),
+                                            error: error.to_string(),
+                                        },
+                                    )?;
+                                }
+                            }
+                        }
+
+                        if request.include_running_info() {
+                            match Self::query_consumer_running_info_with_admin(
+                                admin,
+                                &ConsumerRunningInfoRequest::try_new(consumer_group.clone(), None, None, false, None)?,
+                            )
+                            .await
+                            {
+                                Ok(running_info) => {
+                                    Self::emit_monitoring_event(
+                                        &mut events,
+                                        request.max_events(),
+                                        &mut truncated,
+                                        event_sink,
+                                        Self::monitoring_event_from_running_info_result(
+                                            round,
+                                            &consumer_group,
+                                            &running_info,
+                                        ),
+                                    )?;
+                                }
+                                Err(error) => {
+                                    error_count += 1;
+                                    Self::emit_monitoring_event(
+                                        &mut events,
+                                        request.max_events(),
+                                        &mut truncated,
+                                        event_sink,
+                                        MonitoringEvent::Error {
+                                            round,
+                                            consumer_group: Some(consumer_group),
+                                            operation: "consumerRunningInfo".to_string(),
+                                            error: error.to_string(),
+                                        },
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    error_count += 1;
+                    Self::emit_monitoring_event(
+                        &mut events,
+                        request.max_events(),
+                        &mut truncated,
+                        event_sink,
+                        MonitoringEvent::Error {
+                            round,
+                            consumer_group: None,
+                            operation: "fetchAllTopicList".to_string(),
+                            error: error.to_string(),
+                        },
+                    )?;
+                }
+            }
+
+            rounds_completed = round;
+            let events_emitted = events.len().saturating_sub(events_before_round);
+            Self::emit_monitoring_event(
+                &mut events,
+                request.max_events(),
+                &mut truncated,
+                event_sink,
+                MonitoringEvent::EndRound {
+                    round,
+                    elapsed_millis: round_start.elapsed().as_millis() as u64,
+                    groups_scanned,
+                    events_emitted,
+                },
+            )?;
+
+            if round < request.round_count() {
+                tokio::time::sleep(Duration::from_millis(request.round_interval_millis())).await;
+            }
+        }
+
+        Ok(MonitoringResult {
+            events,
+            rounds_completed,
+            groups_scanned,
+            error_count,
+            truncated,
+        })
+    }
+
+    pub fn monitoring_events_from_progress_result(
+        round: u32,
+        consumer_group: &str,
+        result: &ConsumerProgressResult,
+    ) -> Vec<MonitoringEvent> {
+        let ConsumerProgressResult::Group(progress) = result else {
+            return Vec::new();
+        };
+
+        let mut by_topic: BTreeMap<String, (i64, i64)> = BTreeMap::new();
+        for row in &progress.rows {
+            let lag = row.diff.max(0);
+            let entry = by_topic.entry(row.topic.to_string()).or_default();
+            entry.0 += lag;
+            entry.1 = entry.1.max(lag);
+        }
+
+        by_topic
+            .into_iter()
+            .map(
+                |(topic, (undone_msgs_total, undone_msgs_single_mq))| MonitoringEvent::UndoneMsgs {
+                    round,
+                    consumer_group: consumer_group.to_string(),
+                    topic,
+                    undone_msgs_total,
+                    undone_msgs_single_mq,
+                    undone_msgs_delay_time_millis: None,
+                },
+            )
+            .collect()
+    }
+
+    pub fn monitoring_event_from_running_info_result(
+        round: u32,
+        consumer_group: &str,
+        result: &ConsumerRunningInfoResult,
+    ) -> MonitoringEvent {
+        MonitoringEvent::ConsumerRunningInfo {
+            round,
+            consumer_group: consumer_group.to_string(),
+            client_count: result.items.len(),
+            subscription_consistent: result.subscription_consistent,
+            process_queue_analysis: result.process_queue_analysis.clone(),
+        }
+    }
+
+    fn emit_monitoring_event<F>(
+        events: &mut Vec<MonitoringEvent>,
+        max_events: Option<usize>,
+        truncated: &mut bool,
+        event_sink: &mut F,
+        event: MonitoringEvent,
+    ) -> RocketMQResult<()>
+    where
+        F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
+    {
+        if max_events.is_some_and(|max_events| events.len() >= max_events) {
+            *truncated = true;
+            return Ok(());
+        }
+        event_sink(&event)?;
+        events.push(event);
+        Ok(())
     }
 }
 
@@ -1025,11 +1391,122 @@ mod tests {
     }
 
     #[test]
-    fn start_monitoring_request_trims_namesrv() {
+    fn start_monitoring_request_trims_namesrv_and_validates_limits() {
         let request = StartMonitoringRequest::new(Some(" 127.0.0.1:9876 ".into()));
         assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(request.round_count(), StartMonitoringRequest::DEFAULT_ROUND_COUNT);
+        assert_eq!(
+            request.round_interval_millis(),
+            StartMonitoringRequest::DEFAULT_ROUND_INTERVAL_MILLIS
+        );
+        assert!(request.include_undone_msgs());
+        assert!(request.include_running_info());
+        assert_eq!(request.max_events(), None);
 
         let request = StartMonitoringRequest::new(Some(" ".into()));
         assert_eq!(request.namesrv_addr(), None);
+
+        let request =
+            StartMonitoringRequest::try_new(Some(" 127.0.0.1:9876 ".into()), 2, 1_000, true, false, Some(16)).unwrap();
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(request.round_count(), 2);
+        assert_eq!(request.round_interval_millis(), 1_000);
+        assert!(request.include_undone_msgs());
+        assert!(!request.include_running_info());
+        assert_eq!(request.max_events(), Some(16));
+
+        assert!(StartMonitoringRequest::try_new(None, 0, 1_000, true, true, None).is_err());
+        assert!(StartMonitoringRequest::try_new(None, 1, 0, true, true, None).is_err());
+        assert!(StartMonitoringRequest::try_new(None, 1, 1_000, true, true, Some(0)).is_err());
+    }
+
+    #[test]
+    fn monitoring_progress_conversion_groups_lag_by_topic() {
+        let result = ConsumerProgressResult::Group(ConsumerGroupProgressResult {
+            rows: vec![
+                ConsumerProgressRow {
+                    topic: "TopicA".into(),
+                    broker_name: "broker-a".into(),
+                    queue_id: 0,
+                    broker_offset: 100,
+                    consumer_offset: 95,
+                    client_ip: None,
+                    diff: 5,
+                    inflight: 0,
+                    last_timestamp: 0,
+                },
+                ConsumerProgressRow {
+                    topic: "TopicA".into(),
+                    broker_name: "broker-a".into(),
+                    queue_id: 1,
+                    broker_offset: 120,
+                    consumer_offset: 117,
+                    client_ip: None,
+                    diff: 3,
+                    inflight: 0,
+                    last_timestamp: 0,
+                },
+                ConsumerProgressRow {
+                    topic: "TopicB".into(),
+                    broker_name: "broker-b".into(),
+                    queue_id: 0,
+                    broker_offset: 10,
+                    consumer_offset: 11,
+                    client_ip: None,
+                    diff: -1,
+                    inflight: 0,
+                    last_timestamp: 0,
+                },
+            ],
+            consume_tps: 10.0,
+            diff_total: 7,
+            inflight_total: 0,
+            show_client_ip: false,
+        });
+
+        let events = ConsumerService::monitoring_events_from_progress_result(3, "GroupA", &result);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            MonitoringEvent::UndoneMsgs {
+                round: 3,
+                consumer_group,
+                topic,
+                undone_msgs_total: 8,
+                undone_msgs_single_mq: 5,
+                undone_msgs_delay_time_millis: None,
+            } if consumer_group == "GroupA" && topic == "TopicA"
+        ));
+        assert!(matches!(
+            &events[1],
+            MonitoringEvent::UndoneMsgs {
+                topic,
+                undone_msgs_total: 0,
+                undone_msgs_single_mq: 0,
+                ..
+            } if topic == "TopicB"
+        ));
+    }
+
+    #[test]
+    fn monitoring_running_info_conversion_preserves_diagnostics() {
+        let result = ConsumerRunningInfoResult {
+            items: Vec::new(),
+            subscription_consistent: Some(false),
+            process_queue_analysis: vec!["client-a process queue stalled".to_string()],
+        };
+
+        let event = ConsumerService::monitoring_event_from_running_info_result(2, "GroupA", &result);
+        assert!(matches!(
+            event,
+            MonitoringEvent::ConsumerRunningInfo {
+                round: 2,
+                ref consumer_group,
+                client_count: 0,
+                subscription_consistent: Some(false),
+                ref process_queue_analysis,
+            } if consumer_group == "GroupA"
+                && process_queue_analysis == &vec!["client-a process queue stalled".to_string()]
+        ));
     }
 }

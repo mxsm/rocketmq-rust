@@ -719,6 +719,21 @@ where
                 .await?;
             CommandResultViewModel::consumer_progress(spec.title, &result)
         }
+        "consumer.start_monitoring" => {
+            let max_events =
+                usize::try_from(form.number_u64("max_events")?).context("max_events is out of range for usize")?;
+            let result = facade
+                .start_monitoring_with_progress(
+                    form.number_u32("round_count")?,
+                    form.number_u64("round_interval_millis")?,
+                    form.bool_value("include_undone_msgs")?,
+                    form.bool_value("include_running_info")?,
+                    max_events,
+                    &mut progress,
+                )
+                .await?;
+            CommandResultViewModel::consumer_monitoring(spec.title, &result)
+        }
         "consumer.delete_subscription_group" => {
             let group = form.required_string("group_name")?;
             let result = facade
@@ -2159,6 +2174,53 @@ fn consumer_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "consumer.start_monitoring",
+            CommandCategory::Consumer,
+            "Start Monitoring",
+            "Run bounded consumer monitoring rounds and stream typed monitor events.",
+            RiskLevel::Safe,
+            vec![
+                number(
+                    "round_count",
+                    "Rounds",
+                    "Monitoring round count.",
+                    true,
+                    Some(1),
+                    Some(1),
+                ),
+                number(
+                    "round_interval_millis",
+                    "Round Interval",
+                    "Delay between rounds in milliseconds.",
+                    true,
+                    Some(60_000),
+                    Some(1),
+                ),
+                bool_arg(
+                    "include_undone_msgs",
+                    "Undone Msgs",
+                    "Report consumer lag by topic.",
+                    true,
+                ),
+                bool_arg(
+                    "include_running_info",
+                    "Running Info",
+                    "Report consumer running-info diagnostics.",
+                    true,
+                ),
+                number(
+                    "max_events",
+                    "Max Events",
+                    "Maximum monitor events to keep.",
+                    true,
+                    Some(128),
+                    Some(1),
+                ),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
             "consumer.delete_subscription_group",
             CommandCategory::Consumer,
             "Delete Subscription Group",
@@ -3426,6 +3488,7 @@ mod tests {
             "consumer.config",
             "consumer.running_info",
             "consumer.progress",
+            "consumer.start_monitoring",
             "consumer.delete_subscription_group",
             "consumer.set_consume_mode",
             "offset.clone_group",
@@ -3629,5 +3692,29 @@ mod tests {
                 arg.name == "overwrite" && !arg.required && matches!(arg.kind, ArgKind::Bool { default: false })
             }));
         }
+    }
+
+    #[test]
+    fn phase_five_catalog_exposes_bounded_monitoring_command() {
+        let catalog = command_catalog();
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "consumer.start_monitoring")
+            .unwrap();
+
+        assert_eq!(command.risk_level, RiskLevel::Safe);
+        assert_eq!(command.result_view_kind, ResultViewKind::Table);
+        assert!(command.args.iter().any(|arg| {
+            arg.name == "round_count"
+                && arg.required
+                && matches!(
+                    arg.kind,
+                    ArgKind::Number {
+                        default: Some(1),
+                        min: Some(1)
+                    }
+                )
+        }));
+        assert!(command.args.iter().any(|arg| arg.name == "max_events" && arg.required));
     }
 }
