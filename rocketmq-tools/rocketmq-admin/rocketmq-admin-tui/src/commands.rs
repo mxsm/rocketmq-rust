@@ -26,6 +26,7 @@ pub enum CommandCategory {
     Producer,
     Lite,
     Message,
+    StaticTopic,
 }
 
 impl CommandCategory {
@@ -46,6 +47,7 @@ impl CommandCategory {
             Self::Producer => "Producer",
             Self::Lite => "Lite",
             Self::Message => "Message",
+            Self::StaticTopic => "Static Topic",
         }
     }
 }
@@ -205,6 +207,7 @@ pub fn command_catalog() -> Vec<CommandSpec> {
     producer_commands(&mut commands);
     lite_commands(&mut commands);
     message_commands(&mut commands);
+    static_topic_commands(&mut commands);
     commands
 }
 
@@ -333,6 +336,52 @@ pub async fn execute_command(
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
         }
+        "auth.user.create" => {
+            let result = facade
+                .create_auth_user(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("username")?,
+                    form.required_string("password")?,
+                    form.optional_string("user_type"),
+                )
+                .await?;
+            CommandResultViewModel::auth_operation(spec.title, &result)
+        }
+        "auth.user.update" => {
+            let result = facade
+                .update_auth_user(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("username")?,
+                    form.optional_string("password"),
+                    form.optional_string("user_type"),
+                    form.optional_string("user_status"),
+                )
+                .await?;
+            CommandResultViewModel::auth_operation(spec.title, &result)
+        }
+        "auth.user.delete" => {
+            let username = form.required_string("username")?;
+            let result = facade
+                .delete_auth_user(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    username.clone(),
+                )
+                .await?;
+            CommandResultViewModel::auth_operation(spec.title, &result).with_debug_tail(&username)
+        }
+        "auth.user.copy" => {
+            let result = facade
+                .copy_auth_users(
+                    form.required_string("from_broker")?,
+                    form.required_string("to_broker")?,
+                    form.optional_string("usernames"),
+                )
+                .await?;
+            CommandResultViewModel::auth_copy_users(spec.title, &result)
+        }
         "auth.acl.get" => {
             let result = facade
                 .query_auth_acl(
@@ -353,6 +402,56 @@ pub async fn execute_command(
                 )
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "auth.acl.create" => {
+            let result = facade
+                .create_auth_acl(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("subject")?,
+                    form.required_string("resources")?,
+                    form.required_string("actions")?,
+                    form.enum_string("decision")?,
+                    form.optional_string("source_ip"),
+                )
+                .await?;
+            CommandResultViewModel::auth_operation(spec.title, &result)
+        }
+        "auth.acl.update" => {
+            let result = facade
+                .update_auth_acl(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("subject")?,
+                    form.required_string("resources")?,
+                    form.required_string("actions")?,
+                    form.enum_string("decision")?,
+                    form.optional_string("source_ip"),
+                )
+                .await?;
+            CommandResultViewModel::auth_operation(spec.title, &result)
+        }
+        "auth.acl.delete" => {
+            let subject = form.required_string("subject")?;
+            let result = facade
+                .delete_auth_acl(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    subject.clone(),
+                    form.optional_string("resource"),
+                )
+                .await?;
+            CommandResultViewModel::auth_operation(spec.title, &result).with_debug_tail(&subject)
+        }
+        "auth.acl.copy" => {
+            let result = facade
+                .copy_auth_acl(
+                    form.required_string("from_broker")?,
+                    form.required_string("to_broker")?,
+                    form.optional_string("subjects"),
+                )
+                .await?;
+            CommandResultViewModel::auth_copy_acl(spec.title, &result)
         }
         "broker.config.query" => {
             let result = facade
@@ -412,6 +511,98 @@ pub async fn execute_command(
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
         }
+        "broker.clean_expired_cq" => {
+            let result = facade
+                .clean_expired_consume_queue(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.optional_string("topic"),
+                    form.bool_value("dry_run")?,
+                )
+                .await?;
+            CommandResultViewModel::clean_expired_consume_queue(spec.title, &result)
+        }
+        "broker.delete_expired_commit_log" => {
+            let target = operation_target_label(
+                form.optional_string("broker_addr"),
+                form.optional_string("cluster_name"),
+                "all brokers",
+            );
+            let result = facade
+                .delete_expired_commit_log(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                )
+                .await?;
+            CommandResultViewModel::broker_boolean_operation(spec.title, target, &result)
+        }
+        "broker.clean_unused_topic" => {
+            let target = operation_target_label(
+                form.optional_string("broker_addr"),
+                form.optional_string("cluster_name"),
+                "all brokers",
+            );
+            let result = facade
+                .clean_unused_topic(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                )
+                .await?;
+            CommandResultViewModel::broker_boolean_operation(spec.title, target, &result)
+        }
+        "broker.reset_master_flush_offset" => {
+            let broker_addr = form.required_string("broker_addr")?;
+            facade
+                .reset_master_flush_offset(Some(broker_addr.clone()), Some(form.number_i64("offset")?))
+                .await?;
+            CommandResultViewModel::operation_success(spec.title, vec![broker_addr])
+        }
+        "broker.cold_data_flow_ctr_update" => {
+            let result = facade
+                .update_cold_data_flow_ctr_group_config(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("consumer_group")?,
+                    form.required_string("threshold")?,
+                )
+                .await?;
+            CommandResultViewModel::broker_operation(spec.title, &result)
+        }
+        "broker.cold_data_flow_ctr_remove" => {
+            let result = facade
+                .remove_cold_data_flow_ctr_group_config(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("consumer_group")?,
+                )
+                .await?;
+            CommandResultViewModel::broker_operation(spec.title, &result)
+        }
+        "broker.commit_log_read_ahead" => {
+            let result = facade
+                .set_commit_log_read_ahead(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.optional_string("mode"),
+                    form.bool_value("enable")?,
+                    form.bool_value("disable")?,
+                    form.optional_string("read_ahead_size"),
+                    form.optional_string("read_ahead_size_key"),
+                    form.bool_value("show_only")?,
+                )
+                .await?;
+            CommandResultViewModel::commit_log_read_ahead(spec.title, &result)
+        }
+        "broker.switch_timer_engine" => {
+            let result = facade
+                .switch_timer_engine(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.enum_string("engine_type")?,
+                )
+                .await?;
+            CommandResultViewModel::broker_operation(spec.title, &result)
+        }
         "cluster.list" => {
             let result = facade
                 .query_cluster_list(form.bool_value("more_stats")?, form.optional_string("cluster_name"))
@@ -447,11 +638,35 @@ pub async fn execute_command(
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
         }
+        "controller.config.update" => {
+            let controller_address = form.required_string("controller_address")?;
+            facade
+                .update_controller_config(
+                    controller_address.clone(),
+                    form.required_string("key")?,
+                    form.required_string("value")?,
+                )
+                .await?;
+            CommandResultViewModel::operation_success(spec.title, vec![controller_address])
+        }
         "controller.metadata.query" => {
             let result = facade
                 .query_controller_metadata(form.required_string("controller_address")?)
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "controller.metadata.clean" => {
+            let broker_name = form.required_string("broker_name")?;
+            facade
+                .clean_controller_metadata(
+                    form.required_string("controller_address")?,
+                    broker_name.clone(),
+                    form.optional_string("broker_controller_ids"),
+                    form.optional_string("cluster_name"),
+                    form.bool_value("clean_living_broker")?,
+                )
+                .await?;
+            CommandResultViewModel::operation_success(spec.title, vec![broker_name])
         }
         "connection.consumer" => {
             let result = facade
@@ -520,6 +735,48 @@ pub async fn execute_command(
                 )
                 .await?;
             CommandResultViewModel::from_debug(spec.title, &result)
+        }
+        "consumer.update_subscription_group" => {
+            let result = facade
+                .update_subscription_group(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("group_name")?,
+                    form.bool_value("consume_enable")?,
+                    form.bool_value("consume_from_min_enable")?,
+                    form.bool_value("consume_broadcast_enable")?,
+                    form.bool_value("consume_message_orderly")?,
+                    form.number_i32("retry_queue_nums")?,
+                    form.number_i32("retry_max_times")?,
+                    form.number_u64("broker_id")?,
+                    form.number_u64("which_broker_when_consume_slowly")?,
+                    form.bool_value("notify_consumer_ids_changed_enable")?,
+                    form.number_i32("group_sys_flag")?,
+                    form.number_i32("consume_timeout_minute")?,
+                )
+                .await?;
+            CommandResultViewModel::consumer_operation(spec.title, &result)
+        }
+        "consumer.update_subscription_group_list" => {
+            let result = facade
+                .update_subscription_group_list(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("group_names")?,
+                    form.bool_value("consume_enable")?,
+                    form.bool_value("consume_from_min_enable")?,
+                    form.bool_value("consume_broadcast_enable")?,
+                    form.bool_value("consume_message_orderly")?,
+                    form.number_i32("retry_queue_nums")?,
+                    form.number_i32("retry_max_times")?,
+                    form.number_u64("broker_id")?,
+                    form.number_u64("which_broker_when_consume_slowly")?,
+                    form.bool_value("notify_consumer_ids_changed_enable")?,
+                    form.number_i32("group_sys_flag")?,
+                    form.number_i32("consume_timeout_minute")?,
+                )
+                .await?;
+            CommandResultViewModel::consumer_operation(spec.title, &result)
         }
         "offset.clone_group" => {
             facade
@@ -715,6 +972,17 @@ pub async fn execute_command(
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
         }
+        "lite.trigger_dispatch" => {
+            let result = facade
+                .trigger_lite_dispatch(
+                    form.required_string("parent_topic")?,
+                    form.required_string("group")?,
+                    form.optional_string("client_id"),
+                    form.optional_string("broker_name"),
+                )
+                .await?;
+            CommandResultViewModel::lite_trigger_dispatch(spec.title, &result)
+        }
         "message.decode_id" => {
             let result = facade.decode_message_id(form.required_string("message_ids")?)?;
             CommandResultViewModel::decoded_message_ids(spec.title, &result)
@@ -782,6 +1050,30 @@ pub async fn execute_command(
                 )
                 .await?;
             CommandResultViewModel::message_trace(spec.title, &result)
+        }
+        "static_topic.update" => {
+            let topic = form.required_string("topic")?;
+            let result = facade
+                .update_static_topic(
+                    topic.clone(),
+                    form.required_string("broker_names")?,
+                    form.required_string("queue_num")?,
+                    form.optional_string("cluster_names"),
+                )
+                .await?;
+            CommandResultViewModel::operation_success(spec.title, vec![topic]).with_debug_tail(&result)
+        }
+        "static_topic.remap" => {
+            let topic = form.required_string("topic")?;
+            let result = facade
+                .remapping_static_topic(
+                    topic.clone(),
+                    form.optional_string("broker_names"),
+                    form.optional_string("cluster_names"),
+                    Some(form.bool_value("force_replace")?),
+                )
+                .await?;
+            CommandResultViewModel::operation_success(spec.title, vec![topic]).with_debug_tail(&result)
         }
         unknown => bail!("unknown command id: {unknown}"),
     };
@@ -1086,6 +1378,79 @@ fn auth_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "auth.user.create",
+            CommandCategory::Auth,
+            "Create User",
+            "Create an ACL user on a broker or cluster.",
+            RiskLevel::Mutating,
+            broker_target_args_with(vec![
+                required_string("username", "Username", "ACL username.", "user-a"),
+                required_string("password", "Password", "ACL password.", "secret"),
+                optional_string("user_type", "User Type", "Optional user type.", "NORMAL"),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "auth.user.update",
+            CommandCategory::Auth,
+            "Update User",
+            "Update an ACL user password, type, or status.",
+            RiskLevel::Mutating,
+            broker_target_args_with(vec![
+                required_string("username", "Username", "ACL username.", "user-a"),
+                optional_string("password", "Password", "Optional new password.", "secret"),
+                optional_string("user_type", "User Type", "Optional user type.", "SUPER"),
+                optional_string("user_status", "User Status", "Optional user status.", "ENABLE"),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "auth.user.delete",
+            CommandCategory::Auth,
+            "Delete User",
+            "Delete an ACL user from a broker or cluster.",
+            RiskLevel::Dangerous,
+            broker_target_args_with(vec![required_string(
+                "username",
+                "Username",
+                "ACL username to delete.",
+                "user-a",
+            )]),
+            ResultViewKind::OperationSummary,
+            Some("username"),
+        ),
+        spec(
+            "auth.user.copy",
+            CommandCategory::Auth,
+            "Copy Users",
+            "Copy ACL users from one broker to another.",
+            RiskLevel::Mutating,
+            vec![
+                required_string(
+                    "from_broker",
+                    "From Broker",
+                    "Source broker address.",
+                    "127.0.0.1:10911",
+                ),
+                required_string(
+                    "to_broker",
+                    "To Broker",
+                    "Destination broker address.",
+                    "127.0.0.2:10911",
+                ),
+                optional_string(
+                    "usernames",
+                    "Usernames",
+                    "Optional comma-separated usernames.",
+                    "user-a,user-b",
+                ),
+            ],
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
             "auth.acl.get",
             CommandCategory::Auth,
             "Get ACL",
@@ -1121,6 +1486,90 @@ fn auth_commands(commands: &mut Vec<CommandSpec>) {
                 ),
             ]),
             ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "auth.acl.create",
+            CommandCategory::Auth,
+            "Create ACL",
+            "Create an ACL policy entry on a broker or cluster.",
+            RiskLevel::Mutating,
+            broker_target_args_with(vec![
+                required_string("subject", "Subject", "ACL subject.", "User:user-a"),
+                required_string("resources", "Resources", "Comma-separated resources.", "Topic:TopicA"),
+                required_string("actions", "Actions", "Comma-separated actions.", "PUB,SUB"),
+                enum_arg("decision", "Decision", "ACL decision.", &["ALLOW", "DENY"], "ALLOW"),
+                optional_string(
+                    "source_ip",
+                    "Source IP",
+                    "Optional comma-separated source IPs.",
+                    "127.0.0.1",
+                ),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "auth.acl.update",
+            CommandCategory::Auth,
+            "Update ACL",
+            "Update an ACL policy entry on a broker or cluster.",
+            RiskLevel::Mutating,
+            broker_target_args_with(vec![
+                required_string("subject", "Subject", "ACL subject.", "User:user-a"),
+                required_string("resources", "Resources", "Comma-separated resources.", "Topic:TopicA"),
+                required_string("actions", "Actions", "Comma-separated actions.", "PUB,SUB"),
+                enum_arg("decision", "Decision", "ACL decision.", &["ALLOW", "DENY"], "ALLOW"),
+                optional_string(
+                    "source_ip",
+                    "Source IP",
+                    "Optional comma-separated source IPs.",
+                    "127.0.0.1",
+                ),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "auth.acl.delete",
+            CommandCategory::Auth,
+            "Delete ACL",
+            "Delete an ACL subject or one subject/resource rule.",
+            RiskLevel::Dangerous,
+            broker_target_args_with(vec![
+                required_string("subject", "Subject", "ACL subject to delete.", "User:user-a"),
+                optional_string("resource", "Resource", "Optional resource to delete.", "Topic:TopicA"),
+            ]),
+            ResultViewKind::OperationSummary,
+            Some("subject"),
+        ),
+        spec(
+            "auth.acl.copy",
+            CommandCategory::Auth,
+            "Copy ACL",
+            "Copy ACL subjects from one broker to another.",
+            RiskLevel::Mutating,
+            vec![
+                required_string(
+                    "from_broker",
+                    "From Broker",
+                    "Source broker address.",
+                    "127.0.0.1:10911",
+                ),
+                required_string(
+                    "to_broker",
+                    "To Broker",
+                    "Destination broker address.",
+                    "127.0.0.2:10911",
+                ),
+                optional_string(
+                    "subjects",
+                    "Subjects",
+                    "Optional comma-separated subjects.",
+                    "User:user-a",
+                ),
+            ],
+            ResultViewKind::OperationSummary,
             None,
         ),
     ]);
@@ -1241,6 +1690,123 @@ fn broker_commands(commands: &mut Vec<CommandSpec>) {
             ResultViewKind::Json,
             None,
         ),
+        spec(
+            "broker.clean_expired_cq",
+            CommandCategory::Broker,
+            "Clean Expired CQ",
+            "Clean expired consume queue files by broker, cluster, topic, or global scope.",
+            RiskLevel::Dangerous,
+            broker_target_args_with(vec![
+                optional_string("topic", "Topic", "Optional topic scope.", "TopicA"),
+                bool_arg("dry_run", "Dry Run", "Only scan matching targets.", true),
+            ]),
+            ResultViewKind::OperationSummary,
+            Some("broker_addr"),
+        ),
+        spec(
+            "broker.delete_expired_commit_log",
+            CommandCategory::Broker,
+            "Delete Expired CommitLog",
+            "Delete expired CommitLog files by broker or cluster.",
+            RiskLevel::Dangerous,
+            broker_target_args(),
+            ResultViewKind::OperationSummary,
+            Some("broker_addr"),
+        ),
+        spec(
+            "broker.clean_unused_topic",
+            CommandCategory::Broker,
+            "Clean Unused Topic",
+            "Clean unused topics by broker or cluster.",
+            RiskLevel::Dangerous,
+            broker_target_args(),
+            ResultViewKind::OperationSummary,
+            Some("broker_addr"),
+        ),
+        spec(
+            "broker.reset_master_flush_offset",
+            CommandCategory::Broker,
+            "Reset Master Flush Offset",
+            "Reset master flush offset for a slave broker.",
+            RiskLevel::Dangerous,
+            vec![
+                required_string("broker_addr", "Broker Addr", "Slave broker address.", "127.0.0.1:10912"),
+                number("offset", "Offset", "Master flush offset.", true, Some(0), Some(0)),
+            ],
+            ResultViewKind::OperationSummary,
+            Some("broker_addr"),
+        ),
+        spec(
+            "broker.cold_data_flow_ctr_update",
+            CommandCategory::Broker,
+            "Update Cold Data Flow Control",
+            "Add or update a cold data flow control group threshold.",
+            RiskLevel::Mutating,
+            broker_target_args_with(vec![
+                required_string("consumer_group", "Consumer Group", "Consumer group.", "GroupA"),
+                required_string("threshold", "Threshold", "Cold data flow threshold.", "1024"),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "broker.cold_data_flow_ctr_remove",
+            CommandCategory::Broker,
+            "Remove Cold Data Flow Control",
+            "Remove a cold data flow control group threshold.",
+            RiskLevel::Dangerous,
+            broker_target_args_with(vec![required_string(
+                "consumer_group",
+                "Consumer Group",
+                "Consumer group to remove.",
+                "GroupA",
+            )]),
+            ResultViewKind::OperationSummary,
+            Some("consumer_group"),
+        ),
+        spec(
+            "broker.commit_log_read_ahead",
+            CommandCategory::Broker,
+            "Set CommitLog ReadAhead",
+            "Inspect or update commitlog read-ahead mode and size.",
+            RiskLevel::Mutating,
+            broker_target_args_with(vec![
+                optional_string("mode", "Mode", "Optional mode config value: 0 normal, 1 random.", "0"),
+                bool_arg("enable", "Enable", "Force normal read-ahead mode.", false),
+                bool_arg("disable", "Disable", "Force random read-ahead mode.", false),
+                optional_string("read_ahead_size", "ReadAhead Size", "Optional read-ahead size.", "4096"),
+                optional_string(
+                    "read_ahead_size_key",
+                    "Size Key",
+                    "Optional read-ahead size config key.",
+                    "mappedFileSizeCommitLog",
+                ),
+                bool_arg(
+                    "show_only",
+                    "Show Only",
+                    "Inspect current config without updates.",
+                    false,
+                ),
+            ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "broker.switch_timer_engine",
+            CommandCategory::Broker,
+            "Switch Timer Engine",
+            "Switch timer message engine type.",
+            RiskLevel::Dangerous,
+            broker_target_args_with(vec![enum_arg(
+                "engine_type",
+                "Engine Type",
+                "Timer engine type: R for RocksDB timeline, F for file time wheel.",
+                &["R", "F"],
+                "R",
+            )]),
+            ResultViewKind::OperationSummary,
+            Some("broker_addr"),
+        ),
     ]);
 }
 
@@ -1309,6 +1875,25 @@ fn controller_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "controller.config.update",
+            CommandCategory::Controller,
+            "Update Controller Config",
+            "Update one controller configuration key on one or more controller addresses.",
+            RiskLevel::Mutating,
+            vec![
+                required_string(
+                    "controller_address",
+                    "Controller",
+                    "Controller address list separated by semicolon.",
+                    "127.0.0.1:9878",
+                ),
+                required_string("key", "Key", "Controller config key.", "enableElectUncleanMaster"),
+                required_string("value", "Value", "Controller config value.", "true"),
+            ],
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
             "controller.metadata.query",
             CommandCategory::Controller,
             "Query Controller Metadata",
@@ -1322,6 +1907,37 @@ fn controller_commands(commands: &mut Vec<CommandSpec>) {
             )],
             ResultViewKind::Json,
             None,
+        ),
+        spec(
+            "controller.metadata.clean",
+            CommandCategory::Controller,
+            "Clean Controller Metadata",
+            "Clean broker metadata from a controller.",
+            RiskLevel::Dangerous,
+            vec![
+                required_string(
+                    "controller_address",
+                    "Controller",
+                    "Controller address.",
+                    "127.0.0.1:9878",
+                ),
+                required_string("broker_name", "Broker Name", "Broker name to clean.", "broker-a"),
+                optional_string(
+                    "broker_controller_ids",
+                    "Broker Controller IDs",
+                    "Optional semicolon-separated controller ids.",
+                    "1;2",
+                ),
+                optional_string("cluster_name", "Cluster", "Cluster name.", "DefaultCluster"),
+                bool_arg(
+                    "clean_living_broker",
+                    "Clean Living Broker",
+                    "Allow cleaning living broker metadata.",
+                    false,
+                ),
+            ],
+            ResultViewKind::OperationSummary,
+            Some("broker_name"),
         ),
     ]);
 }
@@ -1441,6 +2057,31 @@ fn consumer_commands(commands: &mut Vec<CommandSpec>) {
                     Some(0),
                 ),
             ]),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "consumer.update_subscription_group",
+            CommandCategory::Consumer,
+            "Update Subscription Group",
+            "Create or update one subscription group config by broker or cluster.",
+            RiskLevel::Mutating,
+            subscription_group_args("group_name", "Group", "Consumer group.", "GroupA"),
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "consumer.update_subscription_group_list",
+            CommandCategory::Consumer,
+            "Update Subscription Group List",
+            "Create or update several subscription group configs with the same settings.",
+            RiskLevel::Mutating,
+            subscription_group_args(
+                "group_names",
+                "Groups",
+                "Comma-separated consumer groups.",
+                "GroupA,GroupB",
+            ),
             ResultViewKind::OperationSummary,
             None,
         ),
@@ -1770,6 +2411,21 @@ fn lite_commands(commands: &mut Vec<CommandSpec>) {
             ResultViewKind::Json,
             None,
         ),
+        spec(
+            "lite.trigger_dispatch",
+            CommandCategory::Lite,
+            "Trigger Lite Dispatch",
+            "Trigger lite dispatch for a group and optional client or broker.",
+            RiskLevel::Mutating,
+            vec![
+                required_string("parent_topic", "Parent Topic", "Parent topic name.", "ParentTopicA"),
+                required_string("group", "Group", "Consumer group.", "GroupA"),
+                optional_string("client_id", "Client ID", "Optional client id.", "client-a"),
+                optional_string("broker_name", "Broker Name", "Optional broker name.", "broker-a"),
+            ],
+            ResultViewKind::OperationSummary,
+            None,
+        ),
     ]);
 }
 
@@ -1960,6 +2616,66 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
     ]);
 }
 
+fn static_topic_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "static_topic.update",
+            CommandCategory::StaticTopic,
+            "Update Static Topic",
+            "Create or update static topic queue mapping across brokers and clusters.",
+            RiskLevel::Mutating,
+            vec![
+                required_string("topic", "Topic", "Static topic name.", "StaticTopicA"),
+                required_string(
+                    "broker_names",
+                    "Broker Names",
+                    "Comma-separated broker names.",
+                    "broker-a,broker-b",
+                ),
+                number("queue_num", "Queue Num", "Total queue count.", true, Some(4), Some(1)),
+                optional_string(
+                    "cluster_names",
+                    "Cluster Names",
+                    "Optional comma-separated clusters.",
+                    "DefaultCluster",
+                ),
+            ],
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
+            "static_topic.remap",
+            CommandCategory::StaticTopic,
+            "Remap Static Topic",
+            "Remap static topic queues across brokers and clusters.",
+            RiskLevel::Dangerous,
+            vec![
+                required_string("topic", "Topic", "Static topic name.", "StaticTopicA"),
+                optional_string(
+                    "broker_names",
+                    "Broker Names",
+                    "Optional comma-separated broker names.",
+                    "broker-a,broker-b",
+                ),
+                optional_string(
+                    "cluster_names",
+                    "Cluster Names",
+                    "Optional comma-separated clusters.",
+                    "DefaultCluster",
+                ),
+                bool_arg(
+                    "force_replace",
+                    "Force Replace",
+                    "Force replacing existing mapping.",
+                    false,
+                ),
+            ],
+            ResultViewKind::OperationSummary,
+            Some("topic"),
+        ),
+    ]);
+}
+
 fn spec(
     id: &'static str,
     category: CommandCategory,
@@ -2084,6 +2800,83 @@ fn broker_target_args_with(mut extra: Vec<ArgSpec>) -> Vec<ArgSpec> {
     args
 }
 
+fn subscription_group_args(
+    group_field: &'static str,
+    group_label: &'static str,
+    group_help: &'static str,
+    group_placeholder: &'static str,
+) -> Vec<ArgSpec> {
+    broker_target_args_with(vec![
+        required_string(group_field, group_label, group_help, group_placeholder),
+        bool_arg("consume_enable", "Consume Enable", "Enable consumption.", true),
+        bool_arg(
+            "consume_from_min_enable",
+            "Consume From Min",
+            "Enable consume from min offset.",
+            true,
+        ),
+        bool_arg(
+            "consume_broadcast_enable",
+            "Broadcast Enable",
+            "Enable broadcast consumption.",
+            true,
+        ),
+        bool_arg(
+            "consume_message_orderly",
+            "Orderly",
+            "Enable ordered consumption.",
+            false,
+        ),
+        number(
+            "retry_queue_nums",
+            "Retry Queues",
+            "Retry queue count.",
+            true,
+            Some(1),
+            Some(0),
+        ),
+        number(
+            "retry_max_times",
+            "Retry Max",
+            "Maximum retry count.",
+            true,
+            Some(16),
+            Some(0),
+        ),
+        number("broker_id", "Broker ID", "Broker id.", true, Some(0), Some(0)),
+        number(
+            "which_broker_when_consume_slowly",
+            "Slow Broker ID",
+            "Broker id used when consumption is slow.",
+            true,
+            Some(1),
+            Some(0),
+        ),
+        bool_arg(
+            "notify_consumer_ids_changed_enable",
+            "Notify Consumers",
+            "Notify clients after consumer ids change.",
+            true,
+        ),
+        number(
+            "group_sys_flag",
+            "Group Sys Flag",
+            "Group system flag.",
+            true,
+            Some(0),
+            Some(0),
+        ),
+        number(
+            "consume_timeout_minute",
+            "Timeout Minutes",
+            "Consume timeout in minutes.",
+            true,
+            Some(15),
+            Some(1),
+        ),
+    ])
+}
+
 fn topic_target(form: &CommandFormState) -> anyhow::Result<TopicTarget> {
     let target = form.required_string("target")?;
     match form.enum_string("target_type")?.as_str() {
@@ -2114,6 +2907,13 @@ fn message_request_mode(mode: String) -> anyhow::Result<MessageRequestMode> {
         "pop" => Ok(MessageRequestMode::Pop),
         value => bail!("invalid consume mode: {value}"),
     }
+}
+
+fn operation_target_label(broker_addr: Option<String>, cluster_name: Option<String>, fallback: &str) -> String {
+    broker_addr
+        .map(|broker_addr| format!("broker {broker_addr}"))
+        .or_else(|| cluster_name.map(|cluster_name| format!("cluster {cluster_name}")))
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 trait DebugTail {
@@ -2251,5 +3051,60 @@ mod tests {
         let form = CommandFormState::for_command(command);
 
         assert_eq!(command.expected_confirmation(&form), Some("confirm".to_string()));
+    }
+
+    #[test]
+    fn phase_three_catalog_exposes_mutating_management_commands() {
+        let catalog = command_catalog();
+        let ids = catalog.iter().map(|command| command.id).collect::<HashSet<_>>();
+
+        for expected in [
+            "auth.user.create",
+            "auth.user.update",
+            "auth.user.delete",
+            "auth.user.copy",
+            "auth.acl.create",
+            "auth.acl.update",
+            "auth.acl.delete",
+            "auth.acl.copy",
+            "controller.config.update",
+            "controller.metadata.clean",
+            "broker.clean_expired_cq",
+            "broker.delete_expired_commit_log",
+            "broker.clean_unused_topic",
+            "broker.reset_master_flush_offset",
+            "broker.cold_data_flow_ctr_update",
+            "broker.cold_data_flow_ctr_remove",
+            "broker.commit_log_read_ahead",
+            "broker.switch_timer_engine",
+            "consumer.update_subscription_group",
+            "consumer.update_subscription_group_list",
+            "lite.trigger_dispatch",
+            "static_topic.update",
+            "static_topic.remap",
+        ] {
+            assert!(ids.contains(expected), "missing phase 3 command {expected}");
+        }
+    }
+
+    #[test]
+    fn phase_three_dangerous_commands_require_target_confirmation() {
+        let catalog = command_catalog();
+        let command = catalog.iter().find(|command| command.id == "auth.user.delete").unwrap();
+        assert_eq!(command.risk_level, RiskLevel::Dangerous);
+
+        let mut form = CommandFormState::for_command(command);
+        form.set_value("username", "admin-user".to_string());
+        assert_eq!(command.expected_confirmation(&form), Some("admin-user".to_string()));
+
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "controller.metadata.clean")
+            .unwrap();
+        assert_eq!(command.risk_level, RiskLevel::Dangerous);
+
+        let mut form = CommandFormState::for_command(command);
+        form.set_value("broker_name", "broker-a".to_string());
+        assert_eq!(command.expected_confirmation(&form), Some("broker-a".to_string()));
     }
 }

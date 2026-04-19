@@ -1,13 +1,22 @@
 use std::fmt::Debug;
 
+use rocketmq_admin_core::core::auth::AuthOperationResult;
+use rocketmq_admin_core::core::auth::CopyAclResult;
+use rocketmq_admin_core::core::auth::CopyUsersResult;
+use rocketmq_admin_core::core::broker::BrokerBooleanOperationResult;
 use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
+use rocketmq_admin_core::core::broker::BrokerOperationResult;
+use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueReport;
+use rocketmq_admin_core::core::broker::CommitLogReadAheadResult;
 use rocketmq_admin_core::core::cluster::ClusterListMode;
 use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
 use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
 use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
 use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
+use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
 use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
 use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
+use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
 use rocketmq_admin_core::core::message::MessageTraceView;
@@ -181,6 +190,22 @@ impl CommandResultViewModel {
         })
     }
 
+    pub fn operation_summary(
+        title: impl Into<String>,
+        success_count: usize,
+        failure_count: usize,
+        targets: Vec<String>,
+        errors: Vec<String>,
+    ) -> Self {
+        Self::OperationSummary(OperationSummaryViewModel {
+            title: title.into(),
+            success_count,
+            failure_count,
+            targets,
+            errors,
+        })
+    }
+
     pub fn error(title: impl Into<String>, body: impl Into<String>) -> Self {
         Self::Text {
             title: title.into(),
@@ -190,6 +215,176 @@ impl CommandResultViewModel {
 
     pub fn key_value_sorted(title: impl Into<String>, rows: Vec<(String, String)>) -> Self {
         Self::KeyValue(KeyValueViewModel::sorted(title, rows))
+    }
+
+    pub fn auth_operation(title: impl Into<String>, result: &AuthOperationResult) -> Self {
+        let targets = result.broker_addrs.iter().map(ToString::to_string).collect::<Vec<_>>();
+        Self::operation_summary(title, targets.len(), 0, targets, Vec::new())
+    }
+
+    pub fn auth_copy_users(title: impl Into<String>, result: &CopyUsersResult) -> Self {
+        let mut targets = result
+            .copied_usernames
+            .iter()
+            .map(|username| format!("copied user: {username}"))
+            .collect::<Vec<_>>();
+        targets.extend(
+            result
+                .skipped_usernames
+                .iter()
+                .map(|username| format!("skipped user: {username}")),
+        );
+        let errors = result
+            .failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+            .collect::<Vec<_>>();
+        Self::operation_summary(
+            title,
+            result.copied_usernames.len(),
+            result.failures.len(),
+            targets,
+            errors,
+        )
+    }
+
+    pub fn auth_copy_acl(title: impl Into<String>, result: &CopyAclResult) -> Self {
+        let mut targets = result
+            .copied_subjects
+            .iter()
+            .map(|subject| format!("copied subject: {subject}"))
+            .collect::<Vec<_>>();
+        targets.extend(
+            result
+                .skipped_subjects
+                .iter()
+                .map(|subject| format!("skipped subject: {subject}")),
+        );
+        let errors = result
+            .failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+            .collect::<Vec<_>>();
+        Self::operation_summary(
+            title,
+            result.copied_subjects.len(),
+            result.failures.len(),
+            targets,
+            errors,
+        )
+    }
+
+    pub fn broker_operation(title: impl Into<String>, result: &BrokerOperationResult) -> Self {
+        let targets = result.broker_addrs.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let errors = result
+            .failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+            .collect::<Vec<_>>();
+        Self::operation_summary(title, result.broker_addrs.len(), result.failures.len(), targets, errors)
+    }
+
+    pub fn broker_boolean_operation(
+        title: impl Into<String>,
+        target: impl Into<String>,
+        result: &BrokerBooleanOperationResult,
+    ) -> Self {
+        let target = target.into();
+        let errors = if result.success {
+            Vec::new()
+        } else {
+            vec![format!("{target}: operation returned false")]
+        };
+        Self::operation_summary(
+            title,
+            usize::from(result.success),
+            usize::from(!result.success),
+            vec![target],
+            errors,
+        )
+    }
+
+    pub fn clean_expired_consume_queue(title: impl Into<String>, result: &CleanExpiredConsumeQueueReport) -> Self {
+        let mut targets = result
+            .targets
+            .iter()
+            .map(|target| {
+                if result.dry_run {
+                    format!("dry-run target: {target}")
+                } else {
+                    target.to_string()
+                }
+            })
+            .collect::<Vec<_>>();
+        targets.push(format!("scanned brokers: {}", result.scanned_brokers));
+        targets.push(format!("cleanup invocations: {}", result.cleanup_invocations));
+        let false_results = result
+            .target_results
+            .iter()
+            .filter(|target| !target.success)
+            .map(|target| format!("{}: operation returned false", target.broker_addr))
+            .collect::<Vec<_>>();
+        let mut errors = false_results;
+        errors.extend(
+            result
+                .failures
+                .iter()
+                .map(|failure| format!("{}: {}", failure.broker_addr, failure.error)),
+        );
+        Self::operation_summary(
+            title,
+            result.cleanup_successes,
+            result.cleanup_false_results + result.failures.len(),
+            targets,
+            errors,
+        )
+    }
+
+    pub fn commit_log_read_ahead(title: impl Into<String>, result: &CommitLogReadAheadResult) -> Self {
+        let targets = result
+            .sections
+            .iter()
+            .map(|section| {
+                let status = if section.applied { "applied" } else { "inspected" };
+                format!("{}: {status}", section.broker_addr)
+            })
+            .collect::<Vec<_>>();
+        let errors = result
+            .failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+            .collect::<Vec<_>>();
+        Self::operation_summary(title, result.sections.len(), result.failures.len(), targets, errors)
+    }
+
+    pub fn consumer_operation(title: impl Into<String>, result: &ConsumerOperationResult) -> Self {
+        let mut targets = result.broker_addrs.iter().map(ToString::to_string).collect::<Vec<_>>();
+        targets.extend(result.warnings.iter().map(|warning| format!("warning: {warning}")));
+        let errors = result
+            .failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+            .collect::<Vec<_>>();
+        Self::operation_summary(title, result.broker_addrs.len(), result.failures.len(), targets, errors)
+    }
+
+    pub fn lite_trigger_dispatch(title: impl Into<String>, result: &TriggerLiteDispatchResult) -> Self {
+        let targets = result
+            .entries
+            .iter()
+            .filter(|entry| entry.dispatched)
+            .map(|entry| entry.broker_name.to_string())
+            .collect::<Vec<_>>();
+        let errors = result
+            .entries
+            .iter()
+            .filter(|entry| !entry.dispatched)
+            .map(|entry| {
+                let error = entry.error.as_deref().unwrap_or("dispatch returned false");
+                format!("{}: {error}", entry.broker_name)
+            })
+            .collect::<Vec<_>>();
+        Self::operation_summary(title, targets.len(), errors.len(), targets, errors)
     }
 
     pub fn cluster_list(title: impl Into<String>, result: &ClusterListQueryResult) -> Self {
@@ -1048,8 +1243,11 @@ fn truncate_cell(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_admin_core::core::auth::AuthOperationResult;
     use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
     use rocketmq_admin_core::core::broker::BrokerConsumeStatsRow;
+    use rocketmq_admin_core::core::broker::BrokerOperationFailure;
+    use rocketmq_admin_core::core::broker::BrokerOperationResult;
     use rocketmq_admin_core::core::cluster::ClusterBaseInfoRow;
     use rocketmq_admin_core::core::cluster::ClusterListMode;
     use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
@@ -1058,6 +1256,8 @@ mod tests {
     use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
     use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
     use rocketmq_admin_core::core::consumer::ConsumerGroupProgressResult;
+    use rocketmq_admin_core::core::consumer::ConsumerOperationFailure;
+    use rocketmq_admin_core::core::consumer::ConsumerOperationResult;
     use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
     use rocketmq_admin_core::core::consumer::ConsumerProgressRow;
     use rocketmq_admin_core::core::consumer::ConsumerRunningInfoItem;
@@ -1899,6 +2099,48 @@ mod tests {
         assert_table(&result, &["Attempt", "RT", "Result"], &["1", "12", "SEND_OK"]);
     }
 
+    #[test]
+    fn phase_three_operation_results_render_partial_failures_as_summary() {
+        let auth = CommandResultViewModel::auth_operation(
+            "Create User",
+            &AuthOperationResult {
+                broker_addrs: vec!["127.0.0.1:10911".into()],
+            },
+        );
+        assert_summary(&auth, 1, 0, &["127.0.0.1:10911"], &[]);
+
+        let broker = CommandResultViewModel::broker_operation(
+            "Cold Data Flow Control",
+            &BrokerOperationResult {
+                broker_addrs: vec!["127.0.0.1:10911".into()],
+                failures: vec![BrokerOperationFailure {
+                    broker_addr: "127.0.0.1:10912".into(),
+                    error: "timeout".to_string(),
+                }],
+            },
+        );
+        assert_summary(&broker, 1, 1, &["127.0.0.1:10911"], &["127.0.0.1:10912: timeout"]);
+
+        let consumer = CommandResultViewModel::consumer_operation(
+            "Update Subscription Group",
+            &ConsumerOperationResult {
+                broker_addrs: vec!["127.0.0.1:10911".into()],
+                failures: vec![ConsumerOperationFailure {
+                    broker_addr: "127.0.0.1:10912".into(),
+                    error: "rejected".to_string(),
+                }],
+                warnings: vec!["retry topic cleanup failed".to_string()],
+            },
+        );
+        assert_summary(
+            &consumer,
+            1,
+            1,
+            &["127.0.0.1:10911", "warning: retry topic cleanup failed"],
+            &["127.0.0.1:10912: rejected"],
+        );
+    }
+
     fn assert_table(result: &CommandResultViewModel, headers: &[&str], first_row: &[&str]) {
         let CommandResultViewModel::Table(table) = result else {
             panic!("expected table result, got {result:?}");
@@ -1910,6 +2152,28 @@ mod tests {
         assert_eq!(
             table.rows.first(),
             Some(&first_row.iter().map(|cell| (*cell).to_string()).collect::<Vec<_>>())
+        );
+    }
+
+    fn assert_summary(
+        result: &CommandResultViewModel,
+        success_count: usize,
+        failure_count: usize,
+        targets: &[&str],
+        errors: &[&str],
+    ) {
+        let CommandResultViewModel::OperationSummary(summary) = result else {
+            panic!("expected operation summary result, got {result:?}");
+        };
+        assert_eq!(summary.success_count, success_count);
+        assert_eq!(summary.failure_count, failure_count);
+        assert_eq!(
+            summary.targets,
+            targets.iter().map(|value| (*value).to_string()).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            summary.errors,
+            errors.iter().map(|value| (*value).to_string()).collect::<Vec<_>>()
         );
     }
 

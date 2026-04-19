@@ -13,7 +13,16 @@
 // limitations under the License.
 
 use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::core::auth::AuthOperationResult;
 use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::CopyAclRequest;
+use rocketmq_admin_core::core::auth::CopyAclResult;
+use rocketmq_admin_core::core::auth::CopyUsersRequest;
+use rocketmq_admin_core::core::auth::CopyUsersResult;
+use rocketmq_admin_core::core::auth::CreateAclRequest;
+use rocketmq_admin_core::core::auth::CreateUserRequest;
+use rocketmq_admin_core::core::auth::DeleteAclRequest;
+use rocketmq_admin_core::core::auth::DeleteUserRequest;
 use rocketmq_admin_core::core::auth::GetAclRequest;
 use rocketmq_admin_core::core::auth::GetAclResult;
 use rocketmq_admin_core::core::auth::GetUserRequest;
@@ -22,6 +31,9 @@ use rocketmq_admin_core::core::auth::ListAclRequest;
 use rocketmq_admin_core::core::auth::ListAclResult;
 use rocketmq_admin_core::core::auth::ListUsersRequest;
 use rocketmq_admin_core::core::auth::ListUsersResult;
+use rocketmq_admin_core::core::auth::UpdateAclRequest;
+use rocketmq_admin_core::core::auth::UpdateUserRequest;
+use rocketmq_admin_core::core::broker::BrokerBooleanOperationResult;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryResult;
 use rocketmq_admin_core::core::broker::BrokerConfigUpdateApplyResult;
@@ -31,11 +43,21 @@ use rocketmq_admin_core::core::broker::BrokerConsumeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
 use rocketmq_admin_core::core::broker::BrokerEpochQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerEpochQueryResult;
+use rocketmq_admin_core::core::broker::BrokerOperationResult;
+use rocketmq_admin_core::core::broker::BrokerOptionalTarget;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
 use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueReport;
+use rocketmq_admin_core::core::broker::CleanExpiredConsumeQueueRequest;
+use rocketmq_admin_core::core::broker::ColdDataFlowCtrGroupConfigRemoveRequest;
+use rocketmq_admin_core::core::broker::ColdDataFlowCtrGroupConfigUpdateRequest;
 use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryRequest;
 use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryResult;
+use rocketmq_admin_core::core::broker::CommitLogReadAheadRequest;
+use rocketmq_admin_core::core::broker::CommitLogReadAheadResult;
+use rocketmq_admin_core::core::broker::ResetMasterFlushOffsetRequest;
+use rocketmq_admin_core::core::broker::SwitchTimerEngineRequest;
 use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
 use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryResult;
 use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
@@ -58,8 +80,12 @@ use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
 use rocketmq_admin_core::core::consumer::ConsumerService;
 use rocketmq_admin_core::core::consumer::DeleteSubscriptionGroupRequest;
 use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
+use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupListRequest;
+use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupRequest;
 use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
 use rocketmq_admin_core::core::controller::ControllerConfigQueryResult;
+use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
 use rocketmq_admin_core::core::controller::ControllerService;
@@ -79,6 +105,8 @@ use rocketmq_admin_core::core::lite::LiteTopicInfoQueryRequest;
 use rocketmq_admin_core::core::lite::LiteTopicInfoQueryResult;
 use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
 use rocketmq_admin_core::core::lite::ParentTopicInfoQueryResult;
+use rocketmq_admin_core::core::lite::TriggerLiteDispatchRequest;
+use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
 use rocketmq_admin_core::core::message::MessageService;
@@ -123,6 +151,10 @@ use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
 use rocketmq_admin_core::core::queue::QueryConsumeQueueRequest;
 use rocketmq_admin_core::core::queue::QueryConsumeQueueResult;
 use rocketmq_admin_core::core::queue::QueueService;
+use rocketmq_admin_core::core::static_topic::RemappingStaticTopicRequest;
+use rocketmq_admin_core::core::static_topic::StaticTopicMappingPlan;
+use rocketmq_admin_core::core::static_topic::StaticTopicService;
+use rocketmq_admin_core::core::static_topic::UpdateStaticTopicRequest;
 use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
 use rocketmq_admin_core::core::stats::StatsAllQueryResult;
 use rocketmq_admin_core::core::stats::StatsService;
@@ -149,6 +181,7 @@ use rocketmq_admin_core::core::topic::UpdateTopicResult;
 use rocketmq_admin_core::core::RocketMQResult;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiAdminFacade {
@@ -190,6 +223,55 @@ impl TuiAdminFacade {
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    pub fn auth_create_user_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+        user_type: Option<String>,
+    ) -> RocketMQResult<CreateUserRequest> {
+        Ok(
+            CreateUserRequest::try_new(broker_addr, cluster_name, username, password, user_type)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn auth_update_user_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+        password: Option<String>,
+        user_type: Option<String>,
+        user_status: Option<String>,
+    ) -> RocketMQResult<UpdateUserRequest> {
+        Ok(
+            UpdateUserRequest::try_new(broker_addr, cluster_name, username, password, user_type, user_status)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn auth_delete_user_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+    ) -> RocketMQResult<DeleteUserRequest> {
+        Ok(DeleteUserRequest::try_new(broker_addr, cluster_name, username)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn auth_copy_users_request(
+        &self,
+        from_broker: impl Into<String>,
+        to_broker: impl Into<String>,
+        usernames: Option<String>,
+    ) -> RocketMQResult<CopyUsersRequest> {
+        Ok(CopyUsersRequest::try_new(from_broker, to_broker, usernames)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
     pub fn auth_list_users_request(
         &self,
         broker_addr: Option<String>,
@@ -207,6 +289,73 @@ impl TuiAdminFacade {
         subject: impl Into<String>,
     ) -> RocketMQResult<GetAclRequest> {
         Ok(GetAclRequest::try_new(broker_addr, cluster_name, subject)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn auth_create_acl_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+        resources: impl Into<String>,
+        actions: impl Into<String>,
+        decision: impl Into<String>,
+        source_ip: Option<String>,
+    ) -> RocketMQResult<CreateAclRequest> {
+        Ok(CreateAclRequest::try_new(
+            broker_addr,
+            cluster_name,
+            subject,
+            resources,
+            actions,
+            decision,
+            source_ip,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn auth_update_acl_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+        resources: impl Into<String>,
+        actions: impl Into<String>,
+        decision: impl Into<String>,
+        source_ip: Option<String>,
+    ) -> RocketMQResult<UpdateAclRequest> {
+        Ok(UpdateAclRequest::try_new(
+            broker_addr,
+            cluster_name,
+            subject,
+            resources,
+            actions,
+            decision,
+            source_ip,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn auth_delete_acl_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+        resource: Option<String>,
+    ) -> RocketMQResult<DeleteAclRequest> {
+        Ok(DeleteAclRequest::try_new(broker_addr, cluster_name, subject, resource)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn auth_copy_acl_request(
+        &self,
+        from_broker: impl Into<String>,
+        to_broker: impl Into<String>,
+        subjects: Option<String>,
+    ) -> RocketMQResult<CopyAclRequest> {
+        Ok(CopyAclRequest::try_new(from_broker, to_broker, subjects)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -230,12 +379,40 @@ impl TuiAdminFacade {
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    pub fn controller_config_update_request(
+        &self,
+        controller_address: impl Into<String>,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<ControllerConfigUpdateRequest> {
+        Ok(ControllerConfigUpdateRequest::try_new(controller_address, key, value)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
     pub fn controller_metadata_query_request(
         &self,
         controller_address: impl Into<String>,
     ) -> RocketMQResult<ControllerMetadataQueryRequest> {
         Ok(ControllerMetadataQueryRequest::try_new(controller_address)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn controller_metadata_clean_request(
+        &self,
+        controller_address: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_controller_ids_to_clean: Option<String>,
+        cluster_name: Option<String>,
+        clean_living_broker: bool,
+    ) -> RocketMQResult<ControllerMetadataCleanRequest> {
+        Ok(ControllerMetadataCleanRequest::try_new(
+            controller_address,
+            broker_name,
+            broker_controller_ids_to_clean,
+            cluster_name,
+            clean_living_broker,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
     pub fn namesrv_config_query_request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
@@ -338,6 +515,98 @@ impl TuiAdminFacade {
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    pub fn broker_optional_target_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerOptionalTarget> {
+        Ok(BrokerOptionalTarget::new(broker_addr, cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn clean_expired_consume_queue_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        topic: Option<String>,
+        dry_run: bool,
+    ) -> RocketMQResult<CleanExpiredConsumeQueueRequest> {
+        Ok(
+            CleanExpiredConsumeQueueRequest::try_new(broker_addr, cluster_name, topic, dry_run)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn reset_master_flush_offset_request(
+        &self,
+        broker_addr: Option<String>,
+        offset: Option<i64>,
+    ) -> RocketMQResult<ResetMasterFlushOffsetRequest> {
+        Ok(ResetMasterFlushOffsetRequest::try_new(broker_addr, offset)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn cold_data_flow_ctr_group_config_update_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        consumer_group: impl Into<String>,
+        threshold: impl Into<String>,
+    ) -> RocketMQResult<ColdDataFlowCtrGroupConfigUpdateRequest> {
+        Ok(
+            ColdDataFlowCtrGroupConfigUpdateRequest::try_new(broker_addr, cluster_name, consumer_group, threshold)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn cold_data_flow_ctr_group_config_remove_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        consumer_group: impl Into<String>,
+    ) -> RocketMQResult<ColdDataFlowCtrGroupConfigRemoveRequest> {
+        Ok(
+            ColdDataFlowCtrGroupConfigRemoveRequest::try_new(broker_addr, cluster_name, consumer_group)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn commit_log_read_ahead_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        mode: Option<String>,
+        enable: bool,
+        disable: bool,
+        read_ahead_size: Option<String>,
+        read_ahead_size_key: Option<String>,
+        show_only: bool,
+    ) -> RocketMQResult<CommitLogReadAheadRequest> {
+        Ok(CommitLogReadAheadRequest::try_new(
+            broker_addr,
+            cluster_name,
+            mode,
+            enable,
+            disable,
+            read_ahead_size,
+            read_ahead_size_key,
+            show_only,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn switch_timer_engine_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        engine_type: impl Into<String>,
+    ) -> RocketMQResult<SwitchTimerEngineRequest> {
+        Ok(
+            SwitchTimerEngineRequest::try_new(broker_addr, cluster_name, engine_type)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
     pub fn cluster_list_request(&self, more_stats: bool, cluster_name: Option<String>) -> ClusterListQueryRequest {
         ClusterListQueryRequest::new(more_stats, cluster_name).with_optional_namesrv_addr(self.namesrv_addr.clone())
     }
@@ -409,6 +678,87 @@ impl TuiAdminFacade {
             pop_share_queue_num,
         )?
         .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_subscription_group_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        group_name: impl Into<String>,
+        consume_enable: bool,
+        consume_from_min_enable: bool,
+        consume_broadcast_enable: bool,
+        consume_message_orderly: bool,
+        retry_queue_nums: i32,
+        retry_max_times: i32,
+        broker_id: u64,
+        which_broker_when_consume_slowly: u64,
+        notify_consumer_ids_changed_enable: bool,
+        group_sys_flag: i32,
+        consume_timeout_minute: i32,
+    ) -> RocketMQResult<UpdateSubscriptionGroupRequest> {
+        let config = subscription_group_config(
+            group_name,
+            consume_enable,
+            consume_from_min_enable,
+            consume_broadcast_enable,
+            consume_message_orderly,
+            retry_queue_nums,
+            retry_max_times,
+            broker_id,
+            which_broker_when_consume_slowly,
+            notify_consumer_ids_changed_enable,
+            group_sys_flag,
+            consume_timeout_minute,
+        );
+        Ok(
+            UpdateSubscriptionGroupRequest::try_new(broker_addr, cluster_name, config)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_subscription_group_list_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        group_names: impl AsRef<str>,
+        consume_enable: bool,
+        consume_from_min_enable: bool,
+        consume_broadcast_enable: bool,
+        consume_message_orderly: bool,
+        retry_queue_nums: i32,
+        retry_max_times: i32,
+        broker_id: u64,
+        which_broker_when_consume_slowly: u64,
+        notify_consumer_ids_changed_enable: bool,
+        group_sys_flag: i32,
+        consume_timeout_minute: i32,
+    ) -> RocketMQResult<UpdateSubscriptionGroupListRequest> {
+        let configs = split_csv(group_names.as_ref())
+            .into_iter()
+            .map(|group_name| {
+                subscription_group_config(
+                    group_name,
+                    consume_enable,
+                    consume_from_min_enable,
+                    consume_broadcast_enable,
+                    consume_message_orderly,
+                    retry_queue_nums,
+                    retry_max_times,
+                    broker_id,
+                    which_broker_when_consume_slowly,
+                    notify_consumer_ids_changed_enable,
+                    group_sys_flag,
+                    consume_timeout_minute,
+                )
+            })
+            .collect::<Vec<_>>();
+        Ok(
+            UpdateSubscriptionGroupListRequest::try_new(broker_addr, cluster_name, configs)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
     }
 
     pub fn consumer_running_info_request(
@@ -611,6 +961,45 @@ impl TuiAdminFacade {
     ) -> RocketMQResult<LiteClientInfoQueryRequest> {
         Ok(LiteClientInfoQueryRequest::try_new(parent_topic, group, client_id)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn trigger_lite_dispatch_request(
+        &self,
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        client_id: Option<String>,
+        broker_name: Option<String>,
+    ) -> RocketMQResult<TriggerLiteDispatchRequest> {
+        Ok(
+            TriggerLiteDispatchRequest::try_new(parent_topic, group, client_id, broker_name)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn update_static_topic_request(
+        &self,
+        topic: impl Into<String>,
+        broker_names: impl Into<String>,
+        queue_num: impl AsRef<str>,
+        cluster_names: Option<String>,
+    ) -> RocketMQResult<UpdateStaticTopicRequest> {
+        Ok(
+            UpdateStaticTopicRequest::try_new(topic, broker_names, queue_num, cluster_names)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn remapping_static_topic_request(
+        &self,
+        topic: impl Into<String>,
+        broker_names: Option<String>,
+        cluster_names: Option<String>,
+        force_replace: Option<bool>,
+    ) -> RocketMQResult<RemappingStaticTopicRequest> {
+        Ok(
+            RemappingStaticTopicRequest::try_new(topic, broker_names, cluster_names, force_replace)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
     }
 
     pub fn decode_message_id_request(&self, message_ids: impl AsRef<str>) -> RocketMQResult<DecodeMessageIdRequest> {
@@ -856,6 +1245,63 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn create_auth_user(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+        user_type: Option<String>,
+    ) -> RocketMQResult<AuthOperationResult> {
+        AuthService::create_user_by_request_with_rpc_hook(
+            self.auth_create_user_request(broker_addr, cluster_name, username, password, user_type)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_auth_user(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+        password: Option<String>,
+        user_type: Option<String>,
+        user_status: Option<String>,
+    ) -> RocketMQResult<AuthOperationResult> {
+        AuthService::update_user_by_request_with_rpc_hook(
+            self.auth_update_user_request(broker_addr, cluster_name, username, password, user_type, user_status)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn delete_auth_user(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+    ) -> RocketMQResult<AuthOperationResult> {
+        AuthService::delete_user_by_request_with_rpc_hook(
+            self.auth_delete_user_request(broker_addr, cluster_name, username)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn copy_auth_users(
+        &self,
+        from_broker: impl Into<String>,
+        to_broker: impl Into<String>,
+        usernames: Option<String>,
+    ) -> RocketMQResult<CopyUsersResult> {
+        AuthService::copy_users_by_request_with_rpc_hook(
+            self.auth_copy_users_request(from_broker, to_broker, usernames)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn list_auth_users(
         &self,
         broker_addr: Option<String>,
@@ -877,6 +1323,85 @@ impl TuiAdminFacade {
     ) -> RocketMQResult<GetAclResult> {
         AuthService::get_acl_by_request_with_rpc_hook(
             self.auth_get_acl_request(broker_addr, cluster_name, subject)?,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_auth_acl(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+        resources: impl Into<String>,
+        actions: impl Into<String>,
+        decision: impl Into<String>,
+        source_ip: Option<String>,
+    ) -> RocketMQResult<AuthOperationResult> {
+        AuthService::create_acl_by_request_with_rpc_hook(
+            self.auth_create_acl_request(
+                broker_addr,
+                cluster_name,
+                subject,
+                resources,
+                actions,
+                decision,
+                source_ip,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_auth_acl(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+        resources: impl Into<String>,
+        actions: impl Into<String>,
+        decision: impl Into<String>,
+        source_ip: Option<String>,
+    ) -> RocketMQResult<AuthOperationResult> {
+        AuthService::update_acl_by_request_with_rpc_hook(
+            self.auth_update_acl_request(
+                broker_addr,
+                cluster_name,
+                subject,
+                resources,
+                actions,
+                decision,
+                source_ip,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn delete_auth_acl(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+        resource: Option<String>,
+    ) -> RocketMQResult<AuthOperationResult> {
+        AuthService::delete_acl_by_request_with_rpc_hook(
+            self.auth_delete_acl_request(broker_addr, cluster_name, subject, resource)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn copy_auth_acl(
+        &self,
+        from_broker: impl Into<String>,
+        to_broker: impl Into<String>,
+        subjects: Option<String>,
+    ) -> RocketMQResult<CopyAclResult> {
+        AuthService::copy_acl_by_request_with_rpc_hook(
+            self.auth_copy_acl_request(from_broker, to_broker, subjects)?,
             None,
         )
         .await
@@ -907,12 +1432,46 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn update_controller_config(
+        &self,
+        controller_address: impl Into<String>,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> RocketMQResult<()> {
+        ControllerService::update_controller_config_by_request_with_rpc_hook(
+            self.controller_config_update_request(controller_address, key, value)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn query_controller_metadata(
         &self,
         controller_address: impl Into<String>,
     ) -> RocketMQResult<ControllerMetadataQueryResult> {
         ControllerService::query_controller_metadata_by_request_with_rpc_hook(
             self.controller_metadata_query_request(controller_address)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn clean_controller_metadata(
+        &self,
+        controller_address: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_controller_ids_to_clean: Option<String>,
+        cluster_name: Option<String>,
+        clean_living_broker: bool,
+    ) -> RocketMQResult<()> {
+        ControllerService::clean_controller_metadata_by_request_with_rpc_hook(
+            self.controller_metadata_clean_request(
+                controller_address,
+                broker_name,
+                broker_controller_ids_to_clean,
+                cluster_name,
+                clean_living_broker,
+            )?,
             None,
         )
         .await
@@ -1034,6 +1593,124 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn clean_expired_consume_queue(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        topic: Option<String>,
+        dry_run: bool,
+    ) -> RocketMQResult<CleanExpiredConsumeQueueReport> {
+        BrokerService::clean_expired_consume_queue_by_request_with_rpc_hook(
+            self.clean_expired_consume_queue_request(broker_addr, cluster_name, topic, dry_run)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn delete_expired_commit_log(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerBooleanOperationResult> {
+        BrokerService::delete_expired_commit_log_by_request_with_rpc_hook(
+            self.broker_optional_target_request(broker_addr, cluster_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn clean_unused_topic(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerBooleanOperationResult> {
+        BrokerService::clean_unused_topic_by_request_with_rpc_hook(
+            self.broker_optional_target_request(broker_addr, cluster_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn reset_master_flush_offset(
+        &self,
+        broker_addr: Option<String>,
+        offset: Option<i64>,
+    ) -> RocketMQResult<()> {
+        BrokerService::reset_master_flush_offset_by_request_with_rpc_hook(
+            self.reset_master_flush_offset_request(broker_addr, offset)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_cold_data_flow_ctr_group_config(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        consumer_group: impl Into<String>,
+        threshold: impl Into<String>,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        BrokerService::update_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(
+            self.cold_data_flow_ctr_group_config_update_request(broker_addr, cluster_name, consumer_group, threshold)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn remove_cold_data_flow_ctr_group_config(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        consumer_group: impl Into<String>,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_rpc_hook(
+            self.cold_data_flow_ctr_group_config_remove_request(broker_addr, cluster_name, consumer_group)?,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn set_commit_log_read_ahead(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        mode: Option<String>,
+        enable: bool,
+        disable: bool,
+        read_ahead_size: Option<String>,
+        read_ahead_size_key: Option<String>,
+        show_only: bool,
+    ) -> RocketMQResult<CommitLogReadAheadResult> {
+        BrokerService::set_commit_log_read_ahead_by_request_with_rpc_hook(
+            self.commit_log_read_ahead_request(
+                broker_addr,
+                cluster_name,
+                mode,
+                enable,
+                disable,
+                read_ahead_size,
+                read_ahead_size_key,
+                show_only,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn switch_timer_engine(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        engine_type: impl Into<String>,
+    ) -> RocketMQResult<BrokerOperationResult> {
+        BrokerService::switch_timer_engine_by_request_with_rpc_hook(
+            self.switch_timer_engine_request(broker_addr, cluster_name, engine_type)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn query_cluster_list(
         &self,
         more_stats: bool,
@@ -1133,6 +1810,86 @@ impl TuiAdminFacade {
                 group_name,
                 mode,
                 pop_share_queue_num,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_subscription_group(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        group_name: impl Into<String>,
+        consume_enable: bool,
+        consume_from_min_enable: bool,
+        consume_broadcast_enable: bool,
+        consume_message_orderly: bool,
+        retry_queue_nums: i32,
+        retry_max_times: i32,
+        broker_id: u64,
+        which_broker_when_consume_slowly: u64,
+        notify_consumer_ids_changed_enable: bool,
+        group_sys_flag: i32,
+        consume_timeout_minute: i32,
+    ) -> RocketMQResult<ConsumerOperationResult> {
+        ConsumerService::update_subscription_group_by_request_with_rpc_hook(
+            self.update_subscription_group_request(
+                broker_addr,
+                cluster_name,
+                group_name,
+                consume_enable,
+                consume_from_min_enable,
+                consume_broadcast_enable,
+                consume_message_orderly,
+                retry_queue_nums,
+                retry_max_times,
+                broker_id,
+                which_broker_when_consume_slowly,
+                notify_consumer_ids_changed_enable,
+                group_sys_flag,
+                consume_timeout_minute,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_subscription_group_list(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        group_names: impl AsRef<str>,
+        consume_enable: bool,
+        consume_from_min_enable: bool,
+        consume_broadcast_enable: bool,
+        consume_message_orderly: bool,
+        retry_queue_nums: i32,
+        retry_max_times: i32,
+        broker_id: u64,
+        which_broker_when_consume_slowly: u64,
+        notify_consumer_ids_changed_enable: bool,
+        group_sys_flag: i32,
+        consume_timeout_minute: i32,
+    ) -> RocketMQResult<ConsumerOperationResult> {
+        ConsumerService::update_subscription_group_list_by_request_with_rpc_hook(
+            self.update_subscription_group_list_request(
+                broker_addr,
+                cluster_name,
+                group_names,
+                consume_enable,
+                consume_from_min_enable,
+                consume_broadcast_enable,
+                consume_message_orderly,
+                retry_queue_nums,
+                retry_max_times,
+                broker_id,
+                which_broker_when_consume_slowly,
+                notify_consumer_ids_changed_enable,
+                group_sys_flag,
+                consume_timeout_minute,
             )?,
             None,
         )
@@ -1388,6 +2145,48 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn trigger_lite_dispatch(
+        &self,
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        client_id: Option<String>,
+        broker_name: Option<String>,
+    ) -> RocketMQResult<TriggerLiteDispatchResult> {
+        LiteService::trigger_lite_dispatch_by_request_with_rpc_hook(
+            self.trigger_lite_dispatch_request(parent_topic, group, client_id, broker_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_static_topic(
+        &self,
+        topic: impl Into<String>,
+        broker_names: impl Into<String>,
+        queue_num: impl AsRef<str>,
+        cluster_names: Option<String>,
+    ) -> RocketMQResult<StaticTopicMappingPlan> {
+        StaticTopicService::update_static_topic_by_request_with_rpc_hook(
+            self.update_static_topic_request(topic, broker_names, queue_num, cluster_names)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn remapping_static_topic(
+        &self,
+        topic: impl Into<String>,
+        broker_names: Option<String>,
+        cluster_names: Option<String>,
+        force_replace: Option<bool>,
+    ) -> RocketMQResult<StaticTopicMappingPlan> {
+        StaticTopicService::remapping_static_topic_by_request_with_rpc_hook(
+            self.remapping_static_topic_request(topic, broker_names, cluster_names, force_replace)?,
+            None,
+        )
+        .await
+    }
+
     pub fn decode_message_id(&self, message_ids: impl AsRef<str>) -> RocketMQResult<DecodeMessageIdResult> {
         let request = self.decode_message_id_request(message_ids)?;
         Ok(MessageService::decode_message_ids(&request))
@@ -1491,6 +2290,45 @@ impl TuiAdminFacade {
         )
         .await
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn subscription_group_config(
+    group_name: impl Into<String>,
+    consume_enable: bool,
+    consume_from_min_enable: bool,
+    consume_broadcast_enable: bool,
+    consume_message_orderly: bool,
+    retry_queue_nums: i32,
+    retry_max_times: i32,
+    broker_id: u64,
+    which_broker_when_consume_slowly: u64,
+    notify_consumer_ids_changed_enable: bool,
+    group_sys_flag: i32,
+    consume_timeout_minute: i32,
+) -> SubscriptionGroupConfig {
+    let mut config = SubscriptionGroupConfig::new(group_name.into().trim().into());
+    config.set_consume_enable(consume_enable);
+    config.set_consume_from_min_enable(consume_from_min_enable);
+    config.set_consume_broadcast_enable(consume_broadcast_enable);
+    config.set_consume_message_orderly(consume_message_orderly);
+    config.set_retry_queue_nums(retry_queue_nums);
+    config.set_retry_max_times(retry_max_times);
+    config.set_broker_id(broker_id);
+    config.set_which_broker_when_consume_slowly(which_broker_when_consume_slowly);
+    config.set_notify_consumer_ids_changed_enable(notify_consumer_ids_changed_enable);
+    config.set_group_sys_flag(group_sys_flag);
+    config.set_consume_timeout_minute(consume_timeout_minute);
+    config
+}
+
+fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn split_message_ids(value: &str) -> Vec<String> {
@@ -1879,6 +2717,291 @@ mod tests {
         std::mem::drop(facade.query_producer_info("127.0.0.1:10911"));
         std::mem::drop(facade.send_message_status("broker-a", 128, 2));
         std::mem::drop(facade.check_message_send_rt("TopicA", 2, 128));
+    }
+
+    #[test]
+    fn facade_builds_phase_three_mutating_requests_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+
+        let create_user = facade
+            .auth_create_user_request(
+                Some(" 127.0.0.1:10911 ".to_string()),
+                None,
+                " admin ",
+                " secret ",
+                Some(" NORMAL ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(create_user.username().as_str(), "admin");
+        assert_eq!(create_user.password().as_str(), "secret");
+        assert_eq!(create_user.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let update_user = facade
+            .auth_update_user_request(
+                None,
+                Some(" DefaultCluster ".to_string()),
+                " admin ",
+                None,
+                Some(" SUPER ".to_string()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(update_user.username().as_str(), "admin");
+        assert_eq!(update_user.user_type(), Some("SUPER"));
+
+        let delete_user = facade
+            .auth_delete_user_request(Some(" 127.0.0.1:10911 ".to_string()), None, " admin ")
+            .unwrap();
+        assert_eq!(delete_user.username().as_str(), "admin");
+
+        let copy_users = facade
+            .auth_copy_users_request(
+                " 127.0.0.1:10911 ",
+                " 127.0.0.2:10911 ",
+                Some(" admin,guest ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(copy_users.from_broker().as_str(), "127.0.0.1:10911");
+        assert_eq!(copy_users.usernames().map(|names| names.len()), Some(2));
+
+        let create_acl = facade
+            .auth_create_acl_request(
+                Some(" 127.0.0.1:10911 ".to_string()),
+                None,
+                " User:admin ",
+                " Topic:TopicA,Group:GroupA ",
+                " PUB,SUB ",
+                " ALLOW ",
+                Some(" 127.0.0.1 ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(create_acl.subject().as_str(), "User:admin");
+        assert_eq!(create_acl.resources().len(), 2);
+        assert_eq!(create_acl.actions().len(), 2);
+        assert_eq!(create_acl.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let delete_acl = facade
+            .auth_delete_acl_request(
+                None,
+                Some(" DefaultCluster ".to_string()),
+                " User:admin ",
+                Some(" Topic:TopicA ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(delete_acl.subject().as_str(), "User:admin");
+        assert_eq!(delete_acl.resource(), Some("Topic:TopicA"));
+
+        let controller_update = facade
+            .controller_config_update_request(" 127.0.0.1:9878 ", " enableElectUncleanMaster ", " true ")
+            .unwrap();
+        assert_eq!(controller_update.controller_servers().len(), 1);
+        assert_eq!(controller_update.properties().len(), 1);
+
+        let controller_clean = facade
+            .controller_metadata_clean_request(
+                " 127.0.0.1:9878 ",
+                " broker-a ",
+                Some(" 1;2 ".to_string()),
+                Some(" DefaultCluster ".to_string()),
+                false,
+            )
+            .unwrap();
+        assert_eq!(controller_clean.broker_name().as_str(), "broker-a");
+        assert_eq!(
+            controller_clean.broker_controller_ids_to_clean().unwrap().as_str(),
+            "1;2"
+        );
+
+        let clean_cq = facade
+            .clean_expired_consume_queue_request(
+                Some(" 127.0.0.1:10911 ".to_string()),
+                None,
+                Some(" TopicA ".to_string()),
+                true,
+            )
+            .unwrap();
+        assert!(clean_cq.dry_run());
+        assert_eq!(clean_cq.topic().unwrap().as_str(), "TopicA");
+
+        let reset_flush = facade
+            .reset_master_flush_offset_request(Some(" 127.0.0.1:10912 ".to_string()), Some(1024))
+            .unwrap();
+        assert_eq!(reset_flush.broker_addr().as_str(), "127.0.0.1:10912");
+        assert_eq!(reset_flush.master_flush_offset(), 1024);
+
+        let read_ahead = facade
+            .commit_log_read_ahead_request(
+                Some(" 127.0.0.1:10911 ".to_string()),
+                None,
+                Some("0".to_string()),
+                false,
+                false,
+                Some("4096".to_string()),
+                None,
+                false,
+            )
+            .unwrap();
+        assert!(read_ahead.has_updates());
+
+        let lite = facade
+            .trigger_lite_dispatch_request(
+                " ParentTopic ",
+                " GroupA ",
+                Some(" client-a ".to_string()),
+                Some(" broker-a ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(lite.parent_topic().as_str(), "ParentTopic");
+        assert_eq!(lite.group().as_str(), "GroupA");
+
+        let update_static = facade
+            .update_static_topic_request(
+                " StaticTopic ",
+                " broker-a,broker-b ",
+                " 4 ",
+                Some(" DefaultCluster ".into()),
+            )
+            .unwrap();
+        assert_eq!(update_static.topic().as_str(), "StaticTopic");
+        assert_eq!(update_static.broker_names().len(), 2);
+
+        let remap_static = facade
+            .remapping_static_topic_request(
+                " StaticTopic ",
+                Some(" broker-a ".to_string()),
+                Some(" DefaultCluster ".to_string()),
+                Some(true),
+            )
+            .unwrap();
+        assert_eq!(remap_static.topic().as_str(), "StaticTopic");
+        assert!(remap_static.force_replace());
+    }
+
+    #[test]
+    fn facade_exposes_phase_three_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.create_auth_user(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "admin",
+            "secret",
+            Some("NORMAL".to_string()),
+        ));
+        std::mem::drop(facade.update_auth_user(
+            None,
+            Some("DefaultCluster".to_string()),
+            "admin",
+            None,
+            Some("SUPER".to_string()),
+            None,
+        ));
+        std::mem::drop(facade.delete_auth_user(Some("127.0.0.1:10911".to_string()), None, "admin"));
+        std::mem::drop(facade.copy_auth_users("127.0.0.1:10911", "127.0.0.2:10911", Some("admin".to_string())));
+        std::mem::drop(facade.create_auth_acl(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "User:admin",
+            "Topic:TopicA",
+            "PUB",
+            "ALLOW",
+            None,
+        ));
+        std::mem::drop(facade.update_auth_acl(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "User:admin",
+            "Topic:TopicA",
+            "PUB",
+            "ALLOW",
+            None,
+        ));
+        std::mem::drop(facade.delete_auth_acl(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "User:admin",
+            Some("Topic:TopicA".to_string()),
+        ));
+        std::mem::drop(facade.copy_auth_acl("127.0.0.1:10911", "127.0.0.2:10911", Some("User:admin".to_string())));
+        std::mem::drop(facade.update_controller_config("127.0.0.1:9878", "enableElectUncleanMaster", "true"));
+        std::mem::drop(facade.clean_controller_metadata(
+            "127.0.0.1:9878",
+            "broker-a",
+            Some("1;2".to_string()),
+            Some("DefaultCluster".to_string()),
+            false,
+        ));
+        std::mem::drop(facade.clean_expired_consume_queue(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            Some("TopicA".to_string()),
+            true,
+        ));
+        std::mem::drop(facade.delete_expired_commit_log(Some("127.0.0.1:10911".to_string()), None));
+        std::mem::drop(facade.clean_unused_topic(Some("127.0.0.1:10911".to_string()), None));
+        std::mem::drop(facade.reset_master_flush_offset(Some("127.0.0.1:10912".to_string()), Some(1024)));
+        std::mem::drop(facade.update_cold_data_flow_ctr_group_config(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "GroupA",
+            "1024",
+        ));
+        std::mem::drop(facade.remove_cold_data_flow_ctr_group_config(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "GroupA",
+        ));
+        std::mem::drop(facade.set_commit_log_read_ahead(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            Some("0".to_string()),
+            false,
+            false,
+            Some("4096".to_string()),
+            None,
+            false,
+        ));
+        std::mem::drop(facade.switch_timer_engine(Some("127.0.0.1:10911".to_string()), None, "R"));
+        std::mem::drop(facade.update_subscription_group(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "GroupA",
+            true,
+            true,
+            true,
+            false,
+            1,
+            16,
+            0,
+            1,
+            true,
+            0,
+            15,
+        ));
+        std::mem::drop(facade.update_subscription_group_list(
+            Some("127.0.0.1:10911".to_string()),
+            None,
+            "GroupA,GroupB",
+            true,
+            true,
+            true,
+            false,
+            1,
+            16,
+            0,
+            1,
+            true,
+            0,
+            15,
+        ));
+        std::mem::drop(facade.trigger_lite_dispatch(
+            "ParentTopic",
+            "GroupA",
+            Some("client-a".to_string()),
+            Some("broker-a".to_string()),
+        ));
+        std::mem::drop(facade.update_static_topic("StaticTopic", "broker-a", "4", Some("DefaultCluster".to_string())));
+        std::mem::drop(facade.remapping_static_topic("StaticTopic", Some("broker-a".to_string()), None, Some(false)));
     }
 
     #[test]
