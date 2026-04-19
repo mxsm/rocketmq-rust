@@ -21,10 +21,10 @@ use ratatui::widgets::Wrap;
 use ratatui::Frame;
 
 use crate::commands::ArgKind;
-use crate::commands::CommandCategory;
 use crate::commands::RiskLevel;
 use crate::state::AppState;
 use crate::state::CommandExecutionState;
+use crate::state::CommandTreeItem;
 use crate::state::FocusArea;
 use crate::view_model::CommandResultViewModel;
 
@@ -108,33 +108,44 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_command_tree(frame: &mut Frame, area: Rect, state: &AppState) {
     let mut items = Vec::new();
-    let mut last_category: Option<CommandCategory> = None;
-    for index in state.visible_command_indices() {
-        let command = &state.commands()[index];
-        if last_category != Some(command.category) {
-            items.push(ListItem::new(Line::from(Span::styled(
-                command.category.as_str(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ))));
-            last_category = Some(command.category);
+    for (row_index, item) in state.visible_tree_items().into_iter().enumerate() {
+        let focused = state.focus == FocusArea::CommandTree && state.tree_cursor() == row_index;
+        match item {
+            CommandTreeItem::Category(category) => {
+                let collapsed = state.is_category_collapsed(category);
+                let marker = if collapsed { ">" } else { "v" };
+                let style = if focused {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                };
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("{marker} {}", category.as_str()),
+                    style,
+                ))));
+            }
+            CommandTreeItem::Command(index) => {
+                let command = &state.commands()[index];
+                let selected = index == state.selected_command_index();
+                let risk = match command.risk_level {
+                    RiskLevel::Safe => " ",
+                    RiskLevel::Mutating => "~",
+                    RiskLevel::Dangerous => "!",
+                };
+                let marker = if selected { ">" } else { " " };
+                let style = if focused {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else if selected {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                };
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  {marker} {risk} {}", command.title),
+                    style,
+                ))));
+            }
         }
-
-        let selected = index == state.selected_command_index();
-        let risk = match command.risk_level {
-            RiskLevel::Safe => " ",
-            RiskLevel::Mutating => "~",
-            RiskLevel::Dangerous => "!",
-        };
-        let marker = if selected { ">" } else { " " };
-        let style = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default()
-        };
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!("{marker} {risk} {}", command.title),
-            style,
-        ))));
     }
 
     if items.is_empty() {
@@ -309,8 +320,8 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(vec![
             Span::styled("Keys: ", Style::default().fg(Color::Cyan)),
             Span::raw(
-                "Tab focus | n namesrv | / search | Enter run | Space toggle | arrows/jk move | Ctrl+R rerun | Ctrl+L \
-                 clear | ? help | q quit",
+                "Tab focus | n namesrv | / search | Enter run/toggle | Left/Right fold | Space bool | arrows/jk move \
+                 | Ctrl+R rerun | Ctrl+L clear | ? help | q quit",
             ),
         ]),
         Line::from(vec![
@@ -350,9 +361,9 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::raw("n                    Edit NameServer address"),
         Line::raw("/ or s               Focus search when not editing args"),
         Line::raw("j/k or arrows        Move command, arg, or result viewport"),
+        Line::raw("Left/Right           Collapse or expand command groups; cycle enum arg; scroll result"),
         Line::raw("Space                Toggle bool arg"),
-        Line::raw("Left/Right           Cycle enum arg or scroll result horizontally"),
-        Line::raw("Enter                Select command, execute, or submit confirmation"),
+        Line::raw("Enter                Toggle group, select command, execute, or submit confirmation"),
         Line::raw("Ctrl+R               Re-run selected command"),
         Line::raw("Ctrl+L               Clear result"),
         Line::raw("Esc                  Close modal, cancel local wait, or quit"),

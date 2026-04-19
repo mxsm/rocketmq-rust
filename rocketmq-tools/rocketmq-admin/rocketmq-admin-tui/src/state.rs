@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::commands::command_catalog;
 use crate::commands::ArgKind;
 use crate::commands::ArgSpec;
+use crate::commands::CommandCategory;
 use crate::commands::CommandSpec;
 use crate::commands::RiskLevel;
 use crate::view_model::CommandResultViewModel;
@@ -76,6 +78,12 @@ impl CommandExecutionState {
             | Self::Cancelled { execution_id, .. } => Some(*execution_id),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandTreeItem {
+    Category(CommandCategory),
+    Command(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,6 +357,8 @@ impl CommandFormState {
 pub struct AppState {
     commands: Vec<CommandSpec>,
     selected_command_index: usize,
+    tree_cursor: usize,
+    collapsed_categories: BTreeSet<CommandCategory>,
     pub focus: FocusArea,
     pub namesrv_addr: String,
     pub search: String,
@@ -368,9 +378,11 @@ impl AppState {
     pub fn new(namesrv_addr: Option<&str>) -> Self {
         let commands = command_catalog();
         let form = CommandFormState::for_command(&commands[0]);
-        Self {
+        let mut state = Self {
             commands,
             selected_command_index: 0,
+            tree_cursor: 0,
+            collapsed_categories: BTreeSet::new(),
             focus: FocusArea::CommandTree,
             namesrv_addr: namesrv_addr.unwrap_or_default().to_string(),
             search: String::new(),
@@ -384,7 +396,9 @@ impl AppState {
             result_scroll: 0,
             result_horizontal_scroll: 0,
             next_execution_id: 1,
-        }
+        };
+        state.align_tree_cursor_to_selected_command();
+        state
     }
 
     pub fn commands(&self) -> &[CommandSpec] {
@@ -400,11 +414,95 @@ impl AppState {
     }
 
     pub fn visible_command_indices(&self) -> Vec<usize> {
-        self.commands
+        self.visible_tree_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandTreeItem::Command(index) => Some(index),
+                CommandTreeItem::Category(_) => None,
+            })
+            .collect()
+    }
+
+    pub fn visible_tree_items(&self) -> Vec<CommandTreeItem> {
+        let search_active = !self.search.trim().is_empty();
+        let mut items = Vec::new();
+        let mut last_category = None;
+
+        for (index, command) in self
+            .commands
             .iter()
             .enumerate()
-            .filter_map(|(index, command)| command.matches_query(&self.search).then_some(index))
-            .collect()
+            .filter(|(_, command)| command.matches_query(&self.search))
+        {
+            if last_category != Some(command.category) {
+                items.push(CommandTreeItem::Category(command.category));
+                last_category = Some(command.category);
+            }
+
+            if search_active || !self.collapsed_categories.contains(&command.category) {
+                items.push(CommandTreeItem::Command(index));
+            }
+        }
+
+        items
+    }
+
+    pub fn tree_cursor(&self) -> usize {
+        self.tree_cursor
+    }
+
+    pub fn focused_tree_item(&self) -> Option<CommandTreeItem> {
+        self.visible_tree_items().get(self.tree_cursor).copied()
+    }
+
+    pub fn is_category_collapsed(&self, category: CommandCategory) -> bool {
+        self.collapsed_categories.contains(&category)
+    }
+
+    pub fn select_next_tree_item(&mut self) {
+        self.move_tree_cursor(1);
+    }
+
+    pub fn select_previous_tree_item(&mut self) {
+        self.move_tree_cursor(-1);
+    }
+
+    pub fn toggle_focused_tree_category(&mut self) {
+        let Some(category) = self.focused_tree_category() else {
+            return;
+        };
+        if !self.collapsed_categories.insert(category) {
+            self.collapsed_categories.remove(&category);
+        }
+        self.ensure_tree_cursor_valid();
+    }
+
+    pub fn collapse_focused_tree_category(&mut self) {
+        if let Some(category) = self.focused_tree_category() {
+            self.collapsed_categories.insert(category);
+            self.ensure_tree_cursor_valid();
+        }
+    }
+
+    pub fn expand_focused_tree_category(&mut self) {
+        if let Some(category) = self.focused_tree_category() {
+            self.collapsed_categories.remove(&category);
+            self.ensure_tree_cursor_valid();
+        }
+    }
+
+    pub fn focused_tree_category(&self) -> Option<CommandCategory> {
+        match self.focused_tree_item()? {
+            CommandTreeItem::Category(category) => Some(category),
+            CommandTreeItem::Command(index) => Some(self.commands[index].category),
+        }
+    }
+
+    pub fn selected_visible_position(&self) -> Option<usize> {
+        self.commands.get(self.selected_command_index)?;
+        self.visible_command_indices()
+            .into_iter()
+            .position(|index| index == self.selected_command_index)
     }
 
     pub fn next_execution_id(&mut self) -> u64 {
@@ -415,27 +513,14 @@ impl AppState {
 
     pub fn set_search(&mut self, search: String) {
         self.search = search;
+        self.ensure_tree_cursor_valid();
         self.ensure_selected_visible();
-    }
-
-    pub fn select_next_command(&mut self) {
-        self.move_selection(1);
-    }
-
-    pub fn select_previous_command(&mut self) {
-        self.move_selection(-1);
     }
 
     pub fn select_visible_command_at(&mut self, visible_position: usize) {
         if let Some(index) = self.visible_command_indices().get(visible_position).copied() {
             self.select_command_index(index);
         }
-    }
-
-    pub fn selected_visible_position(&self) -> Option<usize> {
-        self.visible_command_indices()
-            .into_iter()
-            .position(|index| index == self.selected_command_index)
     }
 
     pub fn reset_form_for_selected_command(&mut self) {
@@ -458,21 +543,23 @@ impl AppState {
         })
     }
 
-    fn move_selection(&mut self, delta: isize) {
-        let visible = self.visible_command_indices();
+    fn move_tree_cursor(&mut self, delta: isize) {
+        let visible = self.visible_tree_items();
         if visible.is_empty() {
+            self.tree_cursor = 0;
             return;
         }
-        let current = visible
-            .iter()
-            .position(|index| *index == self.selected_command_index)
-            .unwrap_or(0);
+
         let next = if delta.is_negative() {
-            current.saturating_sub(delta.unsigned_abs())
+            self.tree_cursor.saturating_sub(delta.unsigned_abs())
         } else {
-            (current + delta as usize).min(visible.len() - 1)
+            (self.tree_cursor + delta as usize).min(visible.len() - 1)
         };
-        self.select_command_index(visible[next]);
+        self.tree_cursor = next;
+
+        if let CommandTreeItem::Command(index) = visible[next] {
+            self.select_command_index(index);
+        }
     }
 
     fn select_command_index(&mut self, index: usize) {
@@ -482,6 +569,7 @@ impl AppState {
             self.result_scroll = 0;
             self.result_horizontal_scroll = 0;
         }
+        self.align_tree_cursor_to_selected_command();
     }
 
     fn ensure_selected_visible(&mut self) {
@@ -491,6 +579,25 @@ impl AppState {
         }
         if !visible.contains(&self.selected_command_index) {
             self.select_command_index(visible[0]);
+        }
+    }
+
+    fn ensure_tree_cursor_valid(&mut self) {
+        let visible_len = self.visible_tree_items().len();
+        if visible_len == 0 {
+            self.tree_cursor = 0;
+        } else {
+            self.tree_cursor = self.tree_cursor.min(visible_len - 1);
+        }
+    }
+
+    fn align_tree_cursor_to_selected_command(&mut self) {
+        if let Some(position) = self
+            .visible_tree_items()
+            .into_iter()
+            .position(|item| item == CommandTreeItem::Command(self.selected_command_index))
+        {
+            self.tree_cursor = position;
         }
     }
 }
@@ -527,6 +634,7 @@ fn parse_key_value_map(value: &str) -> Result<BTreeMap<String, String>, String> 
 mod tests {
     use super::AppState;
     use super::CommandFormState;
+    use super::CommandTreeItem;
     use crate::commands::command_catalog;
 
     #[test]
@@ -576,5 +684,52 @@ mod tests {
         assert!(visible
             .iter()
             .all(|index| state.commands()[*index].matches_query("producer")));
+    }
+
+    #[test]
+    fn command_tree_collapses_current_category() {
+        let mut state = AppState::new(None);
+        let category = state.selected_command().category;
+
+        state.collapse_focused_tree_category();
+
+        assert!(state.is_category_collapsed(category));
+        assert!(state
+            .visible_tree_items()
+            .contains(&CommandTreeItem::Category(category)));
+        assert!(!state
+            .visible_command_indices()
+            .iter()
+            .any(|index| state.commands()[*index].category == category));
+    }
+
+    #[test]
+    fn command_tree_search_ignores_collapsed_categories() {
+        let mut state = AppState::new(None);
+        let command_id = state.selected_command().id.to_string();
+        let category = state.selected_command().category;
+
+        state.collapse_focused_tree_category();
+        state.set_search(command_id);
+
+        assert!(state.is_category_collapsed(category));
+        assert!(matches!(
+            state.focused_tree_item(),
+            Some(CommandTreeItem::Command(index)) if state.commands()[index].category == category
+        ));
+    }
+
+    #[test]
+    fn command_tree_cursor_updates_selected_command() {
+        let mut state = AppState::new(None);
+        let original = state.selected_command().id;
+
+        state.select_next_tree_item();
+
+        assert_ne!(state.selected_command().id, original);
+        assert!(matches!(
+            state.focused_tree_item(),
+            Some(CommandTreeItem::Command(index)) if index == state.selected_command_index()
+        ));
     }
 }

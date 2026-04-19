@@ -17,6 +17,7 @@ use crate::event::is_ctrl;
 use crate::event::key_char;
 use crate::state::AppState;
 use crate::state::CommandExecutionState;
+use crate::state::CommandTreeItem;
 use crate::state::FocusArea;
 
 pub struct RocketmqTuiApp {
@@ -193,10 +194,14 @@ impl RocketmqTuiApp {
 
     fn handle_enter(&mut self) {
         match self.state.focus {
-            FocusArea::CommandTree => {
-                self.state.reset_form_for_selected_command();
-                self.state.focus = FocusArea::Args;
-            }
+            FocusArea::CommandTree => match self.state.focused_tree_item() {
+                Some(CommandTreeItem::Category(_)) => self.state.toggle_focused_tree_category(),
+                Some(CommandTreeItem::Command(_)) => {
+                    self.state.reset_form_for_selected_command();
+                    self.state.focus = FocusArea::Args;
+                }
+                None => {}
+            },
             FocusArea::Args | FocusArea::Search | FocusArea::Namesrv => self.apply_action(Action::ExecuteRequested),
             FocusArea::Result => {
                 self.state.result_scroll = 0;
@@ -208,8 +213,8 @@ impl RocketmqTuiApp {
     fn move_down(&mut self) {
         match self.state.focus {
             FocusArea::CommandTree => {
-                self.state.select_next_command();
-                self.apply_action(Action::CommandSelected(self.state.selected_command().id.to_string()));
+                self.state.select_next_tree_item();
+                self.emit_selected_command_action();
             }
             FocusArea::Args => {
                 let command = self.state.selected_command().clone();
@@ -223,8 +228,8 @@ impl RocketmqTuiApp {
     fn move_up(&mut self) {
         match self.state.focus {
             FocusArea::CommandTree => {
-                self.state.select_previous_command();
-                self.apply_action(Action::CommandSelected(self.state.selected_command().id.to_string()));
+                self.state.select_previous_tree_item();
+                self.emit_selected_command_action();
             }
             FocusArea::Args => self.state.form.focus_previous_arg(),
             FocusArea::Result => self.state.result_scroll = self.state.result_scroll.saturating_sub(1),
@@ -234,6 +239,7 @@ impl RocketmqTuiApp {
 
     fn move_left(&mut self) {
         match self.state.focus {
+            FocusArea::CommandTree => self.state.collapse_focused_tree_category(),
             FocusArea::Args => {
                 let command = self.state.selected_command().clone();
                 self.state.form.cycle_enum_current(&command, true);
@@ -247,6 +253,7 @@ impl RocketmqTuiApp {
 
     fn move_right(&mut self) {
         match self.state.focus {
+            FocusArea::CommandTree => self.state.expand_focused_tree_category(),
             FocusArea::Args => {
                 let command = self.state.selected_command().clone();
                 self.state.form.cycle_enum_current(&command, false);
@@ -506,6 +513,12 @@ impl RocketmqTuiApp {
         }
     }
 
+    fn emit_selected_command_action(&mut self) {
+        if matches!(self.state.focused_tree_item(), Some(CommandTreeItem::Command(_))) {
+            self.apply_action(Action::CommandSelected(self.state.selected_command().id.to_string()));
+        }
+    }
+
     fn draw(&self, frame: &mut Frame) {
         crate::ui::render(frame, &self.state);
     }
@@ -538,7 +551,7 @@ mod tests {
     fn execution_requires_valid_args() {
         let mut app = RocketmqTuiApp::new();
         app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
-        app.state.select_next_command();
+        app.state.select_next_tree_item();
         app.apply_action(Action::ExecuteRequested);
 
         assert!(app.state.last_error.is_some());
