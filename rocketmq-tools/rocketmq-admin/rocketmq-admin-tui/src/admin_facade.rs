@@ -83,10 +83,14 @@ use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
 use rocketmq_admin_core::core::message::MessageService;
 use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::QueryMessageByIdRequest;
+use rocketmq_admin_core::core::message::QueryMessageByIdResult;
 use rocketmq_admin_core::core::message::QueryMessageByKeyRequest;
 use rocketmq_admin_core::core::message::QueryMessageByKeyResult;
 use rocketmq_admin_core::core::message::QueryMessageByOffsetRequest;
 use rocketmq_admin_core::core::message::QueryMessageByOffsetResult;
+use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyRequest;
+use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
 use rocketmq_admin_core::core::message::QueryMessageTraceByIdRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
@@ -107,9 +111,13 @@ use rocketmq_admin_core::core::offset::ResetOffsetByTimeRequest;
 use rocketmq_admin_core::core::offset::ResetOffsetByTimeResult;
 use rocketmq_admin_core::core::offset::SkipAccumulatedMessageRequest;
 use rocketmq_admin_core::core::offset::SkipAccumulatedMessageResult;
+use rocketmq_admin_core::core::producer::CheckMessageSendRtRequest;
+use rocketmq_admin_core::core::producer::CheckMessageSendRtResult;
 use rocketmq_admin_core::core::producer::ProducerInfoQueryRequest;
 use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
 use rocketmq_admin_core::core::producer::ProducerService;
+use rocketmq_admin_core::core::producer::SendMessageStatusRequest;
+use rocketmq_admin_core::core::producer::SendMessageStatusResult;
 use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressRequest;
 use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
 use rocketmq_admin_core::core::queue::QueryConsumeQueueRequest;
@@ -539,6 +547,24 @@ impl TuiAdminFacade {
         Ok(ProducerInfoQueryRequest::try_new(broker_addr)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    pub fn send_message_status_request(
+        &self,
+        broker_name: impl Into<String>,
+        message_size: usize,
+        count: u32,
+    ) -> RocketMQResult<SendMessageStatusRequest> {
+        SendMessageStatusRequest::try_new(broker_name, message_size, count)
+    }
+
+    pub fn check_message_send_rt_request(
+        &self,
+        topic: impl Into<String>,
+        amount: u64,
+        size: usize,
+    ) -> RocketMQResult<CheckMessageSendRtRequest> {
+        CheckMessageSendRtRequest::try_new(topic, amount, size)
+    }
+
     pub fn broker_lite_info_request(
         &self,
         broker_addr: Option<String>,
@@ -591,6 +617,18 @@ impl TuiAdminFacade {
         DecodeMessageIdRequest::try_new(split_message_ids(message_ids.as_ref()))
     }
 
+    pub fn query_message_by_id_request(
+        &self,
+        message_ids: impl AsRef<str>,
+        topic: Option<String>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<QueryMessageByIdRequest> {
+        Ok(
+            QueryMessageByIdRequest::try_new(split_message_ids(message_ids.as_ref()), topic, timeout_millis)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn query_message_by_key_request(
         &self,
@@ -628,6 +666,31 @@ impl TuiAdminFacade {
             QueryMessageByOffsetRequest::try_new(topic, broker_name, queue_id, offset, route_topic)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_message_by_unique_key_request(
+        &self,
+        msg_id: impl Into<String>,
+        consumer_group: Option<String>,
+        client_id: Option<String>,
+        topic: impl Into<String>,
+        show_all: bool,
+        cluster: Option<String>,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+    ) -> RocketMQResult<QueryMessageByUniqueKeyRequest> {
+        Ok(QueryMessageByUniqueKeyRequest::try_new(
+            msg_id,
+            consumer_group,
+            client_id,
+            topic,
+            show_all,
+            cluster,
+            start_time,
+            end_time,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
     pub fn query_message_trace_by_id_request(
@@ -1237,6 +1300,32 @@ impl TuiAdminFacade {
             .await
     }
 
+    pub async fn send_message_status(
+        &self,
+        broker_name: impl Into<String>,
+        message_size: usize,
+        count: u32,
+    ) -> RocketMQResult<SendMessageStatusResult> {
+        ProducerService::send_message_status_by_request_with_rpc_hook(
+            self.send_message_status_request(broker_name, message_size, count)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn check_message_send_rt(
+        &self,
+        topic: impl Into<String>,
+        amount: u64,
+        size: usize,
+    ) -> RocketMQResult<CheckMessageSendRtResult> {
+        ProducerService::check_message_send_rt_by_request_with_rpc_hook(
+            self.check_message_send_rt_request(topic, amount, size)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn query_broker_lite_info(
         &self,
         broker_addr: Option<String>,
@@ -1304,6 +1393,19 @@ impl TuiAdminFacade {
         Ok(MessageService::decode_message_ids(&request))
     }
 
+    pub async fn query_message_by_id(
+        &self,
+        message_ids: impl AsRef<str>,
+        topic: Option<String>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<QueryMessageByIdResult> {
+        MessageService::query_message_by_id_by_request_with_rpc_hook(
+            self.query_message_by_id_request(message_ids, topic, timeout_millis)?,
+            None,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn query_message_by_key(
         &self,
@@ -1342,6 +1444,34 @@ impl TuiAdminFacade {
     ) -> RocketMQResult<QueryMessageByOffsetResult> {
         MessageService::query_message_by_offset_by_request_with_rpc_hook(
             self.query_message_by_offset_request(topic, broker_name, queue_id, offset, route_topic)?,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn query_message_by_unique_key(
+        &self,
+        msg_id: impl Into<String>,
+        consumer_group: Option<String>,
+        client_id: Option<String>,
+        topic: impl Into<String>,
+        show_all: bool,
+        cluster: Option<String>,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+    ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
+        MessageService::query_message_by_unique_key_by_request_with_rpc_hook(
+            self.query_message_by_unique_key_request(
+                msg_id,
+                consumer_group,
+                client_id,
+                topic,
+                show_all,
+                cluster,
+                start_time,
+                end_time,
+            )?,
             None,
         )
         .await
@@ -1680,6 +1810,16 @@ mod tests {
             .ha_status_request(Some(" 127.0.0.1:10911 ".to_string()), None)
             .unwrap();
         assert_eq!(ha.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let send_status = facade.send_message_status_request(" broker-a ", 128, 2).unwrap();
+        assert_eq!(send_status.broker_name().as_str(), "broker-a");
+        assert_eq!(send_status.message_size(), 128);
+        assert_eq!(send_status.count(), 2);
+
+        let send_rt = facade.check_message_send_rt_request(" TopicA ", 2, 128).unwrap();
+        assert_eq!(send_rt.topic().as_str(), "TopicA");
+        assert_eq!(send_rt.amount(), 2);
+        assert_eq!(send_rt.size(), 128);
     }
 
     #[test]
@@ -1737,6 +1877,8 @@ mod tests {
         std::mem::drop(facade.query_sync_state_set("127.0.0.1:9878", Some("broker-a".to_string()), None));
         std::mem::drop(facade.query_stats_all(false, Some("TopicA".to_string())));
         std::mem::drop(facade.query_producer_info("127.0.0.1:10911"));
+        std::mem::drop(facade.send_message_status("broker-a", 128, 2));
+        std::mem::drop(facade.check_message_send_rt("TopicA", 2, 128));
     }
 
     #[test]
@@ -1778,6 +1920,24 @@ mod tests {
             .decode_message_id_request(" C0A8010100002A9F0000000000000064 ")
             .unwrap();
         assert_eq!(decode.message_ids().len(), 1);
+
+        let query_by_id = facade
+            .query_message_by_id_request(" C0A8010100002A9F0000000000000064 ", Some(" TopicA ".to_string()), 3000)
+            .unwrap();
+        assert_eq!(query_by_id.message_ids().len(), 1);
+
+        facade
+            .query_message_by_unique_key_request(
+                " C0A8010100002A9F0000000000000064 ",
+                Some(" GroupA ".to_string()),
+                Some(" client-a ".to_string()),
+                " TopicA ",
+                false,
+                Some(" DefaultCluster ".to_string()),
+                None,
+                None,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -1803,7 +1963,22 @@ mod tests {
         std::mem::drop(facade.query_lite_group_info("ParentTopic", "GroupA", Some("LiteTopic".to_string()), Some(10)));
         std::mem::drop(facade.query_lite_client_info("ParentTopic", "GroupA", "client-a"));
         std::mem::drop(facade.decode_message_id("C0A8010100002A9F0000000000000064"));
+        std::mem::drop(facade.query_message_by_id(
+            "C0A8010100002A9F0000000000000064",
+            Some("TopicA".to_string()),
+            3000,
+        ));
         std::mem::drop(facade.query_message_by_key("TopicA", "KeyA", None, None, 32, None, None, None));
+        std::mem::drop(facade.query_message_by_unique_key(
+            "C0A8010100002A9F0000000000000064",
+            None,
+            None,
+            "TopicA",
+            false,
+            None,
+            None,
+            None,
+        ));
         std::mem::drop(facade.query_message_by_offset("TopicA", "broker-a", 0, 0, None));
         std::mem::drop(facade.query_message_trace_by_id("C0A8010100002A9F0000000000000064", None, None, None, 32));
     }

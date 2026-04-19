@@ -4,13 +4,27 @@ use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
 use rocketmq_admin_core::core::cluster::ClusterListMode;
 use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
 use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
+use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
+use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
 use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
+use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
 use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
+use rocketmq_admin_core::core::message::QueryMessageByIdResult;
 use rocketmq_admin_core::core::message::QueryMessageByKeyResult;
+use rocketmq_admin_core::core::message::QueryMessageByOffsetResult;
+use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
+use rocketmq_admin_core::core::message::UniqueKeyDirectStatus;
+use rocketmq_admin_core::core::producer::CheckMessageSendRtResult;
+use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
+use rocketmq_admin_core::core::producer::SendMessageStatusResult;
 use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
 use rocketmq_admin_core::core::queue::QueryConsumeQueueResult;
+use rocketmq_admin_core::core::stats::StatsAllQueryResult;
+use rocketmq_common::common::message::message_ext::MessageExt;
+use rocketmq_common::common::message::MessageConst;
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,6 +411,77 @@ impl CommandResultViewModel {
         )
     }
 
+    pub fn message_query_by_offset(title: impl Into<String>, result: &QueryMessageByOffsetResult) -> Self {
+        let status = result.pull_status.to_string();
+        let rows = result
+            .message
+            .as_ref()
+            .map(|message| vec![message_detail_row(&status, message.as_ref(), "")])
+            .unwrap_or_else(|| vec![empty_message_detail_row("", &status, "no message returned")]);
+
+        Self::table(title, &MESSAGE_DETAIL_HEADERS, rows)
+    }
+
+    pub fn message_query_by_id(title: impl Into<String>, result: &QueryMessageByIdResult) -> Self {
+        Self::table(
+            title,
+            &MESSAGE_DETAIL_HEADERS,
+            result
+                .entries
+                .iter()
+                .map(|entry| match &entry.outcome {
+                    QueryMessageByIdOutcome::Found {
+                        message,
+                        broker_addr,
+                        query_time_ms,
+                    } => message_detail_row(
+                        "found",
+                        message,
+                        &format!("broker_addr={broker_addr}; query_time_ms={query_time_ms}"),
+                    ),
+                    QueryMessageByIdOutcome::NotFound { reason, query_time_ms } => empty_message_detail_row(
+                        entry.message_id.as_str(),
+                        "not-found",
+                        &format!("reason={}; query_time_ms={query_time_ms}", sanitize_cell(reason)),
+                    ),
+                    QueryMessageByIdOutcome::Failed { error, query_time_ms } => empty_message_detail_row(
+                        entry.message_id.as_str(),
+                        "failed",
+                        &format!("error={}; query_time_ms={query_time_ms}", sanitize_cell(error)),
+                    ),
+                    QueryMessageByIdOutcome::TimedOut => {
+                        empty_message_detail_row(entry.message_id.as_str(), "timed-out", "query timed out")
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    pub fn message_query_by_unique_key(title: impl Into<String>, result: &QueryMessageByUniqueKeyResult) -> Self {
+        let rows = match result {
+            QueryMessageByUniqueKeyResult::Messages(messages) => messages
+                .iter()
+                .map(|message| message_detail_row("found", message, ""))
+                .collect(),
+            QueryMessageByUniqueKeyResult::DirectStatus(status) => {
+                let note = match status {
+                    UniqueKeyDirectStatus::PushConsumerUnsupported { client_id } => {
+                        format!("client_id={client_id}; push consumer direct consume is unsupported")
+                    }
+                    UniqueKeyDirectStatus::NotPushConsumer { client_id } => {
+                        format!("client_id={client_id}; not a push consumer")
+                    }
+                    UniqueKeyDirectStatus::RunningInfoFailed { client_id } => {
+                        format!("client_id={client_id}; running info query failed")
+                    }
+                };
+                vec![empty_message_detail_row("", "direct-status", &note)]
+            }
+        };
+
+        Self::table(title, &MESSAGE_DETAIL_HEADERS, rows)
+    }
+
     pub fn decoded_message_ids(title: impl Into<String>, result: &DecodeMessageIdResult) -> Self {
         Self::table(
             title,
@@ -435,6 +520,60 @@ impl CommandResultViewModel {
                     ],
                 })
                 .collect(),
+        )
+    }
+
+    pub fn send_message_status(title: impl Into<String>, result: &SendMessageStatusResult) -> Self {
+        Self::table(
+            title,
+            &["Attempt", "RT", "Result"],
+            result
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    vec![
+                        (index + 1).to_string(),
+                        row.rt_millis.to_string(),
+                        row.send_result.clone(),
+                    ]
+                })
+                .collect(),
+        )
+    }
+
+    pub fn check_message_send_rt(title: impl Into<String>, result: &CheckMessageSendRtResult) -> Self {
+        let mut rows = result
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                vec![
+                    (index + 1).to_string(),
+                    row.broker_name.clone(),
+                    row.queue_id.to_string(),
+                    row.send_success.to_string(),
+                    row.rt_millis.to_string(),
+                    result.avg_rt.to_string(),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        if rows.is_empty() {
+            rows.push(vec![
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                result.avg_rt.to_string(),
+            ]);
+        }
+
+        Self::table(
+            title,
+            &["Attempt", "Broker", "Queue ID", "Success", "RT", "Avg RT"],
+            rows,
         )
     }
 
@@ -541,6 +680,218 @@ impl CommandResultViewModel {
         Self::table(title, &["Broker", "Address", "Status", "Check Result", "Error"], rows)
     }
 
+    pub fn consumer_connection(title: impl Into<String>, result: &ConsumerConnectionQueryResult) -> Self {
+        let consume_type = result
+            .connection
+            .get_consume_type()
+            .map(|value| format!("{value:?}"))
+            .unwrap_or_default();
+        let message_model = result
+            .connection
+            .get_message_model()
+            .map(|value| format!("{value:?}"))
+            .unwrap_or_default();
+
+        let mut connection_rows = result
+            .connection
+            .get_connection_set()
+            .iter()
+            .map(|connection| {
+                vec![
+                    "Connection".to_string(),
+                    connection.get_client_id().to_string(),
+                    connection.get_client_addr().to_string(),
+                    connection.get_language().to_string(),
+                    connection.get_version().to_string(),
+                    String::new(),
+                    String::new(),
+                    consume_type.clone(),
+                    message_model.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        connection_rows.sort_by(|left, right| left[1].cmp(&right[1]).then_with(|| left[2].cmp(&right[2])));
+
+        let mut subscription_rows = result
+            .connection
+            .get_subscription_table()
+            .values()
+            .map(|subscription| {
+                vec![
+                    "Subscription".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    subscription.topic.to_string(),
+                    subscription.sub_string.to_string(),
+                    consume_type.clone(),
+                    message_model.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        subscription_rows.sort_by(|left, right| left[5].cmp(&right[5]).then_with(|| left[6].cmp(&right[6])));
+
+        connection_rows.extend(subscription_rows);
+
+        Self::table(
+            title,
+            &[
+                "Kind",
+                "Client ID",
+                "Address",
+                "Language",
+                "Version",
+                "Topic",
+                "Sub Expression",
+                "Consume Type",
+                "Message Model",
+            ],
+            connection_rows,
+        )
+    }
+
+    pub fn producer_connection(title: impl Into<String>, result: &ProducerConnectionQueryResult) -> Self {
+        let mut rows = result
+            .connection
+            .connection_set()
+            .iter()
+            .map(|connection| {
+                vec![
+                    connection.get_client_id().to_string(),
+                    connection.get_client_addr().to_string(),
+                    connection.get_language().to_string(),
+                    connection.get_version().to_string(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left[0].cmp(&right[0]).then_with(|| left[1].cmp(&right[1])));
+
+        Self::table(title, &["Client ID", "Address", "Language", "Version"], rows)
+    }
+
+    pub fn consumer_running_info(title: impl Into<String>, result: &ConsumerRunningInfoResult) -> Self {
+        let subscription_consistent = result
+            .subscription_consistent
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let analysis = result.process_queue_analysis.join("; ");
+        let mut rows = result
+            .items
+            .iter()
+            .map(|item| {
+                vec![
+                    item.client_id.to_string(),
+                    item.version.to_string(),
+                    format!("{:?}", item.running_info.consume_type),
+                    item.running_info.consume_orderly.to_string(),
+                    item.running_info.prop_consumer_start_timestamp.to_string(),
+                    item.running_info.subscription_set.len().to_string(),
+                    item.running_info.mq_table.len().to_string(),
+                    item.running_info.mq_pop_table.len().to_string(),
+                    item.running_info.status_table.len().to_string(),
+                    item.running_info.user_consumer_info.len().to_string(),
+                    subscription_consistent.clone(),
+                    analysis.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left[0].cmp(&right[0]));
+
+        Self::table(
+            title,
+            &[
+                "Client ID",
+                "Version",
+                "Consume Type",
+                "Orderly",
+                "Start Timestamp",
+                "Subscriptions",
+                "Queues",
+                "POP Queues",
+                "Status Rows",
+                "User Info",
+                "Subscription Consistent",
+                "Analysis",
+            ],
+            rows,
+        )
+    }
+
+    pub fn producer_info(title: impl Into<String>, result: &ProducerInfoQueryResult) -> Self {
+        let mut rows = result
+            .producer_table_info
+            .data()
+            .iter()
+            .flat_map(|(group, producers)| {
+                producers.iter().map(|producer| {
+                    vec![
+                        group.clone(),
+                        producer.client_id().to_string(),
+                        producer.remote_ip().to_string(),
+                        producer.language().to_string(),
+                        producer.version().to_string(),
+                        producer.last_update_timestamp().to_string(),
+                    ]
+                })
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left[0].cmp(&right[0]).then_with(|| left[1].cmp(&right[1])));
+
+        Self::table(
+            title,
+            &["Group", "Client ID", "Remote IP", "Language", "Version", "Last Update"],
+            rows,
+        )
+    }
+
+    pub fn stats_all(title: impl Into<String>, result: &StatsAllQueryResult) -> Self {
+        let mut rows = result
+            .rows
+            .iter()
+            .map(|row| {
+                vec![
+                    row.topic.to_string(),
+                    optional_text(&row.consumer_group),
+                    row.accumulation.to_string(),
+                    row.in_tps.to_string(),
+                    optional_text(&row.out_tps),
+                    row.in_msg_count_24h.to_string(),
+                    optional_text(&row.out_msg_count_24h),
+                    String::new(),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        rows.extend(result.failures.iter().map(|failure| {
+            vec![
+                failure.topic.to_string(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                failure.error.clone(),
+            ]
+        }));
+
+        Self::table(
+            title,
+            &[
+                "Topic",
+                "Consumer Group",
+                "Accumulation",
+                "In TPS",
+                "Out TPS",
+                "In 24h",
+                "Out 24h",
+                "Error",
+            ],
+            rows,
+        )
+    }
+
     fn table(title: impl Into<String>, headers: &[&str], rows: Vec<Vec<String>>) -> Self {
         Self::Table(TableViewModel {
             title: title.into(),
@@ -596,6 +947,105 @@ fn optional_text<T: ToString>(value: &Option<T>) -> String {
     value.as_ref().map(ToString::to_string).unwrap_or_default()
 }
 
+const MESSAGE_DETAIL_HEADERS: [&str; 17] = [
+    "Message ID",
+    "Status",
+    "Topic",
+    "Broker",
+    "Queue ID",
+    "Queue Offset",
+    "CommitLog Offset",
+    "Tags",
+    "Keys",
+    "Born Host",
+    "Born Time",
+    "Store Host",
+    "Store Time",
+    "Body Bytes",
+    "Body Preview",
+    "Properties",
+    "Note",
+];
+
+fn message_detail_row(status: &str, message: &MessageExt, note: &str) -> Vec<String> {
+    let body = message.body();
+    vec![
+        message.msg_id().to_string(),
+        status.to_string(),
+        message.topic().to_string(),
+        message.broker_name().to_string(),
+        message.queue_id().to_string(),
+        message.queue_offset().to_string(),
+        message.commit_log_offset().to_string(),
+        optional_text(&message.get_tags()),
+        message_property(message, MessageConst::PROPERTY_KEYS),
+        message.born_host().to_string(),
+        message.born_timestamp().to_string(),
+        message.store_host().to_string(),
+        message.store_timestamp().to_string(),
+        body.as_ref().map(|body| body.len().to_string()).unwrap_or_default(),
+        body.as_ref()
+            .map(|body| truncate_cell(&sanitize_cell(String::from_utf8_lossy(body.as_ref()).as_ref()), 120))
+            .unwrap_or_default(),
+        message_properties_summary(message),
+        note.to_string(),
+    ]
+}
+
+fn empty_message_detail_row(message_id: &str, status: &str, note: &str) -> Vec<String> {
+    vec![
+        message_id.to_string(),
+        status.to_string(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        note.to_string(),
+    ]
+}
+
+fn message_property(message: &MessageExt, key: &str) -> String {
+    message
+        .properties()
+        .iter()
+        .find_map(|(property_key, value)| (property_key.as_str() == key).then(|| value.to_string()))
+        .unwrap_or_default()
+}
+
+fn message_properties_summary(message: &MessageExt) -> String {
+    let mut properties = message
+        .properties()
+        .iter()
+        .map(|(key, value)| format!("{}={}", key.as_str(), sanitize_cell(value.as_str())))
+        .collect::<Vec<_>>();
+    properties.sort();
+    properties.join("; ")
+}
+
+fn sanitize_cell(value: &str) -> String {
+    value.replace('\r', "\\r").replace('\n', "\\n")
+}
+
+fn truncate_cell(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
@@ -605,22 +1055,58 @@ mod tests {
     use rocketmq_admin_core::core::cluster::ClusterListQueryResult;
     use rocketmq_admin_core::core::cluster::ClusterSendMessageRtResult;
     use rocketmq_admin_core::core::cluster::ClusterSendMessageRtRow;
+    use rocketmq_admin_core::core::connection::ConsumerConnectionQueryResult;
+    use rocketmq_admin_core::core::connection::ProducerConnectionQueryResult;
     use rocketmq_admin_core::core::consumer::ConsumerGroupProgressResult;
     use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
     use rocketmq_admin_core::core::consumer::ConsumerProgressRow;
+    use rocketmq_admin_core::core::consumer::ConsumerRunningInfoItem;
+    use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
     use rocketmq_admin_core::core::message::DecodeMessageIdEntry;
     use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
     use rocketmq_admin_core::core::message::DecodeMessageIdResult;
     use rocketmq_admin_core::core::message::MessageTraceView;
+    use rocketmq_admin_core::core::message::QueryMessageByIdEntry;
+    use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
+    use rocketmq_admin_core::core::message::QueryMessageByIdResult;
     use rocketmq_admin_core::core::message::QueryMessageByKeyResult;
     use rocketmq_admin_core::core::message::QueryMessageByKeyRow;
+    use rocketmq_admin_core::core::message::QueryMessageByOffsetResult;
+    use rocketmq_admin_core::core::message::QueryMessageByUniqueKeyResult;
+    use rocketmq_admin_core::core::message::UniqueKeyDirectStatus;
+    use rocketmq_admin_core::core::producer::ProducerInfoQueryResult;
+    use rocketmq_admin_core::core::producer::SendMessageStatusResult;
+    use rocketmq_admin_core::core::producer::SendMessageStatusRow;
     use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressEntry;
     use rocketmq_admin_core::core::queue::CheckRocksdbCqWriteProgressResult;
     use rocketmq_admin_core::core::queue::QueryConsumeQueueResult;
     use rocketmq_admin_core::core::queue::QueueOperationFailure;
+    use rocketmq_admin_core::core::stats::StatsAllQueryResult;
+    use rocketmq_admin_core::core::stats::StatsAllRow;
+    use rocketmq_admin_core::core::stats::StatsAllTopicFailure;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
+    use rocketmq_remoting::protocol::body::connection::Connection;
     use rocketmq_remoting::protocol::body::consume_queue_data::ConsumeQueueData;
+    use rocketmq_remoting::protocol::body::consume_status::ConsumeStatus;
+    use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
+    use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
+    use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
+    use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+    use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
+    use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
     use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+    use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+    use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::LanguageCode;
+    use rocketmq_rust::ArcMut;
+
+    use std::collections::HashMap;
 
     use super::CommandResultViewModel;
     use super::KeyValueViewModel;
@@ -952,6 +1438,173 @@ mod tests {
     }
 
     #[test]
+    fn phase_two_message_detail_results_render_as_tables() {
+        let message = sample_message("msg-1");
+
+        let by_offset = CommandResultViewModel::message_query_by_offset(
+            "Query Message By Offset",
+            &QueryMessageByOffsetResult {
+                pull_status: Default::default(),
+                message: Some(ArcMut::new(message.clone())),
+            },
+        );
+        assert_table(
+            &by_offset,
+            &[
+                "Message ID",
+                "Status",
+                "Topic",
+                "Broker",
+                "Queue ID",
+                "Queue Offset",
+                "CommitLog Offset",
+                "Tags",
+                "Keys",
+                "Born Host",
+                "Born Time",
+                "Store Host",
+                "Store Time",
+                "Body Bytes",
+                "Body Preview",
+                "Properties",
+                "Note",
+            ],
+            &[
+                "msg-1",
+                "FOUND",
+                "TopicA",
+                "broker-a",
+                "3",
+                "42",
+                "9001",
+                "TagA",
+                "KeyA",
+                "127.0.0.1:10001",
+                "1700000000000",
+                "127.0.0.1:10911",
+                "1700000001000",
+                "7",
+                "payload",
+                "KEYS=KeyA; TAGS=TagA",
+                "",
+            ],
+        );
+
+        let by_id = CommandResultViewModel::message_query_by_id(
+            "Query Message By ID",
+            &QueryMessageByIdResult {
+                entries: vec![
+                    QueryMessageByIdEntry {
+                        message_id: "msg-1".into(),
+                        outcome: QueryMessageByIdOutcome::Found {
+                            message: Box::new(message.clone()),
+                            broker_addr: "127.0.0.1:10911".to_string(),
+                            query_time_ms: 7,
+                        },
+                    },
+                    QueryMessageByIdEntry {
+                        message_id: "missing".into(),
+                        outcome: QueryMessageByIdOutcome::NotFound {
+                            reason: "not found".to_string(),
+                            query_time_ms: 3,
+                        },
+                    },
+                ],
+            },
+        );
+        assert_table(
+            &by_id,
+            &[
+                "Message ID",
+                "Status",
+                "Topic",
+                "Broker",
+                "Queue ID",
+                "Queue Offset",
+                "CommitLog Offset",
+                "Tags",
+                "Keys",
+                "Born Host",
+                "Born Time",
+                "Store Host",
+                "Store Time",
+                "Body Bytes",
+                "Body Preview",
+                "Properties",
+                "Note",
+            ],
+            &[
+                "msg-1",
+                "found",
+                "TopicA",
+                "broker-a",
+                "3",
+                "42",
+                "9001",
+                "TagA",
+                "KeyA",
+                "127.0.0.1:10001",
+                "1700000000000",
+                "127.0.0.1:10911",
+                "1700000001000",
+                "7",
+                "payload",
+                "KEYS=KeyA; TAGS=TagA",
+                "broker_addr=127.0.0.1:10911; query_time_ms=7",
+            ],
+        );
+        assert!(by_id.text_body().contains("not-found"));
+
+        let unique = CommandResultViewModel::message_query_by_unique_key(
+            "Query Message By Unique Key",
+            &QueryMessageByUniqueKeyResult::DirectStatus(UniqueKeyDirectStatus::NotPushConsumer {
+                client_id: "client-a".into(),
+            }),
+        );
+        assert_table(
+            &unique,
+            &[
+                "Message ID",
+                "Status",
+                "Topic",
+                "Broker",
+                "Queue ID",
+                "Queue Offset",
+                "CommitLog Offset",
+                "Tags",
+                "Keys",
+                "Born Host",
+                "Born Time",
+                "Store Host",
+                "Store Time",
+                "Body Bytes",
+                "Body Preview",
+                "Properties",
+                "Note",
+            ],
+            &[
+                "",
+                "direct-status",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "client_id=client-a; not a push consumer",
+            ],
+        );
+    }
+
+    #[test]
     fn phase_two_queue_results_render_as_tables() {
         let consume_queue = CommandResultViewModel::consume_queue(
             "Query Consume Queue",
@@ -1016,6 +1669,236 @@ mod tests {
         assert!(progress.text_body().contains("timeout"));
     }
 
+    #[test]
+    fn phase_two_connection_and_running_info_results_render_as_tables() {
+        let mut connection = Connection::new();
+        connection.set_client_id("client-a".into());
+        connection.set_client_addr("127.0.0.1:10001".into());
+        connection.set_language(LanguageCode::RUST);
+        connection.set_version(501);
+
+        let mut consumer_connection = ConsumerConnection::new();
+        consumer_connection.insert_connection(connection.clone());
+        consumer_connection.set_consume_type(ConsumeType::ConsumePassively);
+        consumer_connection.set_message_model(MessageModel::Clustering);
+        consumer_connection
+            .get_subscription_table_mut()
+            .insert("TopicA".into(), subscription("TopicA", "TagA"));
+
+        let result = CommandResultViewModel::consumer_connection(
+            "Consumer Connection",
+            &ConsumerConnectionQueryResult {
+                connection: consumer_connection,
+            },
+        );
+        assert_table(
+            &result,
+            &[
+                "Kind",
+                "Client ID",
+                "Address",
+                "Language",
+                "Version",
+                "Topic",
+                "Sub Expression",
+                "Consume Type",
+                "Message Model",
+            ],
+            &[
+                "Connection",
+                "client-a",
+                "127.0.0.1:10001",
+                "RUST",
+                "501",
+                "",
+                "",
+                "ConsumePassively",
+                "Clustering",
+            ],
+        );
+        assert!(result.text_body().contains("Subscription"));
+
+        let mut producer_connection = ProducerConnection::new();
+        producer_connection.connection_set_mut().insert(connection);
+        let result = CommandResultViewModel::producer_connection(
+            "Producer Connection",
+            &ProducerConnectionQueryResult {
+                connection: producer_connection,
+            },
+        );
+        assert_table(
+            &result,
+            &["Client ID", "Address", "Language", "Version"],
+            &["client-a", "127.0.0.1:10001", "RUST", "501"],
+        );
+
+        let mut running_info = ConsumerRunningInfo::new();
+        running_info.consume_type = ConsumeType::ConsumePassively;
+        running_info.consume_orderly = true;
+        running_info.prop_consumer_start_timestamp = 1234;
+        running_info.subscription_set.insert(subscription("TopicA", "TagA"));
+        running_info.mq_table.insert(
+            MessageQueue::from_parts("TopicA", "broker-a", 1),
+            ProcessQueueInfo {
+                commit_offset: 100,
+                cached_msg_min_offset: 90,
+                cached_msg_max_offset: 110,
+                cached_msg_count: 3,
+                cached_msg_size_in_mib: 1,
+                transaction_msg_min_offset: 0,
+                transaction_msg_max_offset: 0,
+                transaction_msg_count: 0,
+                locked: true,
+                try_unlock_times: 0,
+                last_lock_timestamp: 1,
+                droped: false,
+                last_pull_timestamp: 2,
+                last_consume_timestamp: 3,
+            },
+        );
+        running_info.status_table.insert(
+            "TopicA".to_string(),
+            ConsumeStatus {
+                pull_rt: 1.0,
+                pull_tps: 2.0,
+                consume_rt: 3.0,
+                consume_ok_tps: 4.0,
+                consume_failed_tps: 5.0,
+                consume_failed_msgs: 6,
+            },
+        );
+        running_info
+            .user_consumer_info
+            .insert("key".to_string(), "value".to_string());
+
+        let result = CommandResultViewModel::consumer_running_info(
+            "Consumer Running Info",
+            &ConsumerRunningInfoResult {
+                items: vec![ConsumerRunningInfoItem {
+                    client_id: "client-a".into(),
+                    version: 501,
+                    running_info,
+                }],
+                subscription_consistent: Some(true),
+                process_queue_analysis: vec!["all good".to_string()],
+            },
+        );
+        assert_table(
+            &result,
+            &[
+                "Client ID",
+                "Version",
+                "Consume Type",
+                "Orderly",
+                "Start Timestamp",
+                "Subscriptions",
+                "Queues",
+                "POP Queues",
+                "Status Rows",
+                "User Info",
+                "Subscription Consistent",
+                "Analysis",
+            ],
+            &[
+                "client-a",
+                "501",
+                "ConsumePassively",
+                "true",
+                "1234",
+                "1",
+                "1",
+                "0",
+                "1",
+                "1",
+                "true",
+                "all good",
+            ],
+        );
+    }
+
+    #[test]
+    fn phase_two_producer_info_and_stats_results_render_as_tables() {
+        let mut producer_groups = HashMap::new();
+        producer_groups.insert(
+            "ProducerGroupA".to_string(),
+            vec![ProducerInfo::new(
+                "producer-client-a",
+                "127.0.0.1",
+                LanguageCode::RUST,
+                501,
+                1234,
+            )],
+        );
+
+        let result = CommandResultViewModel::producer_info(
+            "Producer Info",
+            &ProducerInfoQueryResult {
+                producer_table_info: ProducerTableInfo::new(producer_groups),
+            },
+        );
+        assert_table(
+            &result,
+            &["Group", "Client ID", "Remote IP", "Language", "Version", "Last Update"],
+            &[
+                "ProducerGroupA",
+                "producer-client-a",
+                "127.0.0.1",
+                "RUST",
+                "501",
+                "1234",
+            ],
+        );
+
+        let result = CommandResultViewModel::stats_all(
+            "Stats All",
+            &StatsAllQueryResult {
+                rows: vec![StatsAllRow {
+                    topic: "TopicA".into(),
+                    consumer_group: Some("GroupA".into()),
+                    accumulation: 10,
+                    in_tps: 1.5,
+                    out_tps: Some(1.25),
+                    in_msg_count_24h: 100,
+                    out_msg_count_24h: Some(90),
+                }],
+                failures: vec![StatsAllTopicFailure {
+                    topic: "TopicB".into(),
+                    error: "route missing".to_string(),
+                }],
+            },
+        );
+        assert_table(
+            &result,
+            &[
+                "Topic",
+                "Consumer Group",
+                "Accumulation",
+                "In TPS",
+                "Out TPS",
+                "In 24h",
+                "Out 24h",
+                "Error",
+            ],
+            &["TopicA", "GroupA", "10", "1.5", "1.25", "100", "90", ""],
+        );
+        assert!(result.text_body().contains("route missing"));
+    }
+
+    #[test]
+    fn phase_two_producer_diagnostics_results_render_as_tables() {
+        let result = CommandResultViewModel::send_message_status(
+            "Send Message Status",
+            &SendMessageStatusResult {
+                rows: vec![SendMessageStatusRow {
+                    rt_millis: 12,
+                    send_result: "SEND_OK".to_string(),
+                }],
+            },
+        );
+
+        assert_table(&result, &["Attempt", "RT", "Result"], &["1", "12", "SEND_OK"]);
+    }
+
     fn assert_table(result: &CommandResultViewModel, headers: &[&str], first_row: &[&str]) {
         let CommandResultViewModel::Table(table) = result else {
             panic!("expected table result, got {result:?}");
@@ -1028,5 +1911,35 @@ mod tests {
             table.rows.first(),
             Some(&first_row.iter().map(|cell| (*cell).to_string()).collect::<Vec<_>>())
         );
+    }
+
+    fn sample_message(message_id: &str) -> MessageExt {
+        let message = Message::builder()
+            .topic("TopicA")
+            .body_slice(b"payload")
+            .build()
+            .expect("sample message should build");
+        let mut message_ext = MessageExt::default();
+        message_ext.set_message_inner(message);
+        message_ext.set_msg_id(message_id.into());
+        message_ext.set_broker_name("broker-a".into());
+        message_ext.set_queue_id(3);
+        message_ext.set_queue_offset(42);
+        message_ext.set_commit_log_offset(9001);
+        message_ext.set_born_host("127.0.0.1:10001".parse().expect("born host"));
+        message_ext.set_store_host("127.0.0.1:10911".parse().expect("store host"));
+        message_ext.set_born_timestamp(1_700_000_000_000);
+        message_ext.set_store_timestamp(1_700_000_001_000);
+        message_ext.put_property(MessageConst::PROPERTY_TAGS.into(), "TagA".into());
+        message_ext.put_property(MessageConst::PROPERTY_KEYS.into(), "KeyA".into());
+        message_ext
+    }
+
+    fn subscription(topic: &str, sub_string: &str) -> SubscriptionData {
+        SubscriptionData {
+            topic: topic.into(),
+            sub_string: sub_string.into(),
+            ..Default::default()
+        }
     }
 }

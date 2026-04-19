@@ -460,13 +460,13 @@ pub async fn execute_command(
                     form.optional_string("broker_addr"),
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::consumer_connection(spec.title, &result)
         }
         "connection.producer" => {
             let result = facade
                 .query_producer_connection(form.required_string("producer_group")?, form.required_string("topic")?)
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::producer_connection(spec.title, &result)
         }
         "consumer.config" => {
             let result = facade
@@ -483,7 +483,7 @@ pub async fn execute_command(
                     form.bool_value("jstack")?,
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::consumer_running_info(spec.title, &result)
         }
         "consumer.progress" => {
             let result = facade
@@ -644,11 +644,31 @@ pub async fn execute_command(
             let result = facade
                 .query_stats_all(form.bool_value("active_topic")?, form.optional_string("topic"))
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::stats_all(spec.title, &result)
         }
         "producer.info" => {
             let result = facade.query_producer_info(form.required_string("broker_addr")?).await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::producer_info(spec.title, &result)
+        }
+        "producer.send_message_status" => {
+            let result = facade
+                .send_message_status(
+                    form.required_string("broker_name")?,
+                    usize::try_from(form.number_u64("message_size")?)?,
+                    form.number_u32("count")?,
+                )
+                .await?;
+            CommandResultViewModel::send_message_status(spec.title, &result)
+        }
+        "producer.check_message_send_rt" => {
+            let result = facade
+                .check_message_send_rt(
+                    form.required_string("topic")?,
+                    form.number_u64("amount")?,
+                    usize::try_from(form.number_u64("size")?)?,
+                )
+                .await?;
+            CommandResultViewModel::check_message_send_rt(spec.title, &result)
         }
         "lite.broker_info" => {
             let result = facade
@@ -699,6 +719,16 @@ pub async fn execute_command(
             let result = facade.decode_message_id(form.required_string("message_ids")?)?;
             CommandResultViewModel::decoded_message_ids(spec.title, &result)
         }
+        "message.query_by_id" => {
+            let result = facade
+                .query_message_by_id(
+                    form.required_string("message_ids")?,
+                    form.optional_string("topic"),
+                    form.number_u64("timeout_millis")?,
+                )
+                .await?;
+            CommandResultViewModel::message_query_by_id(spec.title, &result)
+        }
         "message.query_by_key" => {
             let result = facade
                 .query_message_by_key(
@@ -714,6 +744,21 @@ pub async fn execute_command(
                 .await?;
             CommandResultViewModel::message_query_by_key(spec.title, &result)
         }
+        "message.query_by_unique_key" => {
+            let result = facade
+                .query_message_by_unique_key(
+                    form.required_string("msg_id")?,
+                    form.optional_string("consumer_group"),
+                    form.optional_string("client_id"),
+                    form.required_string("topic")?,
+                    form.bool_value("show_all")?,
+                    form.optional_string("cluster"),
+                    form.optional_i64("start_time")?,
+                    form.optional_i64("end_time")?,
+                )
+                .await?;
+            CommandResultViewModel::message_query_by_unique_key(spec.title, &result)
+        }
         "message.query_by_offset" => {
             let result = facade
                 .query_message_by_offset(
@@ -724,7 +769,7 @@ pub async fn execute_command(
                     form.optional_string("route_topic"),
                 )
                 .await?;
-            CommandResultViewModel::from_debug(spec.title, &result)
+            CommandResultViewModel::message_query_by_offset(spec.title, &result)
         }
         "message.query_trace_by_id" => {
             let result = facade
@@ -1298,7 +1343,7 @@ fn connection_commands(commands: &mut Vec<CommandSpec>) {
                     "127.0.0.1:10911",
                 ),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1311,7 +1356,7 @@ fn connection_commands(commands: &mut Vec<CommandSpec>) {
                 required_string("producer_group", "Producer Group", "Producer group.", "ProducerGroupA"),
                 required_string("topic", "Topic", "Topic name.", "TopicA"),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
     ]);
@@ -1346,7 +1391,7 @@ fn consumer_commands(commands: &mut Vec<CommandSpec>) {
                 ),
                 bool_arg("jstack", "JStack", "Include jstack data.", false),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -1590,21 +1635,70 @@ fn stats_commands(commands: &mut Vec<CommandSpec>) {
 }
 
 fn producer_commands(commands: &mut Vec<CommandSpec>) {
-    commands.push(spec(
-        "producer.info",
-        CommandCategory::Producer,
-        "Producer Info",
-        "Query producer information from a broker.",
-        RiskLevel::Safe,
-        vec![required_string(
-            "broker_addr",
-            "Broker Addr",
-            "Broker address.",
-            "127.0.0.1:10911",
-        )],
-        ResultViewKind::Text,
-        None,
-    ));
+    commands.extend([
+        spec(
+            "producer.info",
+            CommandCategory::Producer,
+            "Producer Info",
+            "Query producer information from a broker.",
+            RiskLevel::Safe,
+            vec![required_string(
+                "broker_addr",
+                "Broker Addr",
+                "Broker address.",
+                "127.0.0.1:10911",
+            )],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "producer.send_message_status",
+            CommandCategory::Producer,
+            "Send Message Status",
+            "Send diagnostic messages to a broker-named topic and collect per-send RT.",
+            RiskLevel::Mutating,
+            vec![
+                required_string(
+                    "broker_name",
+                    "Broker Name",
+                    "Broker name used as diagnostic topic.",
+                    "broker-a",
+                ),
+                number(
+                    "message_size",
+                    "Message Size",
+                    "Diagnostic message body size.",
+                    true,
+                    Some(128),
+                    Some(1),
+                ),
+                number(
+                    "count",
+                    "Count",
+                    "Number of diagnostic messages.",
+                    true,
+                    Some(1),
+                    Some(1),
+                ),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "producer.check_message_send_rt",
+            CommandCategory::Producer,
+            "Check Message Send RT",
+            "Send diagnostic messages to a topic and collect queue-level RT samples.",
+            RiskLevel::Mutating,
+            vec![
+                required_string("topic", "Topic", "Diagnostic target topic.", "TopicA"),
+                number("amount", "Amount", "Messages to send.", true, Some(2), Some(2)),
+                number("size", "Size", "Message body size.", true, Some(128), Some(1)),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+    ]);
 }
 
 fn lite_commands(commands: &mut Vec<CommandSpec>) {
@@ -1697,6 +1791,32 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "message.query_by_id",
+            CommandCategory::Message,
+            "Query Message By ID",
+            "Query one or more messages by broker message ID.",
+            RiskLevel::Safe,
+            vec![
+                required_string(
+                    "message_ids",
+                    "Message IDs",
+                    "Message IDs separated by comma, semicolon, or whitespace.",
+                    "7F0000010007D8260BF075769D36C348",
+                ),
+                optional_string("topic", "Topic", "Optional topic hint.", "TopicA"),
+                number(
+                    "timeout_millis",
+                    "Timeout",
+                    "Per-message query timeout in milliseconds.",
+                    true,
+                    Some(3000),
+                    Some(1),
+                ),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
             "message.query_by_key",
             CommandCategory::Message,
             "Query Message By Key",
@@ -1737,6 +1857,44 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "message.query_by_unique_key",
+            CommandCategory::Message,
+            "Query Message By Unique Key",
+            "Query messages by unique message key and optional direct-consume target.",
+            RiskLevel::Safe,
+            vec![
+                required_string(
+                    "msg_id",
+                    "Message ID",
+                    "Unique message ID.",
+                    "7F0000010007D8260BF075769D36C348",
+                ),
+                required_string("topic", "Topic", "Topic name.", "TopicA"),
+                optional_string("consumer_group", "Consumer Group", "Optional consumer group.", "GroupA"),
+                optional_string("client_id", "Client ID", "Optional consumer client id.", "client-a"),
+                bool_arg("show_all", "Show All", "Show all matched messages.", false),
+                optional_string("cluster", "Cluster", "Optional cluster name.", "DefaultCluster"),
+                number(
+                    "start_time",
+                    "Start Time",
+                    "Optional begin timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "end_time",
+                    "End Time",
+                    "Optional end timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
             "message.query_by_offset",
             CommandCategory::Message,
             "Query Message By Offset",
@@ -1749,7 +1907,7 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
                 number("offset", "Offset", "Queue offset.", true, Some(0), Some(0)),
                 optional_string("route_topic", "Route Topic", "Optional route topic.", "TopicA"),
             ],
-            ResultViewKind::Text,
+            ResultViewKind::Table,
             None,
         ),
         spec(
@@ -2029,6 +2187,8 @@ mod tests {
             "ha.sync_state_set",
             "stats.all",
             "producer.info",
+            "producer.send_message_status",
+            "producer.check_message_send_rt",
             "auth.user.get",
             "auth.user.list",
             "auth.acl.get",
@@ -2043,7 +2203,9 @@ mod tests {
             "lite.group_info",
             "lite.client_info",
             "message.decode_id",
+            "message.query_by_id",
             "message.query_by_key",
+            "message.query_by_unique_key",
             "message.query_by_offset",
             "message.query_trace_by_id",
         ] {
