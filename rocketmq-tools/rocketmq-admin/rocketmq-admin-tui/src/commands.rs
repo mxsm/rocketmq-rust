@@ -13,8 +13,10 @@ use crate::view_model::CommandResultViewModel;
 pub enum CommandCategory {
     Topic,
     NameServer,
+    Auth,
     Broker,
     Cluster,
+    Controller,
     Connection,
     Consumer,
     Offset,
@@ -22,6 +24,8 @@ pub enum CommandCategory {
     Ha,
     Stats,
     Producer,
+    Lite,
+    Message,
 }
 
 impl CommandCategory {
@@ -29,8 +33,10 @@ impl CommandCategory {
         match self {
             Self::Topic => "Topic",
             Self::NameServer => "NameServer",
+            Self::Auth => "Auth",
             Self::Broker => "Broker",
             Self::Cluster => "Cluster",
+            Self::Controller => "Controller",
             Self::Connection => "Connection",
             Self::Consumer => "Consumer",
             Self::Offset => "Offset",
@@ -38,6 +44,8 @@ impl CommandCategory {
             Self::Ha => "HA",
             Self::Stats => "Stats",
             Self::Producer => "Producer",
+            Self::Lite => "Lite",
+            Self::Message => "Message",
         }
     }
 }
@@ -184,8 +192,10 @@ pub fn command_catalog() -> Vec<CommandSpec> {
     let mut commands = Vec::new();
     topic_commands(&mut commands);
     nameserver_commands(&mut commands);
+    auth_commands(&mut commands);
     broker_commands(&mut commands);
     cluster_commands(&mut commands);
+    controller_commands(&mut commands);
     connection_commands(&mut commands);
     consumer_commands(&mut commands);
     offset_commands(&mut commands);
@@ -193,6 +203,8 @@ pub fn command_catalog() -> Vec<CommandSpec> {
     ha_commands(&mut commands);
     stats_commands(&mut commands);
     producer_commands(&mut commands);
+    lite_commands(&mut commands);
+    message_commands(&mut commands);
     commands
 }
 
@@ -301,6 +313,47 @@ pub async fn execute_command(
             let result = facade.wipe_write_perm(form.required_string("broker_name")?).await?;
             CommandResultViewModel::from_debug(spec.title, &result)
         }
+        "auth.user.get" => {
+            let result = facade
+                .query_auth_user(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("username")?,
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "auth.user.list" => {
+            let result = facade
+                .list_auth_users(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.optional_string("filter"),
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "auth.acl.get" => {
+            let result = facade
+                .query_auth_acl(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.required_string("subject")?,
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "auth.acl.list" => {
+            let result = facade
+                .list_auth_acl(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                    form.optional_string("subject_filter"),
+                    form.optional_string("resource_filter"),
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
         "broker.config.query" => {
             let result = facade
                 .query_broker_config(
@@ -341,6 +394,24 @@ pub async fn execute_command(
                 .await?;
             CommandResultViewModel::from_debug(spec.title, &result)
         }
+        "broker.epoch" => {
+            let result = facade
+                .query_broker_epoch(
+                    form.optional_string("broker_name"),
+                    form.optional_string("cluster_name"),
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "broker.cold_data_flow_ctr_info" => {
+            let result = facade
+                .query_cold_data_flow_ctr_info(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
         "cluster.list" => {
             let result = facade
                 .query_cluster_list(form.bool_value("more_stats")?, form.optional_string("cluster_name"))
@@ -369,6 +440,18 @@ pub async fn execute_command(
                 )
                 .await?;
             CommandResultViewModel::from_debug(spec.title, &result)
+        }
+        "controller.config.query" => {
+            let result = facade
+                .query_controller_config(form.required_string("controller_address")?)
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "controller.metadata.query" => {
+            let result = facade
+                .query_controller_metadata(form.required_string("controller_address")?)
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
         }
         "connection.consumer" => {
             let result = facade
@@ -566,6 +649,94 @@ pub async fn execute_command(
         "producer.info" => {
             let result = facade.query_producer_info(form.required_string("broker_addr")?).await?;
             CommandResultViewModel::from_debug(spec.title, &result)
+        }
+        "lite.broker_info" => {
+            let result = facade
+                .query_broker_lite_info(
+                    form.optional_string("broker_addr"),
+                    form.optional_string("cluster_name"),
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "lite.parent_topic_info" => {
+            let result = facade
+                .query_parent_topic_info(form.required_string("parent_topic")?)
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "lite.topic_info" => {
+            let result = facade
+                .query_lite_topic_info(
+                    form.required_string("parent_topic")?,
+                    form.required_string("lite_topic")?,
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "lite.group_info" => {
+            let result = facade
+                .query_lite_group_info(
+                    form.required_string("parent_topic")?,
+                    form.required_string("group")?,
+                    form.optional_string("lite_topic"),
+                    form.optional_i32("top_k")?,
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "lite.client_info" => {
+            let result = facade
+                .query_lite_client_info(
+                    form.required_string("parent_topic")?,
+                    form.required_string("group")?,
+                    form.required_string("client_id")?,
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "message.decode_id" => {
+            let result = facade.decode_message_id(form.required_string("message_ids")?)?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "message.query_by_key" => {
+            let result = facade
+                .query_message_by_key(
+                    form.required_string("topic")?,
+                    form.required_string("msg_key")?,
+                    form.optional_i64("begin_timestamp")?,
+                    form.optional_i64("end_timestamp")?,
+                    form.number_i32("max_num")?,
+                    form.optional_string("cluster"),
+                    Some(form.enum_string("key_type")?),
+                    form.optional_string("last_key"),
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
+        }
+        "message.query_by_offset" => {
+            let result = facade
+                .query_message_by_offset(
+                    form.required_string("topic")?,
+                    form.required_string("broker_name")?,
+                    form.number_i32("queue_id")?,
+                    form.number_i64("offset")?,
+                    form.optional_string("route_topic"),
+                )
+                .await?;
+            CommandResultViewModel::from_debug(spec.title, &result)
+        }
+        "message.query_trace_by_id" => {
+            let result = facade
+                .query_message_trace_by_id(
+                    form.required_string("msg_id")?,
+                    form.optional_string("trace_topic"),
+                    form.optional_i64("begin_timestamp")?,
+                    form.optional_i64("end_timestamp")?,
+                    form.number_i32("max_num")?,
+                )
+                .await?;
+            CommandResultViewModel::from_serializable(spec.title, &result)
         }
         unknown => bail!("unknown command id: {unknown}"),
     };
@@ -842,6 +1013,74 @@ fn nameserver_commands(commands: &mut Vec<CommandSpec>) {
     ]);
 }
 
+fn auth_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "auth.user.get",
+            CommandCategory::Auth,
+            "Get User",
+            "Query ACL user detail from a broker or cluster.",
+            RiskLevel::Safe,
+            broker_target_args_with(vec![required_string("username", "Username", "ACL username.", "user-a")]),
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "auth.user.list",
+            CommandCategory::Auth,
+            "List Users",
+            "List ACL users from a broker or cluster.",
+            RiskLevel::Safe,
+            broker_target_args_with(vec![optional_string(
+                "filter",
+                "Filter",
+                "Optional username filter.",
+                "user",
+            )]),
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "auth.acl.get",
+            CommandCategory::Auth,
+            "Get ACL",
+            "Query ACL rule detail from a broker or cluster.",
+            RiskLevel::Safe,
+            broker_target_args_with(vec![required_string(
+                "subject",
+                "Subject",
+                "ACL subject, for example User:user-a.",
+                "User:user-a",
+            )]),
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "auth.acl.list",
+            CommandCategory::Auth,
+            "List ACL",
+            "List ACL rules from a broker or cluster.",
+            RiskLevel::Safe,
+            broker_target_args_with(vec![
+                optional_string(
+                    "subject_filter",
+                    "Subject Filter",
+                    "Optional ACL subject filter.",
+                    "User:user-a",
+                ),
+                optional_string(
+                    "resource_filter",
+                    "Resource Filter",
+                    "Optional resource filter.",
+                    "Topic:TopicA",
+                ),
+            ]),
+            ResultViewKind::Json,
+            None,
+        ),
+    ]);
+}
+
 fn broker_commands(commands: &mut Vec<CommandSpec>) {
     commands.extend([
         spec(
@@ -934,6 +1173,29 @@ fn broker_commands(commands: &mut Vec<CommandSpec>) {
             ResultViewKind::Text,
             None,
         ),
+        spec(
+            "broker.epoch",
+            CommandCategory::Broker,
+            "Broker Epoch",
+            "Query broker epoch cache by broker name or cluster.",
+            RiskLevel::Safe,
+            vec![
+                optional_string("broker_name", "Broker Name", "Broker name target.", "broker-a"),
+                optional_string("cluster_name", "Cluster", "Cluster name target.", "DefaultCluster"),
+            ],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "broker.cold_data_flow_ctr_info",
+            CommandCategory::Broker,
+            "Cold Data Flow Control",
+            "Query cold data flow control information by broker address or cluster.",
+            RiskLevel::Safe,
+            broker_target_args(),
+            ResultViewKind::Json,
+            None,
+        ),
     ]);
 }
 
@@ -979,6 +1241,41 @@ fn cluster_commands(commands: &mut Vec<CommandSpec>) {
                 optional_string("cluster_name", "Cluster", "Optional cluster name.", "DefaultCluster"),
             ],
             ResultViewKind::Table,
+            None,
+        ),
+    ]);
+}
+
+fn controller_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "controller.config.query",
+            CommandCategory::Controller,
+            "Query Controller Config",
+            "Query controller configuration from one or more controller addresses.",
+            RiskLevel::Safe,
+            vec![required_string(
+                "controller_address",
+                "Controller",
+                "Controller address list.",
+                "127.0.0.1:9878",
+            )],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "controller.metadata.query",
+            CommandCategory::Controller,
+            "Query Controller Metadata",
+            "Query controller metadata from a controller address.",
+            RiskLevel::Safe,
+            vec![required_string(
+                "controller_address",
+                "Controller",
+                "Controller address.",
+                "127.0.0.1:9878",
+            )],
+            ResultViewKind::Json,
             None,
         ),
     ]);
@@ -1310,6 +1607,201 @@ fn producer_commands(commands: &mut Vec<CommandSpec>) {
     ));
 }
 
+fn lite_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "lite.broker_info",
+            CommandCategory::Lite,
+            "Broker Lite Info",
+            "Query broker lite information by broker address or cluster.",
+            RiskLevel::Safe,
+            broker_target_args(),
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "lite.parent_topic_info",
+            CommandCategory::Lite,
+            "Parent Topic Info",
+            "Query lite parent topic information.",
+            RiskLevel::Safe,
+            vec![required_string(
+                "parent_topic",
+                "Parent Topic",
+                "Parent topic name.",
+                "ParentTopicA",
+            )],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "lite.topic_info",
+            CommandCategory::Lite,
+            "Lite Topic Info",
+            "Query lite topic information.",
+            RiskLevel::Safe,
+            vec![
+                required_string("parent_topic", "Parent Topic", "Parent topic name.", "ParentTopicA"),
+                required_string("lite_topic", "Lite Topic", "Lite topic name.", "LiteTopicA"),
+            ],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "lite.group_info",
+            CommandCategory::Lite,
+            "Lite Group Info",
+            "Query lite group information.",
+            RiskLevel::Safe,
+            vec![
+                required_string("parent_topic", "Parent Topic", "Parent topic name.", "ParentTopicA"),
+                required_string("group", "Group", "Consumer group.", "GroupA"),
+                optional_string("lite_topic", "Lite Topic", "Optional lite topic filter.", "LiteTopicA"),
+                number("top_k", "Top K", "Optional top K count.", false, None, Some(1)),
+            ],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "lite.client_info",
+            CommandCategory::Lite,
+            "Lite Client Info",
+            "Query lite client information.",
+            RiskLevel::Safe,
+            vec![
+                required_string("parent_topic", "Parent Topic", "Parent topic name.", "ParentTopicA"),
+                required_string("group", "Group", "Consumer group.", "GroupA"),
+                required_string("client_id", "Client ID", "Client id.", "client-a"),
+            ],
+            ResultViewKind::Json,
+            None,
+        ),
+    ]);
+}
+
+fn message_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "message.decode_id",
+            CommandCategory::Message,
+            "Decode Message ID",
+            "Decode one or more message IDs locally.",
+            RiskLevel::Safe,
+            vec![required_string(
+                "message_ids",
+                "Message IDs",
+                "Message IDs separated by comma, semicolon, or whitespace.",
+                "7F0000010007D8260BF075769D36C348",
+            )],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "message.query_by_key",
+            CommandCategory::Message,
+            "Query Message By Key",
+            "Query messages by topic and key or tag.",
+            RiskLevel::Safe,
+            vec![
+                required_string("topic", "Topic", "Topic name.", "TopicA"),
+                required_string("msg_key", "Message Key", "Message key or tag.", "order-1"),
+                number(
+                    "begin_timestamp",
+                    "Begin Timestamp",
+                    "Optional begin timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "end_timestamp",
+                    "End Timestamp",
+                    "Optional end timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "max_num",
+                    "Max Num",
+                    "Maximum messages to return.",
+                    true,
+                    Some(32),
+                    Some(1),
+                ),
+                optional_string("cluster", "Cluster", "Optional cluster name.", "DefaultCluster"),
+                enum_arg("key_type", "Key Type", "K for key, T for tag.", &["K", "T"], "K"),
+                optional_string("last_key", "Last Key", "Optional pagination key.", "last-key"),
+            ],
+            ResultViewKind::Json,
+            None,
+        ),
+        spec(
+            "message.query_by_offset",
+            CommandCategory::Message,
+            "Query Message By Offset",
+            "Query one message by topic, broker, queue, and offset.",
+            RiskLevel::Safe,
+            vec![
+                required_string("topic", "Topic", "Topic name.", "TopicA"),
+                required_string("broker_name", "Broker Name", "Broker name.", "broker-a"),
+                number("queue_id", "Queue ID", "Queue id.", true, Some(0), Some(0)),
+                number("offset", "Offset", "Queue offset.", true, Some(0), Some(0)),
+                optional_string("route_topic", "Route Topic", "Optional route topic.", "TopicA"),
+            ],
+            ResultViewKind::Text,
+            None,
+        ),
+        spec(
+            "message.query_trace_by_id",
+            CommandCategory::Message,
+            "Query Message Trace",
+            "Query message trace by message ID.",
+            RiskLevel::Safe,
+            vec![
+                required_string(
+                    "msg_id",
+                    "Message ID",
+                    "Message ID.",
+                    "7F0000010007D8260BF075769D36C348",
+                ),
+                optional_string(
+                    "trace_topic",
+                    "Trace Topic",
+                    "Optional trace topic; default uses RocketMQ trace topic.",
+                    "RMQ_SYS_TRACE_TOPIC",
+                ),
+                number(
+                    "begin_timestamp",
+                    "Begin Timestamp",
+                    "Optional begin timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "end_timestamp",
+                    "End Timestamp",
+                    "Optional end timestamp in milliseconds.",
+                    false,
+                    None,
+                    Some(0),
+                ),
+                number(
+                    "max_num",
+                    "Max Num",
+                    "Maximum trace rows to return.",
+                    true,
+                    Some(32),
+                    Some(1),
+                ),
+            ],
+            ResultViewKind::Json,
+            None,
+        ),
+    ]);
+}
+
 fn spec(
     id: &'static str,
     category: CommandCategory,
@@ -1537,6 +2029,23 @@ mod tests {
             "ha.sync_state_set",
             "stats.all",
             "producer.info",
+            "auth.user.get",
+            "auth.user.list",
+            "auth.acl.get",
+            "auth.acl.list",
+            "controller.config.query",
+            "controller.metadata.query",
+            "broker.epoch",
+            "broker.cold_data_flow_ctr_info",
+            "lite.broker_info",
+            "lite.parent_topic_info",
+            "lite.topic_info",
+            "lite.group_info",
+            "lite.client_info",
+            "message.decode_id",
+            "message.query_by_key",
+            "message.query_by_offset",
+            "message.query_trace_by_id",
         ] {
             assert!(ids.contains(expected), "missing command {expected}");
         }

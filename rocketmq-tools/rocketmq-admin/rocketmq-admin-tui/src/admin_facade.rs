@@ -13,6 +13,15 @@
 // limitations under the License.
 
 use rocketmq_admin_core::core::admin::AdminBuilder;
+use rocketmq_admin_core::core::auth::AuthService;
+use rocketmq_admin_core::core::auth::GetAclRequest;
+use rocketmq_admin_core::core::auth::GetAclResult;
+use rocketmq_admin_core::core::auth::GetUserRequest;
+use rocketmq_admin_core::core::auth::GetUserResult;
+use rocketmq_admin_core::core::auth::ListAclRequest;
+use rocketmq_admin_core::core::auth::ListAclResult;
+use rocketmq_admin_core::core::auth::ListUsersRequest;
+use rocketmq_admin_core::core::auth::ListUsersResult;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerConfigQueryResult;
 use rocketmq_admin_core::core::broker::BrokerConfigUpdateApplyResult;
@@ -20,9 +29,13 @@ use rocketmq_admin_core::core::broker::BrokerConfigUpdatePlanResult;
 use rocketmq_admin_core::core::broker::BrokerConfigUpdateRequest;
 use rocketmq_admin_core::core::broker::BrokerConsumeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerConsumeStatsResult;
+use rocketmq_admin_core::core::broker::BrokerEpochQueryRequest;
+use rocketmq_admin_core::core::broker::BrokerEpochQueryResult;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsQueryRequest;
 use rocketmq_admin_core::core::broker::BrokerRuntimeStatsResult;
 use rocketmq_admin_core::core::broker::BrokerService;
+use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryRequest;
+use rocketmq_admin_core::core::broker::ColdDataFlowCtrInfoQueryResult;
 use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryRequest;
 use rocketmq_admin_core::core::cluster::ClusterBrokerNameQueryResult;
 use rocketmq_admin_core::core::cluster::ClusterListQueryRequest;
@@ -45,11 +58,36 @@ use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
 use rocketmq_admin_core::core::consumer::ConsumerService;
 use rocketmq_admin_core::core::consumer::DeleteSubscriptionGroupRequest;
 use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
+use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
+use rocketmq_admin_core::core::controller::ControllerConfigQueryResult;
+use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
+use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
+use rocketmq_admin_core::core::controller::ControllerService;
 use rocketmq_admin_core::core::ha::HaService;
 use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
 use rocketmq_admin_core::core::ha::HaStatusQueryResult;
 use rocketmq_admin_core::core::ha::SyncStateSetQueryRequest;
 use rocketmq_admin_core::core::ha::SyncStateSetQueryResult;
+use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryRequest;
+use rocketmq_admin_core::core::lite::BrokerLiteInfoQueryResult;
+use rocketmq_admin_core::core::lite::LiteClientInfoQueryRequest;
+use rocketmq_admin_core::core::lite::LiteClientInfoQueryResult;
+use rocketmq_admin_core::core::lite::LiteGroupInfoQueryRequest;
+use rocketmq_admin_core::core::lite::LiteGroupInfoQueryResult;
+use rocketmq_admin_core::core::lite::LiteService;
+use rocketmq_admin_core::core::lite::LiteTopicInfoQueryRequest;
+use rocketmq_admin_core::core::lite::LiteTopicInfoQueryResult;
+use rocketmq_admin_core::core::lite::ParentTopicInfoQueryRequest;
+use rocketmq_admin_core::core::lite::ParentTopicInfoQueryResult;
+use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
+use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+use rocketmq_admin_core::core::message::MessageService;
+use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::QueryMessageByKeyRequest;
+use rocketmq_admin_core::core::message::QueryMessageByKeyResult;
+use rocketmq_admin_core::core::message::QueryMessageByOffsetRequest;
+use rocketmq_admin_core::core::message::QueryMessageByOffsetResult;
+use rocketmq_admin_core::core::message::QueryMessageTraceByIdRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateRequest;
 use rocketmq_admin_core::core::namesrv::KvConfigUpdateResult;
@@ -134,6 +172,64 @@ impl TuiAdminFacade {
         }
     }
 
+    pub fn auth_get_user_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+    ) -> RocketMQResult<GetUserRequest> {
+        Ok(GetUserRequest::try_new(broker_addr, cluster_name, username)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn auth_list_users_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        filter: Option<String>,
+    ) -> RocketMQResult<ListUsersRequest> {
+        Ok(ListUsersRequest::try_new(broker_addr, cluster_name, filter)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn auth_get_acl_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+    ) -> RocketMQResult<GetAclRequest> {
+        Ok(GetAclRequest::try_new(broker_addr, cluster_name, subject)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn auth_list_acl_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject_filter: Option<String>,
+        resource_filter: Option<String>,
+    ) -> RocketMQResult<ListAclRequest> {
+        Ok(ListAclRequest::try_new(broker_addr, cluster_name, subject_filter)?
+            .with_resource_filter(resource_filter)
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn controller_config_query_request(
+        &self,
+        controller_address: impl Into<String>,
+    ) -> RocketMQResult<ControllerConfigQueryRequest> {
+        Ok(ControllerConfigQueryRequest::try_new(controller_address)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn controller_metadata_query_request(
+        &self,
+        controller_address: impl Into<String>,
+    ) -> RocketMQResult<ControllerMetadataQueryRequest> {
+        Ok(ControllerMetadataQueryRequest::try_new(controller_address)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
     pub fn namesrv_config_query_request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
         NamesrvConfigQueryRequest::try_new(self.namesrv_addr.clone())
     }
@@ -214,6 +310,24 @@ impl TuiAdminFacade {
             BrokerConsumeStatsQueryRequest::try_new(broker_addr, timeout_millis, diff_level, is_order)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
         )
+    }
+
+    pub fn broker_epoch_request(
+        &self,
+        broker_name: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerEpochQueryRequest> {
+        Ok(BrokerEpochQueryRequest::try_new(broker_name, cluster_name)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn cold_data_flow_ctr_info_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<ColdDataFlowCtrInfoQueryRequest> {
+        Ok(ColdDataFlowCtrInfoQueryRequest::try_new(broker_addr, cluster_name)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
     pub fn cluster_list_request(&self, more_stats: bool, cluster_name: Option<String>) -> ClusterListQueryRequest {
@@ -425,6 +539,111 @@ impl TuiAdminFacade {
         Ok(ProducerInfoQueryRequest::try_new(broker_addr)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    pub fn broker_lite_info_request(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerLiteInfoQueryRequest> {
+        Ok(BrokerLiteInfoQueryRequest::try_new(broker_addr, cluster_name)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn parent_topic_info_request(
+        &self,
+        parent_topic: impl Into<String>,
+    ) -> RocketMQResult<ParentTopicInfoQueryRequest> {
+        Ok(ParentTopicInfoQueryRequest::try_new(parent_topic)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn lite_topic_info_request(
+        &self,
+        parent_topic: impl Into<String>,
+        lite_topic: impl Into<String>,
+    ) -> RocketMQResult<LiteTopicInfoQueryRequest> {
+        Ok(LiteTopicInfoQueryRequest::try_new(parent_topic, lite_topic)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn lite_group_info_request(
+        &self,
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        lite_topic: Option<String>,
+        top_k: Option<i32>,
+    ) -> RocketMQResult<LiteGroupInfoQueryRequest> {
+        Ok(
+            LiteGroupInfoQueryRequest::try_new(parent_topic, group, lite_topic, top_k)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn lite_client_info_request(
+        &self,
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        client_id: impl Into<String>,
+    ) -> RocketMQResult<LiteClientInfoQueryRequest> {
+        Ok(LiteClientInfoQueryRequest::try_new(parent_topic, group, client_id)?
+            .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn decode_message_id_request(&self, message_ids: impl AsRef<str>) -> RocketMQResult<DecodeMessageIdRequest> {
+        DecodeMessageIdRequest::try_new(split_message_ids(message_ids.as_ref()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_message_by_key_request(
+        &self,
+        topic: impl Into<String>,
+        msg_key: impl Into<String>,
+        begin_timestamp: Option<i64>,
+        end_timestamp: Option<i64>,
+        max_num: i32,
+        cluster: Option<String>,
+        key_type: Option<String>,
+        last_key: Option<String>,
+    ) -> RocketMQResult<QueryMessageByKeyRequest> {
+        Ok(QueryMessageByKeyRequest::try_new(
+            topic,
+            msg_key,
+            begin_timestamp,
+            end_timestamp,
+            max_num,
+            cluster,
+            key_type,
+            last_key,
+        )?
+        .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn query_message_by_offset_request(
+        &self,
+        topic: impl Into<String>,
+        broker_name: impl Into<String>,
+        queue_id: i32,
+        offset: i64,
+        route_topic: Option<String>,
+    ) -> RocketMQResult<QueryMessageByOffsetRequest> {
+        Ok(
+            QueryMessageByOffsetRequest::try_new(topic, broker_name, queue_id, offset, route_topic)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn query_message_trace_by_id_request(
+        &self,
+        msg_id: impl Into<String>,
+        trace_topic: Option<String>,
+        begin_timestamp: Option<i64>,
+        end_timestamp: Option<i64>,
+        max_num: i32,
+    ) -> RocketMQResult<QueryMessageTraceByIdRequest> {
+        Ok(
+            QueryMessageTraceByIdRequest::try_new(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
     pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
         Ok(TopicClusterQueryRequest::try_new(topic)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -561,6 +780,81 @@ impl TuiAdminFacade {
         TopicService::update_topic_perm_by_request(request).await
     }
 
+    pub async fn query_auth_user(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        username: impl Into<String>,
+    ) -> RocketMQResult<GetUserResult> {
+        AuthService::get_user_by_request_with_rpc_hook(
+            self.auth_get_user_request(broker_addr, cluster_name, username)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn list_auth_users(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        filter: Option<String>,
+    ) -> RocketMQResult<ListUsersResult> {
+        AuthService::list_users_by_request_with_rpc_hook(
+            self.auth_list_users_request(broker_addr, cluster_name, filter)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_auth_acl(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject: impl Into<String>,
+    ) -> RocketMQResult<GetAclResult> {
+        AuthService::get_acl_by_request_with_rpc_hook(
+            self.auth_get_acl_request(broker_addr, cluster_name, subject)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn list_auth_acl(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+        subject_filter: Option<String>,
+        resource_filter: Option<String>,
+    ) -> RocketMQResult<ListAclResult> {
+        AuthService::list_acl_by_request_with_rpc_hook(
+            self.auth_list_acl_request(broker_addr, cluster_name, subject_filter, resource_filter)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_controller_config(
+        &self,
+        controller_address: impl Into<String>,
+    ) -> RocketMQResult<ControllerConfigQueryResult> {
+        ControllerService::query_controller_config_by_request_with_rpc_hook(
+            self.controller_config_query_request(controller_address)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_controller_metadata(
+        &self,
+        controller_address: impl Into<String>,
+    ) -> RocketMQResult<ControllerMetadataQueryResult> {
+        ControllerService::query_controller_metadata_by_request_with_rpc_hook(
+            self.controller_metadata_query_request(controller_address)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn query_namesrv_config(&self) -> RocketMQResult<NamesrvConfigQueryResult> {
         NameServerService::query_namesrv_config(self.namesrv_config_query_request()?).await
     }
@@ -650,6 +944,30 @@ impl TuiAdminFacade {
             diff_level,
             is_order,
         )?)
+        .await
+    }
+
+    pub async fn query_broker_epoch(
+        &self,
+        broker_name: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerEpochQueryResult> {
+        BrokerService::query_broker_epoch_by_request_with_rpc_hook(
+            self.broker_epoch_request(broker_name, cluster_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_cold_data_flow_ctr_info(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<ColdDataFlowCtrInfoQueryResult> {
+        BrokerService::query_cold_data_flow_ctr_info_by_request_with_rpc_hook(
+            self.cold_data_flow_ctr_info_request(broker_addr, cluster_name)?,
+            None,
+        )
         .await
     }
 
@@ -918,6 +1236,140 @@ impl TuiAdminFacade {
         ProducerService::query_producer_info_by_request_with_rpc_hook(self.producer_info_request(broker_addr)?, None)
             .await
     }
+
+    pub async fn query_broker_lite_info(
+        &self,
+        broker_addr: Option<String>,
+        cluster_name: Option<String>,
+    ) -> RocketMQResult<BrokerLiteInfoQueryResult> {
+        LiteService::query_broker_lite_info_by_request_with_rpc_hook(
+            self.broker_lite_info_request(broker_addr, cluster_name)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_parent_topic_info(
+        &self,
+        parent_topic: impl Into<String>,
+    ) -> RocketMQResult<ParentTopicInfoQueryResult> {
+        LiteService::query_parent_topic_info_by_request_with_rpc_hook(
+            self.parent_topic_info_request(parent_topic)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_lite_topic_info(
+        &self,
+        parent_topic: impl Into<String>,
+        lite_topic: impl Into<String>,
+    ) -> RocketMQResult<LiteTopicInfoQueryResult> {
+        LiteService::query_lite_topic_info_by_request_with_rpc_hook(
+            self.lite_topic_info_request(parent_topic, lite_topic)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_lite_group_info(
+        &self,
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        lite_topic: Option<String>,
+        top_k: Option<i32>,
+    ) -> RocketMQResult<LiteGroupInfoQueryResult> {
+        LiteService::query_lite_group_info_by_request_with_rpc_hook(
+            self.lite_group_info_request(parent_topic, group, lite_topic, top_k)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_lite_client_info(
+        &self,
+        parent_topic: impl Into<String>,
+        group: impl Into<String>,
+        client_id: impl Into<String>,
+    ) -> RocketMQResult<LiteClientInfoQueryResult> {
+        LiteService::query_lite_client_info_by_request_with_rpc_hook(
+            self.lite_client_info_request(parent_topic, group, client_id)?,
+            None,
+        )
+        .await
+    }
+
+    pub fn decode_message_id(&self, message_ids: impl AsRef<str>) -> RocketMQResult<DecodeMessageIdResult> {
+        let request = self.decode_message_id_request(message_ids)?;
+        Ok(MessageService::decode_message_ids(&request))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn query_message_by_key(
+        &self,
+        topic: impl Into<String>,
+        msg_key: impl Into<String>,
+        begin_timestamp: Option<i64>,
+        end_timestamp: Option<i64>,
+        max_num: i32,
+        cluster: Option<String>,
+        key_type: Option<String>,
+        last_key: Option<String>,
+    ) -> RocketMQResult<QueryMessageByKeyResult> {
+        MessageService::query_message_by_key_by_request_with_rpc_hook(
+            self.query_message_by_key_request(
+                topic,
+                msg_key,
+                begin_timestamp,
+                end_timestamp,
+                max_num,
+                cluster,
+                key_type,
+                last_key,
+            )?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_message_by_offset(
+        &self,
+        topic: impl Into<String>,
+        broker_name: impl Into<String>,
+        queue_id: i32,
+        offset: i64,
+        route_topic: Option<String>,
+    ) -> RocketMQResult<QueryMessageByOffsetResult> {
+        MessageService::query_message_by_offset_by_request_with_rpc_hook(
+            self.query_message_by_offset_request(topic, broker_name, queue_id, offset, route_topic)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn query_message_trace_by_id(
+        &self,
+        msg_id: impl Into<String>,
+        trace_topic: Option<String>,
+        begin_timestamp: Option<i64>,
+        end_timestamp: Option<i64>,
+        max_num: i32,
+    ) -> RocketMQResult<Vec<MessageTraceView>> {
+        MessageService::query_message_trace_by_id_by_request_with_rpc_hook(
+            self.query_message_trace_by_id_request(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?,
+            None,
+        )
+        .await
+    }
+}
+
+fn split_message_ids(value: &str) -> Vec<String> {
+    value
+        .split(|character: char| character == ',' || character == ';' || character.is_whitespace())
+        .map(str::trim)
+        .filter(|message_id| !message_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1285,5 +1737,74 @@ mod tests {
         std::mem::drop(facade.query_sync_state_set("127.0.0.1:9878", Some("broker-a".to_string()), None));
         std::mem::drop(facade.query_stats_all(false, Some("TopicA".to_string())));
         std::mem::drop(facade.query_producer_info("127.0.0.1:10911"));
+    }
+
+    #[test]
+    fn facade_builds_phase_one_read_only_requests_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr(" 127.0.0.1:9876 ");
+
+        let get_user = facade
+            .auth_get_user_request(Some(" 127.0.0.1:10911 ".to_string()), None, " admin ")
+            .unwrap();
+        assert_eq!(get_user.username().as_str(), "admin");
+
+        let list_acl = facade
+            .auth_list_acl_request(
+                None,
+                Some(" DefaultCluster ".to_string()),
+                Some(" User:* ".to_string()),
+                Some(" TopicA ".to_string()),
+            )
+            .unwrap();
+        assert_eq!(list_acl.subject_filter(), Some("User:*"));
+        assert_eq!(list_acl.resource_filter(), Some("TopicA"));
+
+        let controller_config = facade
+            .controller_config_query_request(" 127.0.0.1:9878;127.0.0.2:9878 ")
+            .unwrap();
+        assert_eq!(controller_config.controller_servers().len(), 2);
+        assert_eq!(controller_config.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let broker_epoch = facade
+            .broker_epoch_request(Some(" broker-a ".to_string()), None)
+            .unwrap();
+        assert_eq!(broker_epoch.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let lite_topic = facade.lite_topic_info_request(" ParentTopic ", " LiteTopic ").unwrap();
+        assert_eq!(lite_topic.parent_topic().as_str(), "ParentTopic");
+        assert_eq!(lite_topic.lite_topic().as_str(), "LiteTopic");
+
+        let decode = facade
+            .decode_message_id_request(" C0A8010100002A9F0000000000000064 ")
+            .unwrap();
+        assert_eq!(decode.message_ids().len(), 1);
+    }
+
+    #[test]
+    fn facade_exposes_phase_one_read_only_service_futures_without_cli_types() {
+        let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
+
+        std::mem::drop(facade.query_auth_user(Some("127.0.0.1:10911".to_string()), None, "admin"));
+        std::mem::drop(facade.list_auth_users(None, Some("DefaultCluster".to_string()), Some("admin".to_string())));
+        std::mem::drop(facade.query_auth_acl(Some("127.0.0.1:10911".to_string()), None, "User:admin"));
+        std::mem::drop(facade.list_auth_acl(
+            None,
+            Some("DefaultCluster".to_string()),
+            Some("User:*".to_string()),
+            Some("TopicA".to_string()),
+        ));
+        std::mem::drop(facade.query_controller_config("127.0.0.1:9878"));
+        std::mem::drop(facade.query_controller_metadata("127.0.0.1:9878"));
+        std::mem::drop(facade.query_broker_epoch(Some("broker-a".to_string()), None));
+        std::mem::drop(facade.query_cold_data_flow_ctr_info(Some("127.0.0.1:10911".to_string()), None));
+        std::mem::drop(facade.query_broker_lite_info(Some("127.0.0.1:10911".to_string()), None));
+        std::mem::drop(facade.query_parent_topic_info("ParentTopic"));
+        std::mem::drop(facade.query_lite_topic_info("ParentTopic", "LiteTopic"));
+        std::mem::drop(facade.query_lite_group_info("ParentTopic", "GroupA", Some("LiteTopic".to_string()), Some(10)));
+        std::mem::drop(facade.query_lite_client_info("ParentTopic", "GroupA", "client-a"));
+        std::mem::drop(facade.decode_message_id("C0A8010100002A9F0000000000000064"));
+        std::mem::drop(facade.query_message_by_key("TopicA", "KeyA", None, None, 32, None, None, None));
+        std::mem::drop(facade.query_message_by_offset("TopicA", "broker-a", 0, 0, None));
+        std::mem::drop(facade.query_message_trace_by_id("C0A8010100002A9F0000000000000064", None, None, None, 32));
     }
 }
