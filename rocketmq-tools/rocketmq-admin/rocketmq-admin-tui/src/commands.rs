@@ -351,14 +351,14 @@ pub async fn execute_command(
             let result = facade
                 .query_cluster_broker_names(form.optional_string("cluster_name"))
                 .await?;
-            CommandResultViewModel::KeyValue(crate::view_model::KeyValueViewModel {
-                title: spec.title.to_string(),
-                rows: result
+            CommandResultViewModel::key_value_sorted(
+                spec.title,
+                result
                     .broker_names_by_cluster
                     .iter()
                     .map(|(cluster, brokers)| (cluster.clone(), brokers.join(", ")))
                     .collect(),
-            })
+            )
         }
         "cluster.send_message_rt" => {
             let result = facade

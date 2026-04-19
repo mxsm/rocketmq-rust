@@ -139,14 +139,11 @@ impl<'a> BatchMessageIterator<'a> {
                 // Message spans beyond current buffer, fetch larger chunk
                 if msg_size > PARSE_BATCH_SIZE {
                     // Large message, fetch directly
-                    if let Some(msg_bytes) = self.mapped_file.get_bytes(self.current_offset, msg_size) {
-                        self.current_offset += msg_size;
-                        // Clear buffer to force refill on next call
-                        self.buffer = Bytes::new();
-                        return Some((msg_bytes, absolute_offset, msg_size));
-                    } else {
-                        return None;
-                    }
+                    let msg_bytes = self.mapped_file.get_bytes(self.current_offset, msg_size)?;
+                    self.current_offset += msg_size;
+                    // Clear buffer to force refill on next call
+                    self.buffer = Bytes::new();
+                    return Some((msg_bytes, absolute_offset, msg_size));
                 } else {
                     // Refill buffer and retry
                     if !self.refill_buffer() {

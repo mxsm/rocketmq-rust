@@ -278,18 +278,25 @@ fn render_result(frame: &mut Frame, area: Rect, state: &AppState) {
 
     match result {
         CommandResultViewModel::Table(table) if !table.headers.is_empty() => {
-            let widths = table.headers.iter().map(|_| Constraint::Length(24)).collect::<Vec<_>>();
-            let header = Row::new(table.headers.iter().map(|header| {
+            let viewport = table.viewport(state.result_horizontal_scroll as usize, area.width.saturating_sub(2));
+            let title = table_title_with_scroll_hints(result.title(), viewport.hidden_left, viewport.hidden_right);
+            let widths = viewport
+                .widths
+                .iter()
+                .copied()
+                .map(Constraint::Length)
+                .collect::<Vec<_>>();
+            let header = Row::new(viewport.headers.iter().map(|header| {
                 Cell::from(header.clone()).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             }));
-            let rows = table
+            let rows = viewport
                 .rows
                 .iter()
                 .skip(state.result_scroll as usize)
                 .map(|row| Row::new(row.iter().map(|cell| Cell::from(cell.clone()))));
             let widget = Table::new(rows, widths)
                 .header(header)
-                .block(focused_block(result.title(), state.focus == FocusArea::Result));
+                .block(focused_block(&title, state.focus == FocusArea::Result));
             frame.render_widget(widget, area);
         }
         _ => {
@@ -395,6 +402,15 @@ fn truncate(value: &str, max_len: usize) -> String {
         let mut truncated = value.chars().take(max_len.saturating_sub(3)).collect::<String>();
         truncated.push_str("...");
         truncated
+    }
+}
+
+fn table_title_with_scroll_hints(title: &str, hidden_left: bool, hidden_right: bool) -> String {
+    match (hidden_left, hidden_right) {
+        (true, true) => format!("< {title} >"),
+        (true, false) => format!("< {title}"),
+        (false, true) => format!("{title} >"),
+        (false, false) => title.to_string(),
     }
 }
 
