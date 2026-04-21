@@ -68,7 +68,7 @@ byteorder = "1.5.0"
 md5       = { package = "md-5", version = "0.10" }
 base64    = "0.22.1"
 
-local-ip-address = "0.6.11"
+local-ip-address = "0.6.12"
 chrono           = "0.4.44"
 chrono-tz        = "0.10.4"
 time             = "0.3.47"
