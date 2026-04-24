@@ -1,5 +1,7 @@
 //! Export admin service models and operations.
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -10,10 +12,17 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::mix_all;
+use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
+use rocketmq_common::common::stats::Stats;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
 #[cfg(feature = "rocksdb-export")]
@@ -48,9 +57,11 @@ const EXPORT_BROKER_PROPERTY_KEYS: &[&str] = &[
     "autoCreateTopicEnable",
     "autoCreateSubscriptionGroup",
 ];
+const DEFAULT_EXPORT_METRICS_TIMEOUT_MILLIS: u64 = 10000;
 const DEFAULT_EXPORT_POP_RECORD_TIMEOUT_MILLIS: u64 = 30000;
 const TOPICS_JSON_CONFIG: &str = "topics";
 const SUBSCRIPTION_GROUP_JSON_CONFIG: &str = "subscriptionGroups";
+const CONSUMER_OFFSETS_JSON_CONFIG: &str = "consumerOffsets";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportConfigsRequest {
@@ -94,6 +105,148 @@ pub struct ExportConfigsResult {
     pub broker_configs: HashMap<String, HashMap<String, String>>,
     pub master_broker_size: i64,
     pub slave_broker_size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportMetricsRequest {
+    cluster_name: CheetahString,
+    timeout_millis: u64,
+    namesrv_addr: Option<String>,
+}
+
+impl ExportMetricsRequest {
+    pub fn try_new(cluster_name: impl Into<String>) -> RocketMQResult<Self> {
+        Ok(Self {
+            cluster_name: trim_required_cheetah("clusterName", cluster_name)?,
+            timeout_millis: DEFAULT_EXPORT_METRICS_TIMEOUT_MILLIS,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_timeout_millis(mut self, timeout_millis: u64) -> Self {
+        self.timeout_millis = timeout_millis;
+        self
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn cluster_name(&self) -> &CheetahString {
+        &self.cluster_name
+    }
+
+    pub fn timeout_millis(&self) -> u64 {
+        self.timeout_millis
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new();
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsResult {
+    pub evaluate_report: BTreeMap<String, ExportMetricsBrokerReport>,
+    pub total_data: ExportMetricsTotals,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsBrokerReport {
+    pub runtime_env: ExportMetricsRuntimeEnv,
+    pub runtime_quota: ExportMetricsRuntimeQuota,
+    pub runtime_version: ExportMetricsRuntimeVersion,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsRuntimeEnv {
+    pub cpu_num: Option<String>,
+    #[serde(rename = "totalMemKBytes")]
+    pub total_mem_kbytes: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsRuntimeQuota {
+    pub disk_ratio: ExportMetricsDiskRatio,
+    pub tps: ExportMetricsTps,
+    pub one_day_num: ExportMetricsOneDayNum,
+    pub message_average_size: Option<String>,
+    pub topic_size: usize,
+    pub group_size: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsDiskRatio {
+    pub commit_log_disk_ratio: Option<String>,
+    pub consume_queue_disk_ratio: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsTps {
+    pub normal_in_tps: f64,
+    pub normal_out_tps: f64,
+    pub trans_in_tps: f64,
+    pub schedule_in_tps: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsOneDayNum {
+    pub normal_one_day_in_num: i64,
+    pub normal_one_day_out_num: i64,
+    pub trans_one_day_in_num: u64,
+    pub schedule_one_day_in_num: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsRuntimeVersion {
+    pub rocketmq_version: String,
+    pub client_info: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsTotals {
+    pub total_tps: ExportMetricsTotalTps,
+    pub total_one_day_num: ExportMetricsOneDayNum,
+}
+
+impl ExportMetricsTotals {
+    pub fn accumulate(&mut self, quota: &ExportMetricsRuntimeQuota) {
+        self.total_tps.total_normal_in_tps += quota.tps.normal_in_tps;
+        self.total_tps.total_normal_out_tps += quota.tps.normal_out_tps;
+        self.total_tps.total_trans_in_tps += quota.tps.trans_in_tps;
+        self.total_tps.total_schedule_in_tps += quota.tps.schedule_in_tps;
+        self.total_one_day_num.normal_one_day_in_num += quota.one_day_num.normal_one_day_in_num;
+        self.total_one_day_num.normal_one_day_out_num += quota.one_day_num.normal_one_day_out_num;
+        self.total_one_day_num.trans_one_day_in_num += quota.one_day_num.trans_one_day_in_num;
+        self.total_one_day_num.schedule_one_day_in_num += quota.one_day_num.schedule_one_day_in_num;
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMetricsTotalTps {
+    pub total_normal_in_tps: f64,
+    pub total_normal_out_tps: f64,
+    pub total_trans_in_tps: f64,
+    pub total_schedule_in_tps: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +363,7 @@ impl ExportMetadataRequest {
 pub enum ExportMetadataInRocksDbConfigType {
     Topics,
     SubscriptionGroups,
+    ConsumerOffsets,
 }
 
 impl ExportMetadataInRocksDbConfigType {
@@ -218,6 +372,8 @@ impl ExportMetadataInRocksDbConfigType {
             Some(Self::Topics)
         } else if config_type.eq_ignore_ascii_case(SUBSCRIPTION_GROUP_JSON_CONFIG) {
             Some(Self::SubscriptionGroups)
+        } else if config_type.eq_ignore_ascii_case(CONSUMER_OFFSETS_JSON_CONFIG) {
+            Some(Self::ConsumerOffsets)
         } else {
             None
         }
@@ -227,6 +383,7 @@ impl ExportMetadataInRocksDbConfigType {
         match self {
             Self::Topics => "topicConfigTable",
             Self::SubscriptionGroups => "subscriptionGroupTable",
+            Self::ConsumerOffsets => "offsetTable",
         }
     }
 }
@@ -498,7 +655,7 @@ impl ExportService {
                 ))
             })?;
 
-            let entries = iterate_rocksdb_metadata(&db)?;
+            let entries = Self::convert_rocksdb_metadata_entries(config_type, iterate_rocksdb_metadata(&db)?)?;
             drop(db);
 
             Ok(ExportMetadataInRocksDbResult::Data {
@@ -506,6 +663,20 @@ impl ExportService {
                 json_enable: request.json_enable(),
                 entries,
             })
+        }
+    }
+
+    pub fn convert_rocksdb_metadata_entries(
+        config_type: ExportMetadataInRocksDbConfigType,
+        entries: Vec<ExportMetadataInRocksDbEntry>,
+    ) -> RocketMQResult<Vec<ExportMetadataInRocksDbEntry>> {
+        match config_type {
+            ExportMetadataInRocksDbConfigType::Topics | ExportMetadataInRocksDbConfigType::SubscriptionGroups => {
+                Ok(entries)
+            }
+            ExportMetadataInRocksDbConfigType::ConsumerOffsets => {
+                entries.into_iter().map(convert_consumer_offset_entry).collect()
+            }
         }
     }
 
@@ -568,6 +739,140 @@ impl ExportService {
             master_broker_size,
             slave_broker_size,
         })
+    }
+
+    pub async fn export_metrics_by_request_with_rpc_hook(
+        request: ExportMetricsRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<ExportMetricsResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::export_metrics_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn export_metrics_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ExportMetricsRequest,
+    ) -> RocketMQResult<ExportMetricsResult> {
+        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let broker_names = resolve_export_metrics_broker_names(&cluster_info, request.cluster_name().as_str())?;
+        let broker_addr_table = cluster_info
+            .broker_addr_table
+            .as_ref()
+            .ok_or_else(|| RocketMQError::Internal("ExportService: broker address table is empty".to_string()))?;
+
+        let mut result = ExportMetricsResult::default();
+        for broker_name in broker_names {
+            let Some(broker_data) = broker_addr_table.get(&broker_name) else {
+                continue;
+            };
+            let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) else {
+                continue;
+            };
+
+            let runtime_stats = admin.fetch_broker_runtime_stats(master_addr.clone()).await?;
+            let broker_config = admin.get_broker_config(master_addr.clone()).await?;
+            let subscription_group_wrapper = admin
+                .get_user_subscription_group(master_addr.clone(), request.timeout_millis())
+                .await?;
+            let topic_config_wrapper = admin
+                .get_user_topic_config(master_addr.clone(), false, request.timeout_millis())
+                .await?;
+            let trans_stats_data = admin
+                .view_broker_stats_data(
+                    master_addr.clone(),
+                    CheetahString::from_static_str(Stats::TOPIC_PUT_NUMS),
+                    CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC),
+                )
+                .await
+                .ok();
+            let schedule_stats_data = admin
+                .view_broker_stats_data(
+                    master_addr.clone(),
+                    CheetahString::from_static_str(Stats::TOPIC_PUT_NUMS),
+                    CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),
+                )
+                .await
+                .ok();
+            let client_info = collect_export_metrics_client_info(admin, &subscription_group_wrapper).await;
+            let topic_size = topic_config_wrapper
+                .topic_config_table()
+                .map(HashMap::len)
+                .unwrap_or_default();
+            let group_size = subscription_group_wrapper.get_subscription_group_table().len();
+            let report = Self::build_export_metrics_broker_report(
+                &runtime_stats,
+                &broker_config,
+                topic_size,
+                group_size,
+                trans_stats_data.as_ref(),
+                schedule_stats_data.as_ref(),
+                client_info,
+            );
+
+            result.total_data.accumulate(&report.runtime_quota);
+            result.evaluate_report.insert(broker_name.to_string(), report);
+        }
+
+        Ok(result)
+    }
+
+    pub fn build_export_metrics_broker_report(
+        runtime_stats: &KVTable,
+        broker_config: &HashMap<CheetahString, CheetahString>,
+        topic_size: usize,
+        group_size: usize,
+        trans_stats_data: Option<&BrokerStatsData>,
+        schedule_stats_data: Option<&BrokerStatsData>,
+        client_info: Vec<String>,
+    ) -> ExportMetricsBrokerReport {
+        let trans_one_day_in_num = trans_stats_data
+            .map(crate::core::stats::StatsService::compute_24_hour_sum)
+            .unwrap_or_default();
+        let schedule_one_day_in_num = schedule_stats_data
+            .map(crate::core::stats::StatsService::compute_24_hour_sum)
+            .unwrap_or_default();
+
+        ExportMetricsBrokerReport {
+            runtime_env: ExportMetricsRuntimeEnv {
+                cpu_num: map_value(broker_config, "clientCallbackExecutorThreads"),
+                total_mem_kbytes: kv_value(runtime_stats, "totalMemKBytes"),
+            },
+            runtime_quota: ExportMetricsRuntimeQuota {
+                disk_ratio: ExportMetricsDiskRatio {
+                    commit_log_disk_ratio: kv_value(runtime_stats, "commitLogDiskRatio"),
+                    consume_queue_disk_ratio: kv_value(runtime_stats, "consumeQueueDiskRatio"),
+                },
+                tps: ExportMetricsTps {
+                    normal_in_tps: parse_leading_f64(kv_value(runtime_stats, "putTps").as_deref()),
+                    normal_out_tps: parse_leading_f64(kv_value(runtime_stats, "getTransferredTps").as_deref()),
+                    trans_in_tps: trans_stats_data
+                        .map(|stats| stats.get_stats_minute().get_tps())
+                        .unwrap_or_default(),
+                    schedule_in_tps: schedule_stats_data
+                        .map(|stats| stats.get_stats_minute().get_tps())
+                        .unwrap_or_default(),
+                },
+                one_day_num: ExportMetricsOneDayNum {
+                    normal_one_day_in_num: kv_i64(runtime_stats, "msgPutTotalTodayMorning")
+                        - kv_i64(runtime_stats, "msgPutTotalYesterdayMorning"),
+                    normal_one_day_out_num: kv_i64(runtime_stats, "msgGetTotalTodayMorning")
+                        - kv_i64(runtime_stats, "msgGetTotalYesterdayMorning"),
+                    trans_one_day_in_num,
+                    schedule_one_day_in_num,
+                },
+                message_average_size: kv_value(runtime_stats, "putMessageAverageSize"),
+                topic_size,
+                group_size,
+            },
+            runtime_version: ExportMetricsRuntimeVersion {
+                rocketmq_version: CURRENT_VERSION.name().to_string(),
+                client_info: normalize_client_info(client_info),
+            },
+        }
     }
 
     pub async fn export_metadata_by_request_with_rpc_hook(
@@ -818,6 +1123,102 @@ fn resolve_export_pop_record_targets_from_cluster_info(
     });
     targets.dedup();
     targets
+}
+
+fn resolve_export_metrics_broker_names(
+    cluster_info: &ClusterInfo,
+    cluster_name: &str,
+) -> RocketMQResult<Vec<CheetahString>> {
+    let broker_names = cluster_info
+        .cluster_addr_table
+        .as_ref()
+        .and_then(|cluster_addr_table| cluster_addr_table.get(cluster_name))
+        .ok_or_else(|| {
+            RocketMQError::Internal(format!(
+                "ExportService: cluster {} does not exist or has no brokers",
+                cluster_name
+            ))
+        })?;
+    let mut broker_names = broker_names.iter().cloned().collect::<Vec<_>>();
+    broker_names.sort();
+    Ok(broker_names)
+}
+
+async fn collect_export_metrics_client_info(
+    admin: &DefaultMQAdminExt,
+    subscription_group_wrapper: &SubscriptionGroupWrapper,
+) -> Vec<String> {
+    let mut client_info = BTreeSet::new();
+    for entry in subscription_group_wrapper.get_subscription_group_table().iter() {
+        let group_name = entry.value().group_name().clone();
+        let Ok(connection) = admin.examine_consumer_connection_info(group_name, None).await else {
+            continue;
+        };
+        for connection in connection.get_connection_set() {
+            let version = if connection.get_version() < 0 {
+                RocketMqVersion::from_ordinal(0)
+            } else {
+                RocketMqVersion::from_ordinal(connection.get_version() as u32)
+            };
+            client_info.insert(format!("{}%{}", connection.get_language(), version.name()));
+        }
+    }
+    client_info.into_iter().collect()
+}
+
+fn kv_value(runtime_stats: &KVTable, key: &str) -> Option<String> {
+    runtime_stats
+        .table
+        .get(&CheetahString::from(key))
+        .map(ToString::to_string)
+}
+
+fn map_value(properties: &HashMap<CheetahString, CheetahString>, key: &str) -> Option<String> {
+    properties.get(&CheetahString::from(key)).map(ToString::to_string)
+}
+
+fn kv_i64(runtime_stats: &KVTable, key: &str) -> i64 {
+    kv_value(runtime_stats, key)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or_default()
+}
+
+fn parse_leading_f64(value: Option<&str>) -> f64 {
+    value
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or_default()
+}
+
+fn normalize_client_info(client_info: Vec<String>) -> Vec<String> {
+    let mut client_info = client_info
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    client_info.sort();
+    client_info.dedup();
+    client_info
+}
+
+fn convert_consumer_offset_entry(entry: ExportMetadataInRocksDbEntry) -> RocketMQResult<ExportMetadataInRocksDbEntry> {
+    let wrapper = serde_json::from_str::<serde_json::Value>(&entry.value).map_err(|error| {
+        RocketMQError::Internal(format!(
+            "ExportService: failed to parse consumerOffsets entry {}: {}",
+            entry.key, error
+        ))
+    })?;
+    let offset_table = wrapper
+        .get("offsetTable")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let value = serde_json::to_string(&offset_table).map_err(|error| {
+        RocketMQError::Internal(format!(
+            "ExportService: failed to serialize consumerOffsets entry {}: {}",
+            entry.key, error
+        ))
+    })?;
+
+    Ok(ExportMetadataInRocksDbEntry { key: entry.key, value })
 }
 
 #[cfg(feature = "rocksdb-export")]

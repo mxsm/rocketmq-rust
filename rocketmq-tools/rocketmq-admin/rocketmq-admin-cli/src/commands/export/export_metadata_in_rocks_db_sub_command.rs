@@ -38,7 +38,7 @@ pub struct ExportMetadataInRocksDBSubCommand {
         short = 't',
         long = "configType",
         required = true,
-        help = "Name of kv config, e.g. topics/subscriptionGroups"
+        help = "Name of kv config, e.g. topics/subscriptionGroups/consumerOffsets"
     )]
     config_type: String,
 
@@ -63,7 +63,7 @@ impl ExportMetadataInRocksDBSubCommand {
             }
             ExportMetadataInRocksDbResult::InvalidConfigType { config_type } => {
                 println!(
-                    "Invalid config type={}, Options: topics,subscriptionGroups",
+                    "Invalid config type={}, Options: topics,subscriptionGroups,consumerOffsets",
                     config_type
                 );
             }
@@ -133,6 +133,22 @@ mod tests {
         assert_eq!(
             request.normalized_config_type(),
             Some(ExportMetadataInRocksDbConfigType::Topics)
+        );
+    }
+
+    #[test]
+    fn export_metadata_in_rocksdb_sub_command_accepts_consumer_offsets() {
+        let command = ExportMetadataInRocksDBSubCommand {
+            path: " /tmp/metadata ".to_string(),
+            config_type: " consumerOffsets ".to_string(),
+            json_enable: true,
+        };
+
+        let request = command.request();
+
+        assert_eq!(
+            request.normalized_config_type(),
+            Some(ExportMetadataInRocksDbConfigType::ConsumerOffsets)
         );
     }
 }

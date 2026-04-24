@@ -24,6 +24,7 @@ use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataScope;
+use rocketmq_admin_core::core::export_data::ExportMetricsResult;
 use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
 use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
@@ -937,6 +938,83 @@ impl CommandResultViewModel {
         Self::table(title, &["Type", "Target", "Key", "Value"], rows)
     }
 
+    pub fn export_metrics(title: impl Into<String>, result: &ExportMetricsResult) -> Self {
+        let mut rows = result
+            .evaluate_report
+            .iter()
+            .map(|(broker_name, report)| {
+                let quota = &report.runtime_quota;
+                vec![
+                    broker_name.clone(),
+                    optional_text(&report.runtime_env.cpu_num),
+                    optional_text(&report.runtime_env.total_mem_kbytes),
+                    optional_text(&quota.disk_ratio.commit_log_disk_ratio),
+                    optional_text(&quota.disk_ratio.consume_queue_disk_ratio),
+                    fixed_f64(quota.tps.normal_in_tps),
+                    fixed_f64(quota.tps.normal_out_tps),
+                    fixed_f64(quota.tps.trans_in_tps),
+                    fixed_f64(quota.tps.schedule_in_tps),
+                    quota.one_day_num.normal_one_day_in_num.to_string(),
+                    quota.one_day_num.normal_one_day_out_num.to_string(),
+                    quota.one_day_num.trans_one_day_in_num.to_string(),
+                    quota.one_day_num.schedule_one_day_in_num.to_string(),
+                    optional_text(&quota.message_average_size),
+                    quota.topic_size.to_string(),
+                    quota.group_size.to_string(),
+                    report.runtime_version.rocketmq_version.clone(),
+                    report.runtime_version.client_info.join(","),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let totals = &result.total_data;
+        rows.push(vec![
+            "TOTAL".to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            fixed_f64(totals.total_tps.total_normal_in_tps),
+            fixed_f64(totals.total_tps.total_normal_out_tps),
+            fixed_f64(totals.total_tps.total_trans_in_tps),
+            fixed_f64(totals.total_tps.total_schedule_in_tps),
+            totals.total_one_day_num.normal_one_day_in_num.to_string(),
+            totals.total_one_day_num.normal_one_day_out_num.to_string(),
+            totals.total_one_day_num.trans_one_day_in_num.to_string(),
+            totals.total_one_day_num.schedule_one_day_in_num.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ]);
+
+        Self::table(
+            title,
+            &[
+                "Broker",
+                "CPU",
+                "Memory KB",
+                "CommitLog",
+                "ConsumeQueue",
+                "Normal In TPS",
+                "Normal Out TPS",
+                "Trans In TPS",
+                "Schedule In TPS",
+                "Normal 24h In",
+                "Normal 24h Out",
+                "Trans 24h In",
+                "Schedule 24h In",
+                "Avg Size",
+                "Topics",
+                "Groups",
+                "Version",
+                "Clients",
+            ],
+            rows,
+        )
+    }
+
     pub fn export_metadata(title: impl Into<String>, result: &ExportMetadataResult) -> Self {
         match result {
             ExportMetadataResult::BrokerTopic { wrapper } => {
@@ -1375,6 +1453,10 @@ fn optional_text<T: ToString>(value: &Option<T>) -> String {
     value.as_ref().map(ToString::to_string).unwrap_or_default()
 }
 
+fn fixed_f64(value: f64) -> String {
+    format!("{value:.2}")
+}
+
 const MESSAGE_DETAIL_HEADERS: [&str; 17] = [
     "Message ID",
     "Status",
@@ -1638,6 +1720,7 @@ fn export_rocksdb_config_type_name(config_type: ExportMetadataInRocksDbConfigTyp
     match config_type {
         ExportMetadataInRocksDbConfigType::Topics => "Topics",
         ExportMetadataInRocksDbConfigType::SubscriptionGroups => "SubscriptionGroups",
+        ExportMetadataInRocksDbConfigType::ConsumerOffsets => "ConsumerOffsets",
     }
 }
 
@@ -1700,6 +1783,16 @@ mod tests {
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry;
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
+    use rocketmq_admin_core::core::export_data::ExportMetricsBrokerReport;
+    use rocketmq_admin_core::core::export_data::ExportMetricsDiskRatio;
+    use rocketmq_admin_core::core::export_data::ExportMetricsOneDayNum;
+    use rocketmq_admin_core::core::export_data::ExportMetricsResult;
+    use rocketmq_admin_core::core::export_data::ExportMetricsRuntimeEnv;
+    use rocketmq_admin_core::core::export_data::ExportMetricsRuntimeQuota;
+    use rocketmq_admin_core::core::export_data::ExportMetricsRuntimeVersion;
+    use rocketmq_admin_core::core::export_data::ExportMetricsTotalTps;
+    use rocketmq_admin_core::core::export_data::ExportMetricsTotals;
+    use rocketmq_admin_core::core::export_data::ExportMetricsTps;
     use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
     use rocketmq_admin_core::core::export_data::ExportPopRecordTargetResult;
     use rocketmq_admin_core::core::message::DecodeMessageIdEntry;
@@ -1749,6 +1842,7 @@ mod tests {
     use rocketmq_remoting::protocol::LanguageCode;
     use rocketmq_rust::ArcMut;
 
+    use std::collections::BTreeMap;
     use std::collections::HashMap;
 
     use crate::admin_facade::MessagePullCapture;
@@ -2623,6 +2717,103 @@ mod tests {
             &["name-server", "", "address", "127.0.0.1:9876"],
         );
 
+        let export_metrics = CommandResultViewModel::export_metrics(
+            "Export Metrics",
+            &ExportMetricsResult {
+                evaluate_report: BTreeMap::from([(
+                    "broker-a".to_string(),
+                    ExportMetricsBrokerReport {
+                        runtime_env: ExportMetricsRuntimeEnv {
+                            cpu_num: Some("8".to_string()),
+                            total_mem_kbytes: Some("4096".to_string()),
+                        },
+                        runtime_quota: ExportMetricsRuntimeQuota {
+                            disk_ratio: ExportMetricsDiskRatio {
+                                commit_log_disk_ratio: Some("0.25".to_string()),
+                                consume_queue_disk_ratio: Some("0.10".to_string()),
+                            },
+                            tps: ExportMetricsTps {
+                                normal_in_tps: 123.5,
+                                normal_out_tps: 45.25,
+                                trans_in_tps: 1.5,
+                                schedule_in_tps: 2.5,
+                            },
+                            one_day_num: ExportMetricsOneDayNum {
+                                normal_one_day_in_num: 60,
+                                normal_one_day_out_num: 50,
+                                trans_one_day_in_num: 10,
+                                schedule_one_day_in_num: 20,
+                            },
+                            message_average_size: Some("512".to_string()),
+                            topic_size: 12,
+                            group_size: 4,
+                        },
+                        runtime_version: ExportMetricsRuntimeVersion {
+                            rocketmq_version: "V5_1_0".to_string(),
+                            client_info: vec!["JAVA%V5_1_0".to_string()],
+                        },
+                    },
+                )]),
+                total_data: ExportMetricsTotals {
+                    total_tps: ExportMetricsTotalTps {
+                        total_normal_in_tps: 123.5,
+                        total_normal_out_tps: 45.25,
+                        total_trans_in_tps: 1.5,
+                        total_schedule_in_tps: 2.5,
+                    },
+                    total_one_day_num: ExportMetricsOneDayNum {
+                        normal_one_day_in_num: 60,
+                        normal_one_day_out_num: 50,
+                        trans_one_day_in_num: 10,
+                        schedule_one_day_in_num: 20,
+                    },
+                },
+            },
+        );
+        assert_table(
+            &export_metrics,
+            &[
+                "Broker",
+                "CPU",
+                "Memory KB",
+                "CommitLog",
+                "ConsumeQueue",
+                "Normal In TPS",
+                "Normal Out TPS",
+                "Trans In TPS",
+                "Schedule In TPS",
+                "Normal 24h In",
+                "Normal 24h Out",
+                "Trans 24h In",
+                "Schedule 24h In",
+                "Avg Size",
+                "Topics",
+                "Groups",
+                "Version",
+                "Clients",
+            ],
+            &[
+                "broker-a",
+                "8",
+                "4096",
+                "0.25",
+                "0.10",
+                "123.50",
+                "45.25",
+                "1.50",
+                "2.50",
+                "60",
+                "50",
+                "10",
+                "20",
+                "512",
+                "12",
+                "4",
+                "V5_1_0",
+                "JAVA%V5_1_0",
+            ],
+        );
+
         let rocksdb = CommandResultViewModel::export_metadata_rocksdb(
             "Export Metadata In RocksDB",
             &ExportMetadataInRocksDbResult::Data {
@@ -2638,6 +2829,23 @@ mod tests {
             &rocksdb,
             &["Config Type", "Format", "Key", "Value"],
             &["Topics", "json", "TopicA", "{\"readQueueNums\":4}"],
+        );
+
+        let consumer_offsets = CommandResultViewModel::export_metadata_rocksdb(
+            "Export Metadata In RocksDB",
+            &ExportMetadataInRocksDbResult::Data {
+                config_type: ExportMetadataInRocksDbConfigType::ConsumerOffsets,
+                json_enable: true,
+                entries: vec![ExportMetadataInRocksDbEntry {
+                    key: "GroupA@TopicA".to_string(),
+                    value: "{\"0\":12}".to_string(),
+                }],
+            },
+        );
+        assert_table(
+            &consumer_offsets,
+            &["Config Type", "Format", "Key", "Value"],
+            &["ConsumerOffsets", "json", "GroupA@TopicA", "{\"0\":12}"],
         );
 
         let pop_records = CommandResultViewModel::export_pop_records(

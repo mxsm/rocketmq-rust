@@ -14,9 +14,14 @@ use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataScope;
 use rocketmq_admin_core::core::export_data::ExportMetadataTarget;
+use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
+use rocketmq_admin_core::core::export_data::ExportMetricsTotals;
 use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
 use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
 use rocketmq_admin_core::core::export_data::ExportService;
+use rocketmq_remoting::protocol::body::broker_stats_item::BrokerStatsItem;
+use rocketmq_remoting::protocol::body::kv_table::KVTable;
+use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
 
 #[test]
 fn export_configs_request_trims_cluster_and_namesrv() {
@@ -135,6 +140,106 @@ fn export_pop_record_request_rejects_invalid_targets() {
 }
 
 #[test]
+fn export_metrics_request_trims_cluster_and_namesrv() {
+    let request = ExportMetricsRequest::try_new(" DefaultCluster ")
+        .unwrap()
+        .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()))
+        .with_timeout_millis(5000);
+
+    assert_eq!(request.cluster_name().as_str(), "DefaultCluster");
+    assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+    assert_eq!(request.timeout_millis(), 5000);
+}
+
+#[test]
+fn export_metrics_report_parses_runtime_quota_like_java() {
+    let mut runtime_stats = KVTable::default();
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("totalMemKBytes"),
+        CheetahString::from_static_str("4096"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("commitLogDiskRatio"),
+        CheetahString::from_static_str("0.25"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("consumeQueueDiskRatio"),
+        CheetahString::from_static_str("0.10"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("putTps"),
+        CheetahString::from_static_str("123.5 1 1"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("getTransferredTps"),
+        CheetahString::from_static_str("45.25 1 1"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("msgPutTotalYesterdayMorning"),
+        CheetahString::from_static_str("100"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("msgPutTotalTodayMorning"),
+        CheetahString::from_static_str("160"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("msgGetTotalYesterdayMorning"),
+        CheetahString::from_static_str("30"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("msgGetTotalTodayMorning"),
+        CheetahString::from_static_str("80"),
+    );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("putMessageAverageSize"),
+        CheetahString::from_static_str("512"),
+    );
+
+    let broker_config = HashMap::from([(
+        CheetahString::from_static_str("clientCallbackExecutorThreads"),
+        CheetahString::from_static_str("8"),
+    )]);
+    let trans_stats = BrokerStatsData::new(
+        BrokerStatsItem::new(10, 1.5, 0.0),
+        BrokerStatsItem::default(),
+        BrokerStatsItem::default(),
+    );
+    let schedule_stats = BrokerStatsData::new(
+        BrokerStatsItem::new(20, 2.5, 0.0),
+        BrokerStatsItem::default(),
+        BrokerStatsItem::default(),
+    );
+
+    let report = ExportService::build_export_metrics_broker_report(
+        &runtime_stats,
+        &broker_config,
+        12,
+        4,
+        Some(&trans_stats),
+        Some(&schedule_stats),
+        vec!["JAVA%V5_1_0".to_string()],
+    );
+    let mut totals = ExportMetricsTotals::default();
+    totals.accumulate(&report.runtime_quota);
+
+    assert_eq!(report.runtime_env.cpu_num.as_deref(), Some("8"));
+    assert_eq!(report.runtime_env.total_mem_kbytes.as_deref(), Some("4096"));
+    assert_eq!(report.runtime_quota.tps.normal_in_tps, 123.5);
+    assert_eq!(report.runtime_quota.tps.normal_out_tps, 45.25);
+    assert_eq!(report.runtime_quota.tps.trans_in_tps, 1.5);
+    assert_eq!(report.runtime_quota.tps.schedule_in_tps, 2.5);
+    assert_eq!(report.runtime_quota.one_day_num.normal_one_day_in_num, 60);
+    assert_eq!(report.runtime_quota.one_day_num.normal_one_day_out_num, 50);
+    assert_eq!(report.runtime_quota.one_day_num.trans_one_day_in_num, 10);
+    assert_eq!(report.runtime_quota.one_day_num.schedule_one_day_in_num, 20);
+    assert_eq!(report.runtime_quota.topic_size, 12);
+    assert_eq!(report.runtime_quota.group_size, 4);
+    assert_eq!(report.runtime_version.client_info, vec!["JAVA%V5_1_0"]);
+    assert_eq!(totals.total_tps.total_normal_in_tps, 123.5);
+    assert_eq!(totals.total_one_day_num.normal_one_day_out_num, 50);
+}
+
+#[test]
 fn export_metadata_in_rocksdb_request_trims_fields() {
     let request = ExportMetadataInRocksDbRequest::new(" /tmp/metadata ", " topics ", true);
 
@@ -154,6 +259,42 @@ fn export_metadata_in_rocksdb_request_recognizes_subscription_groups() {
     assert_eq!(
         request.normalized_config_type(),
         Some(ExportMetadataInRocksDbConfigType::SubscriptionGroups)
+    );
+}
+
+#[test]
+fn export_metadata_in_rocksdb_request_recognizes_consumer_offsets() {
+    let request = ExportMetadataInRocksDbRequest::new("/tmp/metadata", "consumerOffsets", true);
+
+    assert_eq!(
+        request.normalized_config_type(),
+        Some(ExportMetadataInRocksDbConfigType::ConsumerOffsets)
+    );
+    assert_eq!(
+        request.full_path().to_string_lossy().replace('\\', "/"),
+        "/tmp/metadata/consumerOffsets"
+    );
+    assert_eq!(
+        ExportMetadataInRocksDbConfigType::ConsumerOffsets.table_key(),
+        "offsetTable"
+    );
+}
+
+#[test]
+fn export_metadata_in_rocksdb_consumer_offsets_extracts_offset_table() {
+    let entries = vec![rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry {
+        key: "GroupA@TopicA".to_string(),
+        value: r#"{"offsetTable":{"0":12,"1":34}}"#.to_string(),
+    }];
+
+    let entries =
+        ExportService::convert_rocksdb_metadata_entries(ExportMetadataInRocksDbConfigType::ConsumerOffsets, entries)
+            .unwrap();
+
+    assert_eq!(entries[0].key, "GroupA@TopicA");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&entries[0].value).unwrap(),
+        serde_json::json!({"0": 12, "1": 34})
     );
 }
 

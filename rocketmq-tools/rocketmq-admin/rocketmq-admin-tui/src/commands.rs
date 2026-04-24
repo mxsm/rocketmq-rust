@@ -1150,6 +1150,21 @@ where
                 CommandResultViewModel::export_configs(spec.title, &result),
             )?
         }
+        "export.metrics" => {
+            let result = facade
+                .export_metrics(
+                    form.required_string("cluster_name")?,
+                    optional_u64_arg(form, "timeout_millis")?,
+                )
+                .await?;
+            export_output_or_view(
+                facade,
+                spec.title,
+                form,
+                &result,
+                CommandResultViewModel::export_metrics(spec.title, &result),
+            )?
+        }
         "export.metadata" => {
             let result = facade
                 .export_metadata(
@@ -2957,6 +2972,26 @@ fn export_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "export.metrics",
+            CommandCategory::Export,
+            "Export Metrics",
+            "Aggregate broker runtime metrics for a cluster into the Java-compatible export model.",
+            RiskLevel::Safe,
+            with_export_output_args(vec![
+                required_string("cluster_name", "Cluster", "Cluster name.", "DefaultCluster"),
+                number(
+                    "timeout_millis",
+                    "Timeout",
+                    "Optional broker request timeout in milliseconds.",
+                    false,
+                    Some(10000),
+                    Some(1),
+                ),
+            ]),
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
             "export.metadata",
             CommandCategory::Export,
             "Export Metadata",
@@ -2994,7 +3029,7 @@ fn export_commands(commands: &mut Vec<CommandSpec>) {
                     "config_type",
                     "Config Type",
                     "RocksDB config type.",
-                    &["topics", "subscriptionGroups"],
+                    &["topics", "subscriptionGroups", "consumerOffsets"],
                     "topics",
                 ),
                 bool_arg(
@@ -3636,6 +3671,7 @@ mod tests {
             "message.print_by_queue",
             "message.consume",
             "export.configs",
+            "export.metrics",
             "export.metadata",
             "export.metadata_rocksdb",
             "export.pop_record",
@@ -3680,6 +3716,7 @@ mod tests {
 
         for command_id in [
             "export.configs",
+            "export.metrics",
             "export.metadata",
             "export.metadata_rocksdb",
             "export.pop_record",
@@ -3716,5 +3753,51 @@ mod tests {
                 )
         }));
         assert!(command.args.iter().any(|arg| arg.name == "max_events" && arg.required));
+    }
+
+    #[test]
+    fn phase_five_catalog_exposes_rocksdb_consumer_offsets() {
+        let catalog = command_catalog();
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "export.metadata_rocksdb")
+            .unwrap();
+        let config_type = command.args.iter().find(|arg| arg.name == "config_type").unwrap();
+
+        assert!(matches!(
+            &config_type.kind,
+            ArgKind::Enum {
+                values,
+                ..
+            } if values.contains(&"consumerOffsets")
+        ));
+    }
+
+    #[test]
+    fn phase_five_catalog_exposes_export_metrics() {
+        let catalog = command_catalog();
+        let command = catalog.iter().find(|command| command.id == "export.metrics").unwrap();
+
+        assert_eq!(command.risk_level, RiskLevel::Safe);
+        assert_eq!(command.result_view_kind, ResultViewKind::Table);
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg.name == "cluster_name" && arg.required));
+        assert!(command.args.iter().any(|arg| {
+            arg.name == "timeout_millis"
+                && !arg.required
+                && matches!(
+                    arg.kind,
+                    ArgKind::Number {
+                        default: Some(10000),
+                        min: Some(1)
+                    }
+                )
+        }));
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg.name == "output_path" && !arg.required));
     }
 }

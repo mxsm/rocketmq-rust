@@ -101,6 +101,8 @@ use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataRequest;
 use rocketmq_admin_core::core::export_data::ExportMetadataResult;
+use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
+use rocketmq_admin_core::core::export_data::ExportMetricsResult;
 use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
 use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
 use rocketmq_admin_core::core::export_data::ExportService;
@@ -1169,6 +1171,19 @@ impl TuiAdminFacade {
 
     pub fn export_configs_request(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsRequest> {
         Ok(ExportConfigsRequest::try_new(cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn export_metrics_request(
+        &self,
+        cluster_name: impl Into<String>,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<ExportMetricsRequest> {
+        let request =
+            ExportMetricsRequest::try_new(cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone());
+        Ok(match timeout_millis {
+            Some(timeout_millis) => request.with_timeout_millis(timeout_millis),
+            None => request,
+        })
     }
 
     pub fn export_metadata_request(
@@ -2542,6 +2557,18 @@ impl TuiAdminFacade {
         ExportService::export_configs_by_request_with_rpc_hook(self.export_configs_request(cluster_name)?, None).await
     }
 
+    pub async fn export_metrics(
+        &self,
+        cluster_name: impl Into<String>,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<ExportMetricsResult> {
+        ExportService::export_metrics_by_request_with_rpc_hook(
+            self.export_metrics_request(cluster_name, timeout_millis)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn export_metadata(
         &self,
         cluster_name: Option<String>,
@@ -3576,6 +3603,11 @@ mod tests {
         assert_eq!(export_configs.cluster_name().as_str(), "DefaultCluster");
         assert_eq!(export_configs.namesrv_addr(), Some("127.0.0.1:9876"));
 
+        let export_metrics = facade.export_metrics_request(" DefaultCluster ", Some(5000)).unwrap();
+        assert_eq!(export_metrics.cluster_name().as_str(), "DefaultCluster");
+        assert_eq!(export_metrics.namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(export_metrics.timeout_millis(), 5000);
+
         let export_metadata = facade
             .export_metadata_request(Some(" DefaultCluster ".to_string()), None, false, true, true)
             .unwrap();
@@ -3629,6 +3661,7 @@ mod tests {
         let facade = TuiAdminFacade::with_namesrv_addr("127.0.0.1:9876");
 
         std::mem::drop(facade.export_configs("DefaultCluster"));
+        std::mem::drop(facade.export_metrics("DefaultCluster", Some(5000)));
         std::mem::drop(facade.export_metadata(Some("DefaultCluster".to_string()), None, false, false, false));
         std::mem::drop(facade.export_pop_records(None, Some("127.0.0.1:10911".to_string()), true, Some(5000)));
         std::mem::drop(facade.print_messages_with_progress("TopicA", "*", None, None, None, 64, |_| {}));
