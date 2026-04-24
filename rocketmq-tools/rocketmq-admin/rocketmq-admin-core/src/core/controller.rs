@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use serde::Deserialize;
@@ -168,6 +170,71 @@ pub struct ControllerMetadataQueryResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerElectMasterRequest {
+    controller_addr: CheetahString,
+    cluster_name: CheetahString,
+    broker_name: CheetahString,
+    broker_id: u64,
+    namesrv_addr: Option<String>,
+}
+
+impl ControllerElectMasterRequest {
+    pub fn try_new(
+        controller_addr: impl Into<String>,
+        cluster_name: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_id: i64,
+    ) -> RocketMQResult<Self> {
+        if broker_id < 0 {
+            return Err(ToolsError::validation_error("brokerId", "brokerId must be greater than or equal to 0").into());
+        }
+
+        Ok(Self {
+            controller_addr: trim_required_cheetah("controllerAddress", controller_addr)?,
+            cluster_name: trim_required_cheetah("clusterName", cluster_name)?,
+            broker_name: trim_required_cheetah("brokerName", broker_name)?,
+            broker_id: broker_id as u64,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn controller_addr(&self) -> &CheetahString {
+        &self.controller_addr
+    }
+
+    pub fn cluster_name(&self) -> &CheetahString {
+        &self.cluster_name
+    }
+
+    pub fn broker_name(&self) -> &CheetahString {
+        &self.broker_name
+    }
+
+    pub fn broker_id(&self) -> u64 {
+        self.broker_id
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControllerElectMasterResult {
+    pub response_header: ElectMasterResponseHeader,
+    pub broker_member_group: BrokerMemberGroup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControllerMetadataCleanRequest {
     controller_addr: CheetahString,
     broker_name: CheetahString,
@@ -305,6 +372,36 @@ impl ControllerService {
     ) -> RocketMQResult<ControllerMetadataQueryResult> {
         let meta_data = admin.get_controller_meta_data(request.controller_addr.clone()).await?;
         Ok(ControllerMetadataQueryResult { meta_data })
+    }
+
+    pub async fn elect_master_by_request_with_rpc_hook(
+        request: ControllerElectMasterRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<ControllerElectMasterResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::elect_master_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn elect_master_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ControllerElectMasterRequest,
+    ) -> RocketMQResult<ControllerElectMasterResult> {
+        let (response_header, broker_member_group) = admin
+            .elect_master(
+                request.controller_addr.clone(),
+                request.cluster_name.clone(),
+                request.broker_name.clone(),
+                Some(request.broker_id),
+            )
+            .await?;
+        Ok(ControllerElectMasterResult {
+            response_header,
+            broker_member_group,
+        })
     }
 
     pub async fn clean_controller_metadata_by_request_with_rpc_hook(

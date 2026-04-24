@@ -133,6 +133,7 @@ pub mod controller {
 }
 
 pub mod admin {
+    pub use super::super::header::add_broker_request_header::AddBrokerRequestHeader;
     pub use super::super::header::create_topic_request_header::CreateTopicRequestHeader;
     pub use super::super::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     pub use super::super::header::delete_topic_request_header::DeleteTopicRequestHeader;
@@ -144,6 +145,7 @@ pub mod admin {
     pub use super::super::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
     pub use super::super::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
     pub use super::super::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
+    pub use super::super::header::remove_broker_request_header::RemoveBrokerRequestHeader;
 }
 
 pub mod transaction {
@@ -233,9 +235,11 @@ pub use super::header::get_min_offset_response_header::GetMinOffsetResponseHeade
 pub use super::header::pull_message_response_header::PullMessageResponseHeader;
 
 // Administrative operations
+pub use super::header::add_broker_request_header::AddBrokerRequestHeader;
 pub use super::header::create_topic_request_header::CreateTopicRequestHeader;
 pub use super::header::delete_topic_request_header::DeleteTopicRequestHeader;
 pub use super::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+pub use super::header::remove_broker_request_header::RemoveBrokerRequestHeader;
 
 // Offset operations
 pub use super::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;

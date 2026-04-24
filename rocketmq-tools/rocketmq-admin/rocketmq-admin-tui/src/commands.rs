@@ -18,6 +18,7 @@ pub enum CommandCategory {
     Broker,
     Cluster,
     Controller,
+    Container,
     Connection,
     Consumer,
     Offset,
@@ -40,6 +41,7 @@ impl CommandCategory {
             Self::Broker => "Broker",
             Self::Cluster => "Cluster",
             Self::Controller => "Controller",
+            Self::Container => "Container",
             Self::Connection => "Connection",
             Self::Consumer => "Consumer",
             Self::Offset => "Offset",
@@ -201,6 +203,7 @@ pub fn command_catalog() -> Vec<CommandSpec> {
     broker_commands(&mut commands);
     cluster_commands(&mut commands);
     controller_commands(&mut commands);
+    container_commands(&mut commands);
     connection_commands(&mut commands);
     consumer_commands(&mut commands);
     offset_commands(&mut commands);
@@ -663,6 +666,17 @@ where
                 .await?;
             CommandResultViewModel::from_serializable(spec.title, &result)
         }
+        "controller.elect_master" => {
+            let result = facade
+                .elect_controller_master(
+                    form.required_string("controller_address")?,
+                    form.required_string("cluster_name")?,
+                    form.required_string("broker_name")?,
+                    form.number_i64("broker_id")?,
+                )
+                .await?;
+            CommandResultViewModel::controller_elect_master(spec.title, &result)
+        }
         "controller.metadata.clean" => {
             let broker_name = form.required_string("broker_name")?;
             facade
@@ -675,6 +689,40 @@ where
                 )
                 .await?;
             CommandResultViewModel::operation_success(spec.title, vec![broker_name])
+        }
+        "container.add_broker" => {
+            let result = facade
+                .add_broker_to_container(
+                    form.required_string("broker_container_addr")?,
+                    form.required_string("broker_config_path")?,
+                )
+                .await?;
+            CommandResultViewModel::operation_success(
+                spec.title,
+                vec![format!(
+                    "{} config {}",
+                    result.broker_container_addr.as_str(),
+                    result.target.as_str()
+                )],
+            )
+        }
+        "container.remove_broker" => {
+            let result = facade
+                .remove_broker_from_container(
+                    form.required_string("broker_container_addr")?,
+                    form.required_string("cluster_name")?,
+                    form.required_string("broker_name")?,
+                    form.number_i64("broker_id")?,
+                )
+                .await?;
+            CommandResultViewModel::operation_success(
+                spec.title,
+                vec![format!(
+                    "{} broker {}",
+                    result.broker_container_addr.as_str(),
+                    result.target.as_str()
+                )],
+            )
         }
         "connection.consumer" => {
             let result = facade
@@ -1196,6 +1244,17 @@ where
                 &result,
                 CommandResultViewModel::export_metadata_rocksdb(spec.title, &result),
             )?
+        }
+        "export.metadata_rocksdb_rpc" => {
+            let result = facade
+                .export_rocksdb_config_rpc(
+                    form.optional_string("cluster_name"),
+                    form.optional_string("broker_addr"),
+                    form.required_string("config_types")?,
+                    optional_u64_arg(form, "timeout_millis")?,
+                )
+                .await?;
+            CommandResultViewModel::export_rocksdb_config_rpc(spec.title, &result)
         }
         "export.pop_record" => {
             let result = facade
@@ -2072,6 +2131,33 @@ fn controller_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "controller.elect_master",
+            CommandCategory::Controller,
+            "Elect Controller Master",
+            "Re-elect the specified broker as master through the controller leader.",
+            RiskLevel::Dangerous,
+            vec![
+                required_string(
+                    "controller_address",
+                    "Controller",
+                    "Controller address.",
+                    "127.0.0.1:9878",
+                ),
+                required_string("cluster_name", "Cluster", "Cluster name.", "DefaultCluster"),
+                required_string("broker_name", "Broker Name", "Broker name.", "broker-a"),
+                number(
+                    "broker_id",
+                    "Broker ID",
+                    "Broker id to elect as master.",
+                    true,
+                    Some(1),
+                    Some(0),
+                ),
+            ],
+            ResultViewKind::Table,
+            Some("broker_name"),
+        ),
+        spec(
             "controller.metadata.clean",
             CommandCategory::Controller,
             "Clean Controller Metadata",
@@ -2098,6 +2184,54 @@ fn controller_commands(commands: &mut Vec<CommandSpec>) {
                     "Allow cleaning living broker metadata.",
                     false,
                 ),
+            ],
+            ResultViewKind::OperationSummary,
+            Some("broker_name"),
+        ),
+    ]);
+}
+
+fn container_commands(commands: &mut Vec<CommandSpec>) {
+    commands.extend([
+        spec(
+            "container.add_broker",
+            CommandCategory::Container,
+            "Add Broker To Container",
+            "Add a broker to the specified broker container using a broker config path.",
+            RiskLevel::Dangerous,
+            vec![
+                required_string(
+                    "broker_container_addr",
+                    "Broker Container Addr",
+                    "Broker container address.",
+                    "127.0.0.1:10911",
+                ),
+                required_string(
+                    "broker_config_path",
+                    "Broker Config Path",
+                    "Broker config path visible to the broker container.",
+                    "/path/to/broker.conf",
+                ),
+            ],
+            ResultViewKind::OperationSummary,
+            Some("broker_container_addr"),
+        ),
+        spec(
+            "container.remove_broker",
+            CommandCategory::Container,
+            "Remove Broker From Container",
+            "Remove a broker identity from the specified broker container.",
+            RiskLevel::Dangerous,
+            vec![
+                required_string(
+                    "broker_container_addr",
+                    "Broker Container Addr",
+                    "Broker container address.",
+                    "127.0.0.1:10911",
+                ),
+                required_string("cluster_name", "Cluster", "Cluster name.", "DefaultCluster"),
+                required_string("broker_name", "Broker Name", "Broker name.", "broker-a"),
+                number("broker_id", "Broker ID", "Broker id to remove.", true, Some(1), Some(0)),
             ],
             ResultViewKind::OperationSummary,
             Some("broker_name"),
@@ -3043,6 +3177,43 @@ fn export_commands(commands: &mut Vec<CommandSpec>) {
             None,
         ),
         spec(
+            "export.metadata_rocksdb_rpc",
+            CommandCategory::Export,
+            "Export RocksDB Config RPC",
+            "Ask broker-side RocksDB config export to write JSON on the target broker.",
+            RiskLevel::Mutating,
+            vec![
+                optional_string(
+                    "cluster_name",
+                    "Cluster",
+                    "Cluster name for master broker targets.",
+                    "DefaultCluster",
+                ),
+                optional_string(
+                    "broker_addr",
+                    "Broker Addr",
+                    "Single broker address.",
+                    "127.0.0.1:10911",
+                ),
+                required_string(
+                    "config_types",
+                    "Config Types",
+                    "Semicolon-separated config types.",
+                    "topics;subscriptionGroups;consumerOffsets",
+                ),
+                number(
+                    "timeout_millis",
+                    "Timeout",
+                    "Request timeout in milliseconds.",
+                    false,
+                    Some(30000),
+                    Some(1),
+                ),
+            ],
+            ResultViewKind::OperationSummary,
+            None,
+        ),
+        spec(
             "export.pop_record",
             CommandCategory::Export,
             "Export POP Records",
@@ -3485,6 +3656,7 @@ mod tests {
 
     use super::command_catalog;
     use super::ArgKind;
+    use super::CommandCategory;
     use super::ResultViewKind;
     use super::RiskLevel;
     use crate::state::CommandFormState;
@@ -3546,6 +3718,9 @@ mod tests {
             "auth.acl.list",
             "controller.config.query",
             "controller.metadata.query",
+            "controller.elect_master",
+            "container.add_broker",
+            "container.remove_broker",
             "broker.epoch",
             "broker.cold_data_flow_ctr_info",
             "lite.broker_info",
@@ -3651,6 +3826,26 @@ mod tests {
         let command = catalog
             .iter()
             .find(|command| command.id == "controller.metadata.clean")
+            .unwrap();
+        assert_eq!(command.risk_level, RiskLevel::Dangerous);
+
+        let mut form = CommandFormState::for_command(command);
+        form.set_value("broker_name", "broker-a".to_string());
+        assert_eq!(command.expected_confirmation(&form), Some("broker-a".to_string()));
+
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "controller.elect_master")
+            .unwrap();
+        assert_eq!(command.risk_level, RiskLevel::Dangerous);
+
+        let mut form = CommandFormState::for_command(command);
+        form.set_value("broker_name", "broker-a".to_string());
+        assert_eq!(command.expected_confirmation(&form), Some("broker-a".to_string()));
+
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "container.remove_broker")
             .unwrap();
         assert_eq!(command.risk_level, RiskLevel::Dangerous);
 
@@ -3771,6 +3966,17 @@ mod tests {
                 ..
             } if values.contains(&"consumerOffsets")
         ));
+
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "export.metadata_rocksdb_rpc")
+            .expect("rocksdb rpc command");
+        assert_eq!(command.risk_level, RiskLevel::Mutating);
+        assert_eq!(command.result_view_kind, ResultViewKind::OperationSummary);
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg.name == "config_types" && arg.required));
     }
 
     #[test]
@@ -3799,5 +4005,59 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.name == "output_path" && !arg.required));
+    }
+
+    #[test]
+    fn phase_five_catalog_exposes_controller_elect_master() {
+        let catalog = command_catalog();
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "controller.elect_master")
+            .unwrap();
+
+        assert_eq!(command.risk_level, RiskLevel::Dangerous);
+        assert_eq!(command.result_view_kind, ResultViewKind::Table);
+        assert_eq!(command.confirmation_field, Some("broker_name"));
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg.name == "controller_address" && arg.required));
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg.name == "cluster_name" && arg.required));
+        assert!(command.args.iter().any(|arg| arg.name == "broker_name" && arg.required));
+        assert!(command.args.iter().any(|arg| {
+            arg.name == "broker_id"
+                && arg.required
+                && matches!(
+                    arg.kind,
+                    ArgKind::Number {
+                        default: Some(1),
+                        min: Some(0)
+                    }
+                )
+        }));
+    }
+
+    #[test]
+    fn phase_five_catalog_exposes_container_broker_commands() {
+        let catalog = command_catalog();
+        let ids = catalog.iter().map(|command| command.id).collect::<HashSet<_>>();
+
+        assert!(ids.contains("container.add_broker"));
+        assert!(ids.contains("container.remove_broker"));
+
+        let command = catalog
+            .iter()
+            .find(|command| command.id == "container.add_broker")
+            .expect("container add broker command");
+        assert_eq!(command.category, CommandCategory::Container);
+        assert_eq!(command.risk_level, RiskLevel::Dangerous);
+        assert_eq!(command.confirmation_field, Some("broker_container_addr"));
+        assert!(command
+            .args
+            .iter()
+            .any(|arg| arg.name == "broker_config_path" && arg.required));
     }
 }

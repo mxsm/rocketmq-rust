@@ -32,6 +32,7 @@ pub mod core {
     pub mod concurrent;
     pub mod connection;
     pub mod consumer;
+    pub mod container;
     pub mod controller;
     pub mod export_data;
     pub mod ha;

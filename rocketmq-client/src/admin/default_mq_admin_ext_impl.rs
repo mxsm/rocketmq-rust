@@ -553,7 +553,18 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .add_broker(
+                    &broker_container_addr,
+                    broker_config,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn remove_broker_from_container(
@@ -563,7 +574,20 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_name: CheetahString,
         broker_id: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .remove_broker(
+                    &broker_container_addr,
+                    cluster_name,
+                    broker_name,
+                    broker_id,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn update_broker_config(
@@ -2398,12 +2422,25 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn elect_master(
         &self,
-        _controller_addr: CheetahString,
-        _cluster_name: CheetahString,
-        _broker_name: CheetahString,
-        _broker_id: Option<u64>,
+        controller_addr: CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)> {
-        unimplemented!("elect_master not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .elect_master(
+                    controller_addr,
+                    cluster_name,
+                    broker_name,
+                    broker_id,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn create_user_with_info(
@@ -2599,10 +2636,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn export_rocksdb_config_to_json(
         &self,
-        _broker_addr: CheetahString,
-        _config_types: Vec<CheetahString>,
+        broker_addr: CheetahString,
+        config_types: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("export_rocksdb_config_to_json not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .export_rocksdb_config_to_json(broker_addr, config_types, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn search_offset(

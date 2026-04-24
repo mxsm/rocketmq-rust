@@ -72,6 +72,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::bodies::broker::GetBrokerLiteInfoResponseBody;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
@@ -96,6 +97,7 @@ use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::Se
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
+use rocketmq_remoting::protocol::header::add_broker_request_header::AddBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
@@ -103,14 +105,17 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
+use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
@@ -156,6 +161,7 @@ use rocketmq_remoting::protocol::header::query_message_request_header::QueryMess
 use rocketmq_remoting::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+use rocketmq_remoting::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
 use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 
@@ -3303,6 +3309,92 @@ impl MQClientAPIImpl {
         }
     }
 
+    pub async fn add_broker(
+        &self,
+        addr: &CheetahString,
+        broker_config_path: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = AddBrokerRequestHeader {
+            config_path: Some(broker_config_path),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::AddBroker, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub async fn remove_broker(
+        &self,
+        addr: &CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: u64,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = RemoveBrokerRequestHeader {
+            broker_name,
+            broker_cluster_name: cluster_name,
+            broker_id,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::RemoveBroker, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub async fn export_rocksdb_config_to_json(
+        &self,
+        broker_addr: CheetahString,
+        config_types: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let mut config_type = config_types
+            .into_iter()
+            .map(|config_type| config_type.as_str().trim().to_string())
+            .filter(|config_type| !config_type.is_empty())
+            .collect::<Vec<_>>()
+            .join(";");
+        if !config_type.is_empty() {
+            config_type.push(';');
+        }
+
+        let request_header = ExportRocksdbConfigToJsonRequestHeader {
+            config_type: CheetahString::from(config_type),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::ExportRocksdbConfigToJson, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
     pub(crate) async fn get_broker_config(
         &self,
         addr: &CheetahString,
@@ -3591,6 +3683,58 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
+    }
+
+    pub async fn elect_master(
+        &self,
+        controller_addr: CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: Option<u64>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)> {
+        let controller_meta_data = self.get_controller_metadata(controller_addr, timeout_millis).await?;
+        let leader_address = controller_meta_data
+            .controller_leader_address
+            .ok_or_else(|| mq_client_err!("Controller leader address is not available".to_string()))?;
+        let designate_elect = broker_id.is_some();
+        let broker_id = match broker_id {
+            Some(broker_id) => i64::try_from(broker_id)
+                .map_err(|error| mq_client_err!(format!("brokerId is out of range for i64: {error}")))?,
+            None => -1,
+        };
+        let request_header = ElectMasterRequestHeader::new(
+            cluster_name,
+            broker_name,
+            broker_id,
+            designate_elect,
+            rocketmq_common::TimeUtils::current_millis(),
+        );
+        let request = RemotingCommand::create_request_command(RequestCode::ControllerElectMaster, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&leader_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let response_header = response
+                    .decode_command_custom_header_fast::<ElectMasterResponseHeader>()
+                    .map_err(|error| mq_client_err!(format!("Could not decode ElectMasterResponseHeader: {error}")))?;
+                let broker_member_group = response
+                    .body()
+                    .ok_or_else(|| mq_client_err!("elect_master response body is empty".to_string()))
+                    .and_then(|body| {
+                        serde_json::from_slice::<BrokerMemberGroup>(body)
+                            .map_err(|error| mq_client_err!(format!("decode BrokerMemberGroup failed: {error}")))
+                    })?;
+                Ok((response_header, broker_member_group))
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
     }
 
     pub async fn clean_controller_broker_data(

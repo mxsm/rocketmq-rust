@@ -18,6 +18,8 @@ use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
 use rocketmq_admin_core::core::export_data::ExportMetricsTotals;
 use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
 use rocketmq_admin_core::core::export_data::ExportPopRecordTarget;
+use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcRequest;
+use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcTarget;
 use rocketmq_admin_core::core::export_data::ExportService;
 use rocketmq_remoting::protocol::body::broker_stats_item::BrokerStatsItem;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -278,6 +280,49 @@ fn export_metadata_in_rocksdb_request_recognizes_consumer_offsets() {
         ExportMetadataInRocksDbConfigType::ConsumerOffsets.table_key(),
         "offsetTable"
     );
+}
+
+#[test]
+fn export_rocksdb_config_rpc_request_trims_target_and_config_types() {
+    let request = ExportRocksDbConfigRpcRequest::try_new(
+        Some(" DefaultCluster ".to_string()),
+        None,
+        " topics;consumerOffsets; ",
+        Some(5000),
+    )
+    .unwrap()
+    .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()));
+
+    assert_eq!(
+        request.target(),
+        &ExportRocksDbConfigRpcTarget::Cluster("DefaultCluster".into())
+    );
+    assert_eq!(
+        request.config_types(),
+        &[
+            ExportMetadataInRocksDbConfigType::Topics,
+            ExportMetadataInRocksDbConfigType::ConsumerOffsets
+        ]
+    );
+    assert_eq!(
+        request.config_type_names(),
+        vec![CheetahString::from("topics"), CheetahString::from("consumerOffsets")]
+    );
+    assert_eq!(request.timeout_millis(), 5000);
+    assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+}
+
+#[test]
+fn export_rocksdb_config_rpc_request_rejects_invalid_target_or_config_type() {
+    assert!(ExportRocksDbConfigRpcRequest::try_new(None, None, "topics", None).is_err());
+    assert!(ExportRocksDbConfigRpcRequest::try_new(
+        Some("DefaultCluster".to_string()),
+        Some("127.0.0.1:10911".to_string()),
+        "topics",
+        None
+    )
+    .is_err());
+    assert!(ExportRocksDbConfigRpcRequest::try_new(None, Some("127.0.0.1:10911".to_string()), "bad", None).is_err());
 }
 
 #[test]

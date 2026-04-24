@@ -386,6 +386,14 @@ impl ExportMetadataInRocksDbConfigType {
             Self::ConsumerOffsets => "offsetTable",
         }
     }
+
+    pub fn type_name(self) -> &'static str {
+        match self {
+            Self::Topics => TOPICS_JSON_CONFIG,
+            Self::SubscriptionGroups => SUBSCRIPTION_GROUP_JSON_CONFIG,
+            Self::ConsumerOffsets => CONSUMER_OFFSETS_JSON_CONFIG,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,6 +450,108 @@ pub enum ExportMetadataInRocksDbResult {
         json_enable: bool,
         entries: Vec<ExportMetadataInRocksDbEntry>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportRocksDbConfigRpcTarget {
+    Broker(CheetahString),
+    Cluster(CheetahString),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRocksDbConfigRpcRequest {
+    target: ExportRocksDbConfigRpcTarget,
+    config_types: Vec<ExportMetadataInRocksDbConfigType>,
+    timeout_millis: u64,
+    namesrv_addr: Option<String>,
+}
+
+impl ExportRocksDbConfigRpcRequest {
+    pub fn try_new(
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        config_types: impl Into<String>,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<Self> {
+        let cluster_name = trim_optional_string(cluster_name);
+        let broker_addr = trim_optional_string(broker_addr);
+        let target = match (cluster_name, broker_addr) {
+            (Some(cluster_name), None) => ExportRocksDbConfigRpcTarget::Cluster(CheetahString::from(cluster_name)),
+            (None, Some(broker_addr)) => ExportRocksDbConfigRpcTarget::Broker(CheetahString::from(broker_addr)),
+            (None, None) => {
+                return Err(ToolsError::validation_error(
+                    "target",
+                    "either brokerAddr or clusterName must be provided",
+                )
+                .into());
+            }
+            (Some(_), Some(_)) => {
+                return Err(ToolsError::validation_error(
+                    "target",
+                    "brokerAddr and clusterName cannot be provided together",
+                )
+                .into());
+            }
+        };
+        let config_types = parse_rocksdb_config_types(config_types.into())?;
+
+        Ok(Self {
+            target,
+            config_types,
+            timeout_millis: timeout_millis.unwrap_or(30_000),
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn target(&self) -> &ExportRocksDbConfigRpcTarget {
+        &self.target
+    }
+
+    pub fn config_types(&self) -> &[ExportMetadataInRocksDbConfigType] {
+        &self.config_types
+    }
+
+    pub fn config_type_names(&self) -> Vec<CheetahString> {
+        self.config_types
+            .iter()
+            .map(|config_type| CheetahString::from(config_type.type_name()))
+            .collect()
+    }
+
+    pub fn timeout_millis(&self) -> u64 {
+        self.timeout_millis
+    }
+
+    pub fn namesrv_addr(&self) -> Option<&str> {
+        self.namesrv_addr.as_deref()
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = AdminBuilder::new().timeout_millis(self.timeout_millis);
+        match self.namesrv_addr() {
+            Some(addr) => builder.namesrv_addr(addr),
+            None => builder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRocksDbConfigRpcTargetResult {
+    pub broker_name: String,
+    pub broker_addr: String,
+    pub config_types: Vec<ExportMetadataInRocksDbConfigType>,
+    pub exported: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRocksDbConfigRpcResult {
+    pub targets: Vec<ExportRocksDbConfigRpcTargetResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -943,6 +1053,58 @@ impl ExportService {
         }
     }
 
+    pub async fn export_rocksdb_config_rpc_by_request_with_rpc_hook(
+        request: ExportRocksDbConfigRpcRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::export_rocksdb_config_rpc_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn export_rocksdb_config_rpc_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &ExportRocksDbConfigRpcRequest,
+    ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
+        let targets = match request.target() {
+            ExportRocksDbConfigRpcTarget::Broker(broker_addr) => {
+                vec![Self::resolve_export_rocksdb_rpc_broker_target(admin, broker_addr).await]
+            }
+            ExportRocksDbConfigRpcTarget::Cluster(cluster_name) => {
+                let cluster_info = admin.examine_broker_cluster_info().await?;
+                resolve_export_rocksdb_rpc_targets_from_cluster_info(&cluster_info, cluster_name.as_str())
+            }
+        };
+        let config_type_names = request.config_type_names();
+
+        let mut results = Vec::with_capacity(targets.len());
+        for target in targets {
+            let (exported, error) = match admin
+                .export_rocksdb_config_to_json(
+                    CheetahString::from(target.broker_addr.as_str()),
+                    config_type_names.clone(),
+                )
+                .await
+            {
+                Ok(()) => (true, None),
+                Err(error) => (false, Some(error.to_string())),
+            };
+
+            results.push(ExportRocksDbConfigRpcTargetResult {
+                broker_name: target.broker_name,
+                broker_addr: target.broker_addr,
+                config_types: request.config_types().to_vec(),
+                exported,
+                error,
+            });
+        }
+
+        Ok(ExportRocksDbConfigRpcResult { targets: results })
+    }
+
     pub async fn export_pop_records_by_request_with_rpc_hook(
         request: ExportPopRecordRequest,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -1080,10 +1242,37 @@ impl ExportService {
             broker_addr: broker_addr.to_string(),
         }
     }
+
+    async fn resolve_export_rocksdb_rpc_broker_target(
+        admin: &DefaultMQAdminExt,
+        broker_addr: &CheetahString,
+    ) -> ExportRocksDbConfigRpcBrokerTarget {
+        let broker_name = admin
+            .get_broker_config(broker_addr.clone())
+            .await
+            .ok()
+            .and_then(|properties| {
+                properties
+                    .get(&CheetahString::from_static_str("brokerName"))
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_default();
+
+        ExportRocksDbConfigRpcBrokerTarget {
+            broker_name,
+            broker_addr: broker_addr.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExportPopRecordBrokerTarget {
+    broker_name: String,
+    broker_addr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExportRocksDbConfigRpcBrokerTarget {
     broker_name: String,
     broker_addr: String,
 }
@@ -1123,6 +1312,64 @@ fn resolve_export_pop_record_targets_from_cluster_info(
     });
     targets.dedup();
     targets
+}
+
+fn resolve_export_rocksdb_rpc_targets_from_cluster_info(
+    cluster_info: &ClusterInfo,
+    cluster_name: &str,
+) -> Vec<ExportRocksDbConfigRpcBrokerTarget> {
+    let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
+        return Vec::new();
+    };
+    let Some(broker_name_set) = cluster_addr_table.get(cluster_name) else {
+        return Vec::new();
+    };
+    let Some(broker_addr_table) = cluster_info.broker_addr_table.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut targets = Vec::new();
+    for broker_name in broker_name_set {
+        let Some(broker_data) = broker_addr_table.get(broker_name) else {
+            continue;
+        };
+        let Some(master_addr) = broker_data.broker_addrs().get(&0) else {
+            continue;
+        };
+        targets.push(ExportRocksDbConfigRpcBrokerTarget {
+            broker_name: broker_name.to_string(),
+            broker_addr: master_addr.to_string(),
+        });
+    }
+
+    targets.sort_by(|left, right| {
+        left.broker_name
+            .cmp(&right.broker_name)
+            .then_with(|| left.broker_addr.cmp(&right.broker_addr))
+    });
+    targets.dedup();
+    targets
+}
+
+fn parse_rocksdb_config_types(
+    config_types: impl Into<String>,
+) -> RocketMQResult<Vec<ExportMetadataInRocksDbConfigType>> {
+    let config_types = config_types.into();
+    let config_types = config_types
+        .split(';')
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            ExportMetadataInRocksDbConfigType::from_config_type(value.trim()).ok_or_else(|| {
+                ToolsError::validation_error("configType", format!("unknown RocksDB config type: {value}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if config_types.is_empty() {
+        return Err(ToolsError::validation_error("configType", "configType must not be empty").into());
+    }
+
+    Ok(config_types)
 }
 
 fn resolve_export_metrics_broker_names(

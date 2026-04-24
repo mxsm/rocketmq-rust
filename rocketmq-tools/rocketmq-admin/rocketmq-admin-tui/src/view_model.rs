@@ -18,6 +18,7 @@ use rocketmq_admin_core::core::consumer::ConsumerProgressResult;
 use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
 use rocketmq_admin_core::core::consumer::MonitoringEvent;
 use rocketmq_admin_core::core::consumer::MonitoringResult;
+use rocketmq_admin_core::core::controller::ControllerElectMasterResult;
 use rocketmq_admin_core::core::export_data::ExportConfigsResult;
 use rocketmq_admin_core::core::export_data::ExportFileWriteResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
@@ -26,6 +27,7 @@ use rocketmq_admin_core::core::export_data::ExportMetadataResult;
 use rocketmq_admin_core::core::export_data::ExportMetadataScope;
 use rocketmq_admin_core::core::export_data::ExportMetricsResult;
 use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
+use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
@@ -499,6 +501,55 @@ impl CommandResultViewModel {
         }));
 
         Self::table(title, &["Cluster", "Broker", "RT", "Success", "Failed"], rows)
+    }
+
+    pub fn controller_elect_master(title: impl Into<String>, result: &ControllerElectMasterResult) -> Self {
+        let header = &result.response_header;
+        let group = &result.broker_member_group;
+        let mut rows = vec![
+            vec![
+                "cluster".to_string(),
+                String::new(),
+                String::new(),
+                group.cluster.to_string(),
+            ],
+            vec![
+                "broker-name".to_string(),
+                String::new(),
+                String::new(),
+                group.broker_name.to_string(),
+            ],
+            vec![
+                "master".to_string(),
+                optional_text(&header.master_broker_id),
+                optional_text(&header.master_address),
+                String::new(),
+            ],
+            vec![
+                "master-epoch".to_string(),
+                String::new(),
+                String::new(),
+                optional_text(&header.master_epoch),
+            ],
+            vec![
+                "sync-state-set-epoch".to_string(),
+                String::new(),
+                String::new(),
+                optional_text(&header.sync_state_set_epoch),
+            ],
+        ];
+        let mut broker_addrs = group.broker_addrs.iter().collect::<Vec<_>>();
+        broker_addrs.sort_by_key(|(broker_id, _)| *broker_id);
+        rows.extend(broker_addrs.into_iter().map(|(broker_id, broker_addr)| {
+            vec![
+                "broker".to_string(),
+                broker_id.to_string(),
+                broker_addr.to_string(),
+                String::new(),
+            ]
+        }));
+
+        Self::table(title, &["Kind", "Broker ID", "Address", "Value"], rows)
     }
 
     pub fn broker_consume_stats(title: impl Into<String>, result: &BrokerConsumeStatsResult) -> Self {
@@ -1096,6 +1147,38 @@ impl CommandResultViewModel {
                     .collect(),
             ),
         }
+    }
+
+    pub fn export_rocksdb_config_rpc(title: impl Into<String>, result: &ExportRocksDbConfigRpcResult) -> Self {
+        let targets = result
+            .targets
+            .iter()
+            .filter(|target| target.exported)
+            .map(|target| {
+                format!(
+                    "{} {} [{}]",
+                    target.broker_name,
+                    target.broker_addr,
+                    target
+                        .config_types
+                        .iter()
+                        .map(|config_type| export_rocksdb_config_type_name(*config_type))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            })
+            .collect::<Vec<_>>();
+        let errors = result
+            .targets
+            .iter()
+            .filter_map(|target| {
+                target
+                    .error
+                    .as_ref()
+                    .map(|error| format!("{} {}: {error}", target.broker_name, target.broker_addr))
+            })
+            .collect::<Vec<_>>();
+        Self::operation_summary(title, targets.len(), errors.len(), targets, errors)
     }
 
     pub fn export_pop_records(title: impl Into<String>, result: &ExportPopRecordResult) -> Self {
@@ -1779,6 +1862,7 @@ mod tests {
     use rocketmq_admin_core::core::consumer::ConsumerRunningInfoResult;
     use rocketmq_admin_core::core::consumer::MonitoringEvent;
     use rocketmq_admin_core::core::consumer::MonitoringResult;
+    use rocketmq_admin_core::core::controller::ControllerElectMasterResult;
     use rocketmq_admin_core::core::export_data::ExportConfigsResult;
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbConfigType;
     use rocketmq_admin_core::core::export_data::ExportMetadataInRocksDbEntry;
@@ -1795,6 +1879,8 @@ mod tests {
     use rocketmq_admin_core::core::export_data::ExportMetricsTps;
     use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
     use rocketmq_admin_core::core::export_data::ExportPopRecordTargetResult;
+    use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcResult;
+    use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcTargetResult;
     use rocketmq_admin_core::core::message::DecodeMessageIdEntry;
     use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
     use rocketmq_admin_core::core::message::DecodeMessageIdResult;
@@ -1825,6 +1911,7 @@ mod tests {
     use rocketmq_common::common::message::message_single::Message;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
     use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
     use rocketmq_remoting::protocol::body::connection::Connection;
     use rocketmq_remoting::protocol::body::consume_queue_data::ConsumeQueueData;
@@ -1836,6 +1923,7 @@ mod tests {
     use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
     use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
     use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+    use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -2006,6 +2094,29 @@ mod tests {
             &["Cluster", "Broker", "RT", "Success", "Failed"],
             &["DefaultCluster", "broker-a", "3.25", "4", "1"],
         );
+
+        let elect_master = CommandResultViewModel::controller_elect_master(
+            "Elect Master",
+            &ControllerElectMasterResult {
+                response_header: ElectMasterResponseHeader {
+                    master_broker_id: Some(1),
+                    master_address: Some("127.0.0.1:10912".into()),
+                    master_epoch: Some(3),
+                    sync_state_set_epoch: Some(4),
+                },
+                broker_member_group: BrokerMemberGroup {
+                    cluster: "DefaultCluster".into(),
+                    broker_name: "broker-a".into(),
+                    broker_addrs: HashMap::from([(1, "127.0.0.1:10912".into()), (0, "127.0.0.1:10911".into())]),
+                },
+            },
+        );
+        assert_table(
+            &elect_master,
+            &["Kind", "Broker ID", "Address", "Value"],
+            &["cluster", "", "", "DefaultCluster"],
+        );
+        assert!(elect_master.text_body().contains("broker | 0 | 127.0.0.1:10911"));
 
         let consume_stats = CommandResultViewModel::broker_consume_stats(
             "Broker Consume Stats",
@@ -2846,6 +2957,35 @@ mod tests {
             &consumer_offsets,
             &["Config Type", "Format", "Key", "Value"],
             &["ConsumerOffsets", "json", "GroupA@TopicA", "{\"0\":12}"],
+        );
+
+        let rocksdb_rpc = CommandResultViewModel::export_rocksdb_config_rpc(
+            "Export RocksDB Config RPC",
+            &ExportRocksDbConfigRpcResult {
+                targets: vec![
+                    ExportRocksDbConfigRpcTargetResult {
+                        broker_name: "broker-a".to_string(),
+                        broker_addr: "127.0.0.1:10911".to_string(),
+                        config_types: vec![ExportMetadataInRocksDbConfigType::Topics],
+                        exported: true,
+                        error: None,
+                    },
+                    ExportRocksDbConfigRpcTargetResult {
+                        broker_name: "broker-b".to_string(),
+                        broker_addr: "127.0.0.1:10912".to_string(),
+                        config_types: vec![ExportMetadataInRocksDbConfigType::ConsumerOffsets],
+                        exported: false,
+                        error: Some("timeout".to_string()),
+                    },
+                ],
+            },
+        );
+        assert_summary(
+            &rocksdb_rpc,
+            1,
+            1,
+            &["broker-a 127.0.0.1:10911 [Topics]"],
+            &["broker-b 127.0.0.1:10912: timeout"],
         );
 
         let pop_records = CommandResultViewModel::export_pop_records(

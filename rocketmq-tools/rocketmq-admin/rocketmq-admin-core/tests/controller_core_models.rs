@@ -1,5 +1,6 @@
 use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
 use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::core::controller::ControllerElectMasterRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
 
@@ -63,6 +64,23 @@ fn controller_config_update_request_rejects_blank_fields() {
     assert!(ControllerConfigUpdateRequest::try_new(" ", "key", "value").is_err());
     assert!(ControllerConfigUpdateRequest::try_new("127.0.0.1:9878", " ", "value").is_err());
     assert!(ControllerConfigUpdateRequest::try_new("127.0.0.1:9878", "key", " ").is_err());
+}
+
+#[test]
+fn controller_elect_master_request_trims_fields_and_rejects_negative_broker_id() {
+    let request =
+        ControllerElectMasterRequest::try_new(" 127.0.0.1:9878 ", " DefaultCluster ", " broker-a ", 1).unwrap();
+
+    assert_eq!(request.controller_addr().as_str(), "127.0.0.1:9878");
+    assert_eq!(request.cluster_name().as_str(), "DefaultCluster");
+    assert_eq!(request.broker_name().as_str(), "broker-a");
+    assert_eq!(request.broker_id(), 1);
+    assert_eq!(request.namesrv_addr(), None);
+
+    let request = request.with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()));
+    assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+
+    assert!(ControllerElectMasterRequest::try_new("127.0.0.1:9878", "DefaultCluster", "broker-a", -1).is_err());
 }
 
 #[test]

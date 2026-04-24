@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod ack_message_request_header;
+pub mod add_broker_request_header;
 pub mod broker;
 pub mod change_invisible_time_request_header;
 pub mod change_invisible_time_response_header;
@@ -94,6 +95,7 @@ pub mod query_topic_consume_by_who_request_header;
 pub mod query_topics_by_consumer_request_header;
 pub mod recall_message_request_header;
 pub mod recall_message_response_header;
+pub mod remove_broker_request_header;
 pub mod reply_message_request_header;
 pub mod reset_master_flush_offset_header;
 pub mod reset_offset_request_header;

@@ -85,9 +85,15 @@ use rocketmq_admin_core::core::consumer::SetConsumeModeRequest;
 use rocketmq_admin_core::core::consumer::StartMonitoringRequest;
 use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupListRequest;
 use rocketmq_admin_core::core::consumer::UpdateSubscriptionGroupRequest;
+use rocketmq_admin_core::core::container::ContainerAddBrokerRequest;
+use rocketmq_admin_core::core::container::ContainerOperationResult;
+use rocketmq_admin_core::core::container::ContainerRemoveBrokerRequest;
+use rocketmq_admin_core::core::container::ContainerService;
 use rocketmq_admin_core::core::controller::ControllerConfigQueryRequest;
 use rocketmq_admin_core::core::controller::ControllerConfigQueryResult;
 use rocketmq_admin_core::core::controller::ControllerConfigUpdateRequest;
+use rocketmq_admin_core::core::controller::ControllerElectMasterRequest;
+use rocketmq_admin_core::core::controller::ControllerElectMasterResult;
 use rocketmq_admin_core::core::controller::ControllerMetadataCleanRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryRequest;
 use rocketmq_admin_core::core::controller::ControllerMetadataQueryResult;
@@ -105,6 +111,8 @@ use rocketmq_admin_core::core::export_data::ExportMetricsRequest;
 use rocketmq_admin_core::core::export_data::ExportMetricsResult;
 use rocketmq_admin_core::core::export_data::ExportPopRecordRequest;
 use rocketmq_admin_core::core::export_data::ExportPopRecordResult;
+use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcRequest;
+use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::core::export_data::ExportService;
 use rocketmq_admin_core::core::ha::HaService;
 use rocketmq_admin_core::core::ha::HaStatusQueryRequest;
@@ -431,6 +439,19 @@ impl TuiAdminFacade {
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
+    pub fn controller_elect_master_request(
+        &self,
+        controller_address: impl Into<String>,
+        cluster_name: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_id: i64,
+    ) -> RocketMQResult<ControllerElectMasterRequest> {
+        Ok(
+            ControllerElectMasterRequest::try_new(controller_address, cluster_name, broker_name, broker_id)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
     pub fn controller_metadata_clean_request(
         &self,
         controller_address: impl Into<String>,
@@ -447,6 +468,30 @@ impl TuiAdminFacade {
             clean_living_broker,
         )?
         .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn container_add_broker_request(
+        &self,
+        broker_container_addr: impl Into<String>,
+        broker_config_path: impl Into<String>,
+    ) -> RocketMQResult<ContainerAddBrokerRequest> {
+        Ok(
+            ContainerAddBrokerRequest::try_new(broker_container_addr, broker_config_path)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn container_remove_broker_request(
+        &self,
+        broker_container_addr: impl Into<String>,
+        cluster_name: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_id: i64,
+    ) -> RocketMQResult<ContainerRemoveBrokerRequest> {
+        Ok(
+            ContainerRemoveBrokerRequest::try_new(broker_container_addr, cluster_name, broker_name, broker_id)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
     }
 
     pub fn namesrv_config_query_request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
@@ -1213,6 +1258,19 @@ impl TuiAdminFacade {
         ExportMetadataInRocksDbRequest::new(path, config_type, json_enable)
     }
 
+    pub fn export_rocksdb_config_rpc_request(
+        &self,
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        config_types: impl Into<String>,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<ExportRocksDbConfigRpcRequest> {
+        Ok(
+            ExportRocksDbConfigRpcRequest::try_new(cluster_name, broker_addr, config_types, timeout_millis)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
     pub fn export_pop_record_request(
         &self,
         cluster_name: Option<String>,
@@ -1667,6 +1725,20 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn elect_controller_master(
+        &self,
+        controller_address: impl Into<String>,
+        cluster_name: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_id: i64,
+    ) -> RocketMQResult<ControllerElectMasterResult> {
+        ControllerService::elect_master_by_request_with_rpc_hook(
+            self.controller_elect_master_request(controller_address, cluster_name, broker_name, broker_id)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn clean_controller_metadata(
         &self,
         controller_address: impl Into<String>,
@@ -1683,6 +1755,32 @@ impl TuiAdminFacade {
                 cluster_name,
                 clean_living_broker,
             )?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn add_broker_to_container(
+        &self,
+        broker_container_addr: impl Into<String>,
+        broker_config_path: impl Into<String>,
+    ) -> RocketMQResult<ContainerOperationResult> {
+        ContainerService::add_broker_by_request_with_rpc_hook(
+            self.container_add_broker_request(broker_container_addr, broker_config_path)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn remove_broker_from_container(
+        &self,
+        broker_container_addr: impl Into<String>,
+        cluster_name: impl Into<String>,
+        broker_name: impl Into<String>,
+        broker_id: i64,
+    ) -> RocketMQResult<ContainerOperationResult> {
+        ContainerService::remove_broker_by_request_with_rpc_hook(
+            self.container_remove_broker_request(broker_container_addr, cluster_name, broker_name, broker_id)?,
             None,
         )
         .await
@@ -2600,6 +2698,20 @@ impl TuiAdminFacade {
         ExportService::export_metadata_in_rocksdb_by_request(&request)
     }
 
+    pub async fn export_rocksdb_config_rpc(
+        &self,
+        cluster_name: Option<String>,
+        broker_addr: Option<String>,
+        config_types: impl Into<String>,
+        timeout_millis: Option<u64>,
+    ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
+        ExportService::export_rocksdb_config_rpc_by_request_with_rpc_hook(
+            self.export_rocksdb_config_rpc_request(cluster_name, broker_addr, config_types, timeout_millis)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn export_pop_records(
         &self,
         cluster_name: Option<String>,
@@ -3388,6 +3500,14 @@ mod tests {
         assert_eq!(controller_update.controller_servers().len(), 1);
         assert_eq!(controller_update.properties().len(), 1);
 
+        let controller_elect = facade
+            .controller_elect_master_request(" 127.0.0.1:9878 ", " DefaultCluster ", " broker-a ", 1)
+            .unwrap();
+        assert_eq!(controller_elect.controller_addr().as_str(), "127.0.0.1:9878");
+        assert_eq!(controller_elect.cluster_name().as_str(), "DefaultCluster");
+        assert_eq!(controller_elect.broker_name().as_str(), "broker-a");
+        assert_eq!(controller_elect.broker_id(), 1);
+
         let controller_clean = facade
             .controller_metadata_clean_request(
                 " 127.0.0.1:9878 ",
@@ -3466,6 +3586,19 @@ mod tests {
             .unwrap();
         assert_eq!(remap_static.topic().as_str(), "StaticTopic");
         assert!(remap_static.force_replace());
+
+        let container_add = facade
+            .container_add_broker_request(" 127.0.0.1:10911 ", " /tmp/broker.conf ")
+            .unwrap();
+        assert_eq!(container_add.broker_container_addr().as_str(), "127.0.0.1:10911");
+        assert_eq!(container_add.broker_config_path().as_str(), "/tmp/broker.conf");
+        assert_eq!(container_add.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        let container_remove = facade
+            .container_remove_broker_request(" 127.0.0.1:10911 ", " DefaultCluster ", " broker-a ", 1)
+            .unwrap();
+        assert_eq!(container_remove.broker_container_addr().as_str(), "127.0.0.1:10911");
+        assert_eq!(container_remove.broker_identity(), "DefaultCluster:broker-a:1");
     }
 
     #[test]
@@ -3522,6 +3655,8 @@ mod tests {
             Some("DefaultCluster".to_string()),
             false,
         ));
+        std::mem::drop(facade.add_broker_to_container("127.0.0.1:10911", "/tmp/broker.conf"));
+        std::mem::drop(facade.remove_broker_from_container("127.0.0.1:10911", "DefaultCluster", "broker-a", 1));
         std::mem::drop(facade.clean_expired_consume_queue(
             Some("127.0.0.1:10911".to_string()),
             None,
@@ -3618,6 +3753,18 @@ mod tests {
         assert_eq!(rocksdb.config_type(), "topics");
         assert!(rocksdb.json_enable());
 
+        let rocksdb_rpc = facade
+            .export_rocksdb_config_rpc_request(
+                Some(" DefaultCluster ".to_string()),
+                None,
+                " topics;consumerOffsets; ",
+                Some(5000),
+            )
+            .unwrap();
+        assert_eq!(rocksdb_rpc.config_types().len(), 2);
+        assert_eq!(rocksdb_rpc.timeout_millis(), 5000);
+        assert_eq!(rocksdb_rpc.namesrv_addr(), Some("127.0.0.1:9876"));
+
         let pop_record = facade
             .export_pop_record_request(None, Some(" 127.0.0.1:10911 ".to_string()), true, Some(5000))
             .unwrap();
@@ -3663,6 +3810,12 @@ mod tests {
         std::mem::drop(facade.export_configs("DefaultCluster"));
         std::mem::drop(facade.export_metrics("DefaultCluster", Some(5000)));
         std::mem::drop(facade.export_metadata(Some("DefaultCluster".to_string()), None, false, false, false));
+        std::mem::drop(facade.export_rocksdb_config_rpc(
+            Some("DefaultCluster".to_string()),
+            None,
+            "topics",
+            Some(5000),
+        ));
         std::mem::drop(facade.export_pop_records(None, Some("127.0.0.1:10911".to_string()), true, Some(5000)));
         std::mem::drop(facade.print_messages_with_progress("TopicA", "*", None, None, None, 64, |_| {}));
         std::mem::drop(facade.print_messages_by_queue_with_progress(
@@ -3792,6 +3945,7 @@ mod tests {
         ));
         std::mem::drop(facade.query_controller_config("127.0.0.1:9878"));
         std::mem::drop(facade.query_controller_metadata("127.0.0.1:9878"));
+        std::mem::drop(facade.elect_controller_master("127.0.0.1:9878", "DefaultCluster", "broker-a", 1));
         std::mem::drop(facade.query_broker_epoch(Some("broker-a".to_string()), None));
         std::mem::drop(facade.query_cold_data_flow_ctr_info(Some("127.0.0.1:10911".to_string()), None));
         std::mem::drop(facade.query_broker_lite_info(Some("127.0.0.1:10911".to_string()), None));
