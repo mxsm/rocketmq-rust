@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use ratatui::layout::Alignment;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
@@ -107,8 +109,27 @@ fn render_body(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_command_tree(frame: &mut Frame, area: Rect, state: &AppState) {
+    let visible = state.visible_tree_items();
+    let row_capacity = area.height.saturating_sub(2) as usize;
+    let viewport = tree_viewport_range(visible.len(), state.tree_cursor(), row_capacity);
+    let title = if visible.is_empty() {
+        "Command Tree".to_string()
+    } else {
+        let cursor = state.tree_cursor().min(visible.len() - 1) + 1;
+        table_title_with_scroll_hints(
+            &format!("Command Tree {cursor}/{}", visible.len()),
+            viewport.start > 0,
+            viewport.end < visible.len(),
+        )
+    };
     let mut items = Vec::new();
-    for (row_index, item) in state.visible_tree_items().into_iter().enumerate() {
+    for (row_index, item) in visible
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(viewport.start)
+        .take(viewport.end.saturating_sub(viewport.start))
+    {
         let focused = state.focus == FocusArea::CommandTree && state.tree_cursor() == row_index;
         match item {
             CommandTreeItem::Category(category) => {
@@ -148,12 +169,28 @@ fn render_command_tree(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
-    if items.is_empty() {
+    if visible.is_empty() {
         items.push(ListItem::new("No commands match the search."));
     }
 
-    let list = List::new(items).block(focused_block("Command Tree", state.focus == FocusArea::CommandTree));
+    let list = List::new(items).block(focused_block(&title, state.focus == FocusArea::CommandTree));
     frame.render_widget(list, area);
+}
+
+fn tree_viewport_range(total_len: usize, cursor: usize, row_capacity: usize) -> Range<usize> {
+    if total_len == 0 || row_capacity == 0 {
+        return 0..0;
+    }
+
+    let cursor = cursor.min(total_len - 1);
+    let row_capacity = row_capacity.min(total_len);
+    let half_window = row_capacity / 2;
+    let mut start = cursor.saturating_sub(half_window);
+    if start + row_capacity > total_len {
+        start = total_len - row_capacity;
+    }
+
+    start..start + row_capacity
 }
 
 fn render_detail(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -449,4 +486,31 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tree_viewport_range;
+
+    #[test]
+    fn command_tree_viewport_keeps_top_items_when_cursor_is_near_top() {
+        assert_eq!(tree_viewport_range(100, 2, 10), 0..10);
+    }
+
+    #[test]
+    fn command_tree_viewport_centers_middle_cursor_when_possible() {
+        assert_eq!(tree_viewport_range(100, 50, 10), 45..55);
+    }
+
+    #[test]
+    fn command_tree_viewport_keeps_bottom_items_when_cursor_is_near_bottom() {
+        assert_eq!(tree_viewport_range(100, 99, 10), 90..100);
+    }
+
+    #[test]
+    fn command_tree_viewport_handles_small_and_empty_lists() {
+        assert_eq!(tree_viewport_range(4, 99, 10), 0..4);
+        assert_eq!(tree_viewport_range(0, 0, 10), 0..0);
+        assert_eq!(tree_viewport_range(10, 5, 0), 0..0);
+    }
 }
