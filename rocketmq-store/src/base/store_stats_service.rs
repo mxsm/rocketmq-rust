@@ -24,8 +24,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use dashmap::DashMap;
 use parking_lot::Mutex;
-use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::current_millis;
@@ -82,8 +82,8 @@ pub struct StoreStatsService {
     put_message_time_buckets: Vec<AtomicU64>,
     last_put_message_time_buckets: Mutex<Vec<u64>>,
     put_message_failed_times: AtomicUsize,
-    put_message_topic_times_total: RwLock<HashMap<String, AtomicU64>>,
-    put_message_topic_size_total: RwLock<HashMap<String, AtomicU64>>,
+    put_message_topic_times_total: DashMap<String, AtomicU64>,
+    put_message_topic_size_total: DashMap<String, AtomicU64>,
     get_message_times_total_found: AtomicUsize,
     get_message_transferred_msg_count: AtomicUsize,
     get_message_times_total_miss: AtomicUsize,
@@ -112,8 +112,8 @@ impl StoreStatsService {
             put_message_time_buckets: (0..bucket_count).map(|_| AtomicU64::new(0)).collect(),
             last_put_message_time_buckets: Mutex::new(vec![0; bucket_count]),
             put_message_failed_times: AtomicUsize::new(0),
-            put_message_topic_times_total: RwLock::new(HashMap::with_capacity(128)),
-            put_message_topic_size_total: RwLock::new(HashMap::with_capacity(128)),
+            put_message_topic_times_total: DashMap::with_capacity(128),
+            put_message_topic_size_total: DashMap::with_capacity(128),
             get_message_times_total_found: AtomicUsize::new(0),
             get_message_transferred_msg_count: AtomicUsize::new(0),
             get_message_times_total_miss: AtomicUsize::new(0),
@@ -541,29 +541,24 @@ impl StoreStatsService {
     }
 
     #[inline]
-    fn add_topic_value(&self, map: &RwLock<HashMap<String, AtomicU64>>, topic: &str, delta: u64) {
+    fn add_topic_value(&self, map: &DashMap<String, AtomicU64>, topic: &str, delta: u64) {
         if delta == 0 {
             return;
         }
 
-        {
-            let values = map.read();
-            if let Some(value) = values.get(topic) {
-                value.fetch_add(delta, Ordering::Relaxed);
-                return;
-            }
+        if let Some(value) = map.get(topic) {
+            value.fetch_add(delta, Ordering::Relaxed);
+            return;
         }
 
-        let mut values = map.write();
-        values
-            .entry(topic.to_string())
+        map.entry(topic.to_string())
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(delta, Ordering::Relaxed);
     }
 
     #[inline]
-    fn sum_topic_values(map: &RwLock<HashMap<String, AtomicU64>>) -> u64 {
-        map.read().values().map(|value| value.load(Ordering::Relaxed)).sum()
+    fn sum_topic_values(map: &DashMap<String, AtomicU64>) -> u64 {
+        map.iter().map(|entry| entry.value().load(Ordering::Relaxed)).sum()
     }
 
     fn tps_from_list(&self, list: &Mutex<VecDeque<CallSnapshot>>, time: usize) -> String {
