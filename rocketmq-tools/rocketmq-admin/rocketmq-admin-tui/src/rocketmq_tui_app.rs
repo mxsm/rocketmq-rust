@@ -211,12 +211,31 @@ impl RocketmqTuiApp {
                 }
                 None => {}
             },
-            FocusArea::Args | FocusArea::Search | FocusArea::Namesrv => self.apply_action(Action::ExecuteRequested),
+            FocusArea::Namesrv => self.submit_namesrv_input(),
+            FocusArea::Search => self.submit_search_input(),
+            FocusArea::Args => self.apply_action(Action::ExecuteRequested),
             FocusArea::Result => {
                 self.state.result_scroll = 0;
                 self.state.result_horizontal_scroll = 0;
             }
         }
+    }
+
+    fn submit_namesrv_input(&mut self) {
+        let namesrv_addr = self.state.namesrv_addr.trim().to_string();
+        self.apply_action(Action::NamesrvChanged(namesrv_addr.clone()));
+        self.state.last_error = None;
+        self.state.progress_message = Some(if namesrv_addr.is_empty() {
+            "NameServer address cleared".to_string()
+        } else {
+            format!("NameServer address set to {namesrv_addr}")
+        });
+        self.state.focus = FocusArea::CommandTree;
+    }
+
+    fn submit_search_input(&mut self) {
+        self.state.last_error = None;
+        self.state.focus = FocusArea::CommandTree;
     }
 
     fn move_down(&mut self) {
@@ -405,8 +424,7 @@ impl RocketmqTuiApp {
                         execution_id,
                         command_id,
                     };
-                    self.state.progress_message =
-                        Some("cancelled locally; running task aborted and late result will be ignored".to_string());
+                    self.state.progress_message = Some("cancelled locally; late result will be ignored".to_string());
                     self.state.confirm_input.clear();
                 }
             }
@@ -493,12 +511,22 @@ impl RocketmqTuiApp {
         let facade = self.admin_facade.clone();
         let tx = self.action_tx.clone();
         let progress_tx = tx.clone();
-        let handle = tokio::task::spawn_local(async move {
-            let action = match execute_command_with_progress(&facade, &command, &form, |message| {
-                let _ = progress_tx.send(Action::ProgressUpdated { execution_id, message });
-            })
-            .await
-            {
+        let handle = tokio::task::spawn_blocking(move || {
+            let result = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| anyhow::anyhow!("failed to create command runtime: {error}"))
+                .and_then(|runtime| {
+                    runtime.block_on(execute_command_with_progress(
+                        &facade,
+                        &command,
+                        &form,
+                        move |message| {
+                            let _ = progress_tx.send(Action::ProgressUpdated { execution_id, message });
+                        },
+                    ))
+                });
+            let action = match result {
                 Ok(result) => Action::CommandSucceeded {
                     execution_id,
                     command_id,
@@ -581,6 +609,8 @@ mod tests {
     use std::task::Context;
     use std::task::Poll;
 
+    use ratatui::crossterm::event::KeyModifiers;
+
     use super::*;
     use crate::admin_facade::TuiAdminFacade;
 
@@ -603,6 +633,36 @@ mod tests {
     }
 
     #[test]
+    fn enter_in_namesrv_input_commits_address_without_executing_command() {
+        let mut app = RocketmqTuiApp::new();
+
+        app.apply_action(Action::FocusNamesrv);
+        app.apply_action(Action::NamesrvChanged(" 127.0.0.1:9876 ".to_string()));
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.admin_facade().namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(app.state.namesrv_addr, "127.0.0.1:9876");
+        assert_eq!(app.state.focus, FocusArea::CommandTree);
+        assert_eq!(app.state.execution, CommandExecutionState::Idle);
+        assert!(app.running_task.is_none());
+        assert!(app.state.last_error.is_none());
+    }
+
+    #[test]
+    fn enter_in_search_input_returns_to_command_tree_without_executing_command() {
+        let mut app = RocketmqTuiApp::new();
+
+        app.apply_action(Action::FocusSearch);
+        app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.state.focus, FocusArea::CommandTree);
+        assert_eq!(app.state.execution, CommandExecutionState::Idle);
+        assert!(app.running_task.is_none());
+        assert!(app.state.last_error.is_none());
+    }
+
+    #[test]
     fn execution_requires_valid_args() {
         let mut app = RocketmqTuiApp::new();
         app.apply_action(Action::SearchChanged("topic.cluster".to_string()));
@@ -611,6 +671,27 @@ mod tests {
 
         assert!(app.state.last_error.is_some());
         assert_eq!(app.state.focus, FocusArea::Args);
+    }
+
+    #[test]
+    fn starting_command_execution_builds_background_task_without_stack_overflow() {
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(&tokio::runtime::Builder::new_current_thread().build().unwrap(), async {
+            let mut app = RocketmqTuiApp::new();
+            app.apply_action(Action::SearchChanged("message.decode_id".to_string()));
+            app.apply_action(Action::CommandSelected("message.decode_id".to_string()));
+            app.state.reset_form_for_selected_command();
+            app.state
+                .form
+                .set_value("message_ids", "7F0000010007D8260BF075769D36C348".to_string());
+
+            app.apply_action(Action::ExecuteRequested);
+
+            assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
+            assert!(app.running_task.is_some());
+            app.abort_running_task();
+        });
     }
 
     #[test]

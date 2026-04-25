@@ -327,8 +327,8 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(vec![
             Span::styled("Keys: ", Style::default().fg(Color::Cyan)),
             Span::raw(
-                "Tab focus | n namesrv | / search | Enter run/toggle | Left/Right fold | Space bool | arrows/jk move \
-                 | Ctrl+R rerun | Ctrl+L clear | ? help | q quit",
+                "Tab focus | n namesrv | / search | Enter submit/run/toggle | Left/Right fold | Space bool | \
+                 arrows/jk move | Ctrl+R rerun | Ctrl+L clear | ? help | q quit",
             ),
         ]),
         Line::from(vec![
@@ -370,7 +370,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
         Line::raw("j/k or arrows        Move command, arg, or result viewport"),
         Line::raw("Left/Right           Collapse or expand command groups; cycle enum arg; scroll result"),
         Line::raw("Space                Toggle bool arg"),
-        Line::raw("Enter                Toggle group, select command, execute, or submit confirmation"),
+        Line::raw("Enter                Submit header input, toggle group, select command, execute, or confirm"),
         Line::raw("Ctrl+R               Re-run selected command"),
         Line::raw("Ctrl+L               Clear result"),
         Line::raw("Esc                  Close modal, cancel local wait, or quit"),
