@@ -683,6 +683,7 @@ mod call_snapshot_tests {
     use std::thread;
 
     use super::*;
+    use tokio::task;
 
     #[test]
     fn calculates_tps_for_non_zero_duration() {
@@ -786,5 +787,115 @@ mod call_snapshot_tests {
 
         assert_eq!(stats.get_message_entire_time_max.load(Ordering::Relaxed), 10);
         assert_eq!(stats.dispatch_max_buffer.load(Ordering::Relaxed), 100);
+    }
+
+    #[test]
+    fn sampling_keeps_only_java_compatible_ten_minute_window() {
+        let stats = StoreStatsService::new(None);
+
+        for index in 0..(MAX_SNAPSHOT_RECORDS + 10) {
+            stats.add_single_put_message_topic_times_total("topic-a", 1);
+            stats.get_message_times_total_found().store(index, Ordering::Relaxed);
+            stats.get_message_times_total_miss().store(index * 2, Ordering::Relaxed);
+            stats
+                .get_message_transferred_msg_count()
+                .store(index * 3, Ordering::Relaxed);
+            stats.sampling();
+        }
+
+        assert_eq!(stats.put_times_list.lock().len(), MAX_SNAPSHOT_RECORDS);
+        assert_eq!(stats.get_times_found_list.lock().len(), MAX_SNAPSHOT_RECORDS);
+        assert_eq!(stats.get_times_miss_list.lock().len(), MAX_SNAPSHOT_RECORDS);
+        assert_eq!(stats.transferred_msg_count_list.lock().len(), MAX_SNAPSHOT_RECORDS);
+        assert_eq!(stats.put_times_list.lock().front().unwrap().call_times_total, 11);
+    }
+
+    #[test]
+    fn runtime_info_reports_java_compatible_fields_and_values() {
+        let stats = StoreStatsService::new(None);
+        stats.add_single_put_message_topic_times_total("topic-a", 4);
+        stats.add_single_put_message_topic_size_total("topic-a", 100);
+        stats.get_put_message_failed_times().store(2, Ordering::Relaxed);
+        stats.set_put_message_entire_time_max(50);
+        stats.set_get_message_entire_time_max(9);
+        stats.set_dispatch_max_buffer(256);
+        stats.reset_put_message_distribute_time();
+        stats.reset_put_message_time_buckets();
+
+        let runtime_info = stats.get_runtime_info();
+
+        for key in [
+            "bootTimestamp",
+            "runtime",
+            "putMessageEntireTimeMax",
+            "putMessageTimesTotal",
+            "putMessageFailedTimes",
+            "putMessageSizeTotal",
+            "putMessageDistributeTime",
+            "putMessageAverageSize",
+            "dispatchMaxBuffer",
+            "getMessageEntireTimeMax",
+            "putTps",
+            "getFoundTps",
+            "getMissTps",
+            "getTotalTps",
+            "getTransferredTps",
+            "putLatency99",
+            "putLatency999",
+        ] {
+            assert!(runtime_info.contains_key(key), "missing runtime info key {key}");
+        }
+
+        assert_eq!(runtime_info["putMessageTimesTotal"], "4");
+        assert_eq!(runtime_info["putMessageFailedTimes"], "2");
+        assert_eq!(runtime_info["putMessageSizeTotal"], "100");
+        assert_eq!(runtime_info["putMessageAverageSize"], "25");
+        assert_eq!(runtime_info["putMessageEntireTimeMax"], "50");
+        assert_eq!(runtime_info["getMessageEntireTimeMax"], "9");
+        assert_eq!(runtime_info["dispatchMaxBuffer"], "256");
+        assert!(runtime_info["runtime"].starts_with("[ 0 days, 0 hours"));
+        assert!(runtime_info["putMessageDistributeTime"].contains("[50~100ms]:1"));
+    }
+
+    #[test]
+    fn print_tps_rotates_latency_snapshots_for_percentile_queries() {
+        let stats = StoreStatsService::new(None);
+        for value in 1..=100 {
+            stats.set_put_message_entire_time_max(value);
+        }
+        stats.last_print_timestamp.store(0, Ordering::Release);
+
+        stats.print_tps();
+
+        assert!(stats.find_put_message_entire_time_px(0.99) >= 90.0);
+        assert!(stats.put_message_distribute_time_to_string().contains("[10~50ms]:40"));
+        assert_eq!(
+            stats
+                .put_message_time_buckets
+                .iter()
+                .map(|bucket| bucket.load(Ordering::Relaxed))
+                .sum::<u64>(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn start_shutdown_are_idempotent_and_restartable() {
+        let stats = Arc::new(StoreStatsService::new(None));
+
+        stats.start();
+        stats.start();
+        assert!(stats.worker_handle.lock().is_some());
+        assert!(!stats.stopped.load(Ordering::Acquire));
+
+        task::yield_now().await;
+        stats.shutdown();
+        stats.shutdown();
+        assert!(stats.worker_handle.lock().is_none());
+        assert!(stats.stopped.load(Ordering::Acquire));
+
+        stats.start();
+        assert!(stats.worker_handle.lock().is_some());
+        stats.shutdown();
     }
 }

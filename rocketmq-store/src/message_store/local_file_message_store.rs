@@ -3312,6 +3312,7 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
 
+    use bytes::BufMut;
     use bytes::Bytes;
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
@@ -3319,11 +3320,13 @@ mod tests {
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::message::message_batch::MessageExtBatch;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::topic::TopicValidator;
+    use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
@@ -3382,6 +3385,39 @@ mod tests {
         let msg_size = bytes.get_i32();
         let tags_code = bytes.get_i64();
         (commit_log_offset, msg_size, tags_code)
+    }
+
+    fn build_test_message(topic: &CheetahString, body: Bytes) -> MessageExtBrokerInner {
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(topic.clone());
+        msg.message_ext_inner.set_queue_id(0);
+        msg.set_body(body);
+        msg
+    }
+
+    fn build_test_batch(topic: &CheetahString, bodies: &[Bytes]) -> MessageExtBatch {
+        let mut batch_body = BytesMut::new();
+        for body in bodies {
+            let record_size = 4 + 4 + 4 + 4 + 4 + body.len() + 2;
+            batch_body.put_i32(record_size as i32);
+            batch_body.put_i32(0);
+            batch_body.put_i32(crc32(body.as_ref()) as i32);
+            batch_body.put_i32(0);
+            batch_body.put_i32(body.len() as i32);
+            batch_body.put_slice(body.as_ref());
+            batch_body.put_i16(0);
+        }
+
+        let mut inner = MessageExtBrokerInner::default();
+        inner.set_topic(topic.clone());
+        inner.message_ext_inner.set_queue_id(0);
+        inner.set_body(batch_body.freeze());
+
+        MessageExtBatch {
+            message_ext_broker_inner: inner,
+            is_inner_batch: false,
+            encoded_buff: None,
+        }
     }
 
     #[test]
@@ -3985,6 +4021,89 @@ mod tests {
         assert_eq!(result.min_offset(), 0);
         assert_eq!(result.max_offset(), 2);
         assert_eq!(result.message_mapped_list().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn store_stats_records_single_put_append_totals() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("single-put-store-stats-topic");
+        let stats = store.get_store_stats_service();
+
+        let put_result = store
+            .put_message(build_test_message(&topic, Bytes::from_static(b"single-put-body")))
+            .await;
+
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        let append_result = put_result.append_message_result().expect("single put append result");
+        assert_eq!(append_result.msg_num, 1);
+        assert_eq!(stats.get_put_message_times_total(), append_result.msg_num as u64);
+        assert_eq!(stats.get_put_message_size_total(), append_result.wrote_bytes as u64);
+
+        let runtime_info = stats.get_runtime_info();
+        assert_eq!(runtime_info["putMessageTimesTotal"], "1");
+        assert_eq!(
+            runtime_info["putMessageSizeTotal"],
+            append_result.wrote_bytes.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn store_stats_records_batch_put_append_totals() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("batch-put-store-stats-topic");
+        let stats = store.get_store_stats_service();
+        let batch = build_test_batch(
+            &topic,
+            &[
+                Bytes::from_static(b"batch-body-1"),
+                Bytes::from_static(b"batch-body-2"),
+                Bytes::from_static(b"batch-body-3"),
+            ],
+        );
+
+        let put_result = store.put_messages(batch).await;
+
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        let append_result = put_result.append_message_result().expect("batch put append result");
+        assert_eq!(append_result.msg_num, 3);
+        assert_eq!(stats.get_put_message_times_total(), 3);
+        assert_eq!(stats.get_put_message_size_total(), append_result.wrote_bytes as u64);
+    }
+
+    #[tokio::test]
+    async fn store_stats_records_get_found_miss_and_transferred_counts() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_async_flush_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("get-store-stats-topic");
+        let group = CheetahString::from_static_str("get-store-stats-group");
+        let stats = store.get_store_stats_service();
+
+        for body in [Bytes::from_static(b"first-body"), Bytes::from_static(b"second-body")] {
+            let put_result = store.put_message(build_test_message(&topic, body)).await;
+            assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        }
+        store.reput_once().await;
+
+        let found_result = store
+            .get_message(&group, &topic, 0, 0, 32, None)
+            .await
+            .expect("found get result");
+        assert_eq!(found_result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(found_result.message_count(), 2);
+        assert_eq!(stats.get_message_times_total_found().load(Ordering::Relaxed), 1);
+        assert_eq!(stats.get_message_times_total_miss().load(Ordering::Relaxed), 0);
+        assert_eq!(stats.get_message_transferred_msg_count().load(Ordering::Relaxed), 2);
+
+        let miss_result = store
+            .get_message(&group, &topic, 0, 2, 32, None)
+            .await
+            .expect("miss get result");
+        assert_ne!(miss_result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(stats.get_message_times_total_found().load(Ordering::Relaxed), 1);
+        assert_eq!(stats.get_message_times_total_miss().load(Ordering::Relaxed), 1);
+        assert_eq!(stats.get_message_transferred_msg_count().load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
