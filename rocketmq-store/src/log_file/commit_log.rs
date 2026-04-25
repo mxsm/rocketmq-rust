@@ -634,6 +634,9 @@ impl CommitLog {
                 &msg_batch.message_ext_broker_inner,
                 put_message_context.get_batch_size() as i16,
             );
+            if let Some(append_result) = put_message_result.append_message_result() {
+                self.record_put_message_stats(msg_batch.message_ext_broker_inner.topic(), append_result);
+            }
             // Topic-queue lock released here after successful write
             drop(_topic_queue_guard);
             self.handle_disk_flush_and_ha(
@@ -816,6 +819,9 @@ impl CommitLog {
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             let message_num = get_message_num(&self.topic_config_table, &msg);
             self.increase_offset(&msg, message_num);
+            if let Some(append_result) = put_message_result.append_message_result() {
+                self.record_put_message_stats(msg.topic(), append_result);
+            }
             // Topic-queue lock released here after successful write
             drop(_topic_queue_guard);
             self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
@@ -926,6 +932,20 @@ impl CommitLog {
         }
 
         put_message_result
+    }
+
+    fn record_put_message_stats(&self, topic: &CheetahString, append_result: &AppendMessageResult) {
+        let Some(local_file_message_store) = self.local_file_message_store.as_ref() else {
+            return;
+        };
+
+        let stats = local_file_message_store.get_store_stats_service();
+        if append_result.msg_num > 0 {
+            stats.add_single_put_message_topic_times_total(topic.as_str(), append_result.msg_num as usize);
+        }
+        if append_result.wrote_bytes > 0 {
+            stats.add_single_put_message_topic_size_total(topic.as_str(), append_result.wrote_bytes as usize);
+        }
     }
 
     async fn handle_ha(&self, put_message_result: &AppendMessageResult, need_ack_nums: i32) -> PutMessageStatus {

@@ -1464,6 +1464,7 @@ impl MessageStore for LocalFileMessageStore {
                 .fetch_add(1, Ordering::Relaxed);
         }
         let elapsed_time = begin_time.elapsed().as_millis() as u64;
+        self.store_stats_service.set_get_message_entire_time_max(elapsed_time);
         if get_result.is_none() {
             get_result = Some(GetMessageResult::new_result_size(0));
         }
@@ -2905,6 +2906,7 @@ impl ReputMessageServiceInner {
                 }
             }
         }
+        self.record_dispatch_behind_bytes();
     }
 
     fn is_commit_log_available(&self) -> bool {
@@ -2916,6 +2918,15 @@ impl ReputMessageServiceInner {
             true => self.commit_log.get_max_offset(),
             false => self.commit_log.get_confirm_offset(),
         }
+    }
+
+    fn record_dispatch_behind_bytes(&self) {
+        let behind = self
+            .get_reput_end_offset()
+            .saturating_sub(self.reput_from_offset.load(Ordering::Relaxed));
+        self.message_store
+            .store_stats_service
+            .set_dispatch_max_buffer(behind.max(0) as u64);
     }
 
     pub fn reput_from_offset(&self) -> i64 {
@@ -2941,6 +2952,7 @@ impl ReputMessageServiceInner {
         }
 
         if !self.is_commit_log_available() {
+            self.record_dispatch_behind_bytes();
             return None;
         }
 
@@ -3028,6 +3040,8 @@ impl ReputMessageServiceInner {
                 break;
             }
         }
+
+        self.record_dispatch_behind_bytes();
 
         if dispatch_batch.is_empty() {
             None
