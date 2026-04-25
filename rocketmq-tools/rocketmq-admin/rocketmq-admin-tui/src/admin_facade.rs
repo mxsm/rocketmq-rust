@@ -135,11 +135,15 @@ use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::ConsumeMessagesRequest;
 use rocketmq_admin_core::core::message::DecodeMessageIdRequest;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+use rocketmq_admin_core::core::message::DirectConsumeMessageRequest;
+use rocketmq_admin_core::core::message::DirectConsumeMessageResult;
 use rocketmq_admin_core::core::message::DumpCompactionLogRequest;
 use rocketmq_admin_core::core::message::DumpCompactionLogResult;
 use rocketmq_admin_core::core::message::MessagePullEvent;
 use rocketmq_admin_core::core::message::MessageService;
 use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::MessageTrackRequest;
+use rocketmq_admin_core::core::message::MessageTrackResult;
 use rocketmq_admin_core::core::message::PrintMessagesByQueueRequest;
 use rocketmq_admin_core::core::message::PrintMessagesRequest;
 use rocketmq_admin_core::core::message::QueryMessageByIdRequest;
@@ -1194,6 +1198,33 @@ impl TuiAdminFacade {
             end_time,
         )?
         .with_optional_namesrv_addr(self.namesrv_addr.clone()))
+    }
+
+    pub fn direct_consume_message_request(
+        &self,
+        topic: impl Into<String>,
+        msg_id: impl Into<String>,
+        consumer_group: impl Into<String>,
+        client_id: impl Into<String>,
+        cluster: Option<String>,
+    ) -> RocketMQResult<DirectConsumeMessageRequest> {
+        Ok(
+            DirectConsumeMessageRequest::try_new(topic, msg_id, consumer_group, client_id, cluster)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
+    }
+
+    pub fn message_track_request(
+        &self,
+        message_ids: impl AsRef<str>,
+        topic: impl Into<String>,
+        cluster: Option<String>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<MessageTrackRequest> {
+        Ok(
+            MessageTrackRequest::try_new(split_message_ids(message_ids.as_ref()), topic, cluster, timeout_millis)?
+                .with_optional_namesrv_addr(self.namesrv_addr.clone()),
+        )
     }
 
     pub fn query_message_trace_by_id_request(
@@ -2631,6 +2662,35 @@ impl TuiAdminFacade {
         .await
     }
 
+    pub async fn direct_consume_message(
+        &self,
+        topic: impl Into<String>,
+        msg_id: impl Into<String>,
+        consumer_group: impl Into<String>,
+        client_id: impl Into<String>,
+        cluster: Option<String>,
+    ) -> RocketMQResult<DirectConsumeMessageResult> {
+        MessageService::direct_consume_message_by_request_with_rpc_hook(
+            self.direct_consume_message_request(topic, msg_id, consumer_group, client_id, cluster)?,
+            None,
+        )
+        .await
+    }
+
+    pub async fn message_track(
+        &self,
+        message_ids: impl AsRef<str>,
+        topic: impl Into<String>,
+        cluster: Option<String>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<MessageTrackResult> {
+        MessageService::message_track_by_request_with_rpc_hook(
+            self.message_track_request(message_ids, topic, cluster, timeout_millis)?,
+            None,
+        )
+        .await
+    }
+
     pub async fn query_message_trace_by_id(
         &self,
         msg_id: impl Into<String>,
@@ -3928,6 +3988,26 @@ mod tests {
                 None,
             )
             .unwrap();
+
+        facade
+            .direct_consume_message_request(
+                " TopicA ",
+                " C0A8010100002A9F0000000000000064 ",
+                " GroupA ",
+                " client-a ",
+                Some(" DefaultCluster ".to_string()),
+            )
+            .unwrap();
+
+        let track = facade
+            .message_track_request(
+                " C0A8010100002A9F0000000000000064 ",
+                " TopicA ",
+                Some(" DefaultCluster ".to_string()),
+                3000,
+            )
+            .unwrap();
+        assert_eq!(track.message_ids().len(), 1);
     }
 
     #[test]
@@ -3970,6 +4050,14 @@ mod tests {
             None,
             None,
         ));
+        std::mem::drop(facade.direct_consume_message(
+            "TopicA",
+            "C0A8010100002A9F0000000000000064",
+            "GroupA",
+            "client-a",
+            None,
+        ));
+        std::mem::drop(facade.message_track("C0A8010100002A9F0000000000000064", "TopicA", None, 3000));
         std::mem::drop(facade.query_message_by_offset("TopicA", "broker-a", 0, 0, None));
         std::mem::drop(facade.query_message_trace_by_id("C0A8010100002A9F0000000000000064", None, None, None, 32));
     }

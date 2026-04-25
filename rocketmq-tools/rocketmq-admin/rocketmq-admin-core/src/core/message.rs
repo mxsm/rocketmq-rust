@@ -32,10 +32,13 @@ use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageConst;
+#[allow(deprecated)]
+use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::MessageDecoder::decode_message_id;
 use rocketmq_common::MessageDecoder::validate_message_id;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;
@@ -167,6 +170,18 @@ fn route_topic_queues(
         }
     }
     message_queues
+}
+
+#[allow(deprecated)]
+fn message_track_rows(tracks: Vec<MessageTrack>) -> Vec<MessageTrackRow> {
+    tracks
+        .into_iter()
+        .map(|track| MessageTrackRow {
+            consumer_group: track.consumer_group,
+            track_type: track.track_type.map(|track_type| track_type.to_string()),
+            exception_desc: track.exception_desc,
+        })
+        .collect()
 }
 
 async fn resolve_message_queues(
@@ -557,6 +572,176 @@ pub enum UniqueKeyDirectStatus {
 pub enum QueryMessageByUniqueKeyResult {
     Messages(Vec<MessageExt>),
     DirectStatus(UniqueKeyDirectStatus),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectConsumeMessageRequest {
+    topic: CheetahString,
+    msg_id: CheetahString,
+    consumer_group: CheetahString,
+    client_id: CheetahString,
+    cluster: Option<CheetahString>,
+    namesrv_addr: Option<String>,
+}
+
+impl DirectConsumeMessageRequest {
+    pub fn try_new(
+        topic: impl Into<String>,
+        msg_id: impl Into<String>,
+        consumer_group: impl Into<String>,
+        client_id: impl Into<String>,
+        cluster: Option<String>,
+    ) -> RocketMQResult<Self> {
+        Ok(Self {
+            topic: trim_required_cheetah("topic", topic)?,
+            msg_id: trim_required_cheetah("msgId", msg_id)?,
+            consumer_group: trim_required_cheetah("consumerGroup", consumer_group)?,
+            client_id: trim_required_cheetah("clientId", client_id)?,
+            cluster: trim_optional_string(cluster)
+                .map(|cluster| trim_required_cheetah("cluster", cluster))
+                .transpose()?,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        builder_with_namesrv(self.namesrv_addr.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectConsumeMessageResultDetail {
+    pub order: bool,
+    pub auto_commit: bool,
+    pub consume_result: Option<String>,
+    pub remark: Option<String>,
+    pub spent_time_millis: u64,
+}
+
+impl DirectConsumeMessageResultDetail {
+    fn from_result(result: &ConsumeMessageDirectlyResult) -> Self {
+        Self {
+            order: result.order(),
+            auto_commit: result.auto_commit(),
+            consume_result: result.consume_result().map(ToString::to_string),
+            remark: result.remark().map(ToString::to_string),
+            spent_time_millis: result.spent_time_mills(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DirectConsumeMessageStatus {
+    Consumed(DirectConsumeMessageResultDetail),
+    NotPushConsumer,
+    RunningInfoFailed { error: String },
+    Failed { error: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectConsumeMessageResult {
+    pub topic: CheetahString,
+    pub msg_id: CheetahString,
+    pub consumer_group: CheetahString,
+    pub client_id: CheetahString,
+    pub status: DirectConsumeMessageStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageTrackRequest {
+    message_ids: Vec<CheetahString>,
+    topic: CheetahString,
+    cluster: Option<CheetahString>,
+    timeout_millis: u64,
+    namesrv_addr: Option<String>,
+}
+
+impl MessageTrackRequest {
+    pub fn try_new(
+        message_ids: Vec<String>,
+        topic: impl Into<String>,
+        cluster: Option<String>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<Self> {
+        if message_ids.is_empty() {
+            return Err(ToolsError::validation_error("messageId", "At least one message ID is required").into());
+        }
+
+        let mut normalized_ids = Vec::with_capacity(message_ids.len());
+        for msg_id in message_ids {
+            validate_message_id(&msg_id).map_err(RocketMQError::IllegalArgument)?;
+            normalized_ids.push(trim_required_cheetah("messageId", msg_id)?);
+        }
+
+        Ok(Self {
+            message_ids: normalized_ids,
+            topic: trim_required_cheetah("topic", topic)?,
+            cluster: trim_optional_string(cluster)
+                .map(|cluster| trim_required_cheetah("cluster", cluster))
+                .transpose()?,
+            timeout_millis,
+            namesrv_addr: None,
+        })
+    }
+
+    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
+        self.namesrv_addr = trim_optional_string(namesrv_addr);
+        self
+    }
+
+    pub fn message_ids(&self) -> &[CheetahString] {
+        &self.message_ids
+    }
+
+    pub fn admin_builder(&self) -> AdminBuilder {
+        let builder = builder_with_namesrv(self.namesrv_addr.as_deref());
+        if self.timeout_millis > 0 {
+            builder.timeout_millis(self.timeout_millis)
+        } else {
+            builder
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageTrackRow {
+    pub consumer_group: String,
+    pub track_type: Option<String>,
+    pub exception_desc: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageTrackOutcome {
+    Found {
+        broker_addr: String,
+        query_time_ms: u64,
+        tracks: Vec<MessageTrackRow>,
+    },
+    NotFound {
+        reason: String,
+        query_time_ms: u64,
+    },
+    Failed {
+        error: String,
+        query_time_ms: u64,
+    },
+    TimedOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageTrackEntry {
+    pub message_id: CheetahString,
+    pub outcome: MessageTrackOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageTrackResult {
+    pub entries: Vec<MessageTrackEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -999,7 +1184,7 @@ impl MessageService {
     ) -> RocketMQResult<QueryMessageByIdResult> {
         let mut entries = Vec::with_capacity(request.message_ids.len());
         for message_id in &request.message_ids {
-            let query_future = Self::query_single_message_by_id(admin, message_id, &request.topic);
+            let query_future = Self::query_single_message_by_id(admin, message_id, &request.topic, None);
             let outcome = match tokio::time::timeout(Duration::from_millis(request.timeout_millis), query_future).await
             {
                 Ok(outcome) => outcome,
@@ -1017,11 +1202,14 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         message_id: &CheetahString,
         topic: &CheetahString,
+        cluster: Option<&CheetahString>,
     ) -> QueryMessageByIdOutcome {
         let start_time = Instant::now();
         let query_result = admin
             .query_message(
-                CheetahString::from_static_str(DEFAULT_CLUSTER),
+                cluster
+                    .cloned()
+                    .unwrap_or_else(|| CheetahString::from_static_str(DEFAULT_CLUSTER)),
                 topic.clone(),
                 message_id.clone(),
             )
@@ -1172,6 +1360,134 @@ impl MessageService {
         }
 
         Ok(QueryMessageByUniqueKeyResult::Messages(messages))
+    }
+
+    pub async fn direct_consume_message_by_request_with_rpc_hook(
+        request: DirectConsumeMessageRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<DirectConsumeMessageResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::direct_consume_message_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn direct_consume_message_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &DirectConsumeMessageRequest,
+    ) -> RocketMQResult<DirectConsumeMessageResult> {
+        let running_info = admin
+            .get_consumer_running_info(
+                request.consumer_group.clone(),
+                request.client_id.clone(),
+                false,
+                Some(false),
+            )
+            .await;
+
+        let status = match running_info {
+            Ok(info) if info.is_push_type() => {
+                let cluster = request
+                    .cluster
+                    .clone()
+                    .unwrap_or_else(|| CheetahString::from_static_str(DEFAULT_CLUSTER));
+                match admin
+                    .consume_message_directly_ext(
+                        cluster,
+                        request.consumer_group.clone(),
+                        request.client_id.clone(),
+                        request.topic.clone(),
+                        request.msg_id.clone(),
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        DirectConsumeMessageStatus::Consumed(DirectConsumeMessageResultDetail::from_result(&result))
+                    }
+                    Err(error) => DirectConsumeMessageStatus::Failed {
+                        error: error.to_string(),
+                    },
+                }
+            }
+            Ok(_) => DirectConsumeMessageStatus::NotPushConsumer,
+            Err(error) => DirectConsumeMessageStatus::RunningInfoFailed {
+                error: error.to_string(),
+            },
+        };
+
+        Ok(DirectConsumeMessageResult {
+            topic: request.topic.clone(),
+            msg_id: request.msg_id.clone(),
+            consumer_group: request.consumer_group.clone(),
+            client_id: request.client_id.clone(),
+            status,
+        })
+    }
+
+    pub async fn message_track_by_request_with_rpc_hook(
+        request: MessageTrackRequest,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> RocketMQResult<MessageTrackResult> {
+        let mut admin = admin_builder_with_rpc_hook(request.admin_builder(), rpc_hook)
+            .build_and_start()
+            .await?;
+        let result = Self::message_track_with_admin(&admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    pub async fn message_track_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &MessageTrackRequest,
+    ) -> RocketMQResult<MessageTrackResult> {
+        let mut entries = Vec::with_capacity(request.message_ids.len());
+        for message_id in &request.message_ids {
+            let track_future = Self::track_single_message_by_id(admin, request, message_id);
+            let outcome = match tokio::time::timeout(Duration::from_millis(request.timeout_millis), track_future).await
+            {
+                Ok(outcome) => outcome,
+                Err(_) => MessageTrackOutcome::TimedOut,
+            };
+            entries.push(MessageTrackEntry {
+                message_id: message_id.clone(),
+                outcome,
+            });
+        }
+
+        Ok(MessageTrackResult { entries })
+    }
+
+    async fn track_single_message_by_id(
+        admin: &DefaultMQAdminExt,
+        request: &MessageTrackRequest,
+        message_id: &CheetahString,
+    ) -> MessageTrackOutcome {
+        match Self::query_single_message_by_id(admin, message_id, &request.topic, request.cluster.as_ref()).await {
+            QueryMessageByIdOutcome::Found {
+                message,
+                broker_addr,
+                query_time_ms,
+            } => match admin.message_track_detail((*message).clone()).await {
+                Ok(tracks) => MessageTrackOutcome::Found {
+                    broker_addr,
+                    query_time_ms,
+                    tracks: message_track_rows(tracks),
+                },
+                Err(error) => MessageTrackOutcome::Failed {
+                    error: format!("Failed to query message track for '{message_id}': {error}"),
+                    query_time_ms,
+                },
+            },
+            QueryMessageByIdOutcome::NotFound { reason, query_time_ms } => {
+                MessageTrackOutcome::NotFound { reason, query_time_ms }
+            }
+            QueryMessageByIdOutcome::Failed { error, query_time_ms } => {
+                MessageTrackOutcome::Failed { error, query_time_ms }
+            }
+            QueryMessageByIdOutcome::TimedOut => MessageTrackOutcome::TimedOut,
+        }
     }
 
     pub async fn query_message_trace_by_id_by_request_with_rpc_hook(
@@ -1768,6 +2084,63 @@ mod tests {
     fn consume_request_requires_broker_before_queue() {
         let result = ConsumeMessagesRequest::try_new("topic", None, Some(0), None, None, None, None, 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn direct_consume_request_trims_required_fields() {
+        let request = DirectConsumeMessageRequest::try_new(
+            " TopicA ",
+            " MSGID ",
+            " GroupA ",
+            " ClientA ",
+            Some(" DefaultCluster ".to_string()),
+        )
+        .unwrap()
+        .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".to_string()));
+
+        assert_eq!(request.topic.as_str(), "TopicA");
+        assert_eq!(request.msg_id.as_str(), "MSGID");
+        assert_eq!(request.consumer_group.as_str(), "GroupA");
+        assert_eq!(request.client_id.as_str(), "ClientA");
+        assert_eq!(request.cluster.as_ref().unwrap().as_str(), "DefaultCluster");
+        assert_eq!(request.namesrv_addr.as_deref(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn direct_consume_request_rejects_blank_target() {
+        let result = DirectConsumeMessageRequest::try_new("TopicA", "MSGID", " ", "ClientA", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn message_track_request_validates_message_ids_and_topic() {
+        let request = MessageTrackRequest::try_new(
+            vec![" 7F0000010007D8260BF075769D36C348 ".into()],
+            " TopicA ",
+            Some(" DefaultCluster ".into()),
+            3000,
+        )
+        .unwrap()
+        .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+
+        assert_eq!(request.message_ids(), ["7F0000010007D8260BF075769D36C348"]);
+        assert_eq!(request.topic.as_str(), "TopicA");
+        assert_eq!(request.cluster.as_ref().unwrap().as_str(), "DefaultCluster");
+        assert_eq!(request.namesrv_addr.as_deref(), Some("127.0.0.1:9876"));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn message_track_rows_convert_track_type_to_display_text() {
+        let rows = message_track_rows(vec![MessageTrack {
+            consumer_group: "GroupA".to_string(),
+            track_type: Some(rocketmq_common::common::tools::track_type::TrackType::Consumed),
+            exception_desc: String::new(),
+        }]);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].consumer_group, "GroupA");
+        assert_eq!(rows[0].track_type.as_deref(), Some("CONSUMED"));
     }
 
     #[test]

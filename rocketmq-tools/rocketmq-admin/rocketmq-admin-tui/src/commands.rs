@@ -1101,8 +1101,8 @@ where
             let result = facade
                 .query_message_by_unique_key(
                     form.required_string("msg_id")?,
-                    form.optional_string("consumer_group"),
-                    form.optional_string("client_id"),
+                    None,
+                    None,
                     form.required_string("topic")?,
                     form.bool_value("show_all")?,
                     form.optional_string("cluster"),
@@ -1111,6 +1111,29 @@ where
                 )
                 .await?;
             CommandResultViewModel::message_query_by_unique_key(spec.title, &result)
+        }
+        "message.direct_consume" => {
+            let result = facade
+                .direct_consume_message(
+                    form.required_string("topic")?,
+                    form.required_string("msg_id")?,
+                    form.required_string("consumer_group")?,
+                    form.required_string("client_id")?,
+                    form.optional_string("cluster"),
+                )
+                .await?;
+            CommandResultViewModel::direct_consume_message(spec.title, &result)
+        }
+        "message.track_by_id" => {
+            let result = facade
+                .message_track(
+                    form.required_string("message_ids")?,
+                    form.required_string("topic")?,
+                    form.optional_string("cluster"),
+                    form.number_u64("timeout_millis")?,
+                )
+                .await?;
+            CommandResultViewModel::message_track(spec.title, &result)
         }
         "message.query_by_offset" => {
             let result = facade
@@ -2890,7 +2913,7 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
             "message.query_by_unique_key",
             CommandCategory::Message,
             "Query Message By Unique Key",
-            "Query messages by unique message key and optional direct-consume target.",
+            "Query messages by unique message key.",
             RiskLevel::Safe,
             vec![
                 required_string(
@@ -2900,8 +2923,6 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
                     "7F0000010007D8260BF075769D36C348",
                 ),
                 required_string("topic", "Topic", "Topic name.", "TopicA"),
-                optional_string("consumer_group", "Consumer Group", "Optional consumer group.", "GroupA"),
-                optional_string("client_id", "Client ID", "Optional consumer client id.", "client-a"),
                 bool_arg("show_all", "Show All", "Show all matched messages.", false),
                 optional_string("cluster", "Cluster", "Optional cluster name.", "DefaultCluster"),
                 number(
@@ -2919,6 +2940,54 @@ fn message_commands(commands: &mut Vec<CommandSpec>) {
                     false,
                     None,
                     Some(0),
+                ),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "message.direct_consume",
+            CommandCategory::Message,
+            "Direct Consume Message",
+            "Ask one push-consumer client to directly consume a message for diagnostics.",
+            RiskLevel::Mutating,
+            vec![
+                required_string("topic", "Topic", "Topic name.", "TopicA"),
+                required_string(
+                    "msg_id",
+                    "Message ID",
+                    "Message ID or unique message key.",
+                    "7F0000010007D8260BF075769D36C348",
+                ),
+                required_string("consumer_group", "Consumer Group", "Consumer group.", "GroupA"),
+                required_string("client_id", "Client ID", "Consumer client id.", "client-a"),
+                optional_string("cluster", "Cluster", "Optional cluster name.", "DefaultCluster"),
+            ],
+            ResultViewKind::Table,
+            None,
+        ),
+        spec(
+            "message.track_by_id",
+            CommandCategory::Message,
+            "Track Message By ID",
+            "Query message consumer track detail by message ID.",
+            RiskLevel::Safe,
+            vec![
+                required_string(
+                    "message_ids",
+                    "Message IDs",
+                    "Message IDs separated by comma, semicolon, or whitespace.",
+                    "7F0000010007D8260BF075769D36C348",
+                ),
+                required_string("topic", "Topic", "Topic name.", "TopicA"),
+                optional_string("cluster", "Cluster", "Optional cluster name.", "DefaultCluster"),
+                number(
+                    "timeout_millis",
+                    "Timeout",
+                    "Per-message track timeout in milliseconds.",
+                    true,
+                    Some(3000),
+                    Some(1),
                 ),
             ],
             ResultViewKind::Table,
@@ -3652,6 +3721,7 @@ impl DebugTail for CommandResultViewModel {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::collections::HashSet;
 
     use super::command_catalog;
@@ -3732,6 +3802,8 @@ mod tests {
             "message.query_by_id",
             "message.query_by_key",
             "message.query_by_unique_key",
+            "message.direct_consume",
+            "message.track_by_id",
             "message.query_by_offset",
             "message.query_trace_by_id",
         ] {
@@ -3744,6 +3816,43 @@ mod tests {
         let catalog = command_catalog();
         let ids = catalog.iter().map(|command| command.id).collect::<HashSet<_>>();
         assert_eq!(catalog.len(), ids.len());
+    }
+
+    #[test]
+    fn phase_six_command_catalog_category_snapshot() {
+        let catalog = command_catalog();
+        let mut counts = BTreeMap::new();
+        for command in &catalog {
+            *counts.entry(command.category).or_insert(0) += 1;
+            assert!(!command.id.trim().is_empty());
+            assert!(!command.title.trim().is_empty());
+            assert!(!command.description.trim().is_empty());
+        }
+
+        assert_eq!(catalog.len(), 102);
+        assert_eq!(
+            counts,
+            BTreeMap::from([
+                (CommandCategory::Auth, 12),
+                (CommandCategory::Broker, 15),
+                (CommandCategory::Cluster, 3),
+                (CommandCategory::Connection, 2),
+                (CommandCategory::Consumer, 8),
+                (CommandCategory::Container, 2),
+                (CommandCategory::Controller, 5),
+                (CommandCategory::Export, 6),
+                (CommandCategory::Ha, 2),
+                (CommandCategory::Lite, 6),
+                (CommandCategory::Message, 12),
+                (CommandCategory::NameServer, 6),
+                (CommandCategory::Offset, 5),
+                (CommandCategory::Producer, 4),
+                (CommandCategory::Queue, 2),
+                (CommandCategory::StaticTopic, 2),
+                (CommandCategory::Stats, 1),
+                (CommandCategory::Topic, 9),
+            ])
+        );
     }
 
     #[test]
@@ -4059,5 +4168,34 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.name == "broker_config_path" && arg.required));
+    }
+
+    #[test]
+    fn phase_five_catalog_exposes_message_direct_consume_and_track_commands() {
+        let catalog = command_catalog();
+
+        let direct = catalog
+            .iter()
+            .find(|command| command.id == "message.direct_consume")
+            .expect("direct consume command");
+        assert_eq!(direct.risk_level, RiskLevel::Mutating);
+        assert_eq!(direct.result_view_kind, ResultViewKind::Table);
+        assert!(direct
+            .args
+            .iter()
+            .any(|arg| arg.name == "consumer_group" && arg.required));
+        assert!(direct.args.iter().any(|arg| arg.name == "client_id" && arg.required));
+
+        let track = catalog
+            .iter()
+            .find(|command| command.id == "message.track_by_id")
+            .expect("message track command");
+        assert_eq!(track.risk_level, RiskLevel::Safe);
+        assert_eq!(track.result_view_kind, ResultViewKind::Table);
+        assert!(track.args.iter().any(|arg| arg.name == "message_ids" && arg.required));
+        assert!(track
+            .args
+            .iter()
+            .any(|arg| arg.name == "timeout_millis" && arg.required));
     }
 }

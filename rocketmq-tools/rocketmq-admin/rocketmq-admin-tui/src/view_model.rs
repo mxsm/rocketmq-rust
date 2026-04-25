@@ -31,9 +31,13 @@ use rocketmq_admin_core::core::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::core::lite::TriggerLiteDispatchResult;
 use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
 use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+use rocketmq_admin_core::core::message::DirectConsumeMessageResult;
+use rocketmq_admin_core::core::message::DirectConsumeMessageStatus;
 use rocketmq_admin_core::core::message::DumpCompactionLogResult;
 use rocketmq_admin_core::core::message::MessagePullEvent;
 use rocketmq_admin_core::core::message::MessageTraceView;
+use rocketmq_admin_core::core::message::MessageTrackOutcome;
+use rocketmq_admin_core::core::message::MessageTrackResult;
 use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
 use rocketmq_admin_core::core::message::QueryMessageByIdResult;
 use rocketmq_admin_core::core::message::QueryMessageByKeyResult;
@@ -768,6 +772,160 @@ impl CommandResultViewModel {
         };
 
         Self::table(title, &MESSAGE_DETAIL_HEADERS, rows)
+    }
+
+    pub fn direct_consume_message(title: impl Into<String>, result: &DirectConsumeMessageResult) -> Self {
+        let mut row = vec![
+            result.consumer_group.to_string(),
+            result.client_id.to_string(),
+            result.topic.to_string(),
+            result.msg_id.to_string(),
+        ];
+
+        match &result.status {
+            DirectConsumeMessageStatus::Consumed(detail) => {
+                row.extend([
+                    "consumed".to_string(),
+                    detail.consume_result.clone().unwrap_or_default(),
+                    detail.order.to_string(),
+                    detail.auto_commit.to_string(),
+                    detail.spent_time_millis.to_string(),
+                    detail.remark.clone().unwrap_or_default(),
+                ]);
+            }
+            DirectConsumeMessageStatus::NotPushConsumer => {
+                row.extend([
+                    "not-push-consumer".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    "target client is not a push consumer".to_string(),
+                ]);
+            }
+            DirectConsumeMessageStatus::RunningInfoFailed { error } => {
+                row.extend([
+                    "running-info-failed".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    sanitize_cell(error),
+                ]);
+            }
+            DirectConsumeMessageStatus::Failed { error } => {
+                row.extend([
+                    "failed".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    sanitize_cell(error),
+                ]);
+            }
+        }
+
+        Self::table(
+            title,
+            &[
+                "Consumer Group",
+                "Client ID",
+                "Topic",
+                "Message ID",
+                "Status",
+                "Consume Result",
+                "Order",
+                "Auto Commit",
+                "Spent Time",
+                "Remark",
+            ],
+            vec![row],
+        )
+    }
+
+    pub fn message_track(title: impl Into<String>, result: &MessageTrackResult) -> Self {
+        let mut rows = Vec::new();
+        for entry in &result.entries {
+            match &entry.outcome {
+                MessageTrackOutcome::Found {
+                    broker_addr,
+                    query_time_ms,
+                    tracks,
+                } if tracks.is_empty() => rows.push(vec![
+                    entry.message_id.to_string(),
+                    "found".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    broker_addr.clone(),
+                    query_time_ms.to_string(),
+                    "no consumer".to_string(),
+                ]),
+                MessageTrackOutcome::Found {
+                    broker_addr,
+                    query_time_ms,
+                    tracks,
+                } => {
+                    rows.extend(tracks.iter().map(|track| {
+                        vec![
+                            entry.message_id.to_string(),
+                            "found".to_string(),
+                            track.consumer_group.clone(),
+                            track.track_type.clone().unwrap_or_default(),
+                            sanitize_cell(&track.exception_desc),
+                            broker_addr.clone(),
+                            query_time_ms.to_string(),
+                            String::new(),
+                        ]
+                    }));
+                }
+                MessageTrackOutcome::NotFound { reason, query_time_ms } => rows.push(vec![
+                    entry.message_id.to_string(),
+                    "not-found".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    query_time_ms.to_string(),
+                    sanitize_cell(reason),
+                ]),
+                MessageTrackOutcome::Failed { error, query_time_ms } => rows.push(vec![
+                    entry.message_id.to_string(),
+                    "failed".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    query_time_ms.to_string(),
+                    sanitize_cell(error),
+                ]),
+                MessageTrackOutcome::TimedOut => rows.push(vec![
+                    entry.message_id.to_string(),
+                    "timed-out".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    "track query timed out".to_string(),
+                ]),
+            }
+        }
+
+        Self::table(
+            title,
+            &[
+                "Message ID",
+                "Status",
+                "Consumer Group",
+                "Track Type",
+                "Exception",
+                "Broker",
+                "Query Time",
+                "Note",
+            ],
+            rows,
+        )
     }
 
     pub fn decoded_message_ids(title: impl Into<String>, result: &DecodeMessageIdResult) -> Self {
@@ -1884,8 +2042,15 @@ mod tests {
     use rocketmq_admin_core::core::message::DecodeMessageIdEntry;
     use rocketmq_admin_core::core::message::DecodeMessageIdOutcome;
     use rocketmq_admin_core::core::message::DecodeMessageIdResult;
+    use rocketmq_admin_core::core::message::DirectConsumeMessageResult;
+    use rocketmq_admin_core::core::message::DirectConsumeMessageResultDetail;
+    use rocketmq_admin_core::core::message::DirectConsumeMessageStatus;
     use rocketmq_admin_core::core::message::MessagePullEvent;
     use rocketmq_admin_core::core::message::MessageTraceView;
+    use rocketmq_admin_core::core::message::MessageTrackEntry;
+    use rocketmq_admin_core::core::message::MessageTrackOutcome;
+    use rocketmq_admin_core::core::message::MessageTrackResult;
+    use rocketmq_admin_core::core::message::MessageTrackRow;
     use rocketmq_admin_core::core::message::QueryMessageByIdEntry;
     use rocketmq_admin_core::core::message::QueryMessageByIdOutcome;
     use rocketmq_admin_core::core::message::QueryMessageByIdResult;
@@ -3084,6 +3249,90 @@ mod tests {
         assert!(result.text_body().contains("undone-msgs"));
         assert!(result.text_body().contains("client-a stalled"));
         assert!(result.text_body().contains("max events reached"));
+    }
+
+    #[test]
+    fn phase_five_direct_consume_result_renders_as_table() {
+        let result = CommandResultViewModel::direct_consume_message(
+            "Direct Consume Message",
+            &DirectConsumeMessageResult {
+                topic: "TopicA".into(),
+                msg_id: "MSGID".into(),
+                consumer_group: "GroupA".into(),
+                client_id: "client-a".into(),
+                status: DirectConsumeMessageStatus::Consumed(DirectConsumeMessageResultDetail {
+                    order: false,
+                    auto_commit: true,
+                    consume_result: Some("CR_SUCCESS".to_string()),
+                    remark: Some("ok".to_string()),
+                    spent_time_millis: 12,
+                }),
+            },
+        );
+
+        assert_table(
+            &result,
+            &[
+                "Consumer Group",
+                "Client ID",
+                "Topic",
+                "Message ID",
+                "Status",
+                "Consume Result",
+                "Order",
+                "Auto Commit",
+                "Spent Time",
+                "Remark",
+            ],
+            &[
+                "GroupA",
+                "client-a",
+                "TopicA",
+                "MSGID",
+                "consumed",
+                "CR_SUCCESS",
+                "false",
+                "true",
+                "12",
+                "ok",
+            ],
+        );
+    }
+
+    #[test]
+    fn phase_five_message_track_result_renders_as_table() {
+        let result = CommandResultViewModel::message_track(
+            "Track Message By ID",
+            &MessageTrackResult {
+                entries: vec![MessageTrackEntry {
+                    message_id: "MSGID".into(),
+                    outcome: MessageTrackOutcome::Found {
+                        broker_addr: "127.0.0.1:10911".to_string(),
+                        query_time_ms: 7,
+                        tracks: vec![MessageTrackRow {
+                            consumer_group: "GroupA".to_string(),
+                            track_type: Some("CONSUMED".to_string()),
+                            exception_desc: String::new(),
+                        }],
+                    },
+                }],
+            },
+        );
+
+        assert_table(
+            &result,
+            &[
+                "Message ID",
+                "Status",
+                "Consumer Group",
+                "Track Type",
+                "Exception",
+                "Broker",
+                "Query Time",
+                "Note",
+            ],
+            &["MSGID", "found", "GroupA", "CONSUMED", "", "127.0.0.1:10911", "7", ""],
+        );
     }
 
     fn assert_table(result: &CommandResultViewModel, headers: &[&str], first_row: &[&str]) {
