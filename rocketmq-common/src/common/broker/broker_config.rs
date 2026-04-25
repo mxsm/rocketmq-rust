@@ -470,6 +470,38 @@ mod defaults {
         1000
     }
 
+    pub const fn broker_fast_failure_enable() -> bool {
+        true
+    }
+
+    pub const fn wait_time_mills_in_send_queue() -> u64 {
+        200
+    }
+
+    pub const fn wait_time_mills_in_pull_queue() -> u64 {
+        5_000
+    }
+
+    pub const fn wait_time_mills_in_lite_pull_queue() -> u64 {
+        5_000
+    }
+
+    pub const fn wait_time_mills_in_heartbeat_queue() -> u64 {
+        31_000
+    }
+
+    pub const fn wait_time_mills_in_transaction_queue() -> u64 {
+        3_000
+    }
+
+    pub const fn wait_time_mills_in_ack_queue() -> u64 {
+        3_000
+    }
+
+    pub const fn wait_time_mills_in_admin_broker_queue() -> u64 {
+        5_000
+    }
+
     pub const fn controller_heartbeat_timeout_mills() -> i64 {
         10 * 1000
     }
@@ -690,6 +722,30 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::send_heartbeat_timeout_millis")]
     pub send_heartbeat_timeout_millis: u64,
+
+    #[serde(default = "defaults::broker_fast_failure_enable")]
+    pub broker_fast_failure_enable: bool,
+
+    #[serde(default = "defaults::wait_time_mills_in_send_queue")]
+    pub wait_time_mills_in_send_queue: u64,
+
+    #[serde(default = "defaults::wait_time_mills_in_pull_queue")]
+    pub wait_time_mills_in_pull_queue: u64,
+
+    #[serde(default = "defaults::wait_time_mills_in_lite_pull_queue")]
+    pub wait_time_mills_in_lite_pull_queue: u64,
+
+    #[serde(default = "defaults::wait_time_mills_in_heartbeat_queue")]
+    pub wait_time_mills_in_heartbeat_queue: u64,
+
+    #[serde(default = "defaults::wait_time_mills_in_transaction_queue")]
+    pub wait_time_mills_in_transaction_queue: u64,
+
+    #[serde(default = "defaults::wait_time_mills_in_ack_queue")]
+    pub wait_time_mills_in_ack_queue: u64,
+
+    #[serde(default = "defaults::wait_time_mills_in_admin_broker_queue")]
+    pub wait_time_mills_in_admin_broker_queue: u64,
 
     #[serde(default)]
     pub skip_pre_online: bool,
@@ -1029,6 +1085,14 @@ impl Default for BrokerConfig {
             force_register: true,
             register_name_server_period: 1000 * 30,
             send_heartbeat_timeout_millis: 1000,
+            broker_fast_failure_enable: defaults::broker_fast_failure_enable(),
+            wait_time_mills_in_send_queue: defaults::wait_time_mills_in_send_queue(),
+            wait_time_mills_in_pull_queue: defaults::wait_time_mills_in_pull_queue(),
+            wait_time_mills_in_lite_pull_queue: defaults::wait_time_mills_in_lite_pull_queue(),
+            wait_time_mills_in_heartbeat_queue: defaults::wait_time_mills_in_heartbeat_queue(),
+            wait_time_mills_in_transaction_queue: defaults::wait_time_mills_in_transaction_queue(),
+            wait_time_mills_in_ack_queue: defaults::wait_time_mills_in_ack_queue(),
+            wait_time_mills_in_admin_broker_queue: defaults::wait_time_mills_in_admin_broker_queue(),
             skip_pre_online: false,
             namesrv_addr: NAMESRV_ADDR.clone().map(|addr| addr.into()),
             fetch_name_srv_addr_by_dns_lookup: false,
@@ -1281,6 +1345,38 @@ impl BrokerConfig {
             "sendHeartbeatTimeoutMillis".into(),
             self.send_heartbeat_timeout_millis.to_string().into(),
         );
+        properties.insert(
+            "brokerFastFailureEnable".into(),
+            self.broker_fast_failure_enable.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInSendQueue".into(),
+            self.wait_time_mills_in_send_queue.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInPullQueue".into(),
+            self.wait_time_mills_in_pull_queue.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInLitePullQueue".into(),
+            self.wait_time_mills_in_lite_pull_queue.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInHeartbeatQueue".into(),
+            self.wait_time_mills_in_heartbeat_queue.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInTransactionQueue".into(),
+            self.wait_time_mills_in_transaction_queue.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInAckQueue".into(),
+            self.wait_time_mills_in_ack_queue.to_string().into(),
+        );
+        properties.insert(
+            "waitTimeMillsInAdminBrokerQueue".into(),
+            self.wait_time_mills_in_admin_broker_queue.to_string().into(),
+        );
         properties.insert("skipPreOnline".into(), self.skip_pre_online.to_string().into());
         properties.insert("namesrvAddr".into(), self.namesrv_addr.clone().unwrap_or_default());
         properties.insert(
@@ -1479,6 +1575,20 @@ mod tests {
     }
 
     #[test]
+    fn default_broker_config_uses_java_fast_failure_defaults() {
+        let config = BrokerConfig::default();
+
+        assert!(config.broker_fast_failure_enable);
+        assert_eq!(config.wait_time_mills_in_send_queue, 200);
+        assert_eq!(config.wait_time_mills_in_pull_queue, 5_000);
+        assert_eq!(config.wait_time_mills_in_lite_pull_queue, 5_000);
+        assert_eq!(config.wait_time_mills_in_heartbeat_queue, 31_000);
+        assert_eq!(config.wait_time_mills_in_transaction_queue, 3_000);
+        assert_eq!(config.wait_time_mills_in_ack_queue, 3_000);
+        assert_eq!(config.wait_time_mills_in_admin_broker_queue, 5_000);
+    }
+
+    #[test]
     fn get_properties_contains_java_lite_keys() {
         let config = BrokerConfig::default();
         let properties = config.get_properties();
@@ -1548,6 +1658,53 @@ mod tests {
         assert_eq!(
             properties.get("liteLagLatencyTopK").map(|value| value.as_str()),
             Some("50")
+        );
+    }
+
+    #[test]
+    fn get_properties_contains_java_fast_failure_keys() {
+        let config = BrokerConfig::default();
+        let properties = config.get_properties();
+
+        assert_eq!(
+            properties.get("brokerFastFailureEnable").map(|value| value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("waitTimeMillsInSendQueue").map(|value| value.as_str()),
+            Some("200")
+        );
+        assert_eq!(
+            properties.get("waitTimeMillsInPullQueue").map(|value| value.as_str()),
+            Some("5000")
+        );
+        assert_eq!(
+            properties
+                .get("waitTimeMillsInLitePullQueue")
+                .map(|value| value.as_str()),
+            Some("5000")
+        );
+        assert_eq!(
+            properties
+                .get("waitTimeMillsInHeartbeatQueue")
+                .map(|value| value.as_str()),
+            Some("31000")
+        );
+        assert_eq!(
+            properties
+                .get("waitTimeMillsInTransactionQueue")
+                .map(|value| value.as_str()),
+            Some("3000")
+        );
+        assert_eq!(
+            properties.get("waitTimeMillsInAckQueue").map(|value| value.as_str()),
+            Some("3000")
+        );
+        assert_eq!(
+            properties
+                .get("waitTimeMillsInAdminBrokerQueue")
+                .map(|value| value.as_str()),
+            Some("5000")
         );
     }
 }

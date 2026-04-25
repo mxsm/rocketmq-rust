@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rocketmq_auth::AuthRuntime;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -24,8 +25,11 @@ use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use tracing::warn;
 
 use self::client_manage_processor::ClientManageProcessor;
+use crate::latency::broker_fast_failure::BrokerFastFailure;
+use crate::latency::broker_fast_failure::FastFailureQueueKind;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
@@ -90,6 +94,35 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     LiteSubscriptionCtl(ArcMut<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(ArcMut<EndTransactionProcessor<TS, MS>>),
     AdminBroker(ArcMut<AdminBrokerProcessor<MS>>),
+}
+
+impl<MS, TS> Clone for BrokerProcessorType<MS, TS>
+where
+    MS: MessageStore,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Send(processor) => Self::Send(processor.clone()),
+            Self::Pull(processor) => Self::Pull(processor.clone()),
+            Self::Peek(processor) => Self::Peek(processor.clone()),
+            Self::Pop(processor) => Self::Pop(processor.clone()),
+            Self::PopLite(processor) => Self::PopLite(processor.clone()),
+            Self::Ack(processor) => Self::Ack(processor.clone()),
+            Self::ChangeInvisible(processor) => Self::ChangeInvisible(processor.clone()),
+            Self::Notification(processor) => Self::Notification(processor.clone()),
+            Self::PollingInfo(processor) => Self::PollingInfo(processor.clone()),
+            Self::Reply(processor) => Self::Reply(processor.clone()),
+            Self::Recall(processor) => Self::Recall(processor.clone()),
+            Self::QueryMessage(processor) => Self::QueryMessage(processor.clone()),
+            Self::ClientManage(processor) => Self::ClientManage(processor.clone()),
+            Self::ConsumerManage(processor) => Self::ConsumerManage(processor.clone()),
+            Self::QueryAssignment(processor) => Self::QueryAssignment(processor.clone()),
+            Self::LiteManager(processor) => Self::LiteManager(processor.clone()),
+            Self::LiteSubscriptionCtl(processor) => Self::LiteSubscriptionCtl(processor.clone()),
+            Self::EndTransaction(processor) => Self::EndTransaction(processor.clone()),
+            Self::AdminBroker(processor) => Self::AdminBroker(processor.clone()),
+        }
+    }
 }
 
 impl<MS, TS> RequestProcessor for BrokerProcessorType<MS, TS>
@@ -159,6 +192,7 @@ pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
     process_table: ArcMut<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
     default_request_processor: Option<ArcMut<BrokerProcessorType<MS, TS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    broker_fast_failure: Option<BrokerFastFailure>,
 }
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
@@ -171,6 +205,7 @@ where
             process_table: ArcMut::new(HashMap::new()),
             default_request_processor: None,
             auth_runtime: None,
+            broker_fast_failure: None,
         }
     }
 
@@ -185,6 +220,10 @@ where
     pub fn set_auth_runtime(&mut self, auth_runtime: Arc<AuthRuntime>) {
         self.auth_runtime = Some(auth_runtime);
     }
+
+    pub fn set_broker_fast_failure(&mut self, broker_fast_failure: BrokerFastFailure) {
+        self.broker_fast_failure = Some(broker_fast_failure);
+    }
 }
 
 impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
@@ -193,6 +232,7 @@ impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
             process_table: self.process_table.clone(),
             default_request_processor: self.default_request_processor.clone(),
             auth_runtime: self.auth_runtime.clone(),
+            broker_fast_failure: self.broker_fast_failure.clone(),
         }
     }
 }
@@ -200,7 +240,7 @@ impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
 impl<MS, TS> RequestProcessor for BrokerRequestProcessor<MS, TS>
 where
     MS: MessageStore + Send + Sync + 'static,
-    TS: TransactionalMessageService,
+    TS: TransactionalMessageService + Send + Sync + 'static,
 {
     async fn process_request(
         &mut self,
@@ -219,10 +259,30 @@ where
             }
         }
 
-        match self.process_table.get_mut(request.code_ref()) {
-            Some(processor) => processor.process_request(channel, ctx, request).await,
-            None => match self.default_request_processor.as_mut() {
-                Some(default_processor) => default_processor.process_request(channel, ctx, request).await,
+        let request_code = *request.code_ref();
+
+        match self.process_table.get(&request_code).cloned() {
+            Some(processor) => {
+                self.process_with_optional_fast_failure(
+                    fast_failure_queue_kind(request_code, false),
+                    processor,
+                    channel,
+                    ctx,
+                    request,
+                )
+                .await
+            }
+            None => match self.default_request_processor.as_ref() {
+                Some(default_processor) => {
+                    self.process_with_optional_fast_failure(
+                        fast_failure_queue_kind(request_code, true),
+                        default_processor.as_ref().clone(),
+                        channel,
+                        ctx,
+                        request,
+                    )
+                    .await
+                }
                 None => {
                     let response_command = RemotingCommand::create_response_command_with_code_remark(
                         rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
@@ -250,4 +310,93 @@ where
             }
         }
     }
+}
+
+impl<MS, TS> BrokerRequestProcessor<MS, TS>
+where
+    MS: MessageStore + Send + Sync + 'static,
+    TS: TransactionalMessageService + Send + Sync + 'static,
+{
+    async fn process_with_optional_fast_failure(
+        &self,
+        queue_kind: Option<FastFailureQueueKind>,
+        mut processor: BrokerProcessorType<MS, TS>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let Some(queue_kind) = queue_kind else {
+            return processor.process_request(channel, ctx, request).await;
+        };
+        let Some(broker_fast_failure) = &self.broker_fast_failure else {
+            return processor.process_request(channel, ctx, request).await;
+        };
+        if !broker_fast_failure.is_enabled() {
+            return processor.process_request(channel, ctx, request).await;
+        }
+
+        let opaque = request.opaque();
+        let mut queued_request = request.clone();
+        let (task, response_rx) = broker_fast_failure.enqueue(queue_kind, opaque);
+        let broker_fast_failure = broker_fast_failure.clone();
+
+        tokio::spawn(async move {
+            let Some(_permit) = broker_fast_failure.acquire_permit(queue_kind).await else {
+                warn!("fast failure queue permit acquisition failed: queue={queue_kind:?}");
+                if broker_fast_failure.try_mark_running(queue_kind, &task) {
+                    broker_fast_failure.complete(
+                        queue_kind,
+                        &task,
+                        Some(system_error_response(
+                            opaque,
+                            "fast failure queue permit acquisition failed",
+                        )),
+                    );
+                }
+                return;
+            };
+
+            if !broker_fast_failure.try_mark_running(queue_kind, &task) {
+                return;
+            }
+
+            let response = match processor.process_request(channel, ctx, &mut queued_request).await {
+                Ok(response) => response,
+                Err(error) => Some(system_error_response(opaque, error.to_string())),
+            };
+            broker_fast_failure.complete(queue_kind, &task, response);
+        });
+
+        match response_rx.await {
+            Ok(response) => Ok(response),
+            Err(_error) => Ok(Some(system_error_response(
+                opaque,
+                "fast failure response channel closed before request completed",
+            ))),
+        }
+    }
+}
+
+fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option<FastFailureQueueKind> {
+    if default_processor {
+        return Some(FastFailureQueueKind::AdminBroker);
+    }
+
+    match RequestCode::from(request_code) {
+        RequestCode::SendMessage
+        | RequestCode::SendMessageV2
+        | RequestCode::SendBatchMessage
+        | RequestCode::ConsumerSendMsgBack => Some(FastFailureQueueKind::Send),
+        RequestCode::PullMessage => Some(FastFailureQueueKind::Pull),
+        RequestCode::LitePullMessage => Some(FastFailureQueueKind::LitePull),
+        RequestCode::HeartBeat => Some(FastFailureQueueKind::Heartbeat),
+        RequestCode::EndTransaction => Some(FastFailureQueueKind::Transaction),
+        RequestCode::AckMessage | RequestCode::BatchAckMessage => Some(FastFailureQueueKind::Ack),
+        _ => None,
+    }
+}
+
+fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, remark.into())
+        .set_opaque(opaque)
 }

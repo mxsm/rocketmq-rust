@@ -251,7 +251,7 @@ impl BrokerRuntime {
             escape_bridge: None,
             pop_inflight_message_counter,
             replicas_manager: None,
-            broker_fast_failure: BrokerFastFailure,
+            broker_fast_failure: BrokerFastFailure::new(broker_config.clone()),
             cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
             cold_data_cg_ctr_service: Some(ColdDataCgCtrService::new(
                 message_store_config.cold_data_flow_control_enable,
@@ -525,6 +525,10 @@ impl BrokerRuntime {
             self.inner.timer_message_store = message_store.get_timer_message_store().cloned();
             self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
             self.inner.message_store = Some(message_store.clone());
+            let message_store_for_fast_failure = message_store.clone();
+            self.inner
+                .broker_fast_failure
+                .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
             self.inner
                 .consumer_offset_manager
                 .set_message_store(Some(message_store));
@@ -668,6 +672,7 @@ impl BrokerRuntime {
         if let Some(auth_runtime) = &self.inner.auth_runtime {
             broker_request_processor.set_auth_runtime(auth_runtime.clone());
         }
+        broker_request_processor.set_broker_fast_failure(self.inner.broker_fast_failure.clone());
         let send_message_processor = ArcMut::new(send_message_processor);
 
         broker_request_processor.register_processor(
