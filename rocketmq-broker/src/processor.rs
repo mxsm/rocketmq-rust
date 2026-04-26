@@ -400,3 +400,64 @@ fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingComm
     RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, remark.into())
         .set_opaque(opaque)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fast_failure_queue_kind_maps_java_fast_failure_families() {
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::SendMessage as i32, false),
+            Some(FastFailureQueueKind::Send)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::SendMessageV2 as i32, false),
+            Some(FastFailureQueueKind::Send)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::SendBatchMessage as i32, false),
+            Some(FastFailureQueueKind::Send)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::ConsumerSendMsgBack as i32, false),
+            Some(FastFailureQueueKind::Send)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::PullMessage as i32, false),
+            Some(FastFailureQueueKind::Pull)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::LitePullMessage as i32, false),
+            Some(FastFailureQueueKind::LitePull)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::HeartBeat as i32, false),
+            Some(FastFailureQueueKind::Heartbeat)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::EndTransaction as i32, false),
+            Some(FastFailureQueueKind::Transaction)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::AckMessage as i32, false),
+            Some(FastFailureQueueKind::Ack)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::BatchAckMessage as i32, false),
+            Some(FastFailureQueueKind::Ack)
+        );
+    }
+
+    #[test]
+    fn fast_failure_queue_kind_maps_default_processor_to_admin_queue() {
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::UpdateBrokerConfig as i32, true),
+            Some(FastFailureQueueKind::AdminBroker)
+        );
+        assert_eq!(
+            fast_failure_queue_kind(RequestCode::UpdateBrokerConfig as i32, false),
+            None
+        );
+    }
+}

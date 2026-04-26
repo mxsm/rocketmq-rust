@@ -1707,4 +1707,30 @@ mod tests {
             Some("5000")
         );
     }
+
+    #[test]
+    fn serde_accepts_java_fast_failure_camel_case_keys() {
+        let config: BrokerConfig = serde_json::from_str(
+            r#"{
+                "brokerFastFailureEnable": false,
+                "waitTimeMillsInSendQueue": 201,
+                "waitTimeMillsInPullQueue": 5001,
+                "waitTimeMillsInLitePullQueue": 5002,
+                "waitTimeMillsInHeartbeatQueue": 31001,
+                "waitTimeMillsInTransactionQueue": 3001,
+                "waitTimeMillsInAckQueue": 3002,
+                "waitTimeMillsInAdminBrokerQueue": 5003
+            }"#,
+        )
+        .expect("broker config should deserialize Java fast failure keys");
+
+        assert!(!config.broker_fast_failure_enable);
+        assert_eq!(config.wait_time_mills_in_send_queue, 201);
+        assert_eq!(config.wait_time_mills_in_pull_queue, 5_001);
+        assert_eq!(config.wait_time_mills_in_lite_pull_queue, 5_002);
+        assert_eq!(config.wait_time_mills_in_heartbeat_queue, 31_001);
+        assert_eq!(config.wait_time_mills_in_transaction_queue, 3_001);
+        assert_eq!(config.wait_time_mills_in_ack_queue, 3_002);
+        assert_eq!(config.wait_time_mills_in_admin_broker_queue, 5_003);
+    }
 }

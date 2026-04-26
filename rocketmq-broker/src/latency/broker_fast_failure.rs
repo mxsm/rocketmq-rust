@@ -731,4 +731,119 @@ mod tests {
 
         assert!(called.load(Ordering::Acquire));
     }
+
+    #[tokio::test]
+    async fn completed_head_is_skipped_and_next_expired_task_is_cleaned() {
+        let fast_failure = BrokerFastFailure::new(config_with_fast_failure_waits(10));
+        let (completed_task, mut completed_rx) =
+            fast_failure.enqueue_with_timestamp(FastFailureQueueKind::Ack, 21, current_millis() - 30);
+        assert!(fast_failure.try_mark_running(FastFailureQueueKind::Ack, &completed_task));
+        fast_failure.complete(FastFailureQueueKind::Ack, &completed_task, None);
+
+        let (_expired_task, expired_rx) =
+            fast_failure.enqueue_with_timestamp(FastFailureQueueKind::Ack, 22, current_millis() - 30);
+
+        fast_failure.clean_expired_request();
+
+        assert!(matches!(completed_rx.try_recv(), Ok(None)));
+        let response = expired_rx.await.expect("expired response").expect("response command");
+        assert_eq!(response.opaque(), 22);
+        assert_eq!(response.code(), ResponseCode::SystemBusy.to_i32());
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.starts_with("[TIMEOUT_CLEAN_QUEUE]")));
+    }
+
+    #[tokio::test]
+    async fn page_cache_busy_only_cleans_send_queue() {
+        let fast_failure = BrokerFastFailure::new(config_with_fast_failure_waits(60_000));
+        fast_failure.set_page_cache_busy_checker(|| true);
+        let (_send_task, send_rx) =
+            fast_failure.enqueue_with_timestamp(FastFailureQueueKind::Send, 31, current_millis());
+        let (_pull_task, mut pull_rx) =
+            fast_failure.enqueue_with_timestamp(FastFailureQueueKind::Pull, 32, current_millis());
+
+        fast_failure.clean_expired_request();
+
+        let response = send_rx.await.expect("send response").expect("response command");
+        assert_eq!(response.opaque(), 31);
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.starts_with("[PCBUSY_CLEAN_QUEUE]")));
+        assert!(matches!(pull_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn timeout_cleanup_respects_single_scan_batch_limit() {
+        let fast_failure = BrokerFastFailure::new(config_with_fast_failure_waits(0));
+        let now = current_millis();
+        let mut receivers = Vec::with_capacity(DEFAULT_SCAN_BATCH_LIMIT + 1);
+        for opaque in 0..=DEFAULT_SCAN_BATCH_LIMIT {
+            let (_task, rx) =
+                fast_failure.enqueue_with_timestamp(FastFailureQueueKind::AdminBroker, opaque as i32, now);
+            receivers.push(rx);
+        }
+
+        fast_failure.clean_expired_request();
+
+        for (index, rx) in receivers.iter_mut().take(DEFAULT_SCAN_BATCH_LIMIT).enumerate() {
+            let response = rx
+                .try_recv()
+                .expect("expired task should be cleaned in the first batch")
+                .expect("response command");
+            assert_eq!(response.opaque(), index as i32);
+        }
+        assert!(matches!(
+            receivers
+                .get_mut(DEFAULT_SCAN_BATCH_LIMIT)
+                .expect("last receiver")
+                .try_recv(),
+            Err(TryRecvError::Empty)
+        ));
+
+        fast_failure.clean_expired_request();
+        let response = receivers
+            .pop()
+            .expect("last receiver")
+            .await
+            .expect("second batch response")
+            .expect("response command");
+        assert_eq!(response.opaque(), DEFAULT_SCAN_BATCH_LIMIT as i32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_enqueue_and_timeout_cleanup_returns_each_opaque_once() {
+        let fast_failure = BrokerFastFailure::new(config_with_fast_failure_waits(0));
+        let now = current_millis();
+        let request_count = 512usize;
+        let mut handles = Vec::with_capacity(request_count);
+
+        for opaque in 0..request_count {
+            let fast_failure = fast_failure.clone();
+            handles.push(tokio::spawn(async move {
+                fast_failure.enqueue_with_timestamp(FastFailureQueueKind::Pull, opaque as i32, now)
+            }));
+        }
+
+        let mut receivers = Vec::with_capacity(request_count);
+        for handle in handles {
+            let (_task, rx) = handle.await.expect("enqueue task should finish");
+            receivers.push(rx);
+        }
+
+        for _ in 0..=((request_count / DEFAULT_SCAN_BATCH_LIMIT) + 1) {
+            fast_failure.clean_expired_request();
+        }
+
+        let mut seen = vec![false; request_count];
+        for rx in receivers {
+            let response = rx.await.expect("cleanup response").expect("response command");
+            assert_eq!(response.code(), ResponseCode::SystemBusy.to_i32());
+            let opaque = response.opaque() as usize;
+            assert!(opaque < request_count);
+            assert!(!seen[opaque], "opaque {opaque} should be returned once");
+            seen[opaque] = true;
+        }
+        assert!(seen.into_iter().all(|value| value));
+    }
 }
