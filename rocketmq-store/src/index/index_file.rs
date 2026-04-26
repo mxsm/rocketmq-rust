@@ -122,7 +122,7 @@ impl IndexFile {
         end_phy_offset: i64,
         end_timestamp: i64,
     ) -> io::Result<IndexFile> {
-        let file_total_size = INDEX_HEADER_SIZE + (hash_slot_num * HASH_SLOT_SIZE) + (index_num * INDEX_SIZE);
+        let file_total_size = index_file_total_size(hash_slot_num, index_num)?;
         let mapped_file = Arc::new(DefaultMappedFile::try_new(
             CheetahString::from_slice(file_name),
             file_total_size as u64,
@@ -370,6 +370,33 @@ impl IndexFile {
     }
 }
 
+fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> io::Result<usize> {
+    if hash_slot_num == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "index hash slot number must be positive",
+        ));
+    }
+    if index_num == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "index entry number must be positive",
+        ));
+    }
+
+    let hash_slots_size = hash_slot_num
+        .checked_mul(HASH_SLOT_SIZE)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "index hash slot section size overflow"))?;
+    let indexes_size = index_num
+        .checked_mul(INDEX_SIZE)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "index entry section size overflow"))?;
+
+    INDEX_HEADER_SIZE
+        .checked_add(hash_slots_size)
+        .and_then(|size| size.checked_add(indexes_size))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "index file total size overflow"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +471,29 @@ mod tests {
         assert!(!file.put_key("overflow_key", 9999, 1000000009999));
 
         // temp_dir auto-cleanup on drop
+    }
+
+    #[test]
+    fn try_new_rejects_invalid_index_dimensions() {
+        use std::io::ErrorKind;
+
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("20000000000030");
+        let file_path_str = file_path.to_str().unwrap();
+
+        let zero_slots_error = match IndexFile::try_new(file_path_str, 0, 1, 0, 0) {
+            Ok(_) => panic!("zero hash slots should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(zero_slots_error.kind(), ErrorKind::InvalidInput);
+
+        let zero_indexes_error = match IndexFile::try_new(file_path_str, 1, 0, 0, 0) {
+            Ok(_) => panic!("zero index entries should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(zero_indexes_error.kind(), ErrorKind::InvalidInput);
     }
 
     #[test]

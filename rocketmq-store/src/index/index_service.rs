@@ -147,7 +147,10 @@ impl IndexService {
                 return;
             }
 
-            let end_phy_offset = index_file_list.first().unwrap().get_end_phy_offset() as u64;
+            let Some(first_index_file) = index_file_list.first() else {
+                return;
+            };
+            let end_phy_offset = first_index_file.get_end_phy_offset() as u64;
             if end_phy_offset >= offset {
                 return;
             }
@@ -287,8 +290,15 @@ impl IndexService {
 
                 let mut index_file_new = Some(index_file_inner);
                 if let Some(ref uniq_key) = dispatch_request.uniq_key {
+                    let Some(index_file) = index_file_new.take() else {
+                        error!(
+                            "skip index uniq key {} because no writable index file is available, commitlog {}",
+                            uniq_key, dispatch_request.commit_log_offset
+                        );
+                        return;
+                    };
                     index_file_new = self.put_key(
-                        index_file_new.take().unwrap(),
+                        index_file,
                         dispatch_request,
                         build_key(topic, uniq_key.as_str()).as_str(),
                     );
@@ -305,16 +315,23 @@ impl IndexService {
                     let keyset = keys.split(MessageConst::KEY_SEPARATOR);
                     for key in keyset {
                         if !key.is_empty() {
-                            index_file_new = self.put_key(
-                                index_file_new.take().unwrap(),
-                                dispatch_request,
-                                build_key(topic, key).as_str(),
-                            );
+                            let Some(index_file) = index_file_new.take() else {
+                                error!(
+                                    "skip index key {} because no writable index file is available, commitlog {}",
+                                    key, dispatch_request.commit_log_offset
+                                );
+                                return;
+                            };
+                            index_file_new = self.put_key(index_file, dispatch_request, build_key(topic, key).as_str());
                             if index_file_new.is_none() {
                                 error!(
-                                    "putKey error commitlog {} uniqkey {}",
+                                    "putKey error commitlog {} key {} uniqkey {}",
                                     dispatch_request.commit_log_offset,
-                                    dispatch_request.uniq_key.as_ref().unwrap()
+                                    key,
+                                    dispatch_request
+                                        .uniq_key
+                                        .as_ref()
+                                        .map_or("<none>", CheetahString::as_str)
                                 );
                                 return;
                             }
@@ -326,8 +343,15 @@ impl IndexService {
                 if let Some(properties) = &dispatch_request.properties_map {
                     if let Some(tags) = properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS)) {
                         if !tags.is_empty() {
+                            let Some(index_file) = index_file_new.take() else {
+                                error!(
+                                    "skip index tags {} because no writable index file is available, commitlog {}",
+                                    tags, dispatch_request.commit_log_offset
+                                );
+                                return;
+                            };
                             index_file_new = self.put_key(
-                                index_file_new.take().unwrap(),
+                                index_file,
                                 dispatch_request,
                                 build_key_with_type(topic, tags.as_str(), MessageConst::INDEX_TAG_TYPE).as_str(),
                             );
@@ -392,8 +416,7 @@ impl IndexService {
 
         {
             let read = self.index_file_list.read();
-            if !read.is_empty() {
-                let tmp = read.last().unwrap().clone();
+            if let Some(tmp) = read.last().cloned() {
                 if !tmp.is_write_full() {
                     index_file = Some(tmp);
                 } else {
