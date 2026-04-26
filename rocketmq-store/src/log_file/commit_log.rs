@@ -2035,11 +2035,28 @@ pub fn check_message_and_return_size(
                 }
 
                 let check_size = total_size as usize - CRC32_RESERVED_LEN as usize;
-                let current_crc = crc32(
-                    &original_message
-                        .as_ref()
-                        .expect("property CRC verification requires original message bytes")[..check_size],
-                );
+                let Some(original_message) = original_message.as_ref() else {
+                    warn!("property CRC check failed because original message bytes are unavailable");
+                    return DispatchRequest {
+                        msg_size: -1,
+                        success: false,
+                        ..Default::default()
+                    };
+                };
+                if original_message.len() < check_size {
+                    warn!(
+                        "property CRC check failed because original message length {} is smaller than check size {}",
+                        original_message.len(),
+                        check_size
+                    );
+                    return DispatchRequest {
+                        msg_size: -1,
+                        success: false,
+                        ..Default::default()
+                    };
+                }
+
+                let current_crc = crc32(&original_message[..check_size]);
                 if current_crc != expected_crc {
                     warn!(
                         "property CRC check failed. expectedCRC={}, currentCRC={}",
@@ -2099,7 +2116,13 @@ pub fn check_message_and_return_size(
         prepared_transaction_offset,
         ..DispatchRequest::default()
     };
-    set_batch_size_if_needed(&properties_map, &mut dispatch_request);
+    if !set_batch_size_if_needed(&properties_map, &mut dispatch_request) {
+        return DispatchRequest {
+            msg_size: -1,
+            success: false,
+            ..Default::default()
+        };
+    }
     dispatch_request.properties_map = Some(properties_map);
     dispatch_request
 }
@@ -2107,22 +2130,51 @@ pub fn check_message_and_return_size(
 fn set_batch_size_if_needed(
     properties_map: &HashMap<CheetahString, CheetahString>,
     dispatch_request: &mut DispatchRequest,
-) {
-    if !properties_map.is_empty()
-        && properties_map.contains_key(MessageConst::PROPERTY_INNER_NUM)
-        && properties_map.contains_key(MessageConst::PROPERTY_INNER_BASE)
-    {
-        dispatch_request.msg_base_offset = properties_map
-            .get(MessageConst::PROPERTY_INNER_BASE)
-            .unwrap()
-            .parse::<i64>()
-            .unwrap();
-        dispatch_request.batch_size = properties_map
-            .get(MessageConst::PROPERTY_INNER_NUM)
-            .unwrap()
-            .parse::<i16>()
-            .unwrap();
-    }
+) -> bool {
+    let (Some(inner_base), Some(inner_num)) = (
+        properties_map.get(MessageConst::PROPERTY_INNER_BASE),
+        properties_map.get(MessageConst::PROPERTY_INNER_NUM),
+    ) else {
+        return true;
+    };
+
+    let msg_base_offset = match inner_base.parse::<i64>() {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(
+                "malformed inner batch base offset. {}={}, error={}",
+                MessageConst::PROPERTY_INNER_BASE,
+                inner_base,
+                error
+            );
+            return false;
+        }
+    };
+
+    let batch_size = match inner_num.parse::<i16>() {
+        Ok(value) if value > 0 => value,
+        Ok(value) => {
+            warn!(
+                "malformed inner batch size. {}={} must be positive",
+                MessageConst::PROPERTY_INNER_NUM,
+                value
+            );
+            return false;
+        }
+        Err(error) => {
+            warn!(
+                "malformed inner batch size. {}={}, error={}",
+                MessageConst::PROPERTY_INNER_NUM,
+                inner_num,
+                error
+            );
+            return false;
+        }
+    };
+
+    dispatch_request.msg_base_offset = msg_base_offset;
+    dispatch_request.batch_size = batch_size;
+    true
 }
 
 fn is_mapped_file_matched_recover(
@@ -2207,6 +2259,7 @@ mod tests {
     use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::MessageDecoder::create_crc32;
     use rocketmq_common::TimeUtils::current_millis;
@@ -2449,6 +2502,48 @@ mod tests {
         );
         assert!(!dispatch_request.success);
         assert_eq!(dispatch_request.msg_size, -1);
+    }
+
+    #[test]
+    fn check_message_and_return_size_rejects_malformed_inner_batch_metadata() {
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let delay_level_table = BTreeMap::new();
+
+        for (inner_base, inner_num) in [("not-a-number", "1"), ("0", "not-a-number"), ("0", "0")] {
+            let mut msg = MessageExtBrokerInner::default();
+            msg.with_version(MessageVersion::V1);
+            msg.set_topic(CheetahString::from_static_str("malformed-inner-batch-topic"));
+            msg.message_ext_inner.set_queue_id(0);
+            msg.set_body(Bytes::from_static(b"malformed-inner-batch-body"));
+            msg.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_INNER_BASE),
+                CheetahString::from_static_str(inner_base),
+            );
+            msg.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM),
+                CheetahString::from_static_str(inner_num),
+            );
+
+            let (put_message_result, encoded) = encode_message_ext(&msg, &message_store_config);
+            assert!(put_message_result.is_none());
+
+            let mut encoded = encoded.freeze();
+            let dispatch_request = check_message_and_return_size(
+                &mut encoded,
+                true,
+                false,
+                false,
+                &message_store_config,
+                0,
+                &delay_level_table,
+            );
+
+            assert!(
+                !dispatch_request.success,
+                "INNER_BASE={inner_base}, INNER_NUM={inner_num} should be rejected"
+            );
+            assert_eq!(dispatch_request.msg_size, -1);
+        }
     }
 
     #[tokio::test]

@@ -173,7 +173,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             bytes.put_i32(max_blank);
             bytes.put_i32(BLANK_MAGIC_CODE);
             let instant = Instant::now();
-            mapped_file.write_bytes_segment(bytes.as_ref(), wrote_offset as usize, 0, bytes.len());
+            mapped_file.write_bytes_segment(
+                bytes.as_ref(),
+                mapped_file.get_wrote_position() as usize,
+                0,
+                bytes.len(),
+            );
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
@@ -286,7 +291,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 bytes.clear();
                 bytes.put_i32(max_blank);
                 bytes.put_i32(BLANK_MAGIC_CODE);
-                mapped_file.write_bytes_segment(bytes.as_ref(), wrote_offset as usize, 0, bytes.len());
+                mapped_file.write_bytes_segment(
+                    bytes.as_ref(),
+                    mapped_file.get_wrote_position() as usize,
+                    0,
+                    bytes.len(),
+                );
                 return AppendMessageResult {
                     status: AppendMessageStatus::EndOfFile,
                     wrote_offset,
@@ -376,7 +386,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             bytes.put_i32(max_blank);
             bytes.put_i32(BLANK_MAGIC_CODE);
             let instant = Instant::now();
-            mapped_file.write_bytes_segment(bytes.as_ref(), wrote_offset as usize, 0, bytes.len());
+            mapped_file.write_bytes_segment(
+                bytes.as_ref(),
+                mapped_file.get_wrote_position() as usize,
+                0,
+                bytes.len(),
+            );
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
                 wrote_offset,
@@ -449,5 +464,64 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             msg_inner.encoded_buff = Some(pre_encode_buffer);
             self.do_append(file_from_offset, mapped_file, max_blank, msg_inner, put_message_context)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use bytes::Bytes;
+    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_common::common::message::MessageVersion;
+    use rocketmq_common::UtilAll::offset_to_file_name;
+    use tempfile::tempdir;
+
+    use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
+    use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
+
+    #[test]
+    fn blank_marker_uses_file_local_position_for_nonzero_file_offset() {
+        let file_size = 128;
+        let file_from_offset = file_size;
+        let wrote_position = 96;
+        let max_blank = file_size as i32 - wrote_position;
+
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join(offset_to_file_name(file_from_offset));
+        let mapped_file = DefaultMappedFile::try_new(
+            CheetahString::from_string(file_path.to_string_lossy().into_owned()),
+            file_size,
+        )
+        .expect("mapped file");
+        mapped_file.set_wrote_position(wrote_position);
+
+        let config = Arc::new(MessageStoreConfig::default());
+        let topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> = Arc::new(DashMap::new());
+        let callback = DefaultAppendMessageCallback::new(Arc::clone(&config), topic_config_table);
+
+        let mut msg = MessageExtBrokerInner::default();
+        msg.with_version(MessageVersion::V1);
+        msg.set_topic(CheetahString::from_static_str("blank-marker-topic"));
+        msg.set_body(Bytes::from(vec![7_u8; 64]));
+        msg.message_ext_inner.set_queue_id(0);
+        msg.message_ext_inner.set_store_timestamp(1234);
+
+        let mut encoder = MessageExtEncoder::new(config);
+        assert!(encoder.encode(&msg).is_none());
+        msg.encoded_buff = Some(encoder.byte_buf());
+
+        let context = PutMessageContext::new("blank-marker-topic-0".to_string());
+        let result = callback.do_append(file_from_offset as i64, &mapped_file, max_blank, &mut msg, &context);
+
+        assert_eq!(result.status, AppendMessageStatus::EndOfFile);
+        assert_eq!(result.wrote_offset, file_from_offset as i64 + wrote_position as i64);
+        assert_eq!(result.wrote_bytes, max_blank);
+
+        let mut marker = mapped_file
+            .get_bytes(wrote_position as usize, END_FILE_MIN_BLANK_LENGTH as usize)
+            .expect("blank marker");
+        assert_eq!(marker.get_i32(), max_blank);
+        assert_eq!(marker.get_i32(), BLANK_MAGIC_CODE);
     }
 }
