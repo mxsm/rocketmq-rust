@@ -3554,6 +3554,7 @@ mod tests {
     use dashmap::DashMap;
     use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
     use rocketmq_common::common::attribute::Attribute;
+    use rocketmq_common::common::boundary_type::BoundaryType;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_common::common::config::TopicConfig;
@@ -3562,6 +3563,7 @@ mod tests {
     use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_common::common::message::MessageVersion;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::TopicAttributes::TopicAttributes;
@@ -3581,6 +3583,7 @@ mod tests {
     use crate::filter::MessageFilter;
     use crate::hook::put_message_hook::PutMessageHook;
     use crate::hook::send_message_back_hook::SendMessageBackHook;
+    use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use crate::store_error::StoreError;
@@ -3631,6 +3634,29 @@ mod tests {
         msg.message_ext_inner.set_queue_id(0);
         msg.set_body(body);
         msg
+    }
+
+    async fn append_encoded_test_message(
+        store: &mut ArcMut<LocalFileMessageStore>,
+        topic: &CheetahString,
+        commit_log_offset: i64,
+        store_timestamp: i64,
+        body: Bytes,
+    ) -> i32 {
+        let mut msg = build_test_message(topic, body);
+        msg.with_version(MessageVersion::V1);
+        msg.message_ext_inner.set_store_timestamp(store_timestamp);
+
+        let mut encoder = MessageExtEncoder::new(store.message_store_config());
+        assert!(encoder.encode(&msg).is_none());
+        let encoded = encoder.byte_buf();
+        let msg_size = encoded.len() as i32;
+        let appended = store
+            .append_to_commit_log(commit_log_offset, encoded.as_ref(), 0, msg_size)
+            .await
+            .expect("append encoded commitlog message");
+        assert!(appended);
+        msg_size
     }
 
     fn build_test_batch(topic: &CheetahString, bodies: &[Bytes]) -> MessageExtBatch {
@@ -4304,6 +4330,55 @@ mod tests {
 
         let latest = consume_queue.get_latest_unit().expect("latest cq unit");
         assert_eq!(latest.queue_offset, 1);
+    }
+
+    #[tokio::test]
+    async fn consume_queue_time_query_resolves_duplicate_timestamp_boundaries() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        let topic = CheetahString::from_static_str("consume-queue-duplicate-time-topic");
+
+        let mut next_commit_log_offset = 0;
+        for (queue_offset, store_timestamp, body) in [
+            (0_i64, 1_000_i64, Bytes::from_static(b"first")),
+            (1, 1_000, Bytes::from_static(b"second")),
+            (2, 2_000, Bytes::from_static(b"third")),
+        ] {
+            let msg_size =
+                append_encoded_test_message(&mut store, &topic, next_commit_log_offset, store_timestamp, body).await;
+            store
+                .consume_queue_store
+                .put_message_position_info_wrapper(&DispatchRequest {
+                    topic: topic.clone(),
+                    queue_id: 0,
+                    commit_log_offset: next_commit_log_offset,
+                    msg_size,
+                    consume_queue_offset: queue_offset,
+                    store_timestamp,
+                    success: true,
+                    ..DispatchRequest::default()
+                });
+            next_commit_log_offset += msg_size as i64;
+        }
+
+        let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
+
+        assert_eq!(
+            consume_queue.get_offset_in_queue_by_time_with_boundary(1_000, BoundaryType::Lower),
+            0
+        );
+        assert_eq!(
+            consume_queue.get_offset_in_queue_by_time_with_boundary(1_000, BoundaryType::Upper),
+            1
+        );
+        assert_eq!(
+            consume_queue.get_offset_in_queue_by_time_with_boundary(1_500, BoundaryType::Lower),
+            2
+        );
+        assert_eq!(
+            consume_queue.get_offset_in_queue_by_time_with_boundary(1_500, BoundaryType::Upper),
+            1
+        );
     }
 
     #[tokio::test]

@@ -383,6 +383,22 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         }
     }
 
+    #[inline]
+    fn read_queue_time_entry(buffer: &[u8], relative_offset: i32) -> Option<(i64, i32)> {
+        let start = usize::try_from(relative_offset).ok()?;
+        let record = buffer.get(start..start.checked_add(12)?)?;
+        let physical_offset = i64::from_be_bytes(record[0..8].try_into().ok()?);
+        let message_size = i32::from_be_bytes(record[8..12].try_into().ok()?);
+        Some((physical_offset, message_size))
+    }
+
+    #[inline]
+    fn middle_queue_offset(low: i32, high: i32) -> i32 {
+        let low_unit = low / CQ_STORE_UNIT_SIZE;
+        let high_unit = high / CQ_STORE_UNIT_SIZE;
+        ((low_unit + high_unit) / 2) * CQ_STORE_UNIT_SIZE
+    }
+
     /// Binary search within a mapped file to find the offset by timestamp.
     ///
     /// # Arguments
@@ -422,12 +438,36 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             None => return 0,
         };
 
-        let ceiling = buffer.len() as i32 - CQ_STORE_UNIT_SIZE;
-        let floor = if min_logic_offset > mapped_file.get_file_from_offset() as i64 {
-            (min_logic_offset - mapped_file.get_file_from_offset() as i64) as i32
+        let queue_unit_count = buffer.len() as i32 / CQ_STORE_UNIT_SIZE;
+        if queue_unit_count <= 0 {
+            return 0;
+        }
+
+        let mapped_file_from_offset = mapped_file.get_file_from_offset() as i64;
+        let ceiling = (queue_unit_count - 1) * CQ_STORE_UNIT_SIZE;
+        let mut floor = if min_logic_offset > mapped_file_from_offset {
+            (min_logic_offset - mapped_file_from_offset) as i32
         } else {
             0
         };
+        let floor_remainder = floor % CQ_STORE_UNIT_SIZE;
+        if floor_remainder != 0 {
+            floor += CQ_STORE_UNIT_SIZE - floor_remainder;
+        }
+        if floor > ceiling {
+            return 0;
+        }
+
+        let mut timestamp_cache = Vec::with_capacity(16);
+        let mut pickup_store_time = |relative_offset: i32, phy_offset: i64, size: i32| {
+            if let Some((_, store_time)) = timestamp_cache.iter().find(|(offset, _)| *offset == relative_offset) {
+                return *store_time;
+            }
+            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
+            timestamp_cache.push((relative_offset, store_time));
+            store_time
+        };
+
         let mut low = floor;
         let mut high = ceiling;
         let mut target_offset = -1i32;
@@ -439,50 +479,40 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         // 2. store time of (low) > timestamp
 
         // Handle case 1: ceiling store time < timestamp
-        if ceiling >= 0 && (ceiling as usize + CQ_STORE_UNIT_SIZE as usize) <= buffer.len() {
-            let phy_offset = i64::from_be_bytes(buffer[ceiling as usize..ceiling as usize + 8].try_into().unwrap());
-            let size = i32::from_be_bytes(buffer[ceiling as usize + 8..ceiling as usize + 12].try_into().unwrap());
-            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
-            if store_time < timestamp {
-                return match boundary_type {
-                    BoundaryType::Lower => {
-                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64 + CQ_STORE_UNIT_SIZE as i64)
-                            / CQ_STORE_UNIT_SIZE as i64
-                    }
-                    BoundaryType::Upper => {
-                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64) / CQ_STORE_UNIT_SIZE as i64
-                    }
-                };
+        if let Some((phy_offset, size)) = Self::read_queue_time_entry(buffer, ceiling) {
+            if phy_offset >= min_physic_offset && size > 0 {
+                let store_time = pickup_store_time(ceiling, phy_offset, size);
+                if store_time >= 0 && store_time < timestamp {
+                    return match boundary_type {
+                        BoundaryType::Lower => {
+                            (mapped_file_from_offset + ceiling as i64 + CQ_STORE_UNIT_SIZE as i64)
+                                / CQ_STORE_UNIT_SIZE as i64
+                        }
+                        BoundaryType::Upper => (mapped_file_from_offset + ceiling as i64) / CQ_STORE_UNIT_SIZE as i64,
+                    };
+                }
             }
         }
 
         // Handle case 2: floor store time > timestamp
-        if floor >= 0 && (floor as usize + 12) <= buffer.len() {
-            let phy_offset = i64::from_be_bytes(buffer[floor as usize..floor as usize + 8].try_into().unwrap());
-            let size = i32::from_be_bytes(buffer[floor as usize + 8..floor as usize + 12].try_into().unwrap());
-            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
-            if store_time > timestamp {
-                return match boundary_type {
-                    BoundaryType::Lower => mapped_file.get_file_from_offset() as i64 / CQ_STORE_UNIT_SIZE as i64,
-                    BoundaryType::Upper => 0,
-                };
+        if let Some((phy_offset, size)) = Self::read_queue_time_entry(buffer, floor) {
+            if phy_offset >= min_physic_offset && size > 0 {
+                let store_time = pickup_store_time(floor, phy_offset, size);
+                if store_time >= 0 && store_time > timestamp {
+                    return match boundary_type {
+                        BoundaryType::Lower => mapped_file_from_offset / CQ_STORE_UNIT_SIZE as i64,
+                        BoundaryType::Upper => 0,
+                    };
+                }
             }
         }
 
         // Perform binary search
         while high >= low {
-            let mid_offset = (low + high) / (2 * CQ_STORE_UNIT_SIZE) * CQ_STORE_UNIT_SIZE;
-            if (mid_offset as usize + 12) > buffer.len() {
+            let mid_offset = Self::middle_queue_offset(low, high);
+            let Some((phy_offset, size)) = Self::read_queue_time_entry(buffer, mid_offset) else {
                 break;
-            }
-
-            let phy_offset =
-                i64::from_be_bytes(buffer[mid_offset as usize..mid_offset as usize + 8].try_into().unwrap());
-            let size = i32::from_be_bytes(
-                buffer[mid_offset as usize + 8..mid_offset as usize + 12]
-                    .try_into()
-                    .unwrap(),
-            );
+            };
 
             // Skip invalid physical offsets
             if phy_offset < min_physic_offset {
@@ -491,7 +521,12 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 continue;
             }
 
-            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
+            let logic_offset = mapped_file_from_offset + mid_offset as i64;
+            if size <= 0 || logic_offset < min_logic_offset {
+                return 0;
+            }
+
+            let store_time = pickup_store_time(mid_offset, phy_offset, size);
             if store_time < 0 {
                 warn!("Failed to query store timestamp for commit log offset: {}", phy_offset);
                 return 0;
@@ -514,56 +549,71 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         }
 
         let offset: i64 = if target_offset != -1 {
-            // We found ONE matched record. The records next to it might also share the same
-            // store-timestamp.
+            // We found ONE matched record. Adjacent records can share the same
+            // store-timestamp, so locate the requested boundary with a second
+            // binary search instead of scanning every duplicate.
             match boundary_type {
                 BoundaryType::Lower => {
-                    // Scan backward for records with the same timestamp
-                    let mut previous_attempt = target_offset;
-                    loop {
-                        let attempt = previous_attempt - CQ_STORE_UNIT_SIZE;
-                        if attempt < floor {
+                    let mut duplicate_low = floor;
+                    let mut duplicate_high = target_offset;
+                    let mut first_match = target_offset;
+                    while duplicate_high >= duplicate_low {
+                        let attempt = Self::middle_queue_offset(duplicate_low, duplicate_high);
+                        let Some((physical_offset, message_size)) = Self::read_queue_time_entry(buffer, attempt) else {
                             break;
-                        }
-                        if (attempt as usize + 12) > buffer.len() {
-                            break;
-                        }
-                        let physical_offset =
-                            i64::from_be_bytes(buffer[attempt as usize..attempt as usize + 8].try_into().unwrap());
-                        let message_size =
-                            i32::from_be_bytes(buffer[attempt as usize + 8..attempt as usize + 12].try_into().unwrap());
-                        let message_store_timestamp = commit_log.pickup_store_timestamp(physical_offset, message_size);
-                        if message_store_timestamp == timestamp {
-                            previous_attempt = attempt;
+                        };
+                        if physical_offset < min_physic_offset {
+                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
                             continue;
                         }
-                        break;
+                        let logic_offset = mapped_file_from_offset + attempt as i64;
+                        if message_size <= 0 || logic_offset < min_logic_offset {
+                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
+                            continue;
+                        }
+                        let message_store_timestamp = pickup_store_time(attempt, physical_offset, message_size);
+                        if message_store_timestamp < 0 {
+                            break;
+                        }
+                        if message_store_timestamp < timestamp {
+                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
+                        } else {
+                            first_match = attempt;
+                            duplicate_high = attempt - CQ_STORE_UNIT_SIZE;
+                        }
                     }
-                    previous_attempt as i64
+                    first_match as i64
                 }
                 BoundaryType::Upper => {
-                    // Scan forward for records with the same timestamp
-                    let mut previous_attempt = target_offset;
-                    loop {
-                        let attempt = previous_attempt + CQ_STORE_UNIT_SIZE;
-                        if attempt > ceiling {
+                    let mut duplicate_low = target_offset;
+                    let mut duplicate_high = ceiling;
+                    let mut last_match = target_offset;
+                    while duplicate_high >= duplicate_low {
+                        let attempt = Self::middle_queue_offset(duplicate_low, duplicate_high);
+                        let Some((physical_offset, message_size)) = Self::read_queue_time_entry(buffer, attempt) else {
                             break;
-                        }
-                        if (attempt as usize + 12) > buffer.len() {
-                            break;
-                        }
-                        let physical_offset =
-                            i64::from_be_bytes(buffer[attempt as usize..attempt as usize + 8].try_into().unwrap());
-                        let message_size =
-                            i32::from_be_bytes(buffer[attempt as usize + 8..attempt as usize + 12].try_into().unwrap());
-                        let message_store_timestamp = commit_log.pickup_store_timestamp(physical_offset, message_size);
-                        if message_store_timestamp == timestamp {
-                            previous_attempt = attempt;
+                        };
+                        if physical_offset < min_physic_offset {
+                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
                             continue;
                         }
-                        break;
+                        let logic_offset = mapped_file_from_offset + attempt as i64;
+                        if message_size <= 0 || logic_offset < min_logic_offset {
+                            duplicate_high = attempt - CQ_STORE_UNIT_SIZE;
+                            continue;
+                        }
+                        let message_store_timestamp = pickup_store_time(attempt, physical_offset, message_size);
+                        if message_store_timestamp < 0 {
+                            break;
+                        }
+                        if message_store_timestamp <= timestamp {
+                            last_match = attempt;
+                            duplicate_low = attempt + CQ_STORE_UNIT_SIZE;
+                        } else {
+                            duplicate_high = attempt - CQ_STORE_UNIT_SIZE;
+                        }
                     }
-                    previous_attempt as i64
+                    last_match as i64
                 }
             }
         } else {
@@ -602,7 +652,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             }
         };
 
-        (mapped_file.get_file_from_offset() as i64 + offset) / CQ_STORE_UNIT_SIZE as i64
+        (mapped_file_from_offset + offset) / CQ_STORE_UNIT_SIZE as i64
     }
 }
 
