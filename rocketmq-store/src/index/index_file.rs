@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
 use std::mem;
 use std::sync::Arc;
 
@@ -110,11 +111,22 @@ impl IndexFile {
         end_phy_offset: i64,
         end_timestamp: i64,
     ) -> IndexFile {
+        Self::try_new(file_name, hash_slot_num, index_num, end_phy_offset, end_timestamp)
+            .expect("Create index file failed")
+    }
+
+    pub fn try_new(
+        file_name: &str,
+        hash_slot_num: usize,
+        index_num: usize,
+        end_phy_offset: i64,
+        end_timestamp: i64,
+    ) -> io::Result<IndexFile> {
         let file_total_size = INDEX_HEADER_SIZE + (hash_slot_num * HASH_SLOT_SIZE) + (index_num * INDEX_SIZE);
-        let mapped_file = Arc::new(DefaultMappedFile::new(
+        let mapped_file = Arc::new(DefaultMappedFile::try_new(
             CheetahString::from_slice(file_name),
             file_total_size as u64,
-        ));
+        )?);
 
         let index_header = IndexHeader::new(mapped_file.clone());
         let index_file = IndexFile {
@@ -134,7 +146,7 @@ impl IndexFile {
             index_file.index_header.set_begin_timestamp(end_timestamp);
             index_file.index_header.set_end_timestamp(end_timestamp);
         }
-        index_file
+        Ok(index_file)
     }
 
     #[inline]

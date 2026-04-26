@@ -16,8 +16,6 @@ use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::panic::catch_unwind;
-use std::panic::AssertUnwindSafe;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -314,22 +312,20 @@ impl AllocateMappedFileService {
         let file_size = req.file_size as u64;
         let transient_pool = transient_store_pool.clone();
 
-        let mapped_file = catch_unwind(AssertUnwindSafe(move || -> DefaultMappedFile {
-            if let Some(pool) = transient_pool {
-                // With TransientStorePool (zero-copy)
-                DefaultMappedFile::new_with_transient_store_pool(
-                    CheetahString::from_string(file_path.clone()),
-                    file_size,
-                    (*pool).clone(),
-                )
-            } else {
-                // Standard mmap
-                DefaultMappedFile::new(CheetahString::from_string(file_path.clone()), file_size)
-            }
-        }))
-        .map_err(|payload| RocketMQError::StorageWriteFailed {
+        let mapped_file = if let Some(pool) = transient_pool {
+            // With TransientStorePool (zero-copy)
+            DefaultMappedFile::try_new_with_transient_store_pool(
+                CheetahString::from_string(file_path.clone()),
+                file_size,
+                (*pool).clone(),
+            )
+        } else {
+            // Standard mmap
+            DefaultMappedFile::try_new(CheetahString::from_string(file_path.clone()), file_size)
+        }
+        .map_err(|error| RocketMQError::StorageWriteFailed {
             path: req.file_path.clone(),
-            reason: panic_payload_to_string(payload),
+            reason: error.to_string(),
         })?;
 
         let elapsed = start.elapsed();
@@ -779,16 +775,6 @@ impl Ord for AllocateRequest {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse ordering: smaller offsets come out first (min-heap behavior)
         other.file_offset().cmp(&self.file_offset())
-    }
-}
-
-fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "mapped file allocation panicked".to_string()
     }
 }
 

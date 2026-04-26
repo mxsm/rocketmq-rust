@@ -110,7 +110,7 @@ impl MappedFileFactory {
     ) -> io::Result<MappedFileImpl> {
         match _config.file_type {
             MappedFileType::Default => {
-                let mapped_file = DefaultMappedFile::new(file_name, file_size);
+                let mapped_file = DefaultMappedFile::try_new(file_name, file_size)?;
                 Ok(MappedFileImpl::Default(mapped_file))
             }
 

@@ -251,10 +251,10 @@ impl CommitLogLoader {
         let results: Result<Vec<_>, io::Error> = metadata
             .par_iter()
             .map(|meta| {
-                let mapped_file = DefaultMappedFile::new(
+                let mapped_file = DefaultMappedFile::try_new(
                     CheetahString::from_string(meta.path.to_string_lossy().to_string()),
                     self.mapped_file_size,
-                );
+                )?;
 
                 // Apply memory hints for sequential access
                 self.apply_memory_hints(&mapped_file);
@@ -277,10 +277,10 @@ impl CommitLogLoader {
         let mut mapped_files = Vec::with_capacity(metadata.len());
 
         for meta in metadata {
-            let mapped_file = DefaultMappedFile::new(
+            let mapped_file = DefaultMappedFile::try_new(
                 CheetahString::from_string(meta.path.to_string_lossy().to_string()),
                 self.mapped_file_size,
-            );
+            )?;
 
             self.apply_memory_hints(&mapped_file);
 

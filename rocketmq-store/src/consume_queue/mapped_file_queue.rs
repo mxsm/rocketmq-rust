@@ -185,10 +185,16 @@ impl MappedFileQueue {
                 return false;
             }
 
-            let mapped_file = DefaultMappedFile::new(
+            let mapped_file = match DefaultMappedFile::try_new(
                 CheetahString::from_string(file.to_string_lossy().to_string()),
                 self.mapped_file_size,
-            );
+            ) {
+                Ok(mapped_file) => mapped_file,
+                Err(error) => {
+                    error!("Failed to load mapped file {}: {}", file.display(), error);
+                    return false;
+                }
+            };
             // Set wrote, flushed, committed positions for mapped_file
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
@@ -325,10 +331,13 @@ impl MappedFileQueue {
         }
 
         // Fallback: synchronous creation
-        Some(Arc::new(DefaultMappedFile::new(
-            CheetahString::from_string(file_path_str),
-            self.mapped_file_size,
-        )))
+        match DefaultMappedFile::try_new(CheetahString::from_string(file_path_str.clone()), self.mapped_file_size) {
+            Ok(mapped_file) => Some(Arc::new(mapped_file)),
+            Err(error) => {
+                error!("Failed to create mapped file {}: {}", file_path_str, error);
+                None
+            }
+        }
     }
 
     #[inline]

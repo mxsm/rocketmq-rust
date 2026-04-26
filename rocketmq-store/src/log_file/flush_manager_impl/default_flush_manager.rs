@@ -50,7 +50,6 @@ impl DefaultFlushManager {
             FlushDiskType::SyncFlush => (
                 Some(GroupCommitService {
                     store_checkpoint: store_checkpoint.clone(),
-                    rx_out: None,
                     tx_in: None,
                     shutdown_token: CancellationToken::new(),
                     worker_handle: None,
@@ -160,21 +159,25 @@ impl FlushManager for DefaultFlushManager {
         match self.message_store_config.flush_disk_type {
             FlushDiskType::SyncFlush => {
                 if message_ext.is_wait_store_msg_ok() {
-                    let commit_request = GroupCommitRequest::new(
+                    let (commit_request, flush_ok_receiver) = GroupCommitRequest::new(
                         result.wrote_offset + result.wrote_bytes as i64,
                         self.message_store_config.sync_flush_timeout,
                     );
 
                     time::timeout(
                         time::Duration::from_millis(self.message_store_config.sync_flush_timeout),
-                        self.group_commit_service.as_mut().unwrap().put_request(commit_request),
+                        async {
+                            let Some(group_commit_service) = self.group_commit_service.as_mut() else {
+                                return PutMessageStatus::FlushDiskTimeout;
+                            };
+                            if !group_commit_service.put_request(commit_request).await {
+                                return PutMessageStatus::FlushDiskTimeout;
+                            }
+                            flush_ok_receiver.await.unwrap_or(PutMessageStatus::FlushDiskTimeout)
+                        },
                     )
                     .await
-                    .map_or(PutMessageStatus::FlushDiskTimeout, |request| {
-                        request.map_or(PutMessageStatus::FlushDiskTimeout, |request| {
-                            request.flush_ok.unwrap_or(PutMessageStatus::FlushDiskTimeout)
-                        })
-                    })
+                    .unwrap_or(PutMessageStatus::FlushDiskTimeout)
                 } else {
                     self.group_commit_service.as_ref().unwrap().wakeup();
                     PutMessageStatus::PutOk
@@ -194,31 +197,23 @@ impl FlushManager for DefaultFlushManager {
 
 struct GroupCommitService {
     store_checkpoint: Arc<StoreCheckpoint>,
-    rx_out: Option<tokio::sync::mpsc::Receiver<GroupCommitRequest>>,
     tx_in: Option<tokio::sync::mpsc::Sender<GroupCommitRequest>>,
     shutdown_token: CancellationToken,
     worker_handle: Option<JoinHandle<()>>,
 }
 
 impl GroupCommitService {
-    pub async fn put_request(&mut self, request: GroupCommitRequest) -> Option<GroupCommitRequest> {
+    pub async fn put_request(&mut self, request: GroupCommitRequest) -> bool {
         if self.shutdown_token.is_cancelled() {
-            return None;
+            return false;
         }
 
-        let tx_in = self.tx_in.as_ref()?;
-        if tx_in.send(request).await.is_err() {
-            return None;
-        }
-
-        match self.rx_out {
-            None => None,
-            Some(ref mut rx_out) => {
-                tokio::select! {
-                    request = rx_out.recv() => request,
-                    _ = self.shutdown_token.cancelled() => None,
-                }
-            }
+        let Some(tx_in) = self.tx_in.as_ref() else {
+            return false;
+        };
+        tokio::select! {
+            result = tx_in.send(request) => result.is_ok(),
+            _ = self.shutdown_token.cancelled() => false,
         }
     }
 
@@ -230,8 +225,6 @@ impl GroupCommitService {
         self.shutdown_token = CancellationToken::new();
         let (tx_in, mut rx_in) = tokio::sync::mpsc::channel::<GroupCommitRequest>(1024);
         self.tx_in = Some(tx_in);
-        let (tx_out, rx_out) = tokio::sync::mpsc::channel::<GroupCommitRequest>(1024);
-        self.rx_out = Some(rx_out);
         let shutdown_token = self.shutdown_token.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         self.worker_handle = Some(tokio::spawn(async move {
@@ -244,10 +237,7 @@ impl GroupCommitService {
                         }
                         if !remaining.is_empty() {
                             mapped_file_queue.flush(0);
-                            complete_group_commit_batch(&mut remaining, mapped_file_queue.get_flushed_where());
-                            for request in remaining {
-                                let _ = tx_out.send(request).await;
-                            }
+                            complete_group_commit_batch(remaining, mapped_file_queue.get_flushed_where());
                         }
                         break;
                     }
@@ -278,11 +268,7 @@ impl GroupCommitService {
                         if store_timestamp > 0 {
                             store_checkpoint.set_physic_msg_timestamp(store_timestamp);
                         }
-                        complete_group_commit_batch(&mut requests, flushed_where);
-
-                        for request in requests {
-                            let _ = tx_out.send(request).await;
-                        }
+                        complete_group_commit_batch(requests, flushed_where);
                     }
                     }
                 }
@@ -295,20 +281,20 @@ impl GroupCommitService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        self.rx_out.take();
         if let Some(handle) = self.worker_handle.take() {
             handle.abort();
         }
     }
 }
 
-fn complete_group_commit_batch(requests: &mut [GroupCommitRequest], flushed_where: i64) {
+fn complete_group_commit_batch(requests: Vec<GroupCommitRequest>, flushed_where: i64) {
     for request in requests {
-        request.flush_ok = Some(if flushed_where >= request.next_offset {
+        let status = if flushed_where >= request.next_offset {
             PutMessageStatus::PutOk
         } else {
             PutMessageStatus::FlushDiskTimeout
-        });
+        };
+        request.complete(status);
     }
 }
 
@@ -477,11 +463,13 @@ mod tests {
 
     #[test]
     fn complete_group_commit_batch_marks_each_request_by_final_flushed_offset() {
-        let mut requests = vec![GroupCommitRequest::new(64, 5_000), GroupCommitRequest::new(96, 5_000)];
+        let (request_64, mut response_64) = GroupCommitRequest::new(64, 5_000);
+        let (request_96, mut response_96) = GroupCommitRequest::new(96, 5_000);
+        let requests = vec![request_64, request_96];
 
-        complete_group_commit_batch(&mut requests, 80);
+        complete_group_commit_batch(requests, 80);
 
-        assert_eq!(requests[0].flush_ok, Some(PutMessageStatus::PutOk));
-        assert_eq!(requests[1].flush_ok, Some(PutMessageStatus::FlushDiskTimeout));
+        assert_eq!(response_64.try_recv(), Ok(PutMessageStatus::PutOk));
+        assert_eq!(response_96.try_recv(), Ok(PutMessageStatus::FlushDiskTimeout));
     }
 }

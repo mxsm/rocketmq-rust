@@ -14,6 +14,7 @@
 
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -37,24 +38,31 @@ pub struct StoreCheckpoint {
 impl StoreCheckpoint {
     #[inline]
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        ensure_dir_ok(path.as_ref().parent().unwrap().to_str().unwrap());
+        let checkpoint_path = path.as_ref();
+        let checkpoint_dir = checkpoint_path
+            .parent()
+            .and_then(|parent| parent.to_str())
+            .ok_or_else(|| {
+                invalid_checkpoint_error(format!("checkpoint path is invalid: {}", checkpoint_path.display()))
+            })?;
+        ensure_dir_ok(checkpoint_dir);
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(path.as_ref())?;
-        let _ = file.set_len(OS_PAGE_SIZE);
+            .open(checkpoint_path)?;
+        file.set_len(OS_PAGE_SIZE)?;
         let mmap = unsafe { MmapMut::map_mut(&file)? };
         if file.metadata()?.len() > 0 {
-            let buffer = &mmap[..8];
-            let physic_msg_timestamp = u64::from_be_bytes(buffer.try_into().unwrap());
-            let logics_msg_timestamp = u64::from_be_bytes(mmap[8..16].try_into().unwrap());
-            let index_msg_timestamp = u64::from_be_bytes(mmap[16..24].try_into().unwrap());
-            let master_flushed_offset = u64::from_be_bytes(mmap[24..32].try_into().unwrap());
-            let confirm_phy_offset = u64::from_be_bytes(mmap[32..40].try_into().unwrap());
+            let physic_msg_timestamp = read_checkpoint_u64(&mmap, 0, "physicMsgTimestamp")?;
+            let logics_msg_timestamp = read_checkpoint_u64(&mmap, 8, "logicsMsgTimestamp")?;
+            let index_msg_timestamp = read_checkpoint_u64(&mmap, 16, "indexMsgTimestamp")?;
+            let master_flushed_offset = read_checkpoint_u64(&mmap, 24, "masterFlushedOffset")?;
+            let confirm_phy_offset = read_checkpoint_u64(&mmap, 32, "confirmPhyOffset")?;
 
-            info!("store checkpoint file exists, {}", path.as_ref().display());
+            info!("store checkpoint file exists, {}", checkpoint_path.display());
             info!("physicMsgTimestamp: {}", physic_msg_timestamp);
             info!("logicsMsgTimestamp: {}", logics_msg_timestamp);
             info!("indexMsgTimestamp: {}", index_msg_timestamp);
@@ -167,4 +175,19 @@ impl StoreCheckpoint {
         self.get_min_timestamp()
             .min(self.index_msg_timestamp.load(Ordering::Relaxed))
     }
+}
+
+fn read_checkpoint_u64(mmap: &[u8], offset: usize, field_name: &str) -> io::Result<u64> {
+    let bytes = mmap.get(offset..offset + 8).ok_or_else(|| {
+        invalid_checkpoint_error(format!(
+            "checkpoint file is too small to read {field_name} at offset {offset}"
+        ))
+    })?;
+    let mut value = [0; 8];
+    value.copy_from_slice(bytes);
+    Ok(u64::from_be_bytes(value))
+}
+
+fn invalid_checkpoint_error(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
 }

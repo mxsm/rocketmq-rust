@@ -15,6 +15,7 @@
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
+use std::io;
 use std::io::Write;
 use std::ops::Deref;
 use std::path::Path;
@@ -62,6 +63,10 @@ pub const OS_PAGE_SIZE: u64 = 1024 * 4;
 
 static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
 static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
+
+fn invalid_input_error(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
+}
 
 pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
@@ -117,27 +122,36 @@ impl Default for DefaultMappedFile {
 impl DefaultMappedFile {
     #[inline]
     pub fn new(file_name: CheetahString, file_size: u64) -> Self {
+        Self::try_new(file_name, file_size).expect("Create mapped file failed")
+    }
+
+    pub fn try_new(file_name: CheetahString, file_size: u64) -> io::Result<Self> {
+        Self::try_new_inner(file_name, file_size, None)
+    }
+
+    fn try_new_inner(
+        file_name: CheetahString,
+        file_size: u64,
+        transient_store_pool: Option<TransientStorePool>,
+    ) -> io::Result<Self> {
         let path_buf = PathBuf::from(file_name.as_str());
-        if path_buf.parent().is_none() {
-            panic!("file path is invalid: {file_name}");
-        }
-        let dir = path_buf.parent().unwrap().to_str();
-        if dir.is_none() {
-            panic!("file path is invalid: {file_name}");
-        }
-        ensure_dir_ok(dir.unwrap());
-        let file_from_offset = Self::parse_file_from_offset(&path_buf);
+        let dir = path_buf
+            .parent()
+            .and_then(|path| path.to_str())
+            .ok_or_else(|| invalid_input_error(format!("file path is invalid: {file_name}")))?;
+        ensure_dir_ok(dir);
+
+        let file_from_offset = Self::try_parse_file_from_offset(&path_buf)?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
-            .open(path_buf)
-            .expect("Create file failed");
-        file.set_len(file_size).unwrap();
+            .open(&path_buf)?;
+        file.set_len(file_size)?;
 
-        let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        Self {
+        let mmap = unsafe { MmapMut::map_mut(&file)? };
+        Ok(Self {
             reference_resource: ReferenceResourceCounter::new(),
             file,
             mmapped_file: ArcMut::new(mmap),
@@ -154,11 +168,11 @@ impl DefaultMappedFile {
             swap_map_time: AtomicU64::new(current_millis()),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             start_timestamp: AtomicI64::new(-1),
-            transient_store_pool: None,
+            transient_store_pool,
             stop_timestamp: AtomicI64::new(-1),
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
-        }
+        })
     }
 
     /// Extracts the file offset from the given file name.
@@ -179,11 +193,18 @@ impl DefaultMappedFile {
     /// This function will panic if the file name cannot be parsed to a valid `u64` offset.
     #[inline]
     pub fn parse_file_from_offset(file_name: &Path) -> u64 {
+        Self::try_parse_file_from_offset(file_name).expect("File name parse to offset is invalid")
+    }
+
+    #[inline]
+    pub fn try_parse_file_from_offset(file_name: &Path) -> io::Result<u64> {
         file_name
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(|s| s.parse::<u64>().ok())
-            .expect("File name parse to offset is invalid")
+            .ok_or_else(|| {
+                invalid_input_error(format!("file name parse to offset is invalid: {}", file_name.display()))
+            })
     }
 
     /// Creates and initializes a new file with the specified name and size.
@@ -224,40 +245,16 @@ impl DefaultMappedFile {
         file_size: u64,
         transient_store_pool: TransientStorePool,
     ) -> Self {
-        let path_buf = PathBuf::from(file_name.as_str());
-        let file_from_offset = Self::parse_file_from_offset(&path_buf);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path_buf)
-            .expect("Open file failed");
-        file.set_len(file_size).expect("Set file size failed");
+        Self::try_new_with_transient_store_pool(file_name, file_size, transient_store_pool)
+            .expect("Create mapped file with transient store pool failed")
+    }
 
-        let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        Self {
-            reference_resource: ReferenceResourceCounter::new(),
-            file,
-            file_name,
-            file_from_offset,
-            mapped_byte_buffer: None,
-            wrote_position: Default::default(),
-            committed_position: Default::default(),
-            flushed_position: Default::default(),
-            file_size,
-            store_timestamp: Default::default(),
-            first_create_in_queue: false,
-            last_flush_time: AtomicU64::new(0),
-            swap_map_time: AtomicU64::new(current_millis()),
-            mapped_byte_buffer_access_count_since_last_swap: Default::default(),
-            start_timestamp: AtomicI64::new(-1),
-            transient_store_pool: Some(transient_store_pool),
-            stop_timestamp: AtomicI64::new(-1),
-            mmapped_file: ArcMut::new(mmap),
-            metrics: Some(MappedFileMetrics::new()),
-            flush_strategy: FlushStrategy::Async,
-        }
+    pub fn try_new_with_transient_store_pool(
+        file_name: CheetahString,
+        file_size: u64,
+        transient_store_pool: TransientStorePool,
+    ) -> io::Result<Self> {
+        Self::try_new_inner(file_name, file_size, Some(transient_store_pool))
     }
 }
 

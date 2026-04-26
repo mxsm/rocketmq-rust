@@ -99,7 +99,14 @@ impl IndexService {
                 continue;
             };
 
-            let index_file = IndexFile::new(file_path, self.hash_slot_num as usize, self.index_num as usize, 0, 0);
+            let index_file =
+                match IndexFile::try_new(file_path, self.hash_slot_num as usize, self.index_num as usize, 0, 0) {
+                    Ok(index_file) => index_file,
+                    Err(error) => {
+                        error!("load index file {} failed: {}", file_path, error);
+                        return false;
+                    }
+                };
             index_file.load();
 
             if !last_exit_ok && index_file.get_end_timestamp() > checkpoint_timestamp {
@@ -405,13 +412,20 @@ impl IndexService {
                 time_millis_to_human_string(current_millis() as i64)
             );
 
-            let new_index_file = Arc::new(IndexFile::new(
+            let new_index_file = match IndexFile::try_new(
                 file_name.as_str(),
                 self.hash_slot_num as usize,
                 self.index_num as usize,
                 last_update_end_phy_offset,
                 last_update_index_timestamp,
-            ));
+            ) {
+                Ok(index_file) => Arc::new(index_file),
+                Err(error) => {
+                    error!("create index file {} failed: {}", file_name, error);
+                    self.running_flags.make_index_file_error();
+                    return None;
+                }
+            };
 
             {
                 let mut write = self.index_file_list.write();
