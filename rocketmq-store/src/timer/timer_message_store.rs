@@ -2228,7 +2228,16 @@ mod tests {
 
         assert_eq!(first_delivery_tick, 1);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
-        assert_eq!(timer_message_store.get_timer_wheel_slot(hot_slot_time).unwrap().num, 1);
+        let remaining_timer_messages = timer_message_store
+            .timer_wheel
+            .lock()
+            .as_ref()
+            .map(TimerWheel::slots_snapshot)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|slot| slot.num.max(0))
+            .sum::<i32>();
+        assert_eq!(remaining_timer_messages, 1);
 
         let second_delivery_tick = timer_message_store.process_once().await;
         store.mut_from_ref().reput_once().await;

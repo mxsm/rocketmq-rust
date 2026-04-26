@@ -58,9 +58,16 @@ struct TopicQueueMappingCleanServiceInner<MS: MessageStore> {
     lifecycle: Mutex<CleanServiceLifecycle>,
 }
 
-#[derive(Clone)]
 pub struct TopicQueueMappingCleanService<MS: MessageStore> {
     inner: Arc<TopicQueueMappingCleanServiceInner<MS>>,
+}
+
+impl<MS: MessageStore> Clone for TopicQueueMappingCleanService<MS> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
@@ -472,7 +479,17 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+
+    use crate::broker_runtime::BrokerRuntime;
+
     use super::*;
+
+    type LocalCleanService = TopicQueueMappingCleanService<LocalFileMessageStore>;
 
     #[test]
     fn should_remove_earliest_item_when_queue_is_empty() {
@@ -480,9 +497,7 @@ mod tests {
         offset.set_min_offset(10);
         offset.set_max_offset(10);
 
-        assert!(TopicQueueMappingCleanService::<
-            rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore,
-        >::should_remove_earliest_item(&offset));
+        assert!(LocalCleanService::should_remove_earliest_item(&offset));
     }
 
     #[test]
@@ -491,9 +506,7 @@ mod tests {
         offset.set_min_offset(-1);
         offset.set_max_offset(0);
 
-        assert!(TopicQueueMappingCleanService::<
-            rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore,
-        >::should_remove_earliest_item(&offset));
+        assert!(LocalCleanService::should_remove_earliest_item(&offset));
     }
 
     #[test]
@@ -502,8 +515,41 @@ mod tests {
         offset.set_min_offset(10);
         offset.set_max_offset(20);
 
-        assert!(!TopicQueueMappingCleanService::<
-            rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore,
-        >::should_remove_earliest_item(&offset));
+        assert!(!LocalCleanService::should_remove_earliest_item(&offset));
+    }
+
+    #[tokio::test]
+    async fn run_once_respects_delete_when_window() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = MessageStoreConfig {
+            delete_when: "99".to_string(),
+            ..Default::default()
+        };
+        let mut broker_runtime = BrokerRuntime::new(broker_config, Arc::new(message_store_config));
+        let service = broker_runtime
+            .inner_for_test()
+            .topic_queue_mapping_clean_service_unchecked()
+            .clone();
+
+        assert!(!service.run_once().await.expect("run_once should not fail"));
+        assert!(!service.is_running());
+    }
+
+    #[tokio::test]
+    async fn start_is_idempotent_and_shutdown_stops_background_task() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let service = broker_runtime
+            .inner_for_test()
+            .topic_queue_mapping_clean_service_unchecked()
+            .clone();
+
+        service.start();
+        service.start();
+        assert!(service.is_running());
+
+        service.shutdown();
+        assert!(!service.is_running());
     }
 }
