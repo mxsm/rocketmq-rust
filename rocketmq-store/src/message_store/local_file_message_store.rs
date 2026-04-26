@@ -75,6 +75,8 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -260,6 +262,8 @@ pub struct LocalFileMessageStore {
     send_message_back_hook: StdRwLock<Option<Arc<dyn SendMessageBackHook>>>,
     ha_service: Option<GeneralHAService>,
     flush_consume_queue_service: FlushConsumeQueueService,
+    scheduled_task_shutdown: CancellationToken,
+    scheduled_task_handles: Vec<JoinHandle<()>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
 }
@@ -376,6 +380,8 @@ impl LocalFileMessageStore {
                 consume_queue_store.clone(),
                 store_checkpoint,
             ),
+            scheduled_task_shutdown: CancellationToken::new(),
+            scheduled_task_handles: Vec::new(),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
         }
@@ -758,55 +764,80 @@ impl LocalFileMessageStore {
         }
     }
 
-    fn add_schedule_task(&self) {
+    fn add_schedule_task(&mut self) {
+        if !self.scheduled_task_handles.is_empty() {
+            return;
+        }
+
+        self.scheduled_task_shutdown = CancellationToken::new();
+
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(1000 * 60));
-            interval.tick().await;
-            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval));
+        let shutdown_token = self.scheduled_task_shutdown.clone();
+        self.scheduled_task_handles.push(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
             loop {
-                clean_commit_log_service_arc.run();
-                interval.tick().await;
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = interval.tick() => clean_commit_log_service_arc.run(),
+                }
             }
-        });
+        }));
 
         let message_store = self.message_store_arc.clone().unwrap();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(60));
-            interval.tick().await;
+        let shutdown_token = self.scheduled_task_shutdown.clone();
+        self.scheduled_task_handles.push(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
             loop {
-                message_store.check_self();
-                interval.tick().await;
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = interval.tick() => message_store.check_self(),
+                }
             }
-        });
+        }));
 
         // store check point flush
         let store_checkpoint_arc = self.store_checkpoint.clone().unwrap();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            interval.tick().await;
+        let shutdown_token = self.scheduled_task_shutdown.clone();
+        self.scheduled_task_handles.push(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
-                let _ = store_checkpoint_arc.flush();
-                interval.tick().await;
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = interval.tick() => {
+                        let _ = store_checkpoint_arc.flush();
+                    }
+                }
             }
-        });
+        }));
 
         let correct_logic_offset_service_arc = self.correct_logic_offset_service.clone();
         let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(1000 * 60));
-            interval.tick().await;
-            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval));
+        let shutdown_token = self.scheduled_task_shutdown.clone();
+        self.scheduled_task_handles.push(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
             loop {
-                correct_logic_offset_service_arc.run();
-                clean_consume_queue_service_arc.run();
-                interval.tick().await;
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = interval.tick() => {
+                        correct_logic_offset_service_arc.run();
+                        clean_consume_queue_service_arc.run();
+                    }
+                }
             }
-        });
+        }));
+    }
+
+    async fn shutdown_schedule_tasks(&mut self) {
+        self.scheduled_task_shutdown.cancel();
+        for handle in self.scheduled_task_handles.drain(..) {
+            if let Err(error) = handle.await {
+                if !error.is_cancelled() {
+                    error!("scheduled store task failed during shutdown: {error}");
+                }
+            }
+        }
     }
 
     fn check_self(&self) {
@@ -1091,6 +1122,7 @@ impl MessageStore for LocalFileMessageStore {
                 ha_service.shutdown().await;
             }
 
+            self.shutdown_schedule_tasks().await;
             self.store_stats_service.shutdown();
             self.commit_log.shutdown();
 
