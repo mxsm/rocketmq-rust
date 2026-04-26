@@ -12,18 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tracing::error;
+use tracing::info;
 
 #[derive(Default, Clone)]
-pub struct CompactionService {}
+pub struct CompactionService {
+    loaded: bool,
+}
 
 impl CompactionService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn load(&mut self, exit_ok: bool) -> bool {
-        error!("[unimplemented]load compaction service, exit ok: {}", exit_ok);
+        self.loaded = true;
+        info!("load compaction service, exit ok: {}", exit_ok);
         true
     }
 
     pub fn shutdown(&self) {
-        error!("[unimplemented]shutdown compaction service");
+        info!("shutdown compaction service");
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
     }
 }

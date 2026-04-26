@@ -365,6 +365,7 @@ impl LocalFileMessageStore {
             message_store_config.transient_store_pool_size,
             message_store_config.mapped_file_size_commit_log,
         );
+        let compaction_service = message_store_config.enable_compaction.then(CompactionService::new);
         Self {
             message_store_config: message_store_config.clone(),
             broker_config,
@@ -372,7 +373,7 @@ impl LocalFileMessageStore {
             topic_config_table,
             // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log: commit_log.clone(),
-            compaction_service: Default::default(),
+            compaction_service,
             store_checkpoint: Some(store_checkpoint.clone()),
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
             alive_replica_num_in_group: Arc::new(AtomicI32::new(1)),
@@ -415,7 +416,7 @@ impl LocalFileMessageStore {
             message_arriving_listener: None,
             notify_message_arrive_in_batch,
             store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
-            compaction_store: Arc::new(CompactionStore),
+            compaction_store: Arc::new(CompactionStore::new()),
             timer_message_store: None,
             transient_store_pool,
             message_store_arc: None,
@@ -1133,7 +1134,11 @@ impl MessageStore for LocalFileMessageStore {
         result &= self.consume_queue_store.load();
 
         if self.message_store_config.enable_compaction {
-            result &= self.compaction_service.as_mut().unwrap().load(last_exit_ok);
+            let Some(compaction_service) = self.compaction_service.as_mut() else {
+                error!("compaction is enabled but compaction service is not initialized");
+                return false;
+            };
+            result &= compaction_service.load(last_exit_ok);
             if !result {
                 return result;
             }
@@ -1503,10 +1508,12 @@ impl MessageStore for LocalFileMessageStore {
         let topic_config = self.get_topic_config(topic);
         let policy = get_delete_policy_arc_mut(topic_config.as_ref());
         if policy == CleanupPolicy::COMPACTION && self.message_store_config.enable_compaction {
-            //not implemented will be implemented in the future
-            return self
-                .compaction_store
-                .get_message(group, topic, queue_id, offset, max_msg_nums, max_total_msg_size);
+            if let Some(result) =
+                self.compaction_store
+                    .get_message(group, topic, queue_id, offset, max_msg_nums, max_total_msg_size)
+            {
+                return Some(result);
+            }
         }
         let begin_time = Instant::now();
 
@@ -3545,6 +3552,8 @@ mod tests {
     use bytes::BytesMut;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
+    use rocketmq_common::common::attribute::Attribute;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::broker::broker_role::BrokerRole;
     use rocketmq_common::common::config::TopicConfig;
@@ -3555,6 +3564,7 @@ mod tests {
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::CRC32Utils::crc32;
+    use rocketmq_common::TopicAttributes::TopicAttributes;
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
@@ -3740,6 +3750,48 @@ mod tests {
             .init()
             .await
             .expect("rocksdb-typed store should accept rocksdb flags");
+    }
+
+    #[tokio::test]
+    async fn compaction_topic_loads_and_reads_from_commitlog_until_compaction_backend_has_data() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("compaction-fallback-topic");
+        let group = CheetahString::from_static_str("compaction-fallback-group");
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_compaction: true,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let mut topic_config = TopicConfig::new(topic.clone());
+        topic_config.attributes.insert(
+            TopicAttributes::cleanup_policy_attribute().name().clone(),
+            CleanupPolicy::COMPACTION.to_string().into(),
+        );
+        store
+            .topic_config_table
+            .insert(topic.clone(), ArcMut::new(topic_config));
+
+        store.init().await.expect("init compaction-enabled store");
+        assert!(store.load().await, "load compaction-enabled store");
+
+        let put_result = store
+            .put_message(build_test_message(
+                &topic,
+                Bytes::from_static(b"compaction-fallback-body"),
+            ))
+            .await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        store.reput_once().await;
+
+        let result = store
+            .get_message(&group, &topic, 0, 0, 32, None)
+            .await
+            .expect("compaction topic should fall back to commitlog read");
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(result.message_count(), 1);
     }
 
     #[tokio::test]

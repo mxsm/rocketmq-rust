@@ -16,24 +16,24 @@ use cheetah_string::CheetahString;
 
 use crate::base::get_message_result::GetMessageResult;
 
+#[derive(Default)]
 pub struct CompactionStore;
 
 impl CompactionStore {
     pub fn new() -> Self {
-        CompactionStore
+        Self
     }
 }
 
-#[allow(unused_variables)]
 impl CompactionStore {
     pub fn get_message(
         &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        max_total_msg_size: i32,
+        _group: &CheetahString,
+        _topic: &CheetahString,
+        _queue_id: i32,
+        _offset: i64,
+        _max_msg_nums: i32,
+        _max_total_msg_size: i32,
     ) -> Option<GetMessageResult> {
         None
     }

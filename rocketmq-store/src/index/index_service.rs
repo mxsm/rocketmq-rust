@@ -222,10 +222,18 @@ impl IndexService {
         end: i64,
         index_type: Option<&str>,
     ) -> QueryOffsetResult {
+        let max_num = max_num.max(0).min(self.message_store_config.max_msgs_num_batch as i32);
+        if max_num == 0 {
+            return QueryOffsetResult::new(Vec::new(), 0, 0);
+        }
+
+        let query_index_type =
+            index_type.filter(|idx_type| !idx_type.is_empty() && *idx_type == MessageConst::INDEX_TAG_TYPE);
+        let mut query_key = String::with_capacity(index_key_len(topic, key, query_index_type));
+        let query_key = build_key_into(&mut query_key, topic, key, query_index_type);
         let mut phy_offsets = Vec::with_capacity(max_num as usize);
         let mut index_last_update_timestamp = 0;
         let mut index_last_update_phyoffset = 0;
-        let max_num = max_num.min(self.message_store_config.max_msgs_num_batch as i32);
 
         {
             let index_file_list = self.index_file_list.read();
@@ -241,17 +249,7 @@ impl IndexService {
                     }
 
                     if f.is_time_matched(begin, end) {
-                        // Match only use INDEX_TAG_TYPE if explicitly specified
-                        let query_key = if let Some(idx_type) = index_type {
-                            if !idx_type.is_empty() && idx_type == MessageConst::INDEX_TAG_TYPE {
-                                build_key_with_type(topic, key, MessageConst::INDEX_TAG_TYPE)
-                            } else {
-                                build_key(topic, key)
-                            }
-                        } else {
-                            build_key(topic, key)
-                        };
-                        f.select_phy_offset(&mut phy_offsets, &query_key, max_num as usize, begin, end);
+                        f.select_phy_offset(&mut phy_offsets, query_key, max_num as usize, begin, end);
                     }
 
                     if f.get_begin_timestamp() < begin {
@@ -289,6 +287,7 @@ impl IndexService {
                 }
 
                 let mut index_file_new = Some(index_file_inner);
+                let mut index_key = String::with_capacity(topic.len() + 1 + keys.len());
                 if let Some(ref uniq_key) = dispatch_request.uniq_key {
                     let Some(index_file) = index_file_new.take() else {
                         error!(
@@ -300,7 +299,7 @@ impl IndexService {
                     index_file_new = self.put_key(
                         index_file,
                         dispatch_request,
-                        build_key(topic, uniq_key.as_str()).as_str(),
+                        build_key_into(&mut index_key, topic, uniq_key.as_str(), None),
                     );
                     if index_file_new.is_none() {
                         error!(
@@ -322,7 +321,11 @@ impl IndexService {
                                 );
                                 return;
                             };
-                            index_file_new = self.put_key(index_file, dispatch_request, build_key(topic, key).as_str());
+                            index_file_new = self.put_key(
+                                index_file,
+                                dispatch_request,
+                                build_key_into(&mut index_key, topic, key, None),
+                            );
                             if index_file_new.is_none() {
                                 error!(
                                     "putKey error commitlog {} key {} uniqkey {}",
@@ -353,7 +356,12 @@ impl IndexService {
                             index_file_new = self.put_key(
                                 index_file,
                                 dispatch_request,
-                                build_key_with_type(topic, tags.as_str(), MessageConst::INDEX_TAG_TYPE).as_str(),
+                                build_key_into(
+                                    &mut index_key,
+                                    topic,
+                                    tags.as_str(),
+                                    Some(MessageConst::INDEX_TAG_TYPE),
+                                ),
                             );
                             if index_file_new.is_none() {
                                 error!(
@@ -491,12 +499,39 @@ impl IndexService {
 
 #[inline]
 fn build_key(topic: &str, key: &str) -> String {
-    format!("{topic}#{key}")
+    let mut buffer = String::with_capacity(index_key_len(topic, key, None));
+    build_key_into(&mut buffer, topic, key, None);
+    buffer
 }
 
 #[inline]
 fn build_key_with_type(topic: &str, key: &str, index_type: &str) -> String {
-    format!("{topic}#{index_type}#{key}")
+    let mut buffer = String::with_capacity(index_key_len(topic, key, Some(index_type)));
+    build_key_into(&mut buffer, topic, key, Some(index_type));
+    buffer
+}
+
+#[inline]
+fn build_key_into<'a>(buffer: &'a mut String, topic: &str, key: &str, index_type: Option<&str>) -> &'a str {
+    buffer.clear();
+    let required_len = index_key_len(topic, key, index_type);
+    if buffer.capacity() < required_len {
+        buffer.reserve(required_len - buffer.capacity());
+    }
+
+    buffer.push_str(topic);
+    buffer.push('#');
+    if let Some(index_type) = index_type {
+        buffer.push_str(index_type);
+        buffer.push('#');
+    }
+    buffer.push_str(key);
+    buffer.as_str()
+}
+
+#[inline]
+fn index_key_len(topic: &str, key: &str, index_type: Option<&str>) -> usize {
+    topic.len() + key.len() + 1 + index_type.map_or(0, |index_type| index_type.len() + 1)
 }
 
 #[cfg(test)]
@@ -520,8 +555,8 @@ mod tests {
         assert_eq!(key2, "TestTopic#T#tagValue");
     }
 
-    #[tokio::test]
-    async fn test_build_index_with_tags() {
+    #[test]
+    fn test_build_index_with_tags() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let message_store_config = Arc::new(MessageStoreConfig {
@@ -549,7 +584,7 @@ mod tests {
             tags_code: 0,
             store_timestamp: 1000000000000,
             consume_queue_offset: 0,
-            keys: CheetahString::from_slice("key1"),
+            keys: CheetahString::from_string(format!("key1{}key2", MessageConst::KEY_SEPARATOR)),
             success: true,
             uniq_key: Some(CheetahString::from_slice("uniq123")),
             sys_flag: 0,
@@ -565,8 +600,20 @@ mod tests {
 
         index_service.build_index(&dispatch_request);
 
-        // Give async tasks time to complete
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        for key in ["key1", "key2", "uniq123"] {
+            let result = index_service.query_offset("TestTopic", key, 10, 0, i64::MAX);
+            assert_eq!(result.get_phy_offsets(), &[1000], "missing index for key {key}");
+        }
+
+        let tag_result = index_service.query_offset_with_type(
+            "TestTopic",
+            "TestTag",
+            10,
+            0,
+            i64::MAX,
+            Some(MessageConst::INDEX_TAG_TYPE),
+        );
+        assert_eq!(tag_result.get_phy_offsets(), &[1000]);
     }
 
     #[test]
@@ -599,5 +646,26 @@ mod tests {
         assert_eq!(result2.get_phy_offsets().len(), 0); // Empty because no index files
 
         // Verify both methods work without panicking
+    }
+
+    #[test]
+    fn query_offset_with_negative_max_num_returns_empty_result() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir),
+            ..MessageStoreConfig::default()
+        });
+        let temp_file = temp_dir.path().join("store_checkpoint_test_negative_max_num");
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
+        let running_flags = Arc::new(RunningFlags::default());
+
+        let index_service = IndexService::new(message_store_config, store_checkpoint, running_flags);
+
+        let result = index_service.query_offset("TestTopic", "key1", -1, 0, i64::MAX);
+
+        assert!(result.get_phy_offsets().is_empty());
+        assert_eq!(result.get_index_last_update_timestamp(), 0);
+        assert_eq!(result.get_index_last_update_phyoffset(), 0);
     }
 }

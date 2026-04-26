@@ -684,7 +684,9 @@ impl ConsumeQueueStore {
                                 };
 
                                 // Verify queue type matches expected type
-                                self.queue_type_should_be(&topic, cq_type);
+                                if !self.queue_type_should_be(&topic, cq_type) {
+                                    return false;
+                                }
 
                                 // Create consume queue based on type
                                 let logic =
@@ -735,12 +737,20 @@ impl ConsumeQueueStore {
     }
 
     #[inline]
-    fn queue_type_should_be(&self, topic: &CheetahString, cq_type: CQType) {
-        let topic_config = self.inner.message_store.as_ref().unwrap().get_topic_config(topic);
+    fn queue_type_should_be(&self, topic: &CheetahString, cq_type: CQType) -> bool {
+        let Some(message_store) = self.inner.message_store.as_ref() else {
+            error!("MessageStore must be set before loading consume queues for topic {topic}");
+            return false;
+        };
+
+        let topic_config = message_store.get_topic_config(topic);
         let act = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
         if act != cq_type {
-            panic!("The queue type of topic: {topic} should be {cq_type:?}, but is {act:?}",);
+            error!("The queue type of topic: {topic} should be {cq_type:?}, but is {act:?}");
+            return false;
         }
+
+        true
     }
 
     #[inline]
@@ -798,12 +808,44 @@ mod tests {
 
     use bytes::Buf;
     use cheetah_string::CheetahString;
+    use dashmap::DashMap;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
     use super::*;
     use crate::queue::batch_consume_queue;
+
+    #[test]
+    fn load_consume_queues_returns_false_when_topic_queue_type_mismatches_directory() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("MismatchTopic");
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.path().to_string_lossy().to_string().into(),
+            ..MessageStoreConfig::default()
+        });
+        let broker_config = Arc::new(BrokerConfig::default());
+        let topic_config_table = Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new());
+        topic_config_table.insert(topic.clone(), ArcMut::new(TopicConfig::new(topic.clone())));
+        let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+            message_store_config.clone(),
+            broker_config.clone(),
+            topic_config_table,
+            None,
+            false,
+        ));
+        let message_store_clone = message_store.clone();
+        message_store.set_message_store_arc(message_store_clone);
+
+        let batch_store_path = get_store_path_batch_consume_queue(message_store_config.store_path_root_dir.as_str());
+        fs::create_dir_all(Path::new(&batch_store_path).join(topic.as_str()).join("0"))
+            .expect("batch consume queue directory");
+        let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
+        store.set_message_store(message_store);
+
+        assert!(!store.load_consume_queues(&batch_store_path, CQType::BatchCQ));
+    }
 
     #[test]
     fn batch_consume_queue_store_get_returns_full_batch_unit() {
