@@ -83,6 +83,7 @@ rand         = { workspace = true }
 uuid         = { workspace = true }
 anyhow       = { workspace = true }
 page_size    = "0.6.0"
+fs2          = "0.4"
 
 dashmap   = { workspace = true }
 hashbrown = "0.17"

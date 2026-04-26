@@ -22,7 +22,10 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::future::Future;
+use std::io::Write;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
@@ -30,6 +33,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -43,6 +47,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use fs2::FileExt;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -123,6 +128,7 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
 use crate::store_path_config_helper::get_abort_file;
+use crate::store_path_config_helper::get_lock_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
 use crate::timer::timer_message_store::TimerMessageStore;
@@ -223,6 +229,43 @@ fn murmur3_x64_128_bytes(bytes: &[u8], seed: u32) -> [u8; 16] {
     result
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum StoreLifecycleState {
+    Created = 0,
+    Initialized = 1,
+    Started = 2,
+    Shutdown = 3,
+}
+
+impl StoreLifecycleState {
+    #[inline]
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Initialized,
+            2 => Self::Started,
+            3 => Self::Shutdown,
+            _ => Self::Created,
+        }
+    }
+
+    #[inline]
+    fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+struct StoreLockGuard {
+    file: File,
+}
+
+impl Drop for StoreLockGuard {
+    fn drop(&mut self) {
+        let _ = self.file.sync_all();
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
@@ -240,8 +283,10 @@ pub struct LocalFileMessageStore {
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
+    lifecycle_state: Arc<AtomicU8>,
     controller_epoch_start_offset: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
+    store_lock_guard: Option<StoreLockGuard>,
     running_flags: Arc<RunningFlags>,
     reput_message_service: ReputMessageService,
     clean_commit_log_service: Arc<CleanCommitLogService>,
@@ -337,8 +382,10 @@ impl LocalFileMessageStore {
             dispatcher,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
+            lifecycle_state: Arc::new(AtomicU8::new(StoreLifecycleState::Created.as_u8())),
             controller_epoch_start_offset: Arc::new(AtomicI64::new(-1)),
             shutdown: Arc::new(AtomicBool::new(false)),
+            store_lock_guard: None,
             running_flags,
             reput_message_service: ReputMessageService {
                 shutdown: Arc::new(Notify::new()),
@@ -471,6 +518,83 @@ impl LocalFileMessageStore {
         Ok(())
     }
 
+    #[inline]
+    fn lifecycle_state(&self) -> StoreLifecycleState {
+        StoreLifecycleState::from_u8(self.lifecycle_state.load(Ordering::Acquire))
+    }
+
+    #[inline]
+    fn set_lifecycle_state(&self, state: StoreLifecycleState) {
+        self.lifecycle_state.store(state.as_u8(), Ordering::Release);
+    }
+
+    #[inline]
+    fn is_store_available_for_io(&self) -> bool {
+        self.lifecycle_state() != StoreLifecycleState::Shutdown && !self.shutdown.load(Ordering::Acquire)
+    }
+
+    fn message_store_arc_or_error(&self, operation: &str) -> Result<ArcMut<LocalFileMessageStore>, StoreError> {
+        self.message_store_arc.clone().ok_or_else(|| {
+            StoreError::General(format!(
+                "message store arc is not set; call set_message_store_arc before {operation}"
+            ))
+        })
+    }
+
+    fn acquire_store_lock(&mut self) -> Result<(), StoreError> {
+        if self.store_lock_guard.is_some() {
+            return Ok(());
+        }
+
+        let lock_path = PathBuf::from(get_lock_file(self.message_store_config.store_path_root_dir.as_str()));
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                StoreError::General(format!(
+                    "failed to create store lock parent directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|error| {
+                StoreError::General(format!(
+                    "failed to open store lock file {}: {error}",
+                    lock_path.display()
+                ))
+            })?;
+        file.try_lock_exclusive().map_err(|error| {
+            StoreError::General(format!(
+                "message store lock file is held by another instance: {} ({error})",
+                lock_path.display()
+            ))
+        })?;
+        file.set_len(0).map_err(|error| {
+            StoreError::General(format!(
+                "failed to truncate store lock file {}: {error}",
+                lock_path.display()
+            ))
+        })?;
+        writeln!(file, "pid={}", std::process::id()).map_err(|error| {
+            StoreError::General(format!(
+                "failed to write store lock file {}: {error}",
+                lock_path.display()
+            ))
+        })?;
+
+        self.store_lock_guard = Some(StoreLockGuard { file });
+        Ok(())
+    }
+
+    fn release_store_lock(&mut self) {
+        self.store_lock_guard.take();
+    }
+
     fn should_run_timer_dequeue(&self) -> bool {
         self.message_store_config.is_timer_wheel_enable() && self.message_store_config.broker_role != BrokerRole::Slave
     }
@@ -498,6 +622,7 @@ impl LocalFileMessageStore {
 
 impl Drop for LocalFileMessageStore {
     fn drop(&mut self) {
+        self.release_store_lock();
         // if let Some(runtime) = self.message_store_runtime.take() {
         //     runtime.shutdown();
         // }
@@ -1046,59 +1171,100 @@ impl MessageStore for LocalFileMessageStore {
 
     async fn start(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
-        self.allocate_mapped_file_service.start();
-
-        self.index_service.start();
-
-        self.reput_message_service
-            .set_reput_from_offset(self.commit_log.get_confirm_offset());
-        self.reput_message_service.start(
-            self.commit_log.clone(),
-            self.message_store_config.clone(),
-            self.dispatcher.clone(),
-            self.notify_message_arrive_in_batch,
-            self.message_store_arc.clone().unwrap(),
-        );
-        self.do_recheck_reput_offset_from_dispatchers();
-        self.flush_consume_queue_service.start();
-        self.commit_log.start();
-        self.consume_queue_store.start();
-        self.store_stats_service.start();
-        if let Some(timer_message_store) = self.timer_message_store.as_ref() {
-            timer_message_store.start();
+        match self.lifecycle_state() {
+            StoreLifecycleState::Initialized => {}
+            StoreLifecycleState::Created => {
+                return Err(StoreError::General(
+                    "message store must be initialized before start".to_string(),
+                ));
+            }
+            StoreLifecycleState::Started => {
+                return Err(StoreError::General("message store is already started".to_string()));
+            }
+            StoreLifecycleState::Shutdown => {
+                return Err(StoreError::General(
+                    "message store is shutdown; call init before start".to_string(),
+                ));
+            }
         }
-        self.sync_timer_message_store_role();
 
-        if let Some(ha_service) = self.ha_service.as_mut() {
-            ha_service.start().await.map_err(|e| {
-                error!("HA service start failed: {:?}", e);
-                StoreError::General(e.to_string())
-            })?;
+        self.acquire_store_lock()?;
+        let start_result: Result<(), StoreError> = async {
+            self.allocate_mapped_file_service.start();
+
+            self.index_service.start();
+
+            self.reput_message_service
+                .set_reput_from_offset(self.commit_log.get_confirm_offset());
+            let message_store_arc = self.message_store_arc_or_error("start")?;
+            self.reput_message_service.start(
+                self.commit_log.clone(),
+                self.message_store_config.clone(),
+                self.dispatcher.clone(),
+                self.notify_message_arrive_in_batch,
+                message_store_arc,
+            );
+            self.do_recheck_reput_offset_from_dispatchers();
+            self.flush_consume_queue_service.start();
+            self.commit_log.start();
+            self.consume_queue_store.start();
+            self.store_stats_service.start();
+            if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+                timer_message_store.start();
+            }
+            self.sync_timer_message_store_role();
+
+            if let Some(ha_service) = self.ha_service.as_mut() {
+                ha_service.start().await.map_err(|e| {
+                    error!("HA service start failed: {:?}", e);
+                    StoreError::General(e.to_string())
+                })?;
+            }
+            self.create_temp_file();
+            self.add_schedule_task();
+            // self.perfs.start();
+            Ok(())
         }
-        self.create_temp_file();
-        self.add_schedule_task();
-        // self.perfs.start();
-        self.shutdown.store(false, Ordering::Release);
-        Ok(())
+        .await;
+
+        match start_result {
+            Ok(()) => {
+                self.shutdown.store(false, Ordering::Release);
+                self.set_lifecycle_state(StoreLifecycleState::Started);
+                Ok(())
+            }
+            Err(error) => {
+                self.release_store_lock();
+                Err(error)
+            }
+        }
     }
 
     async fn init(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
+        match self.lifecycle_state() {
+            StoreLifecycleState::Created | StoreLifecycleState::Shutdown => {}
+            StoreLifecycleState::Initialized => return Ok(()),
+            StoreLifecycleState::Started => {
+                return Err(StoreError::General(
+                    "message store cannot be initialized while started".to_string(),
+                ));
+            }
+        }
 
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
             && !self.message_store_config.duplication_enable
         {
+            let message_store_arc = self.message_store_arc_or_error("init")?;
             if self.message_store_config.enable_controller_mode {
                 let mut auto_switch_ha_service = GeneralHAService::AutoSwitchHAService(ArcMut::new(
-                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
-                        self.message_store_arc.clone().unwrap(),
-                    ),
+                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(message_store_arc),
                 ));
                 let _ = auto_switch_ha_service.init();
                 self.ha_service = Some(auto_switch_ha_service);
             } else {
                 let mut default_ha_service = GeneralHAService::DefaultHAService(ArcMut::new(
-                    crate::ha::default_ha_service::DefaultHAService::new(self.message_store_arc.clone().unwrap()),
+                    crate::ha::default_ha_service::DefaultHAService::new(message_store_arc),
                 ));
                 let _ = default_ha_service.init();
                 self.ha_service = Some(default_ha_service);
@@ -1111,12 +1277,25 @@ impl MessageStore for LocalFileMessageStore {
                 Err(e) => return Err(StoreError::General(e.to_string())),
             }
         }
+        self.shutdown.store(false, Ordering::Release);
+        self.set_lifecycle_state(StoreLifecycleState::Initialized);
         Ok(())
     }
 
     async fn shutdown(&mut self) {
+        let previous_state = self.lifecycle_state();
         if !self.shutdown.load(Ordering::Acquire) {
             self.shutdown.store(true, Ordering::Release);
+            self.set_lifecycle_state(StoreLifecycleState::Shutdown);
+
+            if matches!(
+                previous_state,
+                StoreLifecycleState::Created | StoreLifecycleState::Shutdown
+            ) {
+                self.release_store_lock();
+                let _ = self.transient_store_pool.destroy();
+                return;
+            }
 
             if let Some(ha_service) = self.ha_service.as_ref() {
                 ha_service.shutdown().await;
@@ -1153,10 +1332,12 @@ impl MessageStore for LocalFileMessageStore {
             }
         }
 
+        self.release_store_lock();
         let _ = self.transient_store_pool.destroy();
     }
 
     fn destroy(&mut self) {
+        self.release_store_lock();
         self.consume_queue_store.destroy();
         self.commit_log.destroy();
         self.index_service.destroy();
@@ -1167,6 +1348,11 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        if !self.is_store_available_for_io() {
+            warn!("message store has shutdown, so putMessage is forbidden");
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        }
+
         for hook in self.put_message_hook_list.iter() {
             if let Some(result) = hook.execute_before_put_message(&mut msg) {
                 return result;
@@ -1226,6 +1412,11 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn put_messages(&mut self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
+        if !self.is_store_available_for_io() {
+            warn!("message store has shutdown, so putMessages is forbidden");
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        }
+
         for hook in self.put_message_hook_list.iter() {
             if let Some(result) = hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner) {
                 return result;
@@ -1292,6 +1483,11 @@ impl MessageStore for LocalFileMessageStore {
         max_total_msg_size: i32,
         message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
+        if self.lifecycle_state() == StoreLifecycleState::Shutdown {
+            warn!("message store has shutdown, so getMessage is forbidden");
+            return None;
+        }
+
         if self.shutdown.load(Ordering::Relaxed) {
             warn!("message store has shutdown, so getMessage is forbidden");
             return None;
@@ -3544,6 +3740,73 @@ mod tests {
             .init()
             .await
             .expect("rocksdb-typed store should accept rocksdb flags");
+    }
+
+    #[tokio::test]
+    async fn start_requires_init_before_services_begin() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let error = store.start().await.expect_err("start should require init first");
+
+        assert!(matches!(
+            error,
+            StoreError::General(message) if message.contains("initialized before start")
+        ));
+        assert!(!temp_dir.path().join("lock").exists());
+    }
+
+    #[tokio::test]
+    async fn start_holds_store_root_lock_until_shutdown() {
+        let temp_dir = tempdir().unwrap();
+        let config = MessageStoreConfig {
+            duplication_enable: true,
+            ..MessageStoreConfig::default()
+        };
+
+        let mut first = new_configured_test_store(&temp_dir, config.clone());
+        first.init().await.expect("init first store");
+        first.start().await.expect("start first store");
+        assert!(temp_dir.path().join("lock").exists());
+
+        let mut second = new_configured_test_store(&temp_dir, config);
+        second.init().await.expect("init second store");
+        let error = second
+            .start()
+            .await
+            .expect_err("second store should not start while lock is held");
+        assert!(matches!(
+            error,
+            StoreError::General(message) if message.contains("lock file is held")
+        ));
+
+        first.shutdown().await;
+
+        second.start().await.expect("lock should be reusable after shutdown");
+        second.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn read_and_write_are_rejected_after_shutdown() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        store.shutdown().await;
+
+        let topic = CheetahString::from_static_str("shutdown-io-topic");
+        let group = CheetahString::from_static_str("shutdown-io-group");
+
+        let result = store
+            .put_message(build_test_message(&topic, Bytes::from_static(b"after-shutdown")))
+            .await;
+
+        assert_eq!(result.put_message_status(), PutMessageStatus::ServiceNotAvailable);
+        assert!(store.get_message(&group, &topic, 0, 0, 32, None).await.is_none());
     }
 
     #[test]
