@@ -54,13 +54,30 @@ impl TopicQueueMappingDetail {
 
 //impl static methods(Like java static method)
 impl TopicQueueMappingDetail {
+    pub fn build_id_map(mapping_detail: &TopicQueueMappingDetail) -> HashMap<i32, i32> {
+        let mut curr_id_map = HashMap::new();
+        let broker_name = mapping_detail.topic_queue_mapping_info.bname.as_ref();
+        if let (Some(hosted_queues), Some(broker_name)) = (&mapping_detail.hosted_queues, broker_name) {
+            for (global_id, items) in hosted_queues {
+                if let Some(last_item) = items.last() {
+                    if last_item.bname.as_ref() == Some(broker_name) {
+                        curr_id_map.insert(*global_id, last_item.queue_id);
+                    }
+                }
+            }
+        }
+        curr_id_map
+    }
+
     pub fn clone_as_mapping_info(mapping_detail: &TopicQueueMappingDetail) -> TopicQueueMappingInfo {
         TopicQueueMappingInfo {
             topic: mapping_detail.topic_queue_mapping_info.topic.clone(),
+            scope: mapping_detail.topic_queue_mapping_info.scope.clone(),
             total_queues: mapping_detail.topic_queue_mapping_info.total_queues,
             bname: mapping_detail.topic_queue_mapping_info.bname.clone(),
             epoch: mapping_detail.topic_queue_mapping_info.epoch,
-            ..TopicQueueMappingInfo::default()
+            dirty: mapping_detail.topic_queue_mapping_info.dirty,
+            curr_id_map: Some(Self::build_id_map(mapping_detail)),
         }
     }
     pub fn put_mapping_info(
@@ -167,6 +184,45 @@ mod tests {
         assert_eq!(info.total_queues, detail.topic_queue_mapping_info.total_queues);
         assert_eq!(info.bname, detail.topic_queue_mapping_info.bname);
         assert_eq!(info.epoch, detail.topic_queue_mapping_info.epoch);
+    }
+
+    #[test]
+    fn clone_as_mapping_info_builds_current_id_map_for_leader_items() {
+        let broker_a = cheetah_string::CheetahString::from_static_str("broker_a");
+        let broker_b = cheetah_string::CheetahString::from_static_str("broker_b");
+        let mut hosted_queues = HashMap::new();
+        hosted_queues.insert(
+            0,
+            vec![LogicQueueMappingItem {
+                queue_id: 3,
+                bname: Some(broker_a.clone()),
+                ..Default::default()
+            }],
+        );
+        hosted_queues.insert(
+            1,
+            vec![LogicQueueMappingItem {
+                queue_id: 7,
+                bname: Some(broker_b),
+                ..Default::default()
+            }],
+        );
+        let detail = TopicQueueMappingDetail {
+            topic_queue_mapping_info: TopicQueueMappingInfo {
+                topic: Some("test_topic".into()),
+                total_queues: 2,
+                bname: Some(broker_a),
+                epoch: 10,
+                ..TopicQueueMappingInfo::default()
+            },
+            hosted_queues: Some(hosted_queues),
+        };
+
+        let info = TopicQueueMappingDetail::clone_as_mapping_info(&detail);
+
+        let curr_id_map = info.curr_id_map.unwrap();
+        assert_eq!(curr_id_map.get(&0), Some(&3));
+        assert!(!curr_id_map.contains_key(&1));
     }
 
     #[test]

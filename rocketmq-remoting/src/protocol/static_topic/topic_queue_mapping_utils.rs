@@ -204,14 +204,11 @@ impl TopicQueueMappingUtils {
         ))
     }
     pub fn check_if_reuse_physical_queue(mapping_ones: &Vec<TopicQueueMappingOne>) -> RocketMQResult<()> {
-        let mut physical_queue_id_map = HashMap::new();
+        let mut physical_queue_id_map: HashMap<String, TopicQueueMappingOne> = HashMap::new();
         for mapping_one in mapping_ones {
             for item in mapping_one.items() {
                 if let Some(bname) = &item.bname {
                     let physical_queue_id = format!("{} - {}", bname, item.queue_id);
-                    physical_queue_id_map
-                        .entry(physical_queue_id.clone())
-                        .or_insert(mapping_one.clone());
                     if let Some(id) = physical_queue_id_map.get(&physical_queue_id) {
                         return Err(RocketMQError::Internal(format!(
                             "Topic {} global queue id {} and {} shared the same physical queue {}",
@@ -221,6 +218,7 @@ impl TopicQueueMappingUtils {
                             physical_queue_id
                         )));
                     }
+                    physical_queue_id_map.insert(physical_queue_id, mapping_one.clone());
                 }
             }
         }
@@ -229,13 +227,11 @@ impl TopicQueueMappingUtils {
 
     pub fn check_logic_queue_mapping_item_offset(items: &[LogicQueueMappingItem]) -> RocketMQResult<()> {
         if items.is_empty() {
-            return Err(RocketMQError::Internal(
-                "check_logic_queue_mapping_item_offset input items is empty".to_string(),
-            ));
+            return Ok(());
         }
         let mut last_gen = -1;
         let mut last_offset = -1;
-        for i in items.len() - 1..=0 {
+        for i in (0..items.len()).rev() {
             let item = &items[i];
             if item.start_offset < 0 || item.gen < 0 || item.queue_id < 0 {
                 return Err(RocketMQError::Internal(
@@ -276,6 +272,14 @@ impl TopicQueueMappingUtils {
         }
         Ok(())
     }
+
+    pub fn check_if_leader(items: &[LogicQueueMappingItem], mapping_detail: &TopicQueueMappingDetail) -> bool {
+        let Some(item) = items.last() else {
+            return false;
+        };
+        item.bname.as_ref() == mapping_detail.topic_queue_mapping_info.bname.as_ref()
+    }
+
     pub fn get_leader_item(items: &[LogicQueueMappingItem]) -> RocketMQResult<LogicQueueMappingItem> {
         if items.is_empty() {
             return Err(RocketMQError::Internal(
@@ -892,5 +896,57 @@ impl TopicQueueMappingUtils {
             brokers_to_map_in,
             brokers_to_map_out,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_logic_queue_mapping_item_offset_accepts_monotonic_items() {
+        let items = vec![
+            LogicQueueMappingItem {
+                gen: 0,
+                logic_offset: 0,
+                start_offset: 0,
+                end_offset: 9,
+                ..Default::default()
+            },
+            LogicQueueMappingItem {
+                gen: 1,
+                logic_offset: 10,
+                start_offset: 0,
+                end_offset: -1,
+                ..Default::default()
+            },
+        ];
+
+        assert!(TopicQueueMappingUtils::check_logic_queue_mapping_item_offset(&items).is_ok());
+    }
+
+    #[test]
+    fn check_if_leader_requires_last_item_broker_to_match_detail_broker() {
+        let broker_a = CheetahString::from_static_str("broker-a");
+        let broker_b = CheetahString::from_static_str("broker-b");
+        let detail = TopicQueueMappingDetail {
+            topic_queue_mapping_info: TopicQueueMappingInfo {
+                bname: Some(broker_a.clone()),
+                ..Default::default()
+            },
+            hosted_queues: None,
+        };
+        let leader_items = vec![LogicQueueMappingItem {
+            bname: Some(broker_a),
+            ..Default::default()
+        }];
+        let follower_items = vec![LogicQueueMappingItem {
+            bname: Some(broker_b),
+            ..Default::default()
+        }];
+
+        assert!(TopicQueueMappingUtils::check_if_leader(&leader_items, &detail));
+        assert!(!TopicQueueMappingUtils::check_if_leader(&follower_items, &detail));
+        assert!(!TopicQueueMappingUtils::check_if_leader(&[], &detail));
     }
 }

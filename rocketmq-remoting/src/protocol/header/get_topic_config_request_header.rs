@@ -17,6 +17,8 @@ use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
@@ -36,6 +38,92 @@ impl GetTopicConfigRequestHeader {
     pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
+}
+
+impl TopicRequestHeaderTrait for GetTopicConfigRequestHeader {
+    fn set_lo(&mut self, lo: Option<bool>) {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+            .lo = lo;
+    }
+
+    fn lo(&self) -> Option<bool> {
+        self.topic_request_header.as_ref().and_then(|header| header.lo)
+    }
+
+    fn set_topic(&mut self, topic: CheetahString) {
+        self.topic = topic;
+    }
+
+    fn topic(&self) -> &CheetahString {
+        &self.topic
+    }
+
+    fn broker_name(&self) -> Option<&CheetahString> {
+        self.topic_request_header
+            .as_ref()
+            .and_then(|header| header.rpc_request_header.as_ref())
+            .and_then(|rpc| rpc.broker_name.as_ref())
+    }
+
+    fn set_broker_name(&mut self, broker_name: CheetahString) {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+            .rpc_request_header
+            .get_or_insert_with(RpcRequestHeader::default)
+            .broker_name = Some(broker_name);
+    }
+
+    fn namespace(&self) -> Option<&str> {
+        self.topic_request_header
+            .as_ref()
+            .and_then(|header| header.rpc_request_header.as_ref())
+            .and_then(|rpc| rpc.namespace.as_deref())
+    }
+
+    fn set_namespace(&mut self, namespace: CheetahString) {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+            .rpc_request_header
+            .get_or_insert_with(RpcRequestHeader::default)
+            .namespace = Some(namespace);
+    }
+
+    fn namespaced(&self) -> Option<bool> {
+        self.topic_request_header
+            .as_ref()
+            .and_then(|header| header.rpc_request_header.as_ref())
+            .and_then(|rpc| rpc.namespaced)
+    }
+
+    fn set_namespaced(&mut self, namespaced: bool) {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+            .rpc_request_header
+            .get_or_insert_with(RpcRequestHeader::default)
+            .namespaced = Some(namespaced);
+    }
+
+    fn oneway(&self) -> Option<bool> {
+        self.topic_request_header
+            .as_ref()
+            .and_then(|header| header.rpc_request_header.as_ref())
+            .and_then(|rpc| rpc.oneway)
+    }
+
+    fn set_oneway(&mut self, oneway: bool) {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+            .rpc_request_header
+            .get_or_insert_with(RpcRequestHeader::default)
+            .oneway = Some(oneway);
+    }
+
+    fn queue_id(&self) -> i32 {
+        -1
+    }
+
+    fn set_queue_id(&mut self, _queue_id: i32) {}
 }
 
 #[cfg(test)]

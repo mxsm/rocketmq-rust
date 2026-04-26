@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
 use rocketmq_client_rust::consumer::pull_result::PullResult;
@@ -44,6 +45,7 @@ use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
@@ -75,6 +77,8 @@ use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxO
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -96,14 +100,18 @@ use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
+use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_client_impl::RpcClientImpl;
+use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader as RpcTopicRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
@@ -743,7 +751,9 @@ impl BrokerOuterAPI {
             ResponseCode::TopicNotExist => {}
             ResponseCode::Success => {
                 if let Some(body) = response.body() {
-                    let topic_route_data = TopicRouteData::decode(body).unwrap();
+                    let topic_route_data = TopicRouteData::decode(body)?;
+                    self.client_metadata
+                        .fresh_topic_route(topic, Some(topic_route_data.clone()));
                     return Ok(topic_route_data);
                 }
             }
@@ -755,6 +765,77 @@ impl BrokerOuterAPI {
             message: response.remark().cloned().unwrap_or(CheetahString::empty()).to_string(),
             broker_addr: Some("".to_string()),
         })
+    }
+
+    pub(crate) async fn get_topic_stats_info_from_broker(
+        &self,
+        broker_name: &CheetahString,
+        topic: &CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
+        let header = GetTopicStatsInfoRequestHeader {
+            topic: topic.clone(),
+            topic_request_header: Some(TopicRequestHeader {
+                lo: Some(false),
+                rpc: Some(RpcRequestHeader {
+                    broker_name: Some(broker_name.clone()),
+                    ..Default::default()
+                }),
+            }),
+        };
+        let request = RpcRequest::new(RequestCode::GetTopicStatsInfo as i32, header, None);
+        let response = self.rpc_client.invoke(request, timeout_millis).await?;
+        let body = Self::rpc_response_body_as_bytes(response, "get_topic_stats_info")?;
+        TopicStatsTable::decode(body.as_ref())
+    }
+
+    pub(crate) async fn get_topic_config_from_broker(
+        &self,
+        broker_name: &CheetahString,
+        topic: &CheetahString,
+        lo: bool,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigAndQueueMapping> {
+        let header = GetTopicConfigRequestHeader {
+            topic: topic.clone(),
+            topic_request_header: Some(RpcTopicRequestHeader {
+                lo: Some(lo),
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(broker_name.clone()),
+                    ..Default::default()
+                }),
+            }),
+        };
+        let request = RpcRequest::new(RequestCode::GetTopicConfig as i32, header, None);
+        let response = self.rpc_client.invoke(request, timeout_millis).await?;
+        let body = Self::rpc_response_body_as_bytes(response, "get_topic_config")?;
+        TopicConfigAndQueueMapping::decode(body.as_ref())
+    }
+
+    fn rpc_response_body_as_bytes(
+        response: rocketmq_remoting::rpc::rpc_response::RpcResponse,
+        operation: &'static str,
+    ) -> rocketmq_error::RocketMQResult<Bytes> {
+        if let Some(exception) = response.exception {
+            return Err(RocketMQError::ResponseProcessFailed {
+                operation,
+                reason: exception.to_string(),
+            });
+        }
+
+        let Some(body) = response.body else {
+            return Err(RocketMQError::ResponseProcessFailed {
+                operation,
+                reason: "missing response body".to_string(),
+            });
+        };
+
+        body.downcast::<Bytes>()
+            .map(|bytes| *bytes)
+            .map_err(|_| RocketMQError::ResponseProcessFailed {
+                operation,
+                reason: "response body is not bytes".to_string(),
+            })
     }
 
     pub async fn send_message_to_specific_broker(

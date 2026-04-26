@@ -165,7 +165,6 @@ pub(crate) struct BrokerRuntime {
     shutdown_hook: Option<BrokerShutdownHook>,
     proxy_request_processor: Option<DefaultServerProcessor>,
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
-    topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
     scheduled_task_manager: ScheduledTaskManager,
 }
 
@@ -296,13 +295,13 @@ impl BrokerRuntime {
         inner.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
         inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
+        inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(inner.clone()));
         Self {
             inner,
             broker_runtime: Some(runtime),
             shutdown_hook: None,
             proxy_request_processor: None,
             consumer_ids_change_listener,
-            topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
             scheduled_task_manager: Default::default(),
         }
     }
@@ -400,7 +399,9 @@ impl BrokerRuntime {
             notification_processor.shutdown();
         }
         self.consumer_ids_change_listener.shutdown();
-        self.topic_queue_mapping_clean_service.shutdown();
+        if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_ref() {
+            topic_queue_mapping_clean_service.shutdown();
+        }
 
         self.inner.broadcast_offset_manager.shutdown();
 
@@ -619,7 +620,9 @@ impl BrokerRuntime {
     }
 
     fn initialize_resources(&mut self) {
-        self.inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService);
+        if self.inner.topic_queue_mapping_clean_service.is_none() {
+            self.inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(self.inner.clone()));
+        }
     }
 
     fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
@@ -1561,7 +1564,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     consumer_manager: ConsumerManager,
     broadcast_offset_manager: BroadcastOffsetManager,
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
-    topic_queue_mapping_clean_service: Option<TopicQueueMappingCleanService>,
+    topic_queue_mapping_clean_service: Option<TopicQueueMappingCleanService<MS>>,
     update_master_haserver_addr_periodically: bool,
     should_start_time: Arc<AtomicU64>,
     is_isolated: Arc<AtomicBool>,
@@ -1705,7 +1708,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService> {
+    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService<MS>> {
         self.topic_queue_mapping_clean_service.as_mut()
     }
 
@@ -1973,12 +1976,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service(&self) -> &Option<TopicQueueMappingCleanService> {
+    pub fn topic_queue_mapping_clean_service(&self) -> &Option<TopicQueueMappingCleanService<MS>> {
         &self.topic_queue_mapping_clean_service
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service_unchecked(&self) -> &TopicQueueMappingCleanService {
+    pub fn topic_queue_mapping_clean_service_unchecked(&self) -> &TopicQueueMappingCleanService<MS> {
         unsafe { self.topic_queue_mapping_clean_service.as_ref().unwrap_unchecked() }
     }
 
@@ -2177,7 +2180,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn set_topic_queue_mapping_clean_service(
         &mut self,
-        topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
+        topic_queue_mapping_clean_service: TopicQueueMappingCleanService<MS>,
     ) {
         self.topic_queue_mapping_clean_service = Some(topic_queue_mapping_clean_service);
     }
