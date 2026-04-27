@@ -14,7 +14,6 @@
 
 #![allow(dead_code)]
 #![allow(incomplete_features)]
-#![feature(duration_constructors)]
 #![allow(clippy::mut_from_ref)]
 #![allow(clippy::result_large_err)]
 #![recursion_limit = "512"]
