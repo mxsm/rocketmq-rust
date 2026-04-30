@@ -17,7 +17,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Sync Labels from Linked Issue
         uses: actions/github-script@v9
