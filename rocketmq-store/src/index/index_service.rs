@@ -267,25 +267,35 @@ impl IndexService {
     }
 
     pub fn build_index(&self, dispatch_request: &DispatchRequest) {
+        let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
+        match tran_type {
+            MessageSysFlag::TRANSACTION_NOT_TYPE
+            | MessageSysFlag::TRANSACTION_PREPARED_TYPE
+            | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {}
+            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => return,
+            _ => {}
+        }
+
+        let topic = dispatch_request.topic.as_str();
+        let keys = dispatch_request.keys.as_str();
+        let tags = dispatch_request
+            .properties_map
+            .as_ref()
+            .and_then(|properties| properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS)))
+            .filter(|tags| !tags.is_empty());
+
+        let has_normal_key = keys.split(MessageConst::KEY_SEPARATOR).any(|key| !key.is_empty());
+        if dispatch_request.uniq_key.is_none() && !has_normal_key && tags.is_none() {
+            return;
+        }
+
         let index_file = self.retry_get_and_create_index_file();
         match index_file {
             Some(index_file_inner) => {
                 let end_phy_offset = index_file_inner.get_end_phy_offset();
-                let topic = dispatch_request.topic.as_str();
-                let keys = dispatch_request.keys.as_str();
                 if dispatch_request.commit_log_offset < end_phy_offset {
                     return;
                 }
-
-                let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
-                match tran_type {
-                    MessageSysFlag::TRANSACTION_NOT_TYPE
-                    | MessageSysFlag::TRANSACTION_PREPARED_TYPE
-                    | MessageSysFlag::TRANSACTION_COMMIT_TYPE => {}
-                    MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => return,
-                    _ => {}
-                }
-
                 let mut index_file_new = Some(index_file_inner);
                 let mut index_key = String::with_capacity(topic.len() + 1 + keys.len());
                 if let Some(ref uniq_key) = dispatch_request.uniq_key {
@@ -343,33 +353,24 @@ impl IndexService {
                 }
 
                 // Index tags
-                if let Some(properties) = &dispatch_request.properties_map {
-                    if let Some(tags) = properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS)) {
-                        if !tags.is_empty() {
-                            let Some(index_file) = index_file_new.take() else {
-                                error!(
-                                    "skip index tags {} because no writable index file is available, commitlog {}",
-                                    tags, dispatch_request.commit_log_offset
-                                );
-                                return;
-                            };
-                            index_file_new = self.put_key(
-                                index_file,
-                                dispatch_request,
-                                build_key_into(
-                                    &mut index_key,
-                                    topic,
-                                    tags.as_str(),
-                                    Some(MessageConst::INDEX_TAG_TYPE),
-                                ),
-                            );
-                            if index_file_new.is_none() {
-                                error!(
-                                    "putKey error commitlog {} tags {}",
-                                    dispatch_request.commit_log_offset, tags
-                                );
-                            }
-                        }
+                if let Some(tags) = tags {
+                    let Some(index_file) = index_file_new.take() else {
+                        error!(
+                            "skip index tags {} because no writable index file is available, commitlog {}",
+                            tags, dispatch_request.commit_log_offset
+                        );
+                        return;
+                    };
+                    index_file_new = self.put_key(
+                        index_file,
+                        dispatch_request,
+                        build_key_into(&mut index_key, topic, tags.as_str(), Some(MessageConst::INDEX_TAG_TYPE)),
+                    );
+                    if index_file_new.is_none() {
+                        error!(
+                            "putKey error commitlog {} tags {}",
+                            dispatch_request.commit_log_offset, tags
+                        );
                     }
                 }
             }
@@ -544,6 +545,21 @@ mod tests {
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::store::running_flags::RunningFlags;
 
+    fn new_index_service_for_test(temp_dir: &tempfile::TempDir, checkpoint_name: &str) -> IndexService {
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root_dir),
+            max_hash_slot_num: 32,
+            max_index_num: 64,
+            ..MessageStoreConfig::default()
+        });
+        let temp_file = temp_dir.path().join(checkpoint_name);
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
+        let running_flags = Arc::new(RunningFlags::default());
+
+        IndexService::new(message_store_config, store_checkpoint, running_flags)
+    }
+
     #[test]
     fn test_build_key_formats() {
         // Test default key format: topic#key
@@ -614,6 +630,39 @@ mod tests {
             Some(MessageConst::INDEX_TAG_TYPE),
         );
         assert_eq!(tag_result.get_phy_offsets(), &[1000]);
+    }
+
+    #[test]
+    fn build_index_skips_message_without_indexable_keys() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_empty_index_skip");
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            store_timestamp: 1000000000000,
+            ..DispatchRequest::default()
+        });
+
+        assert_eq!(index_service.get_total_size(), 0);
+    }
+
+    #[test]
+    fn build_index_skips_rollback_without_creating_index_file() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_rollback_index_skip");
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            uniq_key: Some(CheetahString::from_slice("uniq123")),
+            sys_flag: MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+            ..DispatchRequest::default()
+        });
+
+        assert_eq!(index_service.get_total_size(), 0);
     }
 
     #[test]
