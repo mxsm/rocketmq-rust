@@ -29,6 +29,7 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -598,4 +599,7 @@ pub trait MessageStoreInner: Sync + 'static {
     /// # Returns
     /// A reference to the `GeneralHAService` instance.
     fn get_ha_service(&self) -> Option<&GeneralHAService>;
+
+    /// Get HA runtime information using the current commit log max offset.
+    fn get_ha_runtime_info(&self) -> Option<HARuntimeInfo>;
 }

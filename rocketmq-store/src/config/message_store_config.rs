@@ -122,6 +122,14 @@ mod defaults {
         200
     }
 
+    pub fn disk_space_warning_level_ratio() -> usize {
+        90
+    }
+
+    pub fn disk_space_clean_forcibly_ratio() -> usize {
+        85
+    }
+
     pub fn flush_commit_log_timed() -> bool {
         true
     }
@@ -228,6 +236,10 @@ mod defaults {
 
     pub fn flush_delay_offset_interval() -> u64 {
         10_000 // 10 seconds
+    }
+
+    pub fn clean_file_forcibly_enable() -> bool {
+        true
     }
 
     pub fn os_page_cache_busy_timeout_mills() -> u64 {
@@ -408,10 +420,10 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub max_recovery_commit_log_files: usize,
 
-    #[serde(default)]
+    #[serde(default = "defaults::disk_space_warning_level_ratio")]
     pub disk_space_warning_level_ratio: usize,
 
-    #[serde(default)]
+    #[serde(default = "defaults::disk_space_clean_forcibly_ratio")]
     pub disk_space_clean_forcibly_ratio: usize,
 
     #[serde(default)]
@@ -549,7 +561,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::flush_delay_offset_interval")]
     pub flush_delay_offset_interval: u64,
 
-    #[serde(default)]
+    #[serde(default = "defaults::clean_file_forcibly_enable")]
     pub clean_file_forcibly_enable: bool,
 
     #[serde(default)]
@@ -861,8 +873,8 @@ impl Default for MessageStoreConfig {
             flush_interval_commit_log: 500,
             commit_interval_commit_log: 200,
             max_recovery_commit_log_files: 0,
-            disk_space_warning_level_ratio: 0,
-            disk_space_clean_forcibly_ratio: 0,
+            disk_space_warning_level_ratio: 90,
+            disk_space_clean_forcibly_ratio: 85,
             use_reentrant_lock_when_put_message: false,
             flush_commit_log_timed: true,
             flush_interval_consume_queue: 1000,
@@ -908,7 +920,7 @@ impl Default for MessageStoreConfig {
             slave_timeout: 0,
             message_delay_level: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h".to_string(),
             flush_delay_offset_interval: 10_000,
-            clean_file_forcibly_enable: false,
+            clean_file_forcibly_enable: true,
             warm_mapped_file_enable: false,
             offset_check_in_slave: false,
             debug_lock_enable: false,
@@ -1585,5 +1597,13 @@ mod tests {
     #[test]
     fn default_max_checksum_range_matches_java_default() {
         assert_eq!(MessageStoreConfig::default().max_checksum_range, 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn default_disk_cleanup_config_matches_java_defaults() {
+        let config = MessageStoreConfig::default();
+        assert_eq!(config.disk_space_warning_level_ratio, 90);
+        assert_eq!(config.disk_space_clean_forcibly_ratio, 85);
+        assert!(config.clean_file_forcibly_enable);
     }
 }

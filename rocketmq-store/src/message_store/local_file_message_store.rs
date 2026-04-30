@@ -77,6 +77,7 @@ use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -387,7 +388,7 @@ impl LocalFileMessageStore {
             controller_epoch_start_offset: Arc::new(AtomicI64::new(-1)),
             shutdown: Arc::new(AtomicBool::new(false)),
             store_lock_guard: None,
-            running_flags,
+            running_flags: running_flags.clone(),
             reput_message_service: ReputMessageService {
                 shutdown: Arc::new(Notify::new()),
                 new_message_notify: Arc::new(Notify::new()),
@@ -402,6 +403,7 @@ impl LocalFileMessageStore {
             clean_commit_log_service: Arc::new(CleanCommitLogService::new(
                 message_store_config.clone(),
                 commit_log.clone(),
+                running_flags.clone(),
             )),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService::new(
                 commit_log.clone(),
@@ -1863,7 +1865,7 @@ impl MessageStore for LocalFileMessageStore {
             for cl_path in paths {
                 let cl_path = cl_path.trim();
                 let physic_ratio = if util_all::is_path_exists(cl_path) {
-                    util_all::get_disk_partition_space_used_percent(cl_path)
+                    store_path_disk_used_ratio(cl_path)
                 } else {
                     -1.0
                 };
@@ -1884,9 +1886,8 @@ impl MessageStore for LocalFileMessageStore {
 
         // Add disk space usage for consume queue
         {
-            let logics_ratio = util_all::get_disk_partition_space_used_percent(
-                Self::get_store_path_logic(&self.message_store_config).as_str(),
-            );
+            let logics_ratio =
+                store_path_disk_used_ratio(Self::get_store_path_logic(&self.message_store_config).as_str());
             result.insert(
                 RunningStats::ConsumeQueueDiskRatio.as_str().to_string(),
                 logics_ratio.to_string(),
@@ -1905,6 +1906,26 @@ impl MessageStore for LocalFileMessageStore {
         );
 
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
+            result.insert(
+                "timerReadBehind".to_string(),
+                timer_message_store.get_dequeue_behind().to_string(),
+            );
+            result.insert(
+                "timerOffsetBehind".to_string(),
+                timer_message_store.get_enqueue_behind_messages().to_string(),
+            );
+            result.insert(
+                "timerCongestNum".to_string(),
+                timer_message_store.get_all_congest_num().to_string(),
+            );
+            result.insert(
+                "timerEnqueueTps".to_string(),
+                timer_message_store.get_enqueue_tps().to_string(),
+            );
+            result.insert(
+                "timerDequeueTps".to_string(),
+                timer_message_store.get_dequeue_tps().to_string(),
+            );
             let (topic_backlog_distribution, timer_backlog_distribution) =
                 timer_message_store.runtime_backlog_metrics();
             if let Ok(topic_backlog_distribution) = serde_json::to_string(&topic_backlog_distribution) {
@@ -1913,6 +1934,14 @@ impl MessageStore for LocalFileMessageStore {
             if let Ok(timer_backlog_distribution) = serde_json::to_string(&timer_backlog_distribution) {
                 result.insert("timerBacklogDistribution".to_string(), timer_backlog_distribution);
             }
+        } else {
+            result.insert("timerReadBehind".to_string(), "0".to_string());
+            result.insert("timerOffsetBehind".to_string(), "0".to_string());
+            result.insert("timerCongestNum".to_string(), "0".to_string());
+            result.insert("timerEnqueueTps".to_string(), "0.0".to_string());
+            result.insert("timerDequeueTps".to_string(), "0.0".to_string());
+            result.insert("timerTopicBacklogDistribution".to_string(), "{}".to_string());
+            result.insert("timerBacklogDistribution".to_string(), "{}".to_string());
         }
 
         result
@@ -2659,6 +2688,12 @@ impl MessageStore for LocalFileMessageStore {
     fn get_ha_service(&self) -> Option<&GeneralHAService> {
         self.ha_service.as_ref()
     }
+
+    fn get_ha_runtime_info(&self) -> Option<HARuntimeInfo> {
+        self.ha_service
+            .as_ref()
+            .map(|ha_service| ha_service.get_runtime_info(self.commit_log.get_max_offset()))
+    }
 }
 
 #[derive(Default)]
@@ -3320,17 +3355,59 @@ where
     }
 }
 
+fn store_path_disk_used_ratio(path: &str) -> f64 {
+    let path = path.trim();
+    if path.is_empty() {
+        error!("Error when measuring disk space usage, path is null or empty");
+        return -1.0;
+    }
+
+    let path = Path::new(path);
+    if !path.exists() {
+        error!(
+            "Error when measuring disk space usage, file doesn't exist on this path: {}",
+            path.to_string_lossy()
+        );
+        return -1.0;
+    }
+
+    match (fs2::total_space(path), fs2::available_space(path)) {
+        (Ok(total_space), Ok(available_space)) if total_space > 0 => {
+            total_space.saturating_sub(available_space) as f64 / total_space as f64
+        }
+        (Ok(_), Ok(_)) => -1.0,
+        (Err(error), _) | (_, Err(error)) => {
+            error!("Error when measuring disk space usage, got exception: {:?}", error);
+            -1.0
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DiskCleanDecision {
+    should_delete: bool,
+    clean_immediately: bool,
+}
+
 struct CleanCommitLogService {
     message_store_config: Arc<MessageStoreConfig>,
     commit_log: ArcMut<CommitLog>,
+    running_flags: Arc<RunningFlags>,
     manual_delete_requests: AtomicI32,
 }
 
 impl CleanCommitLogService {
-    fn new(message_store_config: Arc<MessageStoreConfig>, commit_log: ArcMut<CommitLog>) -> Self {
+    const MAX_MANUAL_DELETE_FILE_TIMES: i32 = 20;
+
+    fn new(
+        message_store_config: Arc<MessageStoreConfig>,
+        commit_log: ArcMut<CommitLog>,
+        running_flags: Arc<RunningFlags>,
+    ) -> Self {
         Self {
             message_store_config,
             commit_log,
+            running_flags,
             manual_delete_requests: AtomicI32::new(0),
         }
     }
@@ -3340,19 +3417,29 @@ impl CleanCommitLogService {
             .saturating_mul(60)
             .saturating_mul(60)
             .saturating_mul(1000);
-        let clean_immediately = self.manual_delete_requests.swap(0, Ordering::SeqCst) > 0;
-        let delete_count = self.commit_log.mut_from_ref().delete_expired_files_by_time(
-            expired_time,
-            self.message_store_config.delete_commit_log_files_interval as i32,
-            self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
-            clean_immediately,
-            self.message_store_config.delete_file_batch_max as i32,
-        );
+        let is_time_up = util_all::is_it_time_to_do(&self.message_store_config.delete_when);
+        let disk_decision = self.is_space_to_delete();
+        let is_manual_delete = self.consume_manual_delete_request();
+        let clean_at_once = self.message_store_config.clean_file_forcibly_enable && disk_decision.clean_immediately;
+        let delete_count = if is_time_up || disk_decision.should_delete || is_manual_delete {
+            self.commit_log.mut_from_ref().delete_expired_files_by_time(
+                expired_time,
+                self.message_store_config.delete_commit_log_files_interval as i32,
+                self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
+                clean_at_once,
+                self.message_store_config.delete_file_batch_max as i32,
+            )
+        } else {
+            0
+        };
         if delete_count > 0 {
             info!(
-                "clean commit log service deleted {} expired commitlog file(s), clean_immediately={}",
-                delete_count, clean_immediately
+                "clean commit log service deleted {} expired commitlog file(s), is_time_up={}, is_space_to_delete={}, \
+                 is_manual_delete={}, clean_at_once={}",
+                delete_count, is_time_up, disk_decision.should_delete, is_manual_delete, clean_at_once
             );
+        } else if disk_decision.should_delete {
+            warn!("disk space will be full soon, but delete commitlog file failed");
         }
 
         let _ = self
@@ -3362,7 +3449,124 @@ impl CleanCommitLogService {
     }
 
     fn execute_delete_files_manually(&self) {
-        self.manual_delete_requests.fetch_add(1, Ordering::SeqCst);
+        self.manual_delete_requests
+            .store(Self::MAX_MANUAL_DELETE_FILE_TIMES, Ordering::SeqCst);
+        info!("executeDeleteFilesManually was invoked");
+    }
+
+    fn consume_manual_delete_request(&self) -> bool {
+        self.manual_delete_requests
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |requests| {
+                (requests > 0).then_some(requests - 1)
+            })
+            .is_ok()
+    }
+
+    fn is_space_to_delete(&self) -> DiskCleanDecision {
+        let warning_ratio = self.disk_space_warning_level_ratio();
+        let clean_forcibly_ratio = self.disk_space_clean_forcibly_ratio();
+        let (min_physic_ratio, min_store_path) = self.min_physic_disk_ratio();
+
+        if min_physic_ratio > warning_ratio {
+            if self.running_flags.get_and_make_disk_full() {
+                error!(
+                    "physic disk maybe full soon {}, so mark disk full, storePathPhysic={}",
+                    min_physic_ratio,
+                    min_store_path.as_deref().unwrap_or("")
+                );
+            }
+            return DiskCleanDecision {
+                should_delete: true,
+                clean_immediately: true,
+            };
+        } else if min_physic_ratio > clean_forcibly_ratio {
+            return DiskCleanDecision {
+                should_delete: true,
+                clean_immediately: true,
+            };
+        } else if !self.running_flags.get_and_make_disk_ok() {
+            info!(
+                "physic disk space OK {}, so mark disk ok, storePathPhysic={}",
+                min_physic_ratio,
+                min_store_path.as_deref().unwrap_or("")
+            );
+        }
+
+        let store_path_logics = LocalFileMessageStore::get_store_path_logic(&self.message_store_config);
+        let logics_ratio = store_path_disk_used_ratio(store_path_logics.as_str());
+        if logics_ratio > warning_ratio {
+            if self.running_flags.get_and_make_logic_disk_full() {
+                error!("logics disk maybe full soon {}, so mark disk full", logics_ratio);
+            }
+            return DiskCleanDecision {
+                should_delete: true,
+                clean_immediately: true,
+            };
+        } else if logics_ratio > clean_forcibly_ratio {
+            return DiskCleanDecision {
+                should_delete: true,
+                clean_immediately: true,
+            };
+        } else if !self.running_flags.get_and_make_logic_disk_ok() {
+            info!("logics disk space OK {}, so mark disk ok", logics_ratio);
+        }
+
+        let max_used_ratio = self.disk_max_used_space_ratio();
+        if min_physic_ratio < 0.0 || min_physic_ratio > max_used_ratio {
+            info!("commitLog disk maybe full soon, so reclaim space, {}", min_physic_ratio);
+            return DiskCleanDecision {
+                should_delete: true,
+                clean_immediately: false,
+            };
+        }
+
+        if logics_ratio < 0.0 || logics_ratio > max_used_ratio {
+            info!("consumeQueue disk maybe full soon, so reclaim space, {}", logics_ratio);
+            return DiskCleanDecision {
+                should_delete: true,
+                clean_immediately: false,
+            };
+        }
+
+        DiskCleanDecision::default()
+    }
+
+    fn min_physic_disk_ratio(&self) -> (f64, Option<String>) {
+        let commit_log_store_path = LocalFileMessageStore::get_store_path_physic(&self.message_store_config);
+        let mut min_ratio = f64::MAX;
+        let mut min_store_path = None;
+
+        for store_path in commit_log_store_path.split(mix_all::MULTI_PATH_SPLITTER.as_str()) {
+            let store_path = store_path.trim();
+            if store_path.is_empty() {
+                continue;
+            }
+
+            let ratio = store_path_disk_used_ratio(store_path);
+            if min_ratio > ratio {
+                min_ratio = ratio;
+                min_store_path = Some(store_path.to_string());
+            }
+        }
+
+        if min_ratio == f64::MAX {
+            (-1.0, None)
+        } else {
+            (min_ratio, min_store_path)
+        }
+    }
+
+    fn disk_space_warning_level_ratio(&self) -> f64 {
+        (self.message_store_config.disk_space_warning_level_ratio as f64 / 100.0).clamp(0.35, 0.90)
+    }
+
+    fn disk_space_clean_forcibly_ratio(&self) -> f64 {
+        (self.message_store_config.disk_space_clean_forcibly_ratio as f64 / 100.0).clamp(0.30, 0.85)
+    }
+
+    fn disk_max_used_space_ratio(&self) -> f64 {
+        let ratio = self.message_store_config.disk_max_used_space_ratio.clamp(10, 95);
+        ratio as f64 / 100.0
     }
 }
 
@@ -3575,6 +3779,7 @@ mod tests {
     use bytes::Buf;
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::fs;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -3599,6 +3804,7 @@ mod tests {
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::message::MessageVersion;
+    use rocketmq_common::common::running::running_stats::RunningStats;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::TopicAttributes::TopicAttributes;
@@ -3606,6 +3812,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::run_blocking_scheduled_task;
+    use super::CleanCommitLogService;
     use super::LocalFileMessageStore;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_result::PutMessageResult;
@@ -4584,6 +4791,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_info_includes_store_offsets_and_timer_defaults_when_timer_disabled() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                timer_wheel_enable: false,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let runtime_info = store.get_runtime_info();
+
+        assert!(runtime_info.contains_key("putMessageTimesTotal"));
+        assert!(runtime_info.contains_key(RunningStats::CommitLogMinOffset.as_str()));
+        assert!(runtime_info.contains_key(RunningStats::CommitLogMaxOffset.as_str()));
+        assert_eq!(runtime_info["timerReadBehind"], "0");
+        assert_eq!(runtime_info["timerOffsetBehind"], "0");
+        assert_eq!(runtime_info["timerCongestNum"], "0");
+        assert_eq!(runtime_info["timerEnqueueTps"], "0.0");
+        assert_eq!(runtime_info["timerDequeueTps"], "0.0");
+        assert_eq!(runtime_info["timerTopicBacklogDistribution"], "{}");
+        assert_eq!(runtime_info["timerBacklogDistribution"], "{}");
+    }
+
+    #[tokio::test]
+    async fn get_ha_runtime_info_reports_current_commitlog_max_offset() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+
+        let data = b"ha";
+        assert!(store
+            .get_commit_log_mut()
+            .append_data(0, data, 0, data.len() as i32)
+            .await
+            .expect("append commitlog data"));
+
+        let ha_runtime_info = store.get_ha_runtime_info().expect("HA service should be initialized");
+
+        assert!(ha_runtime_info.master);
+        assert_eq!(ha_runtime_info.master_commit_log_max_offset, data.len() as u64);
+        assert_eq!(ha_runtime_info.in_sync_slave_nums, 0);
+    }
+
+    #[tokio::test]
     async fn query_message_returns_indexed_message_after_reput() {
         let temp_dir = tempdir().unwrap();
         let mut store = new_async_flush_test_store(&temp_dir);
@@ -4979,6 +5237,9 @@ mod tests {
                 destroy_mapped_file_interval_forcibly: 0,
                 redelete_hanged_file_interval: 0,
                 delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                clean_file_forcibly_enable: false,
                 ..MessageStoreConfig::default()
             },
         );
@@ -4996,11 +5257,126 @@ mod tests {
         assert_eq!(store.get_min_phy_offset(), 0);
         assert_eq!(store.get_last_file_from_offset(), 64);
 
+        store.clean_commit_log_service.execute_delete_files_manually();
         store.clean_commit_log_service.run();
 
         assert_eq!(store.get_min_phy_offset(), 64);
         assert_eq!(store.get_last_file_from_offset(), 64);
         assert_eq!(store.get_commit_log().get_max_offset(), 96);
+    }
+
+    #[tokio::test]
+    async fn clean_commit_log_service_run_skips_expired_files_outside_delete_window() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+
+        store.clean_commit_log_service.run();
+
+        assert_eq!(store.get_min_phy_offset(), 0);
+        assert_eq!(store.get_last_file_from_offset(), 64);
+        assert_eq!(store.get_commit_log().get_max_offset(), 96);
+    }
+
+    #[test]
+    fn clean_commit_log_service_clamps_disk_cleanup_ratios_like_java() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                disk_space_warning_level_ratio: 1,
+                disk_space_clean_forcibly_ratio: 100,
+                disk_max_used_space_ratio: 1,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        assert_eq!(store.clean_commit_log_service.disk_space_warning_level_ratio(), 0.35);
+        assert_eq!(store.clean_commit_log_service.disk_space_clean_forcibly_ratio(), 0.85);
+        assert_eq!(store.clean_commit_log_service.disk_max_used_space_ratio(), 0.10);
+    }
+
+    #[test]
+    fn clean_commit_log_service_manual_delete_uses_java_retry_budget() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+
+        store.clean_commit_log_service.execute_delete_files_manually();
+
+        assert_eq!(
+            store
+                .clean_commit_log_service
+                .manual_delete_requests
+                .load(Ordering::SeqCst),
+            CleanCommitLogService::MAX_MANUAL_DELETE_FILE_TIMES
+        );
+        assert!(store.clean_commit_log_service.consume_manual_delete_request());
+        assert_eq!(
+            store
+                .clean_commit_log_service
+                .manual_delete_requests
+                .load(Ordering::SeqCst),
+            CleanCommitLogService::MAX_MANUAL_DELETE_FILE_TIMES - 1
+        );
+    }
+
+    #[tokio::test]
+    async fn clean_commit_log_service_run_deletes_when_disk_usage_is_unavailable() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 32,
+                file_reserved_time: 0,
+                delete_commit_log_files_interval: 0,
+                destroy_mapped_file_interval_forcibly: 0,
+                redelete_hanged_file_interval: 0,
+                delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                clean_file_forcibly_enable: false,
+                ..MessageStoreConfig::default()
+            },
+        );
+        store.init().await.expect("init store");
+        let logic_path = LocalFileMessageStore::get_store_path_logic(&store.message_store_config);
+        fs::remove_dir_all(logic_path).expect("remove logic store path");
+
+        for (offset, fill) in [(0_i64, b'A'), (32, b'B'), (64, b'C')] {
+            let data = vec![fill; 32];
+            assert!(store
+                .get_commit_log_mut()
+                .append_data(offset, &data, 0, data.len() as i32)
+                .await
+                .expect("append commitlog file"));
+        }
+
+        store.clean_commit_log_service.run();
+
+        assert_eq!(store.get_min_phy_offset(), 64);
+        assert_eq!(store.get_last_file_from_offset(), 64);
     }
 
     #[tokio::test]
@@ -5016,6 +5392,9 @@ mod tests {
                 destroy_mapped_file_interval_forcibly: 0,
                 redelete_hanged_file_interval: 0,
                 delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                clean_file_forcibly_enable: false,
                 ..MessageStoreConfig::default()
             },
         );
@@ -5047,6 +5426,7 @@ mod tests {
         let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
         assert_eq!(consume_queue.get_min_offset_in_queue(), 0);
 
+        store.clean_commit_log_service.execute_delete_files_manually();
         store.clean_commit_log_service.run();
         assert_eq!(store.get_min_phy_offset(), 64);
 
@@ -5070,6 +5450,9 @@ mod tests {
                 destroy_mapped_file_interval_forcibly: 0,
                 redelete_hanged_file_interval: 0,
                 delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                clean_file_forcibly_enable: false,
                 ..MessageStoreConfig::default()
             },
         );
@@ -5110,6 +5493,7 @@ mod tests {
                 ..Default::default()
             });
 
+        store.clean_commit_log_service.execute_delete_files_manually();
         store.clean_commit_log_service.run();
         assert_eq!(store.get_min_phy_offset(), 64);
 
@@ -5137,6 +5521,9 @@ mod tests {
                 destroy_mapped_file_interval_forcibly: 0,
                 redelete_hanged_file_interval: 0,
                 delete_file_batch_max: 10,
+                delete_when: "99".to_string(),
+                disk_max_used_space_ratio: 95,
+                clean_file_forcibly_enable: false,
                 ..MessageStoreConfig::default()
             },
         );
@@ -5163,6 +5550,7 @@ mod tests {
                 ..Default::default()
             });
 
+        store.clean_commit_log_service.execute_delete_files_manually();
         store.clean_commit_log_service.run();
         store.correct_logic_offset_service.run();
 
