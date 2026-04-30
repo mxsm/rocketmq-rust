@@ -906,7 +906,12 @@ impl LocalFileMessageStore {
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => clean_commit_log_service_arc.run(),
+                    _ = interval.tick() => {
+                        let service = Arc::clone(&clean_commit_log_service_arc);
+                        if !run_blocking_scheduled_task("clean commit log", move || service.run()).await {
+                            break;
+                        }
+                    },
                 }
             }
         }));
@@ -918,7 +923,12 @@ impl LocalFileMessageStore {
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => message_store.check_self(),
+                    _ = interval.tick() => {
+                        let message_store = message_store.clone();
+                        if !run_blocking_scheduled_task("store self check", move || message_store.check_self()).await {
+                            break;
+                        }
+                    },
                 }
             }
         }));
@@ -932,7 +942,12 @@ impl LocalFileMessageStore {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
                     _ = interval.tick() => {
-                        let _ = store_checkpoint_arc.flush();
+                        let checkpoint = Arc::clone(&store_checkpoint_arc);
+                        if !run_blocking_scheduled_task("store checkpoint flush", move || {
+                            let _ = checkpoint.flush();
+                        }).await {
+                            break;
+                        }
                     }
                 }
             }
@@ -947,8 +962,14 @@ impl LocalFileMessageStore {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => break,
                     _ = interval.tick() => {
-                        correct_logic_offset_service_arc.run();
-                        clean_consume_queue_service_arc.run();
+                        let correct_service = Arc::clone(&correct_logic_offset_service_arc);
+                        let clean_service = Arc::clone(&clean_consume_queue_service_arc);
+                        if !run_blocking_scheduled_task("clean consume queue", move || {
+                            correct_service.run();
+                            clean_service.run();
+                        }).await {
+                            break;
+                        }
                     }
                 }
             }
@@ -3286,6 +3307,19 @@ impl ReputMessageServiceInner {
     }
 }
 
+async fn run_blocking_scheduled_task<F>(task_name: &'static str, task: F) -> bool
+where
+    F: FnOnce() + Send + 'static,
+{
+    match tokio::task::spawn_blocking(task).await {
+        Ok(()) => true,
+        Err(error) => {
+            error!("scheduled store task {task_name} failed: {error}");
+            false
+        }
+    }
+}
+
 struct CleanCommitLogService {
     message_store_config: Arc<MessageStoreConfig>,
     commit_log: ArcMut<CommitLog>,
@@ -3541,6 +3575,7 @@ mod tests {
     use bytes::Buf;
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::thread;
@@ -3570,6 +3605,7 @@ mod tests {
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
+    use super::run_blocking_scheduled_task;
     use super::LocalFileMessageStore;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_result::PutMessageResult;
@@ -3591,6 +3627,25 @@ mod tests {
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
         new_configured_test_store(temp_dir, MessageStoreConfig::default())
+    }
+
+    #[tokio::test]
+    async fn scheduled_blocking_task_reports_completion_and_join_failure() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_task = Arc::clone(&completed);
+
+        assert!(
+            run_blocking_scheduled_task("test scheduled success", move || {
+                completed_task.store(true, Ordering::Release);
+            })
+            .await
+        );
+        assert!(completed.load(Ordering::Acquire));
+
+        assert!(
+            !run_blocking_scheduled_task("test scheduled panic", || panic!("scheduled task panic")).await,
+            "panic in a scheduled blocking task should stop that scheduled loop"
+        );
     }
 
     fn new_configured_test_store(

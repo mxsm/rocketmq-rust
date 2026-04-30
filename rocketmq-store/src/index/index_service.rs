@@ -281,11 +281,18 @@ impl IndexService {
         let tags = dispatch_request
             .properties_map
             .as_ref()
-            .and_then(|properties| properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS)))
+            .and_then(|properties| properties.get(MessageConst::PROPERTY_TAGS))
             .filter(|tags| !tags.is_empty());
 
         let has_normal_key = keys.split(MessageConst::KEY_SEPARATOR).any(|key| !key.is_empty());
         if dispatch_request.uniq_key.is_none() && !has_normal_key && tags.is_none() {
+            return;
+        }
+
+        if self
+            .get_max_dispatch_commit_log_offset()
+            .is_some_and(|end_phy_offset| dispatch_request.commit_log_offset < end_phy_offset)
+        {
             return;
         }
 
@@ -297,7 +304,12 @@ impl IndexService {
                     return;
                 }
                 let mut index_file_new = Some(index_file_inner);
-                let mut index_key = String::with_capacity(topic.len() + 1 + keys.len());
+                let mut index_key = String::with_capacity(index_build_key_capacity(
+                    topic,
+                    dispatch_request.uniq_key.as_ref().map(CheetahString::as_str),
+                    keys,
+                    tags.map(CheetahString::as_str),
+                ));
                 if let Some(ref uniq_key) = dispatch_request.uniq_key {
                     let Some(index_file) = index_file_new.take() else {
                         error!(
@@ -535,6 +547,18 @@ fn index_key_len(topic: &str, key: &str, index_type: Option<&str>) -> usize {
     topic.len() + key.len() + 1 + index_type.map_or(0, |index_type| index_type.len() + 1)
 }
 
+#[inline]
+fn index_build_key_capacity(topic: &str, uniq_key: Option<&str>, keys: &str, tags: Option<&str>) -> usize {
+    let normal_key_len = keys
+        .split(MessageConst::KEY_SEPARATOR)
+        .map(str::len)
+        .max()
+        .unwrap_or_default();
+    let plain_key_len = uniq_key.map_or(normal_key_len, |uniq_key| normal_key_len.max(uniq_key.len()));
+    let typed_key_len = tags.map_or(0, |tags| tags.len() + MessageConst::INDEX_TAG_TYPE.len() + 1);
+    topic.len() + plain_key_len.max(typed_key_len) + 1
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -546,11 +570,19 @@ mod tests {
     use crate::store::running_flags::RunningFlags;
 
     fn new_index_service_for_test(temp_dir: &tempfile::TempDir, checkpoint_name: &str) -> IndexService {
+        new_index_service_for_test_with_limits(temp_dir, checkpoint_name, 64)
+    }
+
+    fn new_index_service_for_test_with_limits(
+        temp_dir: &tempfile::TempDir,
+        checkpoint_name: &str,
+        max_index_num: u32,
+    ) -> IndexService {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let message_store_config = Arc::new(MessageStoreConfig {
             store_path_root_dir: CheetahString::from_string(root_dir),
             max_hash_slot_num: 32,
-            max_index_num: 64,
+            max_index_num,
             ..MessageStoreConfig::default()
         });
         let temp_file = temp_dir.path().join(checkpoint_name);
@@ -569,6 +601,22 @@ mod tests {
         // Test key with type format: topic#indexType#key
         let key2 = build_key_with_type("TestTopic", "tagValue", MessageConst::INDEX_TAG_TYPE);
         assert_eq!(key2, "TestTopic#T#tagValue");
+    }
+
+    #[test]
+    fn index_build_key_capacity_covers_uniq_normal_and_tag_keys() {
+        assert_eq!(
+            index_build_key_capacity("Topic", Some("uniq-longer"), "k1 k22", Some("Tag")),
+            index_key_len("Topic", "uniq-longer", None)
+        );
+        assert_eq!(
+            index_build_key_capacity("Topic", Some("u"), "short very-long-normal-key", Some("Tag")),
+            index_key_len("Topic", "very-long-normal-key", None)
+        );
+        assert_eq!(
+            index_build_key_capacity("Topic", None, "k1", Some("longer-tag-value")),
+            index_key_len("Topic", "longer-tag-value", Some(MessageConst::INDEX_TAG_TYPE))
+        );
     }
 
     #[test]
@@ -663,6 +711,35 @@ mod tests {
         });
 
         assert_eq!(index_service.get_total_size(), 0);
+    }
+
+    #[test]
+    fn build_index_skips_old_offset_before_rolling_full_file() {
+        let temp_dir = tempdir().unwrap();
+        let index_service =
+            new_index_service_for_test_with_limits(&temp_dir, "store_checkpoint_test_old_offset_no_roll", 2);
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("new-key"),
+            ..DispatchRequest::default()
+        });
+        let initial_total_size = index_service.get_total_size();
+        assert!(initial_total_size > 0);
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 999,
+            store_timestamp: 1000000001000,
+            keys: CheetahString::from_slice("old-key"),
+            ..DispatchRequest::default()
+        });
+
+        assert_eq!(index_service.get_total_size(), initial_total_size);
+        let result = index_service.query_offset("TestTopic", "old-key", 10, 0, i64::MAX);
+        assert!(result.get_phy_offsets().is_empty());
     }
 
     #[test]
