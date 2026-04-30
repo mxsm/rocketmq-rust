@@ -236,8 +236,10 @@ impl GroupCommitService {
                             remaining.push(request);
                         }
                         if !remaining.is_empty() {
-                            mapped_file_queue.flush(0);
-                            complete_group_commit_batch(remaining, mapped_file_queue.get_flushed_where());
+                            let flushed_where = flush_mapped_file_queue(mapped_file_queue.clone(), 0)
+                                .await
+                                .map_or_else(|| mapped_file_queue.get_flushed_where(), |result| result.flushed_where);
+                            complete_group_commit_batch(remaining, flushed_where);
                         }
                         break;
                     }
@@ -252,12 +254,14 @@ impl GroupCommitService {
                         let target_offset = requests.iter().map(|request| request.next_offset).max().unwrap_or(0);
                         let mut flush_ok = mapped_file_queue.get_flushed_where() >= target_offset;
                         for _ in 0..1000 {
-                            if flush_ok {
+                            if flush_ok || requests.iter().all(GroupCommitRequest::is_expired) {
                                 break;
                             }
-                            mapped_file_queue.flush(0);
-                            flush_ok = mapped_file_queue.get_flushed_where() >= target_offset;
-                            if flush_ok {
+                            let Some(flush_result) = flush_mapped_file_queue(mapped_file_queue.clone(), 0).await else {
+                                break;
+                            };
+                            flush_ok = flush_result.flushed_where >= target_offset;
+                            if flush_ok || requests.iter().all(GroupCommitRequest::is_expired) {
                                 break;
                             }
                             time::sleep(time::Duration::from_millis(1)).await;
@@ -281,9 +285,7 @@ impl GroupCommitService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
+        drop(self.worker_handle.take());
     }
 }
 
@@ -348,16 +350,21 @@ impl FlushRealTimeService {
                     }
                 }
 
-                mapped_file_queue.flush(flush_physic_queue_least_pages);
-                let store_timestamp = mapped_file_queue.get_store_timestamp();
+                let Some(flush_result) =
+                    flush_mapped_file_queue(mapped_file_queue.clone(), flush_physic_queue_least_pages).await
+                else {
+                    break;
+                };
+                let store_timestamp = flush_result.store_timestamp;
                 if store_timestamp > 0 {
                     store_checkpoint.set_physic_msg_timestamp(store_timestamp);
                 }
             }
-            mapped_file_queue.flush(0);
-            let store_timestamp = mapped_file_queue.get_store_timestamp();
-            if store_timestamp > 0 {
-                store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+            if let Some(flush_result) = flush_mapped_file_queue(mapped_file_queue, 0).await {
+                let store_timestamp = flush_result.store_timestamp;
+                if store_timestamp > 0 {
+                    store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+                }
             }
         }));
     }
@@ -371,9 +378,7 @@ impl FlushRealTimeService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
+        drop(self.worker_handle.take());
     }
 }
 
@@ -420,8 +425,12 @@ impl CommitRealTimeService {
                     commit_data_least_pages = 0;
                 }
 
-                let result = mapped_file_queue.commit(commit_data_least_pages);
-                if !result {
+                let Some(commit_result) =
+                    commit_mapped_file_queue(mapped_file_queue.clone(), commit_data_least_pages).await
+                else {
+                    break;
+                };
+                if !commit_result.commit_ok {
                     last_commit_timestamp = current_millis();
                     if let Some(flush_manager) = flush_manager.as_ref().unwrap().upgrade() {
                         flush_manager.wake_up_flush();
@@ -434,11 +443,12 @@ impl CommitRealTimeService {
                     _ = tokio::time::sleep(std::time::Duration::from_millis(interval)) => {}
                 }
             }
-            let result = mapped_file_queue.commit(0);
-            if !result {
-                let store_timestamp = mapped_file_queue.get_store_timestamp();
-                if store_timestamp > 0 {
-                    store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+            if let Some(commit_result) = commit_mapped_file_queue(mapped_file_queue, 0).await {
+                if !commit_result.commit_ok {
+                    let store_timestamp = commit_result.store_timestamp;
+                    if store_timestamp > 0 {
+                        store_checkpoint.set_physic_msg_timestamp(store_timestamp);
+                    }
                 }
             }
         }));
@@ -447,9 +457,7 @@ impl CommitRealTimeService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
+        drop(self.worker_handle.take());
     }
 
     pub fn set_flush_manager(&mut self, flush_manager: WeakArcMut<DefaultFlushManager>) {
@@ -457,9 +465,67 @@ impl CommitRealTimeService {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FlushMappedFileQueueResult {
+    flush_ok: bool,
+    flushed_where: i64,
+    store_timestamp: u64,
+}
+
+async fn flush_mapped_file_queue(
+    mapped_file_queue: ArcMut<MappedFileQueue>,
+    flush_least_pages: i32,
+) -> Option<FlushMappedFileQueueResult> {
+    match tokio::task::spawn_blocking(move || {
+        let flush_ok = mapped_file_queue.flush(flush_least_pages);
+        FlushMappedFileQueueResult {
+            flush_ok,
+            flushed_where: mapped_file_queue.get_flushed_where(),
+            store_timestamp: mapped_file_queue.get_store_timestamp(),
+        }
+    })
+    .await
+    {
+        Ok(result) => Some(result),
+        Err(error) => {
+            tracing::error!("commitlog flush task failed: {error}");
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CommitMappedFileQueueResult {
+    commit_ok: bool,
+    store_timestamp: u64,
+}
+
+async fn commit_mapped_file_queue(
+    mapped_file_queue: ArcMut<MappedFileQueue>,
+    commit_least_pages: i32,
+) -> Option<CommitMappedFileQueueResult> {
+    match tokio::task::spawn_blocking(move || {
+        let commit_ok = mapped_file_queue.commit(commit_least_pages);
+        CommitMappedFileQueueResult {
+            commit_ok,
+            store_timestamp: mapped_file_queue.get_store_timestamp(),
+        }
+    })
+    .await
+    {
+        Ok(result) => Some(result),
+        Err(error) => {
+            tracing::error!("commitlog commit task failed: {error}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use tempfile::tempdir;
 
     #[test]
     fn complete_group_commit_batch_marks_each_request_by_final_flushed_offset() {
@@ -471,5 +537,50 @@ mod tests {
 
         assert_eq!(response_64.try_recv(), Ok(PutMessageStatus::PutOk));
         assert_eq!(response_96.try_recv(), Ok(PutMessageStatus::FlushDiskTimeout));
+    }
+
+    #[tokio::test]
+    async fn flush_and_commit_helpers_run_empty_queue_on_blocking_pool() {
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+
+        assert_eq!(
+            flush_mapped_file_queue(mapped_file_queue.clone(), 0).await,
+            Some(FlushMappedFileQueueResult {
+                flush_ok: true,
+                flushed_where: 0,
+                store_timestamp: 0,
+            })
+        );
+        assert_eq!(
+            commit_mapped_file_queue(mapped_file_queue, 0).await,
+            Some(CommitMappedFileQueueResult {
+                commit_ok: true,
+                store_timestamp: 0,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn group_commit_shutdown_completes_pending_request() {
+        let temp_dir = tempdir().unwrap();
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mut service = GroupCommitService {
+            store_checkpoint,
+            tx_in: None,
+            shutdown_token: CancellationToken::new(),
+            worker_handle: None,
+        };
+        service.start(mapped_file_queue);
+
+        let (request, response) = GroupCommitRequest::new(1, 0);
+        assert!(service.put_request(request).await);
+        service.shutdown();
+
+        let status = time::timeout(time::Duration::from_secs(1), response)
+            .await
+            .expect("shutdown should complete pending group commit request")
+            .expect("group commit worker should send a completion status");
+        assert_eq!(status, PutMessageStatus::FlushDiskTimeout);
     }
 }

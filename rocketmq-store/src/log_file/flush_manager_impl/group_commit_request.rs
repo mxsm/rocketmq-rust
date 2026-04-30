@@ -43,4 +43,8 @@ impl GroupCommitRequest {
             let _ = sender.send(status);
         }
     }
+
+    pub(crate) fn is_expired(&self) -> bool {
+        current_nano() >= self.dead_line
+    }
 }
