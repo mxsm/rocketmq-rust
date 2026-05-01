@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::error::Error;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -82,6 +83,7 @@ use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -314,6 +316,65 @@ pub struct LocalFileMessageStore {
     max_delay_level: i32,
 }
 
+fn notify_message_arrive_for_multi_dispatch(
+    message_store_config: &MessageStoreConfig,
+    message_arriving_listener: &(dyn MessageArrivingListener + Sync + Send + 'static),
+    dispatch_request: &mut DispatchRequest,
+) {
+    let Some(properties) = dispatch_request.properties_map.as_ref() else {
+        return;
+    };
+    if dispatch_request.topic.as_str().starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+        return;
+    }
+    let Some(multi_dispatch_queue) = properties.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
+        return;
+    };
+    let Some(multi_queue_offset) = properties.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET) else {
+        return;
+    };
+    if multi_dispatch_queue.is_empty() || multi_queue_offset.is_empty() {
+        return;
+    }
+
+    let mut queue_iter = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER);
+    let mut offset_iter = multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER);
+    loop {
+        match (queue_iter.next(), offset_iter.next()) {
+            (None, None) => break,
+            (Some(queue_name), Some(queue_offset)) => {
+                if queue_name.is_empty() || queue_offset.parse::<i64>().is_err() {
+                    return;
+                }
+            }
+            _ => return,
+        }
+    }
+
+    for (queue_name, queue_offset) in multi_dispatch_queue
+        .split(MULTI_DISPATCH_QUEUE_SPLITTER)
+        .zip(multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER))
+    {
+        let Ok(queue_offset) = queue_offset.parse::<i64>() else {
+            return;
+        };
+        let queue_name = CheetahString::from_slice(queue_name);
+        let mut queue_id = dispatch_request.queue_id;
+        if message_store_config.enable_lmq && is_lmq(Some(queue_name.as_str())) {
+            queue_id = 0;
+        }
+        message_arriving_listener.arriving(
+            &queue_name,
+            queue_id,
+            queue_offset + 1,
+            Some(dispatch_request.tags_code),
+            dispatch_request.store_timestamp,
+            dispatch_request.bit_map.clone(),
+            dispatch_request.properties_map.as_ref(),
+        );
+    }
+}
+
 impl LocalFileMessageStore {
     fn is_dledger_commit_log_enabled_config(message_store_config: &MessageStoreConfig) -> bool {
         message_store_config.enable_dledger_commit_log || message_store_config.enable_dleger_commit_log
@@ -390,11 +451,10 @@ impl LocalFileMessageStore {
             store_lock_guard: None,
             running_flags: running_flags.clone(),
             reput_message_service: ReputMessageService {
-                shutdown: Arc::new(Notify::new()),
+                shutdown_token: CancellationToken::new(),
                 new_message_notify: Arc::new(Notify::new()),
                 pending_messages: Arc::new(AtomicI64::new(0)),
                 reput_from_offset: None,
-                message_store_config: message_store_config.clone(),
                 dispatch_tx: None,
                 inner: None,
                 reader_handle: None,
@@ -683,62 +743,67 @@ impl LocalFileMessageStore {
         delete_count
     }
 
-    fn prepare_lmq_dispatch(&self, msg: &mut MessageExtBrokerInner) {
+    fn prepare_lmq_dispatch(&self, msg: &mut MessageExtBrokerInner) -> Vec<String> {
         if !self.message_store_config.enable_multi_dispatch {
-            return;
+            return Vec::new();
         }
         let Some(multi_dispatch_queue) = msg.property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
-            return;
+            return Vec::new();
         };
         if multi_dispatch_queue.is_empty() {
-            return;
+            return Vec::new();
         }
+        let (queue_keys, is_all_lmq_dispatch) =
+            self.collect_lmq_dispatch_queue_keys_from_value(multi_dispatch_queue.as_str());
         if msg
             .property(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET)
             .is_some_and(|queue_offset| !queue_offset.is_empty())
         {
-            return;
+            return queue_keys;
+        }
+        if !is_all_lmq_dispatch {
+            return Vec::new();
         }
 
-        let queue_names: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
-        let queue_keys = self.collect_lmq_dispatch_queue_keys_from_names(&queue_names);
-        if queue_keys.len() != queue_names.len() {
-            return;
+        let mut queue_offsets = String::new();
+        for (index, queue_key) in queue_keys.iter().enumerate() {
+            if index > 0 {
+                queue_offsets.push_str(MULTI_DISPATCH_QUEUE_SPLITTER);
+            }
+            let _ = write!(
+                &mut queue_offsets,
+                "{}",
+                self.consume_queue_store.get_lmq_queue_offset(queue_key.as_str())
+            );
         }
-
-        let queue_offsets = queue_keys
-            .iter()
-            .map(|queue_key| {
-                self.consume_queue_store
-                    .get_lmq_queue_offset(queue_key.as_str())
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join(MULTI_DISPATCH_QUEUE_SPLITTER);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
             CheetahString::from_string(queue_offsets),
         );
+        queue_keys
     }
 
-    fn collect_lmq_dispatch_queue_keys(&self, msg: &MessageExtBrokerInner) -> Vec<String> {
-        let Some(multi_dispatch_queue) = msg.property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH) else {
-            return Vec::new();
-        };
-        let queue_names: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
-        self.collect_lmq_dispatch_queue_keys_from_names(&queue_names)
-    }
-
-    fn collect_lmq_dispatch_queue_keys_from_names(&self, queue_names: &[&str]) -> Vec<String> {
+    fn collect_lmq_dispatch_queue_keys_from_value(&self, multi_dispatch_queue: &str) -> (Vec<String>, bool) {
         if !self.message_store_config.enable_lmq {
-            return Vec::new();
+            return (Vec::new(), false);
         }
 
-        queue_names
-            .iter()
-            .filter(|queue_name| is_lmq(Some(queue_name)))
-            .map(|queue_name| format!("{queue_name}-{LMQ_QUEUE_ID}"))
-            .collect()
+        let mut queue_keys = Vec::new();
+        let mut saw_queue = false;
+        let mut is_all_lmq_dispatch = true;
+        for queue_name in multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER) {
+            if queue_name.is_empty() {
+                is_all_lmq_dispatch = false;
+                continue;
+            }
+            saw_queue = true;
+            if is_lmq(Some(queue_name)) {
+                queue_keys.push(format!("{queue_name}-{LMQ_QUEUE_ID}"));
+            } else {
+                is_all_lmq_dispatch = false;
+            }
+        }
+        (queue_keys, saw_queue && is_all_lmq_dispatch)
     }
 
     fn update_lmq_offsets(&self, queue_keys: &[String], message_num: i16) {
@@ -1386,8 +1451,7 @@ impl MessageStore for LocalFileMessageStore {
                 return result;
             }
         }
-        self.prepare_lmq_dispatch(&mut msg);
-        let lmq_dispatch_queue_keys = self.collect_lmq_dispatch_queue_keys(&msg);
+        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
         let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&msg);
 
         if msg
@@ -1450,8 +1514,7 @@ impl MessageStore for LocalFileMessageStore {
                 return result;
             }
         }
-        self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
-        let lmq_dispatch_queue_keys = self.collect_lmq_dispatch_queue_keys(&message_ext_batch.message_ext_broker_inner);
+        let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
         let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&message_ext_batch.message_ext_broker_inner);
 
         let begin_time = Instant::now();
@@ -2740,11 +2803,10 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
 }
 
 struct ReputMessageService {
-    shutdown: Arc<Notify>,
+    shutdown_token: CancellationToken,
     new_message_notify: Arc<Notify>,
     pending_messages: Arc<AtomicI64>,
     reput_from_offset: Option<Arc<AtomicI64>>,
-    message_store_config: Arc<MessageStoreConfig>,
     dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
     inner: Option<ReputMessageServiceInner>,
     reader_handle: Option<tokio::task::JoinHandle<()>>,
@@ -2753,54 +2815,8 @@ struct ReputMessageService {
 
 impl ReputMessageService {
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
-        if dispatch_request.properties_map.is_none()
-            || dispatch_request.topic.as_str().starts_with(RETRY_GROUP_TOPIC_PREFIX)
-        {
-            return;
-        }
-        let prop = dispatch_request.properties_map.as_ref().unwrap();
-        let multi_dispatch_queue = prop.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
-        let multi_queue_offset = prop.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
-        if multi_dispatch_queue.is_none()
-            || multi_queue_offset.is_none()
-            || multi_dispatch_queue.as_ref().unwrap().is_empty()
-            || multi_queue_offset.as_ref().unwrap().is_empty()
-        {
-            return;
-        }
-        let queues: Vec<&str> = multi_dispatch_queue
-            .unwrap()
-            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
-            .collect();
-        let queue_offsets: Vec<&str> = multi_dispatch_queue
-            .unwrap()
-            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
-            .collect();
-        if queues.len() != queue_offsets.len() {
-            return;
-        }
-        let reput_message_service_inner = self.inner.as_ref().unwrap();
-        for i in 0..queues.len() {
-            let queue_name = CheetahString::from_slice(queues[i]);
-            let queue_offset: i64 = queue_offsets[i].parse().unwrap();
-            let mut queue_id = dispatch_request.queue_id;
-            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name.as_str())) {
-                queue_id = 0;
-            }
-            reput_message_service_inner
-                .message_store
-                .message_arriving_listener
-                .as_ref()
-                .unwrap()
-                .arriving(
-                    &queue_name,
-                    queue_id,
-                    queue_offset + 1,
-                    Some(dispatch_request.tags_code),
-                    dispatch_request.store_timestamp,
-                    dispatch_request.bit_map.clone(),
-                    dispatch_request.properties_map.as_ref(),
-                );
+        if let Some(inner) = self.inner.as_ref() {
+            inner.notify_message_arrive4multi_queue(dispatch_request);
         }
     }
 
@@ -2826,6 +2842,7 @@ impl ReputMessageService {
         // Create channel for decoupling read and dispatch
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
+        self.shutdown_token = CancellationToken::new();
 
         let mut inner = ReputMessageServiceInner {
             reput_from_offset: self.reput_from_offset.clone().unwrap(),
@@ -2837,13 +2854,15 @@ impl ReputMessageService {
         };
         self.inner = Some(inner.clone());
 
-        let shutdown = self.shutdown.clone();
+        let shutdown = self.shutdown_token.clone();
         let new_message_notify = self.new_message_notify.clone();
         let pending_messages = self.pending_messages.clone();
 
         // Task 1: Read messages from CommitLog and send to channel
         let shutdown_reader = shutdown.clone();
         let reader_handle = tokio::spawn(async move {
+            let mut fallback_interval = tokio::time::interval(Duration::from_millis(1));
+            fallback_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = new_message_notify.notified() => {
@@ -2885,7 +2904,7 @@ impl ReputMessageService {
                             }
                         }
                     }
-                    _ = tokio::time::sleep(Duration::from_millis(1)) => {
+                    _ = fallback_interval.tick() => {
                         // Fallback: periodic check
                         if pending_messages.load(Ordering::Relaxed) > 0 || inner.is_commit_log_available() {
                             if let Some(batch) = inner.read_and_parse_batch().await {
@@ -2899,7 +2918,7 @@ impl ReputMessageService {
                             }
                         }
                     }
-                    _ = shutdown_reader.notified() => {
+                    _ = shutdown_reader.cancelled() => {
                         break;
                     }
                 }
@@ -2922,7 +2941,7 @@ impl ReputMessageService {
                             }
                         }
                     }
-                    _ = shutdown_dispatcher.notified() => {
+                    _ = shutdown_dispatcher.cancelled() => {
                         // Process remaining messages in channel before shutdown
                         while let Ok(mut batch) = dispatch_rx.try_recv() {
                             dispatcher.dispatch_batch(&mut batch);
@@ -2991,7 +3010,7 @@ impl ReputMessageService {
         }
 
         // Step 2: Notify tasks to shutdown
-        self.shutdown.notify_waiters();
+        self.shutdown_token.cancel();
 
         // Step 3: Wait for tasks to complete with timeout (3 seconds)
         if let Some(handle) = self.reader_handle.take() {
@@ -3035,46 +3054,11 @@ struct ReputMessageServiceInner {
 
 impl ReputMessageServiceInner {
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
-        let prop = dispatch_request.properties_map.as_ref();
-        if prop.is_none() || dispatch_request.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            return;
-        }
-        let prop = prop.unwrap();
-        let multi_dispatch_queue = prop.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
-        let multi_queue_offset = prop.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
-        if multi_dispatch_queue.is_none()
-            || multi_queue_offset.is_none()
-            || multi_dispatch_queue.as_ref().unwrap().is_empty()
-            || multi_queue_offset.as_ref().unwrap().is_empty()
-        {
-            return;
-        }
-        let queues: Vec<&str> = multi_dispatch_queue
-            .unwrap()
-            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
-            .collect();
-        let queue_offsets: Vec<&str> = multi_queue_offset
-            .unwrap()
-            .split(MULTI_DISPATCH_QUEUE_SPLITTER)
-            .collect();
-        if queues.len() != queue_offsets.len() {
-            return;
-        }
-        for i in 0..queues.len() {
-            let queue_name = CheetahString::from_slice(queues[i]);
-            let queue_offset: i64 = queue_offsets[i].parse().unwrap();
-            let mut queue_id = dispatch_request.queue_id;
-            if self.message_store_config.enable_lmq && is_lmq(Some(queue_name.as_str())) {
-                queue_id = 0;
-            }
-            self.message_store.message_arriving_listener.as_ref().unwrap().arriving(
-                &queue_name,
-                queue_id,
-                queue_offset + 1,
-                Some(dispatch_request.tags_code),
-                dispatch_request.store_timestamp,
-                dispatch_request.bit_map.clone(),
-                dispatch_request.properties_map.as_ref(),
+        if let Some(message_arriving_listener) = self.message_store.message_arriving_listener.as_ref() {
+            notify_message_arrive_for_multi_dispatch(
+                self.message_store_config.as_ref(),
+                message_arriving_listener.as_ref().as_ref(),
+                dispatch_request,
             );
         }
     }
@@ -3781,6 +3765,7 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicI64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::thread;
@@ -3814,7 +3799,9 @@ mod tests {
     use super::run_blocking_scheduled_task;
     use super::CleanCommitLogService;
     use super::LocalFileMessageStore;
+    use super::ReputMessageServiceInner;
     use crate::base::dispatch_request::DispatchRequest;
+    use crate::base::message_arriving_listener::MessageArrivingListener;
     use crate::base::message_result::PutMessageResult;
     use crate::base::message_status_enum::GetMessageStatus;
     use crate::base::message_status_enum::PutMessageStatus;
@@ -3870,6 +3857,60 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct RecordedArrival {
+        topic: CheetahString,
+        queue_id: i32,
+        logic_offset: i64,
+        filter_bit_map: Option<Vec<u8>>,
+    }
+
+    struct RecordingArrivingListener {
+        arrivals: Arc<std::sync::Mutex<Vec<RecordedArrival>>>,
+    }
+
+    impl MessageArrivingListener for RecordingArrivingListener {
+        fn arriving(
+            &self,
+            topic: &CheetahString,
+            queue_id: i32,
+            logic_offset: i64,
+            _tags_code: Option<i64>,
+            _msg_store_time: i64,
+            filter_bit_map: Option<Vec<u8>>,
+            _properties: Option<&HashMap<CheetahString, CheetahString>>,
+        ) {
+            self.arrivals.lock().unwrap().push(RecordedArrival {
+                topic: topic.clone(),
+                queue_id,
+                logic_offset,
+                filter_bit_map,
+            });
+        }
+    }
+
+    fn install_recording_arriving_listener(
+        store: &mut LocalFileMessageStore,
+    ) -> Arc<std::sync::Mutex<Vec<RecordedArrival>>> {
+        let arrivals = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let listener: Box<dyn MessageArrivingListener + Sync + Send + 'static> = Box::new(RecordingArrivingListener {
+            arrivals: Arc::clone(&arrivals),
+        });
+        store.message_arriving_listener = Some(Arc::new(listener));
+        arrivals
+    }
+
+    fn reput_inner_for_store(store: ArcMut<LocalFileMessageStore>) -> ReputMessageServiceInner {
+        ReputMessageServiceInner {
+            reput_from_offset: Arc::new(AtomicI64::new(0)),
+            commit_log: store.commit_log.clone(),
+            message_store_config: store.message_store_config.clone(),
+            dispatcher: store.dispatcher.clone(),
+            notify_message_arrive_in_batch: false,
+            message_store: store,
+        }
     }
 
     fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
@@ -4148,6 +4189,8 @@ mod tests {
         store.start().await.expect("start store");
 
         assert!(store.store_stats_service.has_worker_handle());
+        assert!(store.reput_message_service.reader_handle.is_some());
+        assert!(store.reput_message_service.dispatcher_handle.is_some());
         assert!(store
             .timer_message_store
             .as_ref()
@@ -4157,6 +4200,8 @@ mod tests {
         store.shutdown().await;
 
         assert!(!store.store_stats_service.has_worker_handle());
+        assert!(store.reput_message_service.reader_handle.is_none());
+        assert!(store.reput_message_service.dispatcher_handle.is_none());
         assert!(!store
             .timer_message_store
             .as_ref()
@@ -5255,6 +5300,145 @@ mod tests {
         assert_eq!(beta_queue.get_message_total_in_queue(), 1);
         assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%alpha-0"), 1);
         assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%beta-0"), 1);
+    }
+
+    #[tokio::test]
+    async fn put_message_with_existing_multi_queue_offsets_still_updates_lmq_offsets() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_multi_dispatch: true,
+                enable_lmq: true,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let source_topic = CheetahString::from_static_str("multi-dispatch-existing-offset-topic");
+
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(source_topic);
+        msg.message_ext_inner.set_queue_id(0);
+        msg.set_body(Bytes::from_static(b"multi-dispatch-existing-offset-body"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("%LMQ%alpha,%LMQ%beta"),
+        );
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_static_str("3,5"),
+        );
+
+        let put_result = store.put_message(msg).await;
+
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%alpha-0"), 1);
+        assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%beta-0"), 1);
+    }
+
+    #[tokio::test]
+    async fn put_message_with_existing_mixed_multi_queue_offsets_updates_lmq_offsets() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_multi_dispatch: true,
+                enable_lmq: true,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let source_topic = CheetahString::from_static_str("multi-dispatch-mixed-offset-topic");
+
+        let mut msg = MessageExtBrokerInner::default();
+        msg.set_topic(source_topic);
+        msg.message_ext_inner.set_queue_id(0);
+        msg.set_body(Bytes::from_static(b"multi-dispatch-mixed-offset-body"));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("%LMQ%alpha,normal-queue"),
+        );
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_static_str("3,5"),
+        );
+
+        let put_result = store.put_message(msg).await;
+
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%alpha-0"), 1);
+        assert_eq!(store.consume_queue_store.get_lmq_queue_offset("normal-queue-0"), 0);
+    }
+
+    #[test]
+    fn multi_dispatch_arrival_uses_multi_queue_offsets_without_allocating_vectors() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                enable_lmq: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let arrivals = install_recording_arriving_listener(&mut store);
+        let inner = reput_inner_for_store(store.clone());
+        let mut properties = HashMap::new();
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("%LMQ%alpha,%LMQ%beta"),
+        );
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_static_str("3,5"),
+        );
+        let mut dispatch_request = DispatchRequest {
+            topic: CheetahString::from_static_str("multi-arrival-source-topic"),
+            queue_id: 7,
+            tags_code: 11,
+            store_timestamp: 99,
+            bit_map: Some(vec![1, 2]),
+            properties_map: Some(properties),
+            ..DispatchRequest::default()
+        };
+
+        inner.notify_message_arrive4multi_queue(&mut dispatch_request);
+
+        let arrivals = arrivals.lock().unwrap();
+        assert_eq!(arrivals.len(), 2);
+        assert_eq!(arrivals[0].topic, CheetahString::from_static_str("%LMQ%alpha"));
+        assert_eq!(arrivals[0].queue_id, 0);
+        assert_eq!(arrivals[0].logic_offset, 4);
+        assert_eq!(arrivals[0].filter_bit_map, Some(vec![1, 2]));
+        assert_eq!(arrivals[1].topic, CheetahString::from_static_str("%LMQ%beta"));
+        assert_eq!(arrivals[1].queue_id, 0);
+        assert_eq!(arrivals[1].logic_offset, 6);
+    }
+
+    #[test]
+    fn multi_dispatch_arrival_ignores_invalid_offsets_without_panicking() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+        let arrivals = install_recording_arriving_listener(&mut store);
+        let inner = reput_inner_for_store(store.clone());
+        let mut properties = HashMap::new();
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("queue-a,queue-b"),
+        );
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET),
+            CheetahString::from_static_str("1,not-a-number"),
+        );
+        let mut dispatch_request = DispatchRequest {
+            topic: CheetahString::from_static_str("multi-arrival-invalid-offset-topic"),
+            queue_id: 3,
+            properties_map: Some(properties),
+            ..DispatchRequest::default()
+        };
+
+        inner.notify_message_arrive4multi_queue(&mut dispatch_request);
+
+        assert!(arrivals.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
