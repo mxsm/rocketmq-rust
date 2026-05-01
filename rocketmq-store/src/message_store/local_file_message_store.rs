@@ -1330,8 +1330,8 @@ impl MessageStore for LocalFileMessageStore {
             }
 
             self.shutdown_schedule_tasks().await;
-            self.store_stats_service.shutdown();
-            self.commit_log.shutdown();
+            self.store_stats_service.shutdown_gracefully().await;
+            self.commit_log.shutdown_gracefully().await;
 
             self.reput_message_service.shutdown().await;
             self.consume_queue_store.shutdown();
@@ -1347,7 +1347,7 @@ impl MessageStore for LocalFileMessageStore {
                 // this.rocksDBMessageStore.consumeQueueStore.shutdown();
             }
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
-                timer_message_store.shutdown();
+                timer_message_store.shutdown_gracefully().await;
             }
             self.flush_consume_queue_service.shutdown();
             self.allocate_mapped_file_service.shutdown().await;
@@ -4130,6 +4130,38 @@ mod tests {
 
         second.start().await.expect("lock should be reusable after shutdown");
         second.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_stats_and_timer_background_tasks() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                timer_wheel_enable: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        store.init().await.expect("init store");
+        store.start().await.expect("start store");
+
+        assert!(store.store_stats_service.has_worker_handle());
+        assert!(store
+            .timer_message_store
+            .as_ref()
+            .expect("timer store should be initialized")
+            .has_scheduler_handle());
+
+        store.shutdown().await;
+
+        assert!(!store.store_stats_service.has_worker_handle());
+        assert!(!store
+            .timer_message_store
+            .as_ref()
+            .expect("timer store should be initialized")
+            .has_scheduler_handle());
     }
 
     #[tokio::test]

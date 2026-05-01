@@ -347,20 +347,21 @@ impl CommitLog {
         let mut flush_manager = self.flush_manager.clone();
         let flush_manager_weak = ArcMut::downgrade(&flush_manager);
 
-        tokio::spawn(async move {
-            // Acquire lock only for initialization
-            {
-                if let Some(service) = flush_manager.commit_real_time_service_mut() {
-                    service.set_flush_manager(flush_manager_weak);
-                }
-                flush_manager.start();
-            }
-        });
+        if let Some(service) = flush_manager.commit_real_time_service_mut() {
+            service.set_flush_manager(flush_manager_weak);
+        }
+        flush_manager.start();
     }
 
     pub fn shutdown(&mut self) {
         self.flush();
         self.flush_manager.shutdown();
+    }
+
+    pub async fn shutdown_gracefully(&mut self) {
+        self.flush();
+        let mut flush_manager = self.flush_manager.clone();
+        flush_manager.shutdown_gracefully().await;
     }
 
     pub fn destroy(&mut self) {
@@ -2426,7 +2427,7 @@ mod tests {
         assert_eq!(store.get_commit_log().get_flushed_where(), 0);
         assert_eq!(store.get_commit_log().get_max_offset(), 4);
 
-        store.get_commit_log_mut().shutdown();
+        store.get_commit_log_mut().shutdown_gracefully().await;
 
         assert_eq!(store.get_commit_log().get_flushed_where(), 4);
         assert_eq!(

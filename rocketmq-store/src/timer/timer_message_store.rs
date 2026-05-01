@@ -36,9 +36,9 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::is_it_time_to_do;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::warn;
 
@@ -251,7 +251,7 @@ pub struct TimerMessageStore {
     should_running_dequeue: AtomicBool,
     enqueue_suspended: AtomicBool,
     process_lock: AsyncMutex<()>,
-    scheduler_shutdown: Notify,
+    scheduler_shutdown: Mutex<CancellationToken>,
     scheduler_handle: Mutex<Option<JoinHandle<()>>>,
     enqueue_tps_counter: TpsCounter,
     dequeue_tps_counter: TpsCounter,
@@ -317,6 +317,8 @@ impl TimerMessageStore {
             return;
         }
 
+        let shutdown_token = CancellationToken::new();
+        *self.scheduler_shutdown.lock() = shutdown_token.clone();
         let scheduler = self.clone();
         let interval_ms = scheduler
             .message_store_config
@@ -327,7 +329,7 @@ impl TimerMessageStore {
             interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
-                    _ = scheduler.scheduler_shutdown.notified() => break,
+                    _ = shutdown_token.cancelled() => break,
                     _ = interval.tick() => {
                         let _ = scheduler.process_once().await;
                     }
@@ -470,7 +472,7 @@ impl TimerMessageStore {
             should_running_dequeue: AtomicBool::new(false),
             enqueue_suspended: AtomicBool::new(false),
             process_lock: AsyncMutex::new(()),
-            scheduler_shutdown: Notify::new(),
+            scheduler_shutdown: Mutex::new(CancellationToken::new()),
             scheduler_handle: Mutex::new(None),
             enqueue_tps_counter: TpsCounter::default(),
             dequeue_tps_counter: TpsCounter::default(),
@@ -492,10 +494,32 @@ impl TimerMessageStore {
     }
 
     pub fn shutdown(&self) {
-        self.scheduler_shutdown.notify_waiters();
+        self.scheduler_shutdown.lock().cancel();
         if let Some(handle) = self.scheduler_handle.lock().take() {
             handle.abort();
         }
+        self.shutdown_storage();
+    }
+
+    pub async fn shutdown_gracefully(&self) {
+        self.scheduler_shutdown.lock().cancel();
+        let handle = self.scheduler_handle.lock().take();
+        if let Some(handle) = handle {
+            if let Err(error) = handle.await {
+                if !error.is_cancelled() {
+                    warn!("TimerMessageStore scheduler failed during shutdown: {error}");
+                }
+            }
+        }
+        self.shutdown_storage();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_scheduler_handle(&self) -> bool {
+        self.scheduler_handle.lock().is_some()
+    }
+
+    fn shutdown_storage(&self) {
         self.sync_last_read_time_ms();
         self.timer_metrics.persist();
         if let Some(timer_log) = self.timer_log.lock().take() {
@@ -1584,6 +1608,22 @@ mod tests {
         assert!(reloaded_store.load());
         assert_eq!(reloaded_store.curr_read_time_ms.load(Ordering::Relaxed), read_time_ms);
         assert_eq!(reloaded_store.curr_queue_offset.load(Ordering::Relaxed), 9);
+    }
+
+    #[tokio::test]
+    async fn scheduler_shutdown_gracefully_waits_for_task() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let config = config_with_root(root_dir.as_str());
+        let timer_message_store = Arc::new(TimerMessageStore::new_with_config(None, config));
+
+        assert!(timer_message_store.load());
+        timer_message_store.start();
+        assert!(timer_message_store.scheduler_handle.lock().is_some());
+
+        timer_message_store.shutdown_gracefully().await;
+
+        assert!(timer_message_store.scheduler_handle.lock().is_none());
     }
 
     #[test]

@@ -22,6 +22,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::base::flush_manager::FlushManager;
 use crate::base::message_result::AppendMessageResult;
@@ -99,6 +100,29 @@ impl DefaultFlushManager {
     pub(crate) fn commit_real_time_service_mut(&mut self) -> Option<&mut CommitRealTimeService> {
         self.commit_real_time_service.as_mut()
     }
+
+    pub(crate) async fn shutdown_gracefully(&mut self) {
+        self.flush_before_shutdown();
+
+        if let Some(ref mut group_commit_service) = self.group_commit_service {
+            group_commit_service.shutdown_gracefully().await;
+        }
+        if let Some(ref mut flush_real_time_service) = self.flush_real_time_service {
+            flush_real_time_service.shutdown_gracefully().await;
+        }
+        if let Some(ref mut commit_real_time_service) = self.commit_real_time_service {
+            commit_real_time_service.shutdown_gracefully().await;
+        }
+    }
+
+    fn flush_before_shutdown(&self) {
+        if let Some(mapped_file_queue) = self.mapped_file_queue.as_ref() {
+            if self.message_store_config.transient_store_pool_enable {
+                mapped_file_queue.commit(0);
+            }
+            mapped_file_queue.flush(0);
+        }
+    }
 }
 
 impl FlushManager for DefaultFlushManager {
@@ -118,12 +142,7 @@ impl FlushManager for DefaultFlushManager {
     }
 
     fn shutdown(&mut self) {
-        if let Some(mapped_file_queue) = self.mapped_file_queue.as_ref() {
-            if self.message_store_config.transient_store_pool_enable {
-                mapped_file_queue.commit(0);
-            }
-            mapped_file_queue.flush(0);
-        }
+        self.flush_before_shutdown();
 
         if let Some(ref mut group_commit_service) = self.group_commit_service {
             group_commit_service.shutdown();
@@ -285,7 +304,17 @@ impl GroupCommitService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        drop(self.worker_handle.take());
+        if let Some(handle) = self.worker_handle.take() {
+            handle.abort();
+        }
+    }
+
+    pub async fn shutdown_gracefully(&mut self) {
+        self.shutdown_token.cancel();
+        self.tx_in.take();
+        if let Some(handle) = self.worker_handle.take() {
+            await_worker("GroupCommitService", handle).await;
+        }
     }
 }
 
@@ -378,7 +407,17 @@ impl FlushRealTimeService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        drop(self.worker_handle.take());
+        if let Some(handle) = self.worker_handle.take() {
+            handle.abort();
+        }
+    }
+
+    pub async fn shutdown_gracefully(&mut self) {
+        self.shutdown_token.cancel();
+        self.notified.notify_waiters();
+        if let Some(handle) = self.worker_handle.take() {
+            await_worker("FlushRealTimeService", handle).await;
+        }
     }
 }
 
@@ -457,11 +496,29 @@ impl CommitRealTimeService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        drop(self.worker_handle.take());
+        if let Some(handle) = self.worker_handle.take() {
+            handle.abort();
+        }
+    }
+
+    pub async fn shutdown_gracefully(&mut self) {
+        self.shutdown_token.cancel();
+        self.notified.notify_waiters();
+        if let Some(handle) = self.worker_handle.take() {
+            await_worker("CommitRealTimeService", handle).await;
+        }
     }
 
     pub fn set_flush_manager(&mut self, flush_manager: WeakArcMut<DefaultFlushManager>) {
         self.flush_manager = Some(flush_manager);
+    }
+}
+
+async fn await_worker(service_name: &str, handle: JoinHandle<()>) {
+    if let Err(error) = handle.await {
+        if !error.is_cancelled() {
+            warn!("{service_name} task failed during shutdown: {error}");
+        }
     }
 }
 
@@ -575,12 +632,37 @@ mod tests {
 
         let (request, response) = GroupCommitRequest::new(1, 0);
         assert!(service.put_request(request).await);
-        service.shutdown();
+        service.shutdown_gracefully().await;
+        assert!(service.worker_handle.is_none());
 
         let status = time::timeout(time::Duration::from_secs(1), response)
             .await
             .expect("shutdown should complete pending group commit request")
             .expect("group commit worker should send a completion status");
         assert_eq!(status, PutMessageStatus::FlushDiskTimeout);
+    }
+
+    #[tokio::test]
+    async fn flush_real_time_shutdown_gracefully_waits_for_worker() {
+        let temp_dir = tempdir().unwrap();
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mut service = FlushRealTimeService {
+            message_store_config: Arc::new(MessageStoreConfig {
+                flush_interval_commit_log: 60_000,
+                ..MessageStoreConfig::default()
+            }),
+            store_checkpoint,
+            notified: Arc::new(Notify::new()),
+            shutdown_token: CancellationToken::new(),
+            worker_handle: None,
+        };
+
+        service.start(mapped_file_queue);
+        assert!(service.worker_handle.is_some());
+
+        service.shutdown_gracefully().await;
+
+        assert!(service.worker_handle.is_none());
     }
 }

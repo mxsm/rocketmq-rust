@@ -29,8 +29,10 @@ use parking_lot::Mutex;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::current_millis;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tracing::info;
+use tracing::warn;
 
 const FREQUENCY_OF_SAMPLING: u64 = 1000;
 const MAX_RECORDS_OF_SAMPLING: usize = 60 * 10;
@@ -100,6 +102,7 @@ pub struct StoreStatsService {
     sampling_lock: Mutex<()>,
     last_print_timestamp: AtomicU64,
     stopped: AtomicBool,
+    shutdown_notify: Notify,
     worker_handle: Mutex<Option<JoinHandle<()>>>,
     broker_identity: Option<BrokerIdentity>,
 }
@@ -130,6 +133,7 @@ impl StoreStatsService {
             sampling_lock: Mutex::new(()),
             last_print_timestamp: AtomicU64::new(current_millis()),
             stopped: AtomicBool::new(true),
+            shutdown_notify: Notify::new(),
             worker_handle: Mutex::new(None),
             broker_identity,
         }
@@ -149,13 +153,17 @@ impl StoreStatsService {
             let mut interval = tokio::time::interval(Duration::from_millis(FREQUENCY_OF_SAMPLING));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            while !service.stopped.load(Ordering::Acquire) {
-                interval.tick().await;
-                if service.stopped.load(Ordering::Acquire) {
-                    break;
+            loop {
+                tokio::select! {
+                    _ = service.shutdown_notify.notified() => break,
+                    _ = interval.tick() => {
+                        if service.stopped.load(Ordering::Acquire) {
+                            break;
+                        }
+                        service.sampling();
+                        service.print_tps();
+                    }
                 }
-                service.sampling();
-                service.print_tps();
             }
 
             info!("{} service end", service.get_service_name());
@@ -165,9 +173,28 @@ impl StoreStatsService {
 
     pub fn shutdown(&self) {
         self.stopped.store(true, Ordering::Release);
+        self.shutdown_notify.notify_waiters();
         if let Some(handle) = self.worker_handle.lock().take() {
             handle.abort();
         }
+    }
+
+    pub async fn shutdown_gracefully(&self) {
+        self.stopped.store(true, Ordering::Release);
+        self.shutdown_notify.notify_waiters();
+        let handle = self.worker_handle.lock().take();
+        if let Some(handle) = handle {
+            if let Err(error) = handle.await {
+                if !error.is_cancelled() {
+                    warn!("StoreStatsService task failed during shutdown: {error}");
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_worker_handle(&self) -> bool {
+        self.worker_handle.lock().is_some()
     }
 
     #[inline]
@@ -884,13 +911,13 @@ mod call_snapshot_tests {
         assert!(!stats.stopped.load(Ordering::Acquire));
 
         task::yield_now().await;
-        stats.shutdown();
-        stats.shutdown();
+        stats.shutdown_gracefully().await;
+        stats.shutdown_gracefully().await;
         assert!(stats.worker_handle.lock().is_none());
         assert!(stats.stopped.load(Ordering::Acquire));
 
         stats.start();
         assert!(stats.worker_handle.lock().is_some());
-        stats.shutdown();
+        stats.shutdown_gracefully().await;
     }
 }
