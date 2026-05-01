@@ -745,12 +745,22 @@ impl ConsumeQueueStore {
 
         let topic_config = message_store.get_topic_config(topic);
         let act = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
+        if self.is_rocksdb_cq_compat(act, cq_type) {
+            return true;
+        }
         if act != cq_type {
             error!("The queue type of topic: {topic} should be {cq_type:?}, but is {act:?}");
             return false;
         }
 
         true
+    }
+
+    #[inline]
+    fn is_rocksdb_cq_compat(&self, actual: CQType, expected: CQType) -> bool {
+        self.inner.message_store_config.is_enable_rocksdb_store()
+            && actual == CQType::RocksDBCQ
+            && expected == CQType::SimpleCQ
     }
 
     #[inline]
@@ -767,8 +777,7 @@ impl ConsumeQueueStore {
         store_path: CheetahString,
     ) -> ArcMut<Box<dyn ConsumeQueueTrait>> {
         match cq_type {
-            CQType::SimpleCQ => {
-                let ms_ref = self.inner.message_store.as_ref().unwrap();
+            CQType::SimpleCQ | CQType::RocksDBCQ => {
                 let consume_queue = ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
@@ -789,10 +798,6 @@ impl ConsumeQueueStore {
                 );
                 ArcMut::new(Box::new(consume_queue))
             }
-            _ => {
-                error!("Unsupported consume queue type: {cq_type:?}");
-                panic!("Unsupported consume queue type: {cq_type:?}");
-            }
         }
     }
 
@@ -809,12 +814,15 @@ mod tests {
     use bytes::Buf;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use rocketmq_common::common::attribute::Attribute;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::TopicAttributes::TopicAttributes;
     use rocketmq_rust::ArcMut;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::base::store_enum::StoreType;
     use crate::queue::batch_consume_queue;
 
     #[test]
@@ -845,6 +853,79 @@ mod tests {
         store.set_message_store(message_store);
 
         assert!(!store.load_consume_queues(&batch_store_path, CQType::BatchCQ));
+    }
+
+    #[test]
+    fn rocksdb_cq_loads_from_simple_cq_path_in_compat_mode() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("RocksCompatTopic");
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.path().to_string_lossy().to_string().into(),
+            store_type: StoreType::RocksDB,
+            ..MessageStoreConfig::default()
+        });
+        let broker_config = Arc::new(BrokerConfig::default());
+        let topic_config_table = Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new());
+        let mut topic_config = TopicConfig::new(topic.clone());
+        topic_config.attributes.insert(
+            TopicAttributes::queue_type_attribute().name().clone(),
+            CQType::RocksDBCQ.to_string().into(),
+        );
+        topic_config_table.insert(topic.clone(), ArcMut::new(topic_config));
+        let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+            message_store_config.clone(),
+            broker_config.clone(),
+            topic_config_table,
+            None,
+            false,
+        ));
+        let message_store_clone = message_store.clone();
+        message_store.set_message_store_arc(message_store_clone);
+
+        let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
+        fs::create_dir_all(Path::new(&simple_store_path).join(topic.as_str()).join("0"))
+            .expect("simple consume queue directory");
+        let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
+        store.set_message_store(message_store);
+
+        assert!(store.load_consume_queues(&simple_store_path, CQType::SimpleCQ));
+        let queue = store
+            .find_consume_queue(&topic, 0)
+            .expect("rocksdb compatibility queue should load");
+        assert_eq!(queue.get_cq_type(), CQType::SimpleCQ);
+    }
+
+    #[test]
+    fn create_consume_queue_by_type_maps_rocksdb_cq_to_simple_cq() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("RocksCreateTopic");
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.path().to_string_lossy().to_string().into(),
+            store_type: StoreType::RocksDB,
+            ..MessageStoreConfig::default()
+        });
+        let broker_config = Arc::new(BrokerConfig::default());
+        let topic_config_table = Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new());
+        let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+            message_store_config.clone(),
+            broker_config.clone(),
+            topic_config_table,
+            None,
+            false,
+        ));
+        let message_store_clone = message_store.clone();
+        message_store.set_message_store_arc(message_store_clone);
+        let mut store = ConsumeQueueStore::new(message_store_config, broker_config);
+        store.set_message_store(message_store);
+
+        let queue = store.create_consume_queue_by_type(
+            &topic,
+            0,
+            CQType::RocksDBCQ,
+            CheetahString::from_string(root.path().join("compat-cq").to_string_lossy().to_string()),
+        );
+
+        assert_eq!(queue.get_cq_type(), CQType::SimpleCQ);
     }
 
     #[test]

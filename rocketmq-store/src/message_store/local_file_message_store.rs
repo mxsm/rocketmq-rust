@@ -3943,6 +3943,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
+    use rocketmq_common::common::attribute::cq_type::CQType;
     use rocketmq_common::common::attribute::Attribute;
     use rocketmq_common::common::boundary_type::BoundaryType;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -4315,6 +4316,50 @@ mod tests {
         assert_eq!(store.compaction_store.message_count(&topic, 0), 1);
         assert!(result.message_mapped_list()[0].mapped_file.is_none());
         assert!(result.message_mapped_list()[0].get_bytes_ref().is_some());
+    }
+
+    #[tokio::test]
+    async fn rocksdb_store_type_with_rocksdb_cq_topic_uses_compat_local_queue_path() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("rocksdb-compat-topic");
+        let group = CheetahString::from_static_str("rocksdb-compat-group");
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                store_type: StoreType::RocksDB,
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let mut topic_config = TopicConfig::new(topic.clone());
+        topic_config.attributes.insert(
+            TopicAttributes::queue_type_attribute().name().clone(),
+            CQType::RocksDBCQ.to_string().into(),
+        );
+        store
+            .topic_config_table
+            .insert(topic.clone(), ArcMut::new(topic_config));
+
+        store.init().await.expect("init rocksdb compatibility store");
+        assert!(store.load().await, "load rocksdb compatibility store");
+        let put_result = store
+            .put_message(build_test_message(&topic, Bytes::from_static(b"rocksdb-compat-body")))
+            .await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        store.reput_once().await;
+
+        let queue = store
+            .get_consume_queue(&topic, 0)
+            .expect("compat queue should be present");
+        assert_eq!(queue.get_cq_type(), CQType::SimpleCQ);
+
+        let result = store
+            .get_message(&group, &topic, 0, 0, 32, None)
+            .await
+            .expect("rocksdb compatibility get result");
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(result.message_count(), 1);
+        assert_eq!(result.next_begin_offset(), 1);
     }
 
     #[tokio::test]
