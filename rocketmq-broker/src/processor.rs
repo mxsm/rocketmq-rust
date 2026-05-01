@@ -125,6 +125,36 @@ where
     }
 }
 
+#[cfg(test)]
+impl<MS, TS> BrokerProcessorType<MS, TS>
+where
+    MS: MessageStore,
+{
+    pub(crate) fn variant_name_for_test(&self) -> &'static str {
+        match self {
+            BrokerProcessorType::Send(_) => "Send",
+            BrokerProcessorType::Pull(_) => "Pull",
+            BrokerProcessorType::Peek(_) => "Peek",
+            BrokerProcessorType::Pop(_) => "Pop",
+            BrokerProcessorType::PopLite(_) => "PopLite",
+            BrokerProcessorType::Ack(_) => "Ack",
+            BrokerProcessorType::ChangeInvisible(_) => "ChangeInvisible",
+            BrokerProcessorType::Notification(_) => "Notification",
+            BrokerProcessorType::PollingInfo(_) => "PollingInfo",
+            BrokerProcessorType::Reply(_) => "Reply",
+            BrokerProcessorType::Recall(_) => "Recall",
+            BrokerProcessorType::QueryMessage(_) => "QueryMessage",
+            BrokerProcessorType::ClientManage(_) => "ClientManage",
+            BrokerProcessorType::ConsumerManage(_) => "ConsumerManage",
+            BrokerProcessorType::QueryAssignment(_) => "QueryAssignment",
+            BrokerProcessorType::LiteManager(_) => "LiteManager",
+            BrokerProcessorType::LiteSubscriptionCtl(_) => "LiteSubscriptionCtl",
+            BrokerProcessorType::EndTransaction(_) => "EndTransaction",
+            BrokerProcessorType::AdminBroker(_) => "AdminBroker",
+        }
+    }
+}
+
 impl<MS, TS> RequestProcessor for BrokerProcessorType<MS, TS>
 where
     MS: MessageStore,
@@ -223,6 +253,23 @@ where
 
     pub fn set_broker_fast_failure(&mut self, broker_fast_failure: BrokerFastFailure) {
         self.broker_fast_failure = Some(broker_fast_failure);
+    }
+}
+
+#[cfg(test)]
+impl<MS, TS> BrokerRequestProcessor<MS, TS>
+where
+    MS: MessageStore,
+{
+    pub(crate) fn dispatch_processor_variant_for_test(&self, request_code: RequestCode) -> Option<&'static str> {
+        self.process_table
+            .get(&request_code.to_i32())
+            .map(BrokerProcessorType::variant_name_for_test)
+            .or_else(|| {
+                self.default_request_processor
+                    .as_ref()
+                    .map(|processor| processor.as_ref().variant_name_for_test())
+            })
     }
 }
 

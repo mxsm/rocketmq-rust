@@ -3384,6 +3384,7 @@ mod tests {
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -3393,17 +3394,22 @@ mod tests {
     use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
     use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
     use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+    use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
     use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
     use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
     use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+    use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+    use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
     use rocketmq_remoting::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
     use rocketmq_remoting::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
     use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::remoting::RemotingService;
@@ -3413,6 +3419,7 @@ mod tests {
     use rocketmq_remoting::runtime::processor::RequestProcessor;
     use rocketmq_store::base::message_status_enum::GetMessageStatus;
     use rocketmq_store::base::message_store::MessageStore;
+    use rocketmq_store::config::flush_disk_type::FlushDiskType;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -3523,6 +3530,19 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
+    async fn process_broker_request(
+        processor: &mut DefaultServerProcessor,
+        request: &mut RemotingCommand,
+    ) -> RemotingCommand {
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        processor
+            .process_request(channel, ctx, request)
+            .await
+            .expect("processor dispatch should succeed")
+            .expect("processor should return a response")
+    }
+
     fn lite_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "rocketmq-rust-broker-lite-manager-{label}-{}",
@@ -3542,6 +3562,24 @@ mod tests {
             enable_lmq: true,
             enable_multi_dispatch: true,
             max_lmq_consume_queue_num: 32,
+            read_uncommitted: true,
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await);
+        runtime
+    }
+
+    async fn new_phase3_test_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-{label}-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            flush_disk_type: FlushDiskType::AsyncFlush,
             read_uncommitted: true,
             ..MessageStoreConfig::default()
         });
@@ -4345,6 +4383,181 @@ mod tests {
         assert!(Arc::ptr_eq(&store_timer, &runtime_timer));
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn phase3_broker_production_request_codes_dispatch_to_expected_processors() {
+        let mut runtime = new_phase3_test_runtime("phase3-dispatch").await;
+        let (processor, _) = runtime.init_processor();
+
+        for request_code in [
+            RequestCode::SendMessage,
+            RequestCode::SendMessageV2,
+            RequestCode::SendBatchMessage,
+            RequestCode::ConsumerSendMsgBack,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("Send"),
+                "{request_code:?} should dispatch to SendMessageProcessor"
+            );
+        }
+
+        for request_code in [RequestCode::SendReplyMessage, RequestCode::SendReplyMessageV2] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("Reply"),
+                "{request_code:?} should dispatch to ReplyMessageProcessor"
+            );
+        }
+
+        assert_eq!(
+            processor.dispatch_processor_variant_for_test(RequestCode::EndTransaction),
+            Some("EndTransaction")
+        );
+        assert_eq!(
+            processor.dispatch_processor_variant_for_test(RequestCode::RecallMessage),
+            Some("Recall")
+        );
+        assert_eq!(
+            processor.dispatch_processor_variant_for_test(RequestCode::QueryMessage),
+            Some("QueryMessage")
+        );
+        assert_eq!(
+            processor.dispatch_processor_variant_for_test(RequestCode::ViewMessageById),
+            Some("QueryMessage")
+        );
+
+        for request_code in [
+            RequestCode::UpdateAndCreateTopic,
+            RequestCode::UpdateAndCreateTopicList,
+            RequestCode::GetAllTopicConfig,
+            RequestCode::GetTopicConfig,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("AdminBroker"),
+                "{request_code:?} should fall back to AdminBrokerProcessor"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase3_send_message_processor_writes_to_local_store() {
+        let mut runtime = new_phase3_test_runtime("phase3-send").await;
+        let topic = CheetahString::from_static_str("phase3-send-topic");
+        runtime
+            .inner_for_test()
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+
+        let (mut processor, _) = runtime.init_processor();
+        let send_header = SendMessageRequestHeader {
+            producer_group: CheetahString::from_static_str("phase3-producer"),
+            topic: topic.clone(),
+            default_topic: CheetahString::from_static_str("TBW102"),
+            default_topic_queue_nums: 1,
+            queue_id: 0,
+            sys_flag: 0,
+            born_timestamp: current_millis() as i64,
+            flag: 0,
+            properties: None,
+            reconsume_times: None,
+            unit_mode: Some(false),
+            batch: Some(false),
+            max_reconsume_times: None,
+            topic_request_header: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::SendMessage, send_header)
+            .set_body(Bytes::from_static(b"phase3-message-body"));
+        request.make_custom_header_to_net();
+
+        let mut harness = LocalRequestHarness::new().await.expect("local harness should start");
+        let direct_response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("send processor dispatch should succeed");
+        assert!(
+            direct_response.is_none(),
+            "successful SendMessage writes response to the remoting context"
+        );
+        let response = tokio::time::timeout(Duration::from_secs(5), harness.receive_response())
+            .await
+            .expect("send response should be written to the remoting peer")
+            .expect("send response receive should succeed")
+            .expect("send response should exist");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let response_header = response
+            .decode_command_custom_header::<SendMessageResponseHeader>()
+            .expect("send response should include SendMessageResponseHeader");
+        assert!(!response_header.msg_id().is_empty());
+        assert_eq!(response_header.queue_id(), 0);
+        assert_eq!(response_header.queue_offset(), 0);
+
+        runtime
+            .inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .reput_once()
+            .await;
+        assert_eq!(
+            runtime
+                .inner
+                .message_store()
+                .expect("message store should be initialized")
+                .get_max_offset_in_queue(&topic, 0),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase3_topic_config_admin_processor_returns_decodable_bodies() {
+        let mut runtime = new_phase3_test_runtime("phase3-topic-config").await;
+        let topic = CheetahString::from_static_str("phase3-topic-config");
+        runtime
+            .inner_for_test()
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 3)));
+
+        let (mut processor, _) = runtime.init_processor();
+        let mut all_config_request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
+        let all_config_response = process_broker_request(&mut processor, &mut all_config_request).await;
+        assert_eq!(ResponseCode::from(all_config_response.code()), ResponseCode::Success);
+        let all_config_body = all_config_response
+            .body()
+            .expect("GetAllTopicConfig response should include a body");
+        let all_config = TopicConfigAndMappingSerializeWrapper::decode(all_config_body)
+            .expect("GetAllTopicConfig body should decode");
+        assert!(all_config
+            .topic_config_serialize_wrapper
+            .topic_config_table
+            .contains_key(&topic));
+
+        let get_config_header = GetTopicConfigRequestHeader {
+            topic: topic.clone(),
+            topic_request_header: None,
+        };
+        let mut get_config_request =
+            RemotingCommand::create_request_command(RequestCode::GetTopicConfig, get_config_header);
+        get_config_request.make_custom_header_to_net();
+        let get_config_response = process_broker_request(&mut processor, &mut get_config_request).await;
+        assert_eq!(ResponseCode::from(get_config_response.code()), ResponseCode::Success);
+        let get_config_body = get_config_response
+            .body()
+            .expect("GetTopicConfig response should include a body");
+        let topic_config =
+            TopicConfigAndQueueMapping::decode(get_config_body).expect("GetTopicConfig body should decode");
+        assert_eq!(topic_config.topic_config.topic_name.as_ref(), Some(&topic));
+        assert_eq!(topic_config.topic_config.read_queue_nums, 2);
+        assert_eq!(topic_config.topic_config.write_queue_nums, 3);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[tokio::test]

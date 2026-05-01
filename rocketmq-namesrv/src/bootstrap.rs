@@ -1336,25 +1336,48 @@ mod tests {
     use rocketmq_common::common::controller::ControllerConfig;
     use rocketmq_common::common::mix_all::string_to_properties;
     use rocketmq_common::common::mix_all::MASTER_ID;
+    use rocketmq_common::common::mix_all::ZONE_NAME;
     use rocketmq_common::common::mq_version::RocketMqVersion;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
     use rocketmq_common::common::TopicSysFlag;
+    use rocketmq_common::CRC32Utils;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::connection::ConnectionState;
     use rocketmq_remoting::local::LocalRequestHarness;
+    use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
+    use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+    use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
     use rocketmq_remoting::protocol::body::kv_table::KVTable;
+    use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
     use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
     use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader;
     use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
+    use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
+    use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
+    use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
+    use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_remoting::protocol::DataVersion;
     use rocketmq_remoting::protocol::RemotingDeserializable;
+    use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
     use tokio::sync::broadcast;
     use tokio::time::sleep;
@@ -1424,6 +1447,19 @@ mod tests {
             .expect("processor should always return a response")
     }
 
+    async fn process_with_name_server_processor(
+        bootstrap: &NameServerBootstrap,
+        harness: &LocalRequestHarness,
+        request: &mut RemotingCommand,
+    ) -> RemotingCommand {
+        let mut processor = bootstrap.name_server_runtime.init_processors();
+        processor
+            .process_request(harness.channel(), harness.context(), request)
+            .await
+            .expect("request processing should succeed")
+            .expect("processor should always return a response")
+    }
+
     fn topic_config_wrapper(entries: &[(&str, u32, u32)]) -> TopicConfigAndMappingSerializeWrapper {
         let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
         for (topic_name, topic_sys_flag, perm) in entries {
@@ -1433,6 +1469,41 @@ mod tests {
             );
         }
         wrapper
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register_broker_request(
+        cluster_name: &CheetahString,
+        broker_name: &CheetahString,
+        broker_addr: &CheetahString,
+        broker_id: u64,
+        ha_server_addr: &CheetahString,
+        zone_name: &CheetahString,
+        enable_acting_master: bool,
+        topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
+        filter_server_list: Vec<CheetahString>,
+    ) -> RemotingCommand {
+        let body = RegisterBrokerBody::new(topic_config_wrapper, filter_server_list).encode(false);
+        let body_crc32 = CRC32Utils::crc32(&body);
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::RegisterBroker,
+            RegisterBrokerRequestHeader::new(
+                broker_name.clone(),
+                broker_addr.clone(),
+                cluster_name.clone(),
+                ha_server_addr.clone(),
+                broker_id,
+                Some(30_000),
+                Some(enable_acting_master),
+                false,
+                body_crc32,
+            ),
+        )
+        .set_version(RocketMqVersion::V5_0_0 as i32)
+        .set_body(body);
+        request.make_custom_header_to_net();
+        request.add_ext_field(ZONE_NAME, zone_name.clone());
+        request
     }
 
     fn start_unregister_service(bootstrap: &NameServerBootstrap) {
@@ -1516,6 +1587,568 @@ mod tests {
             &harness,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn default_v2_aggregate_processor_routes_register_and_route_queries() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
+        let ha_server_addr = CheetahString::from_static_str("10.0.0.10:10912");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("aggregate-route-topic");
+
+        let mut register_request = register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &ha_server_addr,
+            &zone_name,
+            true,
+            topic_config_wrapper(&[("aggregate-route-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+            vec![],
+        );
+
+        let register_response = process_with_name_server_processor(&bootstrap, &harness, &mut register_request).await;
+        assert_eq!(ResponseCode::from(register_response.code()), ResponseCode::Success);
+
+        let mut route_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic_name.clone(), Some(true)),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        route_request.make_custom_header_to_net();
+
+        let route_response = process_with_name_server_processor(&bootstrap, &harness, &mut route_request).await;
+        assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+
+        let topic_route_data =
+            TopicRouteData::decode(route_response.body().expect("route response should include body"))
+                .expect("route response body should decode");
+        assert_eq!(topic_route_data.queue_datas.len(), 1);
+        assert_eq!(topic_route_data.broker_datas[0].broker_name(), &broker_name);
+        assert_eq!(
+            topic_route_data.broker_datas[0].broker_addrs().get(&MASTER_ID),
+            Some(&broker_addr)
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_namesrv_metadata_processors_return_java_compatible_bodies() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
+        let ha_server_addr = CheetahString::from_static_str("10.0.0.10:10912");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("metadata-processor-topic");
+        let topic_wrapper = topic_config_wrapper(&[(
+            "metadata-processor-topic",
+            0,
+            PermName::PERM_READ | PermName::PERM_WRITE,
+        )]);
+        let registered_data_version = topic_wrapper.topic_config_serialize_wrapper.data_version.clone();
+
+        let mut register_request = register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &ha_server_addr,
+            &zone_name,
+            true,
+            topic_wrapper,
+            vec![],
+        );
+        let register_response = process_with_default_processor(&bootstrap, &harness, &mut register_request).await;
+        assert_eq!(ResponseCode::from(register_response.code()), ResponseCode::Success);
+
+        let mut cluster_request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
+        let cluster_response = process_with_default_processor(&bootstrap, &harness, &mut cluster_request).await;
+        assert_eq!(ResponseCode::from(cluster_response.code()), ResponseCode::Success);
+        let cluster_info = ClusterInfo::decode(cluster_response.body().expect("cluster info should include a body"))
+            .expect("cluster info body should decode");
+        assert!(cluster_info
+            .cluster_addr_table
+            .as_ref()
+            .and_then(|clusters| clusters.get(&cluster_name))
+            .is_some_and(|brokers| brokers.contains(&broker_name)));
+        assert_eq!(
+            cluster_info
+                .broker_addr_table
+                .as_ref()
+                .and_then(|brokers| brokers.get(&broker_name))
+                .and_then(|broker| broker.broker_addrs().get(&MASTER_ID)),
+            Some(&broker_addr)
+        );
+
+        let mut topic_list_request =
+            RemotingCommand::create_remoting_command(RequestCode::GetAllTopicListFromNameserver);
+        let topic_list_response = process_with_default_processor(&bootstrap, &harness, &mut topic_list_request).await;
+        assert_eq!(ResponseCode::from(topic_list_response.code()), ResponseCode::Success);
+        let topic_list = TopicList::decode(topic_list_response.body().expect("topic list should include a body"))
+            .expect("topic list body should decode");
+        assert!(topic_list.topic_list.contains(&topic_name));
+
+        let mut member_group_request = RemotingCommand::create_request_command(
+            RequestCode::GetBrokerMemberGroup,
+            GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone()),
+        );
+        member_group_request.make_custom_header_to_net();
+        let member_group_response =
+            process_with_default_processor(&bootstrap, &harness, &mut member_group_request).await;
+        assert_eq!(ResponseCode::from(member_group_response.code()), ResponseCode::Success);
+        let member_group_body = GetBrokerMemberGroupResponseBody::decode(
+            member_group_response
+                .body()
+                .expect("member group should include a body"),
+        )
+        .expect("member group body should decode");
+        let member_group = member_group_body
+            .broker_member_group
+            .expect("registered broker should have member group");
+        assert_eq!(member_group.cluster, cluster_name);
+        assert_eq!(member_group.broker_name, broker_name);
+        assert_eq!(member_group.broker_addrs.get(&MASTER_ID), Some(&broker_addr));
+
+        let mut query_version_request = RemotingCommand::create_request_command(
+            RequestCode::QueryDataVersion,
+            QueryDataVersionRequestHeader::new(
+                broker_name.clone(),
+                broker_addr.clone(),
+                cluster_name.clone(),
+                MASTER_ID,
+            ),
+        )
+        .set_body(registered_data_version.encode().expect("data version should encode"));
+        query_version_request.make_custom_header_to_net();
+        let query_version_response =
+            process_with_default_processor(&bootstrap, &harness, &mut query_version_request).await;
+        assert_eq!(ResponseCode::from(query_version_response.code()), ResponseCode::Success);
+        let query_version_header = query_version_response
+            .read_custom_header_ref::<QueryDataVersionResponseHeader>()
+            .expect("query data version should include a response header");
+        assert!(!query_version_header.changed());
+        let returned_data_version = DataVersion::decode(
+            query_version_response
+                .body()
+                .expect("data version should include a body"),
+        )
+        .expect("query data version body should decode");
+        assert_eq!(returned_data_version, registered_data_version);
+
+        let mut heartbeat_request = RemotingCommand::create_request_command(
+            RequestCode::BrokerHeartbeat,
+            BrokerHeartbeatRequestHeader {
+                cluster_name: cluster_name.clone(),
+                broker_addr: broker_addr.clone(),
+                broker_name: broker_name.clone(),
+                broker_id: Some(MASTER_ID as i64),
+                epoch: Some(1),
+                max_offset: Some(128),
+                confirm_offset: Some(64),
+                heartbeat_timeout_mills: Some(30_000),
+                election_priority: Some(1),
+            },
+        );
+        heartbeat_request.make_custom_header_to_net();
+        let heartbeat_response = process_with_default_processor(&bootstrap, &harness, &mut heartbeat_request).await;
+        assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+    }
+
+    #[tokio::test]
+    async fn default_v2_namesrv_topic_admin_processors_complete_phase2_contracts() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let cluster_name = CheetahString::from_static_str("phase2-cluster");
+        let broker_name = CheetahString::from_static_str("phase2-broker");
+        let broker_addr = CheetahString::from_static_str("10.0.0.20:10911");
+        let ha_server_addr = CheetahString::from_static_str("10.0.0.20:10912");
+        let zone_name = CheetahString::from_static_str("phase2-zone");
+        let normal_topic = CheetahString::from_static_str("phase2-normal-topic");
+        let unit_only_topic = CheetahString::from_static_str("phase2-unit-only-topic");
+        let unit_sub_only_topic = CheetahString::from_static_str("phase2-unit-sub-only-topic");
+        let unit_and_sub_topic = CheetahString::from_static_str("phase2-unit-and-sub-topic");
+        let registered_topic = CheetahString::from_static_str("phase2-registered-topic");
+
+        let mut register_request = register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &ha_server_addr,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[
+                ("phase2-normal-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE),
+                (
+                    "phase2-unit-only-topic",
+                    TopicSysFlag::build_sys_flag(true, false),
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                ),
+                (
+                    "phase2-unit-sub-only-topic",
+                    TopicSysFlag::build_sys_flag(false, true),
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                ),
+                (
+                    "phase2-unit-and-sub-topic",
+                    TopicSysFlag::build_sys_flag(true, true),
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                ),
+            ]),
+            vec![],
+        );
+        let register_response = process_with_default_processor(&bootstrap, &harness, &mut register_request).await;
+        assert_eq!(ResponseCode::from(register_response.code()), ResponseCode::Success);
+
+        let mut wipe_request = RemotingCommand::create_request_command(
+            RequestCode::WipeWritePermOfBroker,
+            WipeWritePermOfBrokerRequestHeader::new(broker_name.clone()),
+        );
+        wipe_request.make_custom_header_to_net();
+        let wipe_response = process_with_default_processor(&bootstrap, &harness, &mut wipe_request).await;
+        assert_eq!(ResponseCode::from(wipe_response.code()), ResponseCode::Success);
+        let wipe_header = wipe_response
+            .read_custom_header_ref::<WipeWritePermOfBrokerResponseHeader>()
+            .expect("wipe write perm should include a response header");
+        assert!(wipe_header.get_wipe_topic_count() >= 4);
+
+        let mut route_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(normal_topic.clone(), Some(true)),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        route_request.make_custom_header_to_net();
+        let route_response = process_with_client_processor(&bootstrap, &harness, &mut route_request).await;
+        assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+        let route_after_wipe =
+            TopicRouteData::decode(route_response.body().expect("route response should include body"))
+                .expect("route response body should decode");
+        let queue_after_wipe = route_after_wipe
+            .queue_datas
+            .iter()
+            .find(|queue| queue.broker_name() == &broker_name)
+            .expect("broker queue data should exist after wipe");
+        assert_ne!(queue_after_wipe.perm & PermName::PERM_READ, 0);
+        assert_eq!(queue_after_wipe.perm & PermName::PERM_WRITE, 0);
+
+        let mut add_request = RemotingCommand::create_request_command(
+            RequestCode::AddWritePermOfBroker,
+            AddWritePermOfBrokerRequestHeader::new(broker_name.clone()),
+        );
+        add_request.make_custom_header_to_net();
+        let add_response = process_with_default_processor(&bootstrap, &harness, &mut add_request).await;
+        assert_eq!(ResponseCode::from(add_response.code()), ResponseCode::Success);
+        let add_header = add_response
+            .read_custom_header_ref::<AddWritePermOfBrokerResponseHeader>()
+            .expect("add write perm should include a response header");
+        assert!(add_header.get_add_topic_count() >= 4);
+
+        let mut route_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(normal_topic.clone(), Some(true)),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        route_request.make_custom_header_to_net();
+        let route_response = process_with_client_processor(&bootstrap, &harness, &mut route_request).await;
+        assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+        let route_after_add =
+            TopicRouteData::decode(route_response.body().expect("route response should include body"))
+                .expect("route response body should decode");
+        let queue_after_add = route_after_add
+            .queue_datas
+            .iter()
+            .find(|queue| queue.broker_name() == &broker_name)
+            .expect("broker queue data should exist after add");
+        assert_ne!(queue_after_add.perm & PermName::PERM_WRITE, 0);
+
+        let mut topics_by_cluster_request = RemotingCommand::create_request_command(
+            RequestCode::GetTopicsByCluster,
+            GetTopicsByClusterRequestHeader::new(cluster_name.clone()),
+        );
+        topics_by_cluster_request.make_custom_header_to_net();
+        let topics_by_cluster_response =
+            process_with_default_processor(&bootstrap, &harness, &mut topics_by_cluster_request).await;
+        assert_eq!(
+            ResponseCode::from(topics_by_cluster_response.code()),
+            ResponseCode::Success
+        );
+        let topics_by_cluster = TopicList::decode(
+            topics_by_cluster_response
+                .body()
+                .expect("topics by cluster should include a body"),
+        )
+        .expect("topics by cluster body should decode");
+        for expected in [
+            &normal_topic,
+            &unit_only_topic,
+            &unit_sub_only_topic,
+            &unit_and_sub_topic,
+        ] {
+            assert!(topics_by_cluster.topic_list.contains(expected));
+        }
+
+        let mut system_topics_request = RemotingCommand::create_remoting_command(RequestCode::GetSystemTopicListFromNs);
+        let system_topics_response =
+            process_with_default_processor(&bootstrap, &harness, &mut system_topics_request).await;
+        assert_eq!(ResponseCode::from(system_topics_response.code()), ResponseCode::Success);
+        let system_topics = TopicList::decode(
+            system_topics_response
+                .body()
+                .expect("system topics should include a body"),
+        )
+        .expect("system topics body should decode");
+        assert!(system_topics.topic_list.contains(&cluster_name));
+        assert!(system_topics.topic_list.contains(&broker_name));
+        assert_eq!(system_topics.broker_addr.as_ref(), Some(&broker_addr));
+
+        let mut unit_topics_request = RemotingCommand::create_remoting_command(RequestCode::GetUnitTopicList);
+        let unit_topics_response = process_with_default_processor(&bootstrap, &harness, &mut unit_topics_request).await;
+        assert_eq!(ResponseCode::from(unit_topics_response.code()), ResponseCode::Success);
+        let unit_topics = TopicList::decode(unit_topics_response.body().expect("unit topics should include a body"))
+            .expect("unit topics body should decode");
+        assert!(unit_topics.topic_list.contains(&unit_only_topic));
+        assert!(unit_topics.topic_list.contains(&unit_and_sub_topic));
+        assert!(!unit_topics.topic_list.contains(&unit_sub_only_topic));
+
+        let mut unit_sub_topics_request = RemotingCommand::create_remoting_command(RequestCode::GetHasUnitSubTopicList);
+        let unit_sub_topics_response =
+            process_with_default_processor(&bootstrap, &harness, &mut unit_sub_topics_request).await;
+        assert_eq!(
+            ResponseCode::from(unit_sub_topics_response.code()),
+            ResponseCode::Success
+        );
+        let unit_sub_topics = TopicList::decode(
+            unit_sub_topics_response
+                .body()
+                .expect("unit sub topics should include a body"),
+        )
+        .expect("unit sub topics body should decode");
+        assert!(unit_sub_topics.topic_list.contains(&unit_sub_only_topic));
+        assert!(unit_sub_topics.topic_list.contains(&unit_and_sub_topic));
+
+        let mut unit_sub_ununit_topics_request =
+            RemotingCommand::create_remoting_command(RequestCode::GetHasUnitSubUnunitTopicList);
+        let unit_sub_ununit_topics_response =
+            process_with_default_processor(&bootstrap, &harness, &mut unit_sub_ununit_topics_request).await;
+        assert_eq!(
+            ResponseCode::from(unit_sub_ununit_topics_response.code()),
+            ResponseCode::Success
+        );
+        let unit_sub_ununit_topics = TopicList::decode(
+            unit_sub_ununit_topics_response
+                .body()
+                .expect("unit sub ununit topics should include a body"),
+        )
+        .expect("unit sub ununit topics body should decode");
+        assert!(unit_sub_ununit_topics.topic_list.contains(&unit_sub_only_topic));
+        assert!(!unit_sub_ununit_topics.topic_list.contains(&unit_and_sub_topic));
+
+        let registered_route = TopicRouteData {
+            order_topic_conf: None,
+            queue_datas: vec![QueueData::new(
+                broker_name.clone(),
+                2,
+                2,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+                0,
+            )],
+            broker_datas: vec![],
+            filter_server_table: HashMap::new(),
+            topic_queue_mapping_by_broker: None,
+        };
+        let mut register_topic_request = RemotingCommand::create_request_command(
+            RequestCode::RegisterTopicInNamesrv,
+            RegisterTopicRequestHeader::new(registered_topic.clone()),
+        )
+        .set_body(registered_route.encode().expect("topic route data should encode"));
+        register_topic_request.make_custom_header_to_net();
+        let register_topic_response =
+            process_with_default_processor(&bootstrap, &harness, &mut register_topic_request).await;
+        assert_eq!(
+            ResponseCode::from(register_topic_response.code()),
+            ResponseCode::Success
+        );
+        assert!(
+            bootstrap
+                .name_server_runtime
+                .inner
+                .route_info_manager()
+                .pickup_topic_route_data(&registered_topic)
+                .is_some(),
+            "registered topic should be visible through route manager"
+        );
+
+        let mut delete_topic_request = RemotingCommand::create_request_command(
+            RequestCode::DeleteTopicInNamesrv,
+            DeleteTopicFromNamesrvRequestHeader::new(registered_topic.clone(), Some(cluster_name.clone())),
+        );
+        delete_topic_request.make_custom_header_to_net();
+        let delete_topic_response =
+            process_with_default_processor(&bootstrap, &harness, &mut delete_topic_request).await;
+        assert_eq!(ResponseCode::from(delete_topic_response.code()), ResponseCode::Success);
+        assert!(
+            bootstrap
+                .name_server_runtime
+                .inner
+                .route_info_manager()
+                .pickup_topic_route_data(&registered_topic)
+                .is_none(),
+            "deleted topic should no longer have route data"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_register_broker_via_default_processor_populates_route_contract() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
+        let ha_server_addr = CheetahString::from_static_str("10.0.0.10:10912");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let filter_server_addr = CheetahString::from_static_str("10.0.0.10:12000");
+        let topic_name = CheetahString::from_static_str("register-processor-topic");
+
+        let mut request = register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &ha_server_addr,
+            &zone_name,
+            true,
+            topic_config_wrapper(&[(
+                "register-processor-topic",
+                0,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+            )]),
+            vec![filter_server_addr.clone()],
+        );
+
+        let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let response_header = response
+            .read_custom_header_ref::<RegisterBrokerResponseHeader>()
+            .expect("register broker should include a response header");
+        assert_eq!(
+            response_header.master_addr.as_ref().map(|value| value.as_str()),
+            Some("")
+        );
+        assert_eq!(
+            response_header.ha_server_addr.as_ref().map(|value| value.as_str()),
+            Some("")
+        );
+
+        let cluster_info = bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .get_all_cluster_info();
+        assert!(cluster_info
+            .cluster_addr_table
+            .as_ref()
+            .and_then(|clusters| clusters.get(&cluster_name))
+            .is_some_and(|broker_names| broker_names.contains(&broker_name)));
+
+        let mut route_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic_name.clone(), Some(true)),
+        )
+        .set_version(RocketMqVersion::V4_9_3 as i32);
+        route_request.make_custom_header_to_net();
+
+        let route_response = process_with_client_processor(&bootstrap, &harness, &mut route_request).await;
+        assert_eq!(ResponseCode::from(route_response.code()), ResponseCode::Success);
+
+        let topic_route_data =
+            TopicRouteData::decode(route_response.body().expect("route response should include body"))
+                .expect("route response body should decode");
+        assert_eq!(topic_route_data.queue_datas.len(), 1);
+        assert_eq!(topic_route_data.broker_datas.len(), 1);
+        assert_eq!(topic_route_data.broker_datas[0].broker_name(), &broker_name);
+        assert_eq!(
+            topic_route_data.broker_datas[0].broker_addrs().get(&MASTER_ID),
+            Some(&broker_addr)
+        );
+        assert_eq!(topic_route_data.broker_datas[0].zone_name(), Some(&zone_name));
+        assert_eq!(
+            topic_route_data.filter_server_table.get(&broker_addr),
+            Some(&vec![filter_server_addr])
+        );
+    }
+
+    #[tokio::test]
+    async fn default_v2_unregister_broker_via_default_processor_removes_route_contract() {
+        let bootstrap = build_bootstrap_with_default_v2();
+        let harness = LocalRequestHarness::new().await.unwrap();
+        let cluster_name = CheetahString::from_static_str("cluster-a");
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let broker_addr = CheetahString::from_static_str("10.0.0.10:10911");
+        let ha_server_addr = CheetahString::from_static_str("10.0.0.10:10912");
+        let zone_name = CheetahString::from_static_str("zone-a");
+        let topic_name = CheetahString::from_static_str("unregister-processor-topic");
+
+        let mut register_request = register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            MASTER_ID,
+            &ha_server_addr,
+            &zone_name,
+            false,
+            topic_config_wrapper(&[(
+                "unregister-processor-topic",
+                0,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+            )]),
+            vec![],
+        );
+
+        let register_response = process_with_default_processor(&bootstrap, &harness, &mut register_request).await;
+        assert_eq!(ResponseCode::from(register_response.code()), ResponseCode::Success);
+        assert!(
+            bootstrap
+                .name_server_runtime
+                .inner
+                .route_info_manager()
+                .pickup_topic_route_data(&topic_name)
+                .is_some(),
+            "registered topic route should exist before unregister"
+        );
+
+        start_unregister_service(&bootstrap);
+
+        let mut unregister_request = RemotingCommand::create_request_command(
+            RequestCode::UnregisterBroker,
+            UnRegisterBrokerRequestHeader::new(
+                broker_name.clone(),
+                broker_addr.clone(),
+                cluster_name.clone(),
+                MASTER_ID,
+            ),
+        );
+        unregister_request.make_custom_header_to_net();
+
+        let unregister_response = process_with_default_processor(&bootstrap, &harness, &mut unregister_request).await;
+        assert_eq!(ResponseCode::from(unregister_response.code()), ResponseCode::Success);
+
+        wait_until("processor unregister broker route cleanup", || {
+            bootstrap
+                .name_server_runtime
+                .inner
+                .route_info_manager()
+                .pickup_topic_route_data(&topic_name)
+                .is_none()
+        })
+        .await;
+        shutdown_unregister_service(&bootstrap);
     }
 
     #[tokio::test]

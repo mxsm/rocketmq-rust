@@ -272,11 +272,11 @@ impl DefaultRequestProcessor {
             filter_server_list,
             channel,
         );
-        if result.is_none() {
+        let Some(register_broker_result) = result else {
             return Ok(response_command
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(CheetahString::from_static_str("register broker failed")));
-        }
+        };
         if self
             .name_server_runtime_inner
             .name_server_config()
@@ -290,7 +290,6 @@ impl DefaultRequestProcessor {
                 response_command = response_command.set_body(value);
             }
         }
-        let register_broker_result = result.unwrap();
         Ok(response_command
             .set_code(RemotingSysResponseCode::Success)
             .set_command_custom_header(RegisterBrokerResponseHeader::new(
@@ -522,8 +521,7 @@ impl DefaultRequestProcessor {
                 .name_server_runtime_inner
                 .route_info_manager()
                 .get_has_unit_sub_un_unit_topic_list();
-            return Ok(RemotingCommand::create_response_command()
-                .set_body(topic_list.encode().expect("encode TopicList failed")));
+            return Ok(RemotingCommand::create_response_command().set_body(topic_list.encode()?));
         }
         Ok(
             RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
