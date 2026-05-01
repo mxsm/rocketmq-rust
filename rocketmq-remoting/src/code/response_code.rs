@@ -154,7 +154,12 @@ define_response_code! {
         ControllerElectMasterFailed = 2012,
         ControllerAlterSyncStateSetFailed = 2013,
         ControllerBrokerIdInvalid = 2014,
+        ControllerJraftInternalError = 2015,
+        ControllerBrokerLiveInfoNotExists = 2016,
+        LmqQuotaExceeded = 2017,
         LiteSubscriptionQuotaExceeded = 2018,
+        UserNotExist = 3001,
+        PolicyNotExist = 3002,
     },
     default = SystemError
 }
@@ -289,7 +294,15 @@ mod tests {
             ResponseCode::ControllerAlterSyncStateSetFailed
         );
         assert_eq!(ResponseCode::from(2014), ResponseCode::ControllerBrokerIdInvalid);
+        assert_eq!(ResponseCode::from(2015), ResponseCode::ControllerJraftInternalError);
+        assert_eq!(
+            ResponseCode::from(2016),
+            ResponseCode::ControllerBrokerLiveInfoNotExists
+        );
+        assert_eq!(ResponseCode::from(2017), ResponseCode::LmqQuotaExceeded);
         assert_eq!(ResponseCode::from(2018), ResponseCode::LiteSubscriptionQuotaExceeded);
+        assert_eq!(ResponseCode::from(3001), ResponseCode::UserNotExist);
+        assert_eq!(ResponseCode::from(3002), ResponseCode::PolicyNotExist);
         assert_eq!(ResponseCode::from(9999), ResponseCode::SystemError); // Edge case - unknown
                                                                          // defaults to SystemError
     }
@@ -396,12 +409,31 @@ mod tests {
 
     #[test]
     fn test_controller_response_codes() {
-        // Test Controller error codes (2000-2014)
+        // Test Controller error codes (2000-2018)
         assert_eq!(ResponseCode::from(2000), ResponseCode::ControllerFencedMasterEpoch);
         assert_eq!(ResponseCode::from(2007), ResponseCode::ControllerNotLeader);
         assert_eq!(ResponseCode::from(2014), ResponseCode::ControllerBrokerIdInvalid);
+        assert_eq!(ResponseCode::from(2015), ResponseCode::ControllerJraftInternalError);
+        assert_eq!(
+            ResponseCode::from(2016),
+            ResponseCode::ControllerBrokerLiveInfoNotExists
+        );
+        assert_eq!(ResponseCode::from(2017), ResponseCode::LmqQuotaExceeded);
 
         assert_eq!(ResponseCode::ControllerFencedMasterEpoch.to_i32(), 2000);
         assert_eq!(ResponseCode::ControllerNotLeader.to_i32(), 2007);
+        assert_eq!(ResponseCode::ControllerBrokerIdInvalid.to_i32(), 2014);
+        assert_eq!(ResponseCode::ControllerJraftInternalError.to_i32(), 2015);
+        assert_eq!(ResponseCode::ControllerBrokerLiveInfoNotExists.to_i32(), 2016);
+        assert_eq!(ResponseCode::LmqQuotaExceeded.to_i32(), 2017);
+    }
+
+    #[test]
+    fn test_auth_response_codes() {
+        assert_eq!(ResponseCode::from(3001), ResponseCode::UserNotExist);
+        assert_eq!(ResponseCode::from(3002), ResponseCode::PolicyNotExist);
+
+        assert_eq!(ResponseCode::UserNotExist.to_i32(), 3001);
+        assert_eq!(ResponseCode::PolicyNotExist.to_i32(), 3002);
     }
 }
