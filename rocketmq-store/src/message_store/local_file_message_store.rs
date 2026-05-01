@@ -2123,6 +2123,12 @@ impl MessageStore for LocalFileMessageStore {
             }
             .to_string(),
         );
+        result.insert(
+            "ioUringBackendStatus".to_string(),
+            crate::log_file::mapped_file::io_uring_backend_status()
+                .as_str()
+                .to_string(),
+        );
 
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             result.insert(
@@ -5258,6 +5264,7 @@ mod tests {
         assert_eq!(runtime_info["storeType"], "LocalFile");
         assert_eq!(runtime_info["rocksdbCqDoubleWriteEnable"], "false");
         assert_eq!(runtime_info["rocksdbCompatibilityMode"], "disabled");
+        assert!(runtime_info.contains_key("ioUringBackendStatus"));
         assert_eq!(runtime_info["timerReadBehind"], "0");
         assert_eq!(runtime_info["timerOffsetBehind"], "0");
         assert_eq!(runtime_info["timerCongestNum"], "0");

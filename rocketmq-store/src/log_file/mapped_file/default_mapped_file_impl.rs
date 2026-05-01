@@ -55,6 +55,8 @@ use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceC
 use crate::log_file::mapped_file::MappedFile;
 use crate::utils::ffi::get_page_size;
 use crate::utils::ffi::madvise;
+#[cfg(target_os = "linux")]
+use crate::utils::ffi::mincore;
 use crate::utils::ffi::mlock as lock_memory;
 use crate::utils::ffi::munlock as unlock_memory;
 use crate::utils::ffi::MADV_WILLNEED;
@@ -255,6 +257,30 @@ impl DefaultMappedFile {
         transient_store_pool: TransientStorePool,
     ) -> io::Result<Self> {
         Self::try_new_inner(file_name, file_size, Some(transient_store_pool))
+    }
+
+    #[inline]
+    fn record_cache_residency(&self, position: i64, size: usize) -> bool {
+        let is_in_cache = MappedFile::is_loaded(self, position, size);
+        if let Some(metrics) = &self.metrics {
+            if is_in_cache {
+                metrics.record_cache_hit();
+            } else {
+                metrics.record_cache_miss();
+            }
+        }
+        is_in_cache
+    }
+
+    #[inline]
+    fn is_valid_cache_range(&self, position: i64, size: usize) -> bool {
+        if position < 0 || size == 0 {
+            return false;
+        }
+
+        let position = position as usize;
+        let file_size = self.file_size as usize;
+        position < file_size && position.checked_add(size).is_some_and(|end| end <= file_size)
     }
 }
 
@@ -600,6 +626,7 @@ impl MappedFile for DefaultMappedFile {
                 self.mapped_byte_buffer_access_count_since_last_swap
                     .fetch_add(1, Ordering::AcqRel);
 
+                let is_in_cache = self.record_cache_residency(pos as i64, size as usize);
                 let bytes = if size >= 8192 {
                     // Try zero-copy read first
                     self.get_bytes_zero_copy(pos as usize, size as usize)
@@ -624,7 +651,7 @@ impl MappedFile for DefaultMappedFile {
                     start_offset: self.file_from_offset + pos as u64,
                     size,
                     bytes: Some(bytes),
-                    is_in_cache: true,
+                    is_in_cache,
                     mapped_file: None,
                 })
             } else {
@@ -861,6 +888,9 @@ impl MappedFile for DefaultMappedFile {
                 self.file_name
             );
         }
+        if let Some(metrics) = &self.metrics {
+            metrics.record_warm(file_size);
+        }
     }
 
     #[inline]
@@ -868,11 +898,17 @@ impl MappedFile for DefaultMappedFile {
         self.swap_map_time.store(current_millis(), Ordering::Release);
         self.mapped_byte_buffer_access_count_since_last_swap
             .store(0, Ordering::Release);
+        if let Some(metrics) = &self.metrics {
+            metrics.record_swap();
+        }
         false
     }
 
     #[inline]
     fn clean_swaped_map(&self, force: bool) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_clean_swap();
+        }
         if force {
             self.mapped_byte_buffer_access_count_since_last_swap
                 .store(0, Ordering::Release);
@@ -919,21 +955,25 @@ impl MappedFile for DefaultMappedFile {
     #[inline]
     #[cfg(target_os = "linux")]
     fn is_loaded(&self, position: i64, size: usize) -> bool {
-        // use libc::c_void;
-        // use libc::mincore;
-        // use libc::EINVAL;
-        // let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
-        // let page_count = (length + page_size - 1) / page_size;
+        if !self.is_valid_cache_range(position, size) {
+            return false;
+        }
 
-        // let mut vec = vec![0u8; page_count];
-        // let ret = unsafe { mincore(address as *mut c_void, length, vec.as_mut_ptr()) };
+        let position = position as usize;
+        let page_size = get_page_size().max(1);
+        let base_addr = self.mmapped_file.as_ptr() as usize;
+        let start_addr = base_addr.saturating_add(position);
+        let aligned_start = start_addr / page_size * page_size;
+        let page_offset = start_addr - aligned_start;
+        let checked_len = page_offset.saturating_add(size);
+        let page_count = checked_len.div_ceil(page_size);
+        if page_count == 0 {
+            return false;
+        }
 
-        // if ret == -1 {
-        //     return false;
-        // }
-
-        // !vec.iter().any(|&byte| byte & 1 == 0)
-        true
+        let mut residency = vec![0u8; page_count];
+        let result = mincore(aligned_start as *const u8, checked_len, residency.as_mut_ptr());
+        result == 0 && residency.iter().all(|page| page & 1 == 1)
     }
 
     #[inline]
@@ -966,7 +1006,7 @@ impl MappedFile for DefaultMappedFile {
             offset += info.RegionSize;
         }*/
 
-        true
+        self.is_valid_cache_range(position, size)
     }
 
     #[inline]
@@ -999,7 +1039,7 @@ impl MappedFile for DefaultMappedFile {
             offset += info.RegionSize;
         }*/
 
-        true
+        self.is_valid_cache_range(position, size)
     }
 
     fn select_mapped_buffer_with_position(&self, pos: i32) -> Option<SelectMappedBufferResult> {
@@ -1008,6 +1048,7 @@ impl MappedFile for DefaultMappedFile {
             self.mapped_byte_buffer_access_count_since_last_swap
                 .fetch_add(1, Ordering::AcqRel);
             let size = read_position - pos;
+            let is_in_cache = self.record_cache_residency(pos as i64, size as usize);
 
             let bytes = if size >= 8192 {
                 self.get_bytes_zero_copy(pos as usize, size as usize)
@@ -1030,7 +1071,7 @@ impl MappedFile for DefaultMappedFile {
                 start_offset: self.get_file_from_offset() + pos as u64,
                 size,
                 bytes: Some(bytes),
-                is_in_cache: true,
+                is_in_cache,
                 mapped_file: None,
             })
         } else {
@@ -1622,6 +1663,8 @@ mod tests {
         assert!(summary.contains("Reads:"));
         assert!(summary.contains("Flushes:"));
         assert!(summary.contains("zero-copy"));
+        assert!(summary.contains("Warm:"));
+        assert!(summary.contains("Swap:"));
     }
 
     #[test]
@@ -1676,5 +1719,42 @@ mod tests {
         assert!(!mapped_file.swap_map());
         assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 0);
         assert!(mapped_file.get_recent_swap_map_time() >= before);
+        assert_eq!(mapped_file.get_metrics().unwrap().swap_operations(), 1);
+    }
+
+    #[test]
+    fn select_mapped_buffer_records_page_cache_residency() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"cache-residency"));
+
+        let result = mapped_file
+            .select_mapped_buffer(0, "cache-residency".len() as i32)
+            .expect("selected buffer should exist");
+
+        let metrics = mapped_file.get_metrics().unwrap();
+        assert_eq!(metrics.cache_hits() + metrics.cache_misses(), 1);
+        assert_eq!(result.is_in_cache, metrics.cache_hits() == 1);
+    }
+
+    #[test]
+    fn warm_and_clean_swap_are_reflected_in_metrics() {
+        let (_temp_dir, mapped_file) = create_test_file();
+
+        mapped_file.warm_mapped_file(FlushDiskType::AsyncFlush, 1);
+        mapped_file.clean_swaped_map(true);
+
+        let metrics = mapped_file.get_metrics().unwrap();
+        assert_eq!(metrics.warm_operations(), 1);
+        assert_eq!(metrics.warm_bytes(), mapped_file.get_file_size());
+        assert_eq!(metrics.clean_swap_operations(), 1);
+    }
+
+    #[test]
+    fn is_loaded_rejects_invalid_ranges() {
+        let (_temp_dir, mapped_file) = create_test_file();
+
+        assert!(!mapped_file.is_loaded(-1, 1));
+        assert!(!mapped_file.is_loaded(0, 0));
+        assert!(!mapped_file.is_loaded(mapped_file.get_file_size() as i64, 1));
     }
 }

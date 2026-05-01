@@ -391,7 +391,6 @@ impl CommitLog {
                 let mut select_mapped_buffer_result = mmap_file.select_mapped_buffer(pos as i32, size);
                 if let Some(ref mut result) = select_mapped_buffer_result {
                     result.mapped_file = Some(mmap_file);
-                    result.is_in_cache = self.cold_data_check_service.is_data_in_page_cache();
                 }
                 select_mapped_buffer_result
             }

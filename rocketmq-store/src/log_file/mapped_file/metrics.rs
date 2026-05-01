@@ -74,6 +74,18 @@ pub struct MappedFileMetrics {
     /// Number of times data was not in page cache (disk I/O required)
     cache_misses: AtomicU64,
 
+    /// Number of mapped file warm-up operations.
+    warm_operations: AtomicU64,
+
+    /// Total bytes touched by warm-up operations.
+    warm_bytes: AtomicU64,
+
+    /// Number of mapped file swap decisions.
+    swap_operations: AtomicU64,
+
+    /// Number of swapped-map cleanup decisions.
+    clean_swap_operations: AtomicU64,
+
     /// Timestamp when metrics collection started
     start_time: Instant,
 }
@@ -103,6 +115,10 @@ impl MappedFileMetrics {
             zero_copy_reads: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_misses: AtomicU64::new(0),
+            warm_operations: AtomicU64::new(0),
+            warm_bytes: AtomicU64::new(0),
+            swap_operations: AtomicU64::new(0),
+            clean_swap_operations: AtomicU64::new(0),
             start_time: Instant::now(),
         }
     }
@@ -162,6 +178,25 @@ impl MappedFileMetrics {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records a mapped file warm-up operation.
+    #[inline]
+    pub fn record_warm(&self, bytes: usize) {
+        self.warm_operations.fetch_add(1, Ordering::Relaxed);
+        self.warm_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    /// Records a mapped file swap decision.
+    #[inline]
+    pub fn record_swap(&self) {
+        self.swap_operations.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a swapped-map cleanup decision.
+    #[inline]
+    pub fn record_clean_swap(&self) {
+        self.clean_swap_operations.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Returns the total number of write operations.
     #[inline]
     pub fn total_writes(&self) -> u64 {
@@ -190,6 +225,42 @@ impl MappedFileMetrics {
     #[inline]
     pub fn total_bytes_read(&self) -> u64 {
         self.total_bytes_read.load(Ordering::Relaxed)
+    }
+
+    /// Returns total page-cache hit observations.
+    #[inline]
+    pub fn cache_hits(&self) -> u64 {
+        self.cache_hits.load(Ordering::Relaxed)
+    }
+
+    /// Returns total page-cache miss observations.
+    #[inline]
+    pub fn cache_misses(&self) -> u64 {
+        self.cache_misses.load(Ordering::Relaxed)
+    }
+
+    /// Returns total warm-up operations.
+    #[inline]
+    pub fn warm_operations(&self) -> u64 {
+        self.warm_operations.load(Ordering::Relaxed)
+    }
+
+    /// Returns total bytes touched by warm-up operations.
+    #[inline]
+    pub fn warm_bytes(&self) -> u64 {
+        self.warm_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Returns total swap decisions.
+    #[inline]
+    pub fn swap_operations(&self) -> u64 {
+        self.swap_operations.load(Ordering::Relaxed)
+    }
+
+    /// Returns total swapped-map cleanup decisions.
+    #[inline]
+    pub fn clean_swap_operations(&self) -> u64 {
+        self.clean_swap_operations.load(Ordering::Relaxed)
     }
 
     /// Calculates write operations per second.
@@ -303,6 +374,10 @@ impl MappedFileMetrics {
         self.zero_copy_reads.store(0, Ordering::Relaxed);
         self.cache_hits.store(0, Ordering::Relaxed);
         self.cache_misses.store(0, Ordering::Relaxed);
+        self.warm_operations.store(0, Ordering::Relaxed);
+        self.warm_bytes.store(0, Ordering::Relaxed);
+        self.swap_operations.store(0, Ordering::Relaxed);
+        self.clean_swap_operations.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
     }
 
@@ -314,7 +389,8 @@ impl MappedFileMetrics {
     pub fn summary(&self) -> String {
         format!(
             "MappedFile Metrics:\nWrites: {} ({:.2} writes/sec, {:.2} MB/s)\nReads: {} ({:.1}% zero-copy)\nFlushes: \
-             {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} bytes",
+             {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} bytes\nWarm: {} ops, {} bytes\nSwap: {} \
+             ops, clean: {} ops",
             self.total_writes(),
             self.writes_per_sec(),
             self.write_throughput_mb_per_sec(),
@@ -323,7 +399,11 @@ impl MappedFileMetrics {
             self.total_flushes(),
             self.avg_flush_duration(),
             self.cache_hit_rate(),
-            self.avg_write_size()
+            self.avg_write_size(),
+            self.warm_operations(),
+            self.warm_bytes(),
+            self.swap_operations(),
+            self.clean_swap_operations()
         )
     }
 }
@@ -373,7 +453,24 @@ mod tests {
         metrics.record_cache_hit();
         metrics.record_cache_miss();
 
+        assert_eq!(metrics.cache_hits(), 2);
+        assert_eq!(metrics.cache_misses(), 1);
         assert!((metrics.cache_hit_rate() - 66.666).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_warm_and_swap_metrics() {
+        let metrics = MappedFileMetrics::new();
+
+        metrics.record_warm(4096);
+        metrics.record_swap();
+        metrics.record_clean_swap();
+
+        assert_eq!(metrics.warm_operations(), 1);
+        assert_eq!(metrics.warm_bytes(), 4096);
+        assert_eq!(metrics.swap_operations(), 1);
+        assert_eq!(metrics.clean_swap_operations(), 1);
+        assert!(metrics.summary().contains("Warm: 1 ops, 4096 bytes"));
     }
 
     #[test]

@@ -38,8 +38,7 @@ mod mapped_buffer;
 mod mapped_file_error;
 mod metrics;
 
-// io_uring implementation
-#[cfg(all(target_os = "linux", feature = "io_uring"))]
+// io_uring support boundary.
 pub mod io_uring_impl;
 
 /*
@@ -53,9 +52,8 @@ pub use builder::MappedFileBuilder;
 pub use factory::MappedFileFactory;
 pub use factory::MappedFileType;*/
 pub use flush_strategy::FlushStrategy;
-// Re-export io_uring implementation
-/*#[cfg(all(target_os = "linux", feature = "io_uring"))]
-pub use io_uring_impl::IoUringMappedFile;*/
+pub use io_uring_impl::io_uring_backend_status;
+pub use io_uring_impl::IoUringBackendStatus;
 pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
