@@ -240,6 +240,9 @@ enum StoreLifecycleState {
     Initialized = 1,
     Started = 2,
     Shutdown = 3,
+    RecoveringConsumeQueue = 4,
+    RecoveringCommitLog = 5,
+    RecoveringTopicQueueTable = 6,
 }
 
 impl StoreLifecycleState {
@@ -249,6 +252,9 @@ impl StoreLifecycleState {
             1 => Self::Initialized,
             2 => Self::Started,
             3 => Self::Shutdown,
+            4 => Self::RecoveringConsumeQueue,
+            5 => Self::RecoveringCommitLog,
+            6 => Self::RecoveringTopicQueueTable,
             _ => Self::Created,
         }
     }
@@ -256,6 +262,14 @@ impl StoreLifecycleState {
     #[inline]
     fn as_u8(self) -> u8 {
         self as u8
+    }
+
+    #[inline]
+    fn is_recovering(self) -> bool {
+        matches!(
+            self,
+            Self::RecoveringConsumeQueue | Self::RecoveringCommitLog | Self::RecoveringTopicQueueTable
+        )
     }
 }
 
@@ -620,7 +634,8 @@ impl LocalFileMessageStore {
 
     #[inline]
     fn is_store_available_for_io(&self) -> bool {
-        self.lifecycle_state() != StoreLifecycleState::Shutdown && !self.shutdown.load(Ordering::Acquire)
+        let state = self.lifecycle_state();
+        state != StoreLifecycleState::Shutdown && !state.is_recovering() && !self.shutdown.load(Ordering::Acquire)
     }
 
     fn message_store_arc_or_error(&self, operation: &str) -> Result<ArcMut<LocalFileMessageStore>, StoreError> {
@@ -862,12 +877,14 @@ impl LocalFileMessageStore {
     }
 
     async fn recover(&mut self, last_exit_ok: bool) {
+        let previous_state = self.lifecycle_state();
         let recover_concurrently = self.is_recover_concurrently();
         info!(
             "message store recover mode: {}",
             if recover_concurrently { "concurrent" } else { "normal" },
         );
         let recover_consume_queue_start = Instant::now();
+        self.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
         self.recover_consume_queue().await;
         let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
         let recover_consume_queue = Instant::now()
@@ -875,6 +892,7 @@ impl LocalFileMessageStore {
             .as_millis();
 
         let recover_commit_log_start = Instant::now();
+        self.set_lifecycle_state(StoreLifecycleState::RecoveringCommitLog);
         if last_exit_ok {
             self.recover_normally(dispatch_recovery_offset).await;
         } else {
@@ -885,10 +903,14 @@ impl LocalFileMessageStore {
             .as_millis();
 
         let recover_topic_queue_table_start = Instant::now();
+        self.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
         self.recover_topic_queue_table();
         let recover_topic_queue_table = Instant::now()
             .saturating_duration_since(recover_topic_queue_table_start)
             .as_millis();
+        if self.lifecycle_state() != StoreLifecycleState::Shutdown {
+            self.set_lifecycle_state(previous_state);
+        }
         info!(
             "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, recoverCommitLog: {} ms, \
              recoverOffsetTable: {} ms",
@@ -1354,6 +1376,13 @@ impl MessageStore for LocalFileMessageStore {
                     "message store is shutdown; call init before start".to_string(),
                 ));
             }
+            StoreLifecycleState::RecoveringConsumeQueue
+            | StoreLifecycleState::RecoveringCommitLog
+            | StoreLifecycleState::RecoveringTopicQueueTable => {
+                return Err(StoreError::General(
+                    "message store is recovering; start is not allowed".to_string(),
+                ));
+            }
         }
 
         self.acquire_store_lock()?;
@@ -1416,6 +1445,13 @@ impl MessageStore for LocalFileMessageStore {
             StoreLifecycleState::Started => {
                 return Err(StoreError::General(
                     "message store cannot be initialized while started".to_string(),
+                ));
+            }
+            StoreLifecycleState::RecoveringConsumeQueue
+            | StoreLifecycleState::RecoveringCommitLog
+            | StoreLifecycleState::RecoveringTopicQueueTable => {
+                return Err(StoreError::General(
+                    "message store cannot be initialized while recovering".to_string(),
                 ));
             }
         }
@@ -1650,8 +1686,9 @@ impl MessageStore for LocalFileMessageStore {
         max_total_msg_size: i32,
         message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
-        if self.lifecycle_state() == StoreLifecycleState::Shutdown {
-            warn!("message store has shutdown, so getMessage is forbidden");
+        let lifecycle_state = self.lifecycle_state();
+        if lifecycle_state == StoreLifecycleState::Shutdown || lifecycle_state.is_recovering() {
+            warn!("message store is not available, so getMessage is forbidden");
             return None;
         }
 
@@ -3899,6 +3936,7 @@ mod tests {
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
     use rocketmq_common::common::message::MessageVersion;
+    use rocketmq_common::common::mix_all;
     use rocketmq_common::common::running::running_stats::RunningStats;
     use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::CRC32Utils::crc32;
@@ -3910,6 +3948,7 @@ mod tests {
     use super::CleanCommitLogService;
     use super::LocalFileMessageStore;
     use super::ReputMessageServiceInner;
+    use super::StoreLifecycleState;
     use crate::base::dispatch_request::DispatchRequest;
     use crate::base::message_arriving_listener::MessageArrivingListener;
     use crate::base::message_result::PutMessageResult;
@@ -4357,6 +4396,59 @@ mod tests {
 
         assert_eq!(result.put_message_status(), PutMessageStatus::ServiceNotAvailable);
         assert!(store.get_message(&group, &topic, 0, 0, 32, None).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_and_write_are_rejected_while_recovering() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+        store.set_lifecycle_state(StoreLifecycleState::RecoveringCommitLog);
+
+        let topic = CheetahString::from_static_str("recovering-io-topic");
+        let group = CheetahString::from_static_str("recovering-io-group");
+        let result = store
+            .put_message(build_test_message(&topic, Bytes::from_static(b"during-recovery")))
+            .await;
+
+        assert_eq!(result.put_message_status(), PutMessageStatus::ServiceNotAvailable);
+        assert!(store.get_message(&group, &topic, 0, 0, 32, None).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn recover_restores_lifecycle_state_after_recovery_phases() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+
+        assert_eq!(store.lifecycle_state(), StoreLifecycleState::Created);
+        store.recover(true).await;
+        assert_eq!(store.lifecycle_state(), StoreLifecycleState::Created);
+
+        store.init().await.expect("init store");
+        store.recover(false).await;
+        assert_eq!(store.lifecycle_state(), StoreLifecycleState::Initialized);
+    }
+
+    #[tokio::test]
+    async fn start_and_init_are_rejected_while_recovering() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_test_store(&temp_dir);
+
+        store.set_lifecycle_state(StoreLifecycleState::RecoveringConsumeQueue);
+        let start_error = store
+            .start()
+            .await
+            .expect_err("start should be rejected during recovery");
+        assert!(matches!(
+            start_error,
+            StoreError::General(message) if message.contains("recovering")
+        ));
+
+        store.set_lifecycle_state(StoreLifecycleState::RecoveringTopicQueueTable);
+        let init_error = store.init().await.expect_err("init should be rejected during recovery");
+        assert!(matches!(
+            init_error,
+            StoreError::General(message) if message.contains("recovering")
+        ));
     }
 
     #[test]
@@ -5689,6 +5781,35 @@ mod tests {
                 .load(Ordering::SeqCst),
             CleanCommitLogService::MAX_MANUAL_DELETE_FILE_TIMES - 1
         );
+    }
+
+    #[test]
+    fn clean_commit_log_service_uses_lowest_commitlog_path_ratio_like_java() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_test_store(&temp_dir);
+        let missing_path = temp_dir.path().join("missing-commitlog");
+        let existing_path = temp_dir.path().join("existing-commitlog");
+        fs::create_dir_all(&existing_path).expect("create existing commitlog path");
+        let store_path_commit_log = format!(
+            "{}{}{}",
+            missing_path.display(),
+            mix_all::MULTI_PATH_SPLITTER.as_str(),
+            existing_path.display()
+        );
+        let service = CleanCommitLogService::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+                store_path_commit_log: Some(store_path_commit_log.into()),
+                ..MessageStoreConfig::default()
+            }),
+            store.commit_log.clone(),
+            store.running_flags.clone(),
+        );
+
+        let (ratio, selected_path) = service.min_physic_disk_ratio();
+
+        assert!(ratio < 0.0);
+        assert_eq!(selected_path, Some(missing_path.to_string_lossy().into_owned()));
     }
 
     #[tokio::test]
