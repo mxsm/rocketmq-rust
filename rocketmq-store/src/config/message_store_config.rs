@@ -82,6 +82,34 @@ mod defaults {
         3
     }
 
+    pub fn timer_rocksdb_precision_ms() -> u64 {
+        1000
+    }
+
+    pub fn timer_rocksdb_roll_max_tps() -> f64 {
+        8000.0
+    }
+
+    pub fn timer_rocksdb_time_expired_max_tps() -> f64 {
+        200000.0
+    }
+
+    pub fn timer_rocksdb_roll_interval_hours() -> usize {
+        1
+    }
+
+    pub fn timer_rocksdb_roll_range_hours() -> usize {
+        2
+    }
+
+    pub fn timer_recall_to_time_wheel_enable() -> bool {
+        true
+    }
+
+    pub fn timer_recall_to_timeline_enable() -> bool {
+        true
+    }
+
     pub fn timer_wheel_enable() -> bool {
         true
     }
@@ -353,6 +381,33 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub timer_enable_disruptor: bool,
+
+    #[serde(default)]
+    pub timer_rocksdb_enable: bool,
+
+    #[serde(default)]
+    pub timer_rocksdb_stop_scan: bool,
+
+    #[serde(default = "defaults::timer_rocksdb_precision_ms")]
+    pub timer_rocksdb_precision_ms: u64,
+
+    #[serde(default = "defaults::timer_rocksdb_roll_max_tps")]
+    pub timer_rocksdb_roll_max_tps: f64,
+
+    #[serde(default = "defaults::timer_rocksdb_time_expired_max_tps")]
+    pub timer_rocksdb_time_expired_max_tps: f64,
+
+    #[serde(default = "defaults::timer_rocksdb_roll_interval_hours")]
+    pub timer_rocksdb_roll_interval_hours: usize,
+
+    #[serde(default = "defaults::timer_rocksdb_roll_range_hours")]
+    pub timer_rocksdb_roll_range_hours: usize,
+
+    #[serde(default = "defaults::timer_recall_to_time_wheel_enable")]
+    pub timer_recall_to_time_wheel_enable: bool,
+
+    #[serde(default = "defaults::timer_recall_to_timeline_enable")]
+    pub timer_recall_to_timeline_enable: bool,
 
     #[serde(default)]
     pub timer_enable_check_metrics: bool,
@@ -851,6 +906,15 @@ impl Default for MessageStoreConfig {
             timer_get_message_thread_num: 3,
             timer_put_message_thread_num: 3,
             timer_enable_disruptor: false,
+            timer_rocksdb_enable: false,
+            timer_rocksdb_stop_scan: false,
+            timer_rocksdb_precision_ms: 1000,
+            timer_rocksdb_roll_max_tps: 8000.0,
+            timer_rocksdb_time_expired_max_tps: 200000.0,
+            timer_rocksdb_roll_interval_hours: 1,
+            timer_rocksdb_roll_range_hours: 2,
+            timer_recall_to_time_wheel_enable: true,
+            timer_recall_to_timeline_enable: true,
             timer_enable_check_metrics: false,
             timer_intercept_delay_level: false,
             timer_max_delay_sec: 3600 * 24 * 3,
@@ -1112,6 +1176,39 @@ impl MessageStoreConfig {
         properties.insert(
             "timerEnableDisruptor".to_string(),
             self.timer_enable_disruptor.to_string(),
+        );
+        properties.insert("timerRocksDBEnable".to_string(), self.timer_rocksdb_enable.to_string());
+        properties.insert(
+            "timerRocksDBStopScan".to_string(),
+            self.timer_rocksdb_stop_scan.to_string(),
+        );
+        properties.insert(
+            "timerRocksDBPrecisionMs".to_string(),
+            self.timer_rocksdb_precision_ms.to_string(),
+        );
+        properties.insert(
+            "timerRocksDBRollMaxTps".to_string(),
+            self.timer_rocksdb_roll_max_tps.to_string(),
+        );
+        properties.insert(
+            "timerRocksDBTimeExpiredMaxTps".to_string(),
+            self.timer_rocksdb_time_expired_max_tps.to_string(),
+        );
+        properties.insert(
+            "timerRocksDBRollIntervalHours".to_string(),
+            self.timer_rocksdb_roll_interval_hours.to_string(),
+        );
+        properties.insert(
+            "timerRocksDBRollRangeHours".to_string(),
+            self.timer_rocksdb_roll_range_hours.to_string(),
+        );
+        properties.insert(
+            "timerRecallToTimeWheelEnable".to_string(),
+            self.timer_recall_to_time_wheel_enable.to_string(),
+        );
+        properties.insert(
+            "timerRecallToTimelineEnable".to_string(),
+            self.timer_recall_to_timeline_enable.to_string(),
         );
         properties.insert(
             "timerEnableCheckMetrics".to_string(),
@@ -1605,5 +1702,30 @@ mod tests {
         assert_eq!(config.disk_space_warning_level_ratio, 90);
         assert_eq!(config.disk_space_clean_forcibly_ratio, 85);
         assert!(config.clean_file_forcibly_enable);
+    }
+
+    #[test]
+    fn default_timer_rocksdb_config_matches_java_defaults() {
+        let config = MessageStoreConfig::default();
+        assert!(!config.timer_rocksdb_enable);
+        assert!(!config.timer_rocksdb_stop_scan);
+        assert_eq!(config.timer_rocksdb_precision_ms, 1000);
+        assert_eq!(config.timer_rocksdb_roll_max_tps, 8000.0);
+        assert_eq!(config.timer_rocksdb_time_expired_max_tps, 200000.0);
+        assert_eq!(config.timer_rocksdb_roll_interval_hours, 1);
+        assert_eq!(config.timer_rocksdb_roll_range_hours, 2);
+        assert!(config.timer_recall_to_time_wheel_enable);
+        assert!(config.timer_recall_to_timeline_enable);
+
+        let properties = config.get_properties();
+        assert_eq!(properties["timerRocksDBEnable"], "false");
+        assert_eq!(properties["timerRocksDBStopScan"], "false");
+        assert_eq!(properties["timerRocksDBPrecisionMs"], "1000");
+        assert_eq!(properties["timerRocksDBRollMaxTps"], "8000");
+        assert_eq!(properties["timerRocksDBTimeExpiredMaxTps"], "200000");
+        assert_eq!(properties["timerRocksDBRollIntervalHours"], "1");
+        assert_eq!(properties["timerRocksDBRollRangeHours"], "2");
+        assert_eq!(properties["timerRecallToTimeWheelEnable"], "true");
+        assert_eq!(properties["timerRecallToTimelineEnable"], "true");
     }
 }

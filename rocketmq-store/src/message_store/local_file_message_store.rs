@@ -637,6 +637,12 @@ impl LocalFileMessageStore {
                 "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
             ));
         }
+        if self.message_store_config.timer_rocksdb_enable {
+            return Err(StoreError::General(
+                "Timer RocksDB backend is not implemented in rocketmq-rust; keep timer_rocksdb_enable=false"
+                    .to_string(),
+            ));
+        }
 
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
         if !self.message_store_config.is_enable_rocksdb_store() && !enabled_rocksdb_options.is_empty() {
@@ -2099,6 +2105,23 @@ impl MessageStore for LocalFileMessageStore {
         result.insert(
             RunningStats::CommitLogMaxOffset.as_str().to_string(),
             self.get_max_phy_offset().to_string(),
+        );
+        result.insert(
+            "storeType".to_string(),
+            self.message_store_config.store_type.get_store_type().to_string(),
+        );
+        result.insert(
+            "rocksdbCqDoubleWriteEnable".to_string(),
+            self.message_store_config.rocksdb_cq_double_write_enable.to_string(),
+        );
+        result.insert(
+            "rocksdbCompatibilityMode".to_string(),
+            if self.message_store_config.is_enable_rocksdb_store() {
+                "local_file_compat"
+            } else {
+                "disabled"
+            }
+            .to_string(),
         );
 
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
@@ -4293,6 +4316,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn init_rejects_timer_rocksdb_backend_until_native_store_exists() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                timer_rocksdb_enable: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        let error = store
+            .init()
+            .await
+            .expect_err("timer rocksdb backend is not implemented");
+        assert!(matches!(
+            error,
+            StoreError::General(message)
+                if message.contains("Timer RocksDB backend")
+                    && message.contains("timer_rocksdb_enable=false")
+        ));
+    }
+
+    #[tokio::test]
     async fn compaction_topic_dispatches_and_reads_from_compaction_store() {
         let temp_dir = tempdir().unwrap();
         let topic = CheetahString::from_static_str("compaction-dispatch-topic");
@@ -4346,6 +4392,7 @@ mod tests {
             &temp_dir,
             MessageStoreConfig {
                 store_type: StoreType::RocksDB,
+                rocksdb_cq_double_write_enable: true,
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 ..MessageStoreConfig::default()
             },
@@ -4379,6 +4426,11 @@ mod tests {
         assert_eq!(result.status(), Some(GetMessageStatus::Found));
         assert_eq!(result.message_count(), 1);
         assert_eq!(result.next_begin_offset(), 1);
+
+        let runtime_info = store.get_runtime_info();
+        assert_eq!(runtime_info["storeType"], "RocksDB");
+        assert_eq!(runtime_info["rocksdbCqDoubleWriteEnable"], "true");
+        assert_eq!(runtime_info["rocksdbCompatibilityMode"], "local_file_compat");
     }
 
     #[tokio::test]
@@ -5203,6 +5255,9 @@ mod tests {
         assert!(runtime_info.contains_key("putMessageTimesTotal"));
         assert!(runtime_info.contains_key(RunningStats::CommitLogMinOffset.as_str()));
         assert!(runtime_info.contains_key(RunningStats::CommitLogMaxOffset.as_str()));
+        assert_eq!(runtime_info["storeType"], "LocalFile");
+        assert_eq!(runtime_info["rocksdbCqDoubleWriteEnable"], "false");
+        assert_eq!(runtime_info["rocksdbCompatibilityMode"], "disabled");
         assert_eq!(runtime_info["timerReadBehind"], "0");
         assert_eq!(runtime_info["timerOffsetBehind"], "0");
         assert_eq!(runtime_info["timerCongestNum"], "0");

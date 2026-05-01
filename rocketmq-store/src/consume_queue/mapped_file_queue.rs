@@ -262,9 +262,7 @@ impl MappedFileQueue {
 
             let next_file_path = PathBuf::from(self.store_path.clone()).join(offset_to_file_name(next_offset));
 
-            // Submit async request (non-blocking)
-            let _drop = service.submit_request(next_file_path.to_string_lossy().to_string(), self.mapped_file_size);
-            std::mem::drop(_drop);
+            service.submit_request_in_background(next_file_path.to_string_lossy().to_string(), self.mapped_file_size);
         }
     }
 
@@ -1310,5 +1308,36 @@ mod tests {
         };
         assert!(queue.load());
         assert_eq!(queue.mapped_files.load().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn trigger_pre_allocation_submits_background_request() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mapped_file_size = 1024;
+        let first_file_path = temp_dir.path().join(offset_to_file_name(0));
+        let next_file_path = temp_dir.path().join(offset_to_file_name(mapped_file_size));
+        let first_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(first_file_path.to_string_lossy().to_string()),
+                mapped_file_size,
+            )
+            .expect("first mapped file"),
+        );
+        first_file.set_wrote_position(820);
+
+        let service = AllocateMappedFileService::new();
+        service.start();
+        let mut queue = MappedFileQueue::new(
+            temp_dir.path().to_string_lossy().to_string(),
+            mapped_file_size,
+            Some(service.clone()),
+        );
+        queue.mapped_files.store(Arc::new(vec![first_file]));
+
+        assert!(!service.has_request(next_file_path.to_string_lossy().as_ref()));
+        assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());
+        assert!(service.has_request(next_file_path.to_string_lossy().as_ref()));
+
+        service.shutdown().await;
     }
 }

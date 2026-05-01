@@ -203,6 +203,11 @@ impl AllocateMappedFileService {
         self.warm_mapped_file_config.should_warm(file_size)
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_request(&self, file_path: &str) -> bool {
+        self.request_table.read().contains_key(file_path)
+    }
+
     /// Start the background worker thread
     /// Corresponds to Java's ServiceThread.start()
     pub fn start(&self) {
