@@ -127,16 +127,21 @@ impl DefaultFlushManager {
 
 impl FlushManager for DefaultFlushManager {
     fn start(&mut self) {
+        let Some(mapped_file_queue) = self.mapped_file_queue.clone() else {
+            warn!("DefaultFlushManager cannot start because mapped file queue is not initialized");
+            return;
+        };
+
         if let Some(ref mut group_commit_service) = self.group_commit_service {
-            group_commit_service.start(self.mapped_file_queue.clone().unwrap());
+            group_commit_service.start(mapped_file_queue.clone());
         }
         if let Some(ref mut flush_real_time_service) = self.flush_real_time_service {
-            flush_real_time_service.start(self.mapped_file_queue.clone().unwrap());
+            flush_real_time_service.start(mapped_file_queue.clone());
         }
 
         if self.message_store_config.transient_store_pool_enable {
             if let Some(ref mut commit_real_time_service) = self.commit_real_time_service {
-                commit_real_time_service.start(self.mapped_file_queue.clone().unwrap());
+                commit_real_time_service.start(mapped_file_queue);
             }
         }
     }
@@ -198,15 +203,27 @@ impl FlushManager for DefaultFlushManager {
                     .await
                     .unwrap_or(PutMessageStatus::FlushDiskTimeout)
                 } else {
-                    self.group_commit_service.as_ref().unwrap().wakeup();
+                    let Some(group_commit_service) = self.group_commit_service.as_ref() else {
+                        warn!("Sync flush requested but GroupCommitService is not initialized");
+                        return PutMessageStatus::FlushDiskTimeout;
+                    };
+                    group_commit_service.wakeup();
                     PutMessageStatus::PutOk
                 }
             }
             FlushDiskType::AsyncFlush => {
                 if self.message_store_config.transient_store_pool_enable {
-                    self.commit_real_time_service.as_ref().unwrap().wakeup();
+                    let Some(commit_real_time_service) = self.commit_real_time_service.as_ref() else {
+                        warn!("Async flush requested but CommitRealTimeService is not initialized");
+                        return PutMessageStatus::FlushDiskTimeout;
+                    };
+                    commit_real_time_service.wakeup();
                 } else {
-                    self.flush_real_time_service.as_ref().unwrap().wakeup();
+                    let Some(flush_real_time_service) = self.flush_real_time_service.as_ref() else {
+                        warn!("Async flush requested but FlushRealTimeService is not initialized");
+                        return PutMessageStatus::FlushDiskTimeout;
+                    };
+                    flush_real_time_service.wakeup();
                 }
                 PutMessageStatus::PutOk
             }
@@ -471,8 +488,12 @@ impl CommitRealTimeService {
                 };
                 if !commit_result.commit_ok {
                     last_commit_timestamp = current_millis();
-                    if let Some(flush_manager) = flush_manager.as_ref().unwrap().upgrade() {
+                    if let Some(flush_manager) =
+                        flush_manager.as_ref().and_then(|flush_manager| flush_manager.upgrade())
+                    {
                         flush_manager.wake_up_flush();
+                    } else {
+                        warn!("CommitRealTimeService cannot wake flush because flush manager is not initialized");
                     }
                 }
 
@@ -615,6 +636,65 @@ mod tests {
                 store_timestamp: 0,
             })
         );
+    }
+
+    #[test]
+    fn start_without_mapped_file_queue_returns_without_panicking() {
+        let temp_dir = tempdir().unwrap();
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mut manager = DefaultFlushManager::new(
+            Arc::new(MessageStoreConfig::default()),
+            mapped_file_queue,
+            store_checkpoint,
+        );
+        manager.mapped_file_queue = None;
+
+        manager.start();
+    }
+
+    #[tokio::test]
+    async fn handle_disk_flush_returns_timeout_when_sync_service_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mut manager = DefaultFlushManager::new(
+            Arc::new(MessageStoreConfig {
+                flush_disk_type: FlushDiskType::SyncFlush,
+                ..MessageStoreConfig::default()
+            }),
+            mapped_file_queue,
+            store_checkpoint,
+        );
+        manager.group_commit_service = None;
+
+        let status = manager
+            .handle_disk_flush(&AppendMessageResult::default(), &MessageExtBrokerInner::default())
+            .await;
+
+        assert_eq!(status, PutMessageStatus::FlushDiskTimeout);
+    }
+
+    #[tokio::test]
+    async fn handle_disk_flush_returns_timeout_when_async_service_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store_checkpoint = Arc::new(StoreCheckpoint::new(temp_dir.path().join("checkpoint")).unwrap());
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
+        let mut manager = DefaultFlushManager::new(
+            Arc::new(MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            }),
+            mapped_file_queue,
+            store_checkpoint,
+        );
+        manager.flush_real_time_service = None;
+
+        let status = manager
+            .handle_disk_flush(&AppendMessageResult::default(), &MessageExtBrokerInner::default())
+            .await;
+
+        assert_eq!(status, PutMessageStatus::FlushDiskTimeout);
     }
 
     #[tokio::test]

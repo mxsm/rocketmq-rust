@@ -38,6 +38,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::RwLock as StdRwLock;
 use std::thread;
 use std::time::Duration;
@@ -312,6 +313,7 @@ pub struct LocalFileMessageStore {
     flush_consume_queue_service: FlushConsumeQueueService,
     scheduled_task_shutdown: CancellationToken,
     scheduled_task_handles: Vec<JoinHandle<()>>,
+    ha_update_master_handles: Arc<StdMutex<Vec<JoinHandle<()>>>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
 }
@@ -387,10 +389,34 @@ impl LocalFileMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {
+        Self::try_new(
+            message_store_config,
+            broker_config,
+            topic_config_table,
+            broker_stats_manager,
+            notify_message_arrive_in_batch,
+        )
+        .unwrap_or_else(|error| panic!("failed to create local file message store: {error}"))
+    }
+
+    pub fn try_new(
+        message_store_config: Arc<MessageStoreConfig>,
+        broker_config: Arc<BrokerConfig>,
+        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
+        broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+        notify_message_arrive_in_batch: bool,
+    ) -> Result<Self, StoreError> {
         let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
         let running_flags = Arc::new(RunningFlags::new());
         let store_checkpoint = Arc::new(
-            StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).unwrap(),
+            StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
+                |error| {
+                    StoreError::General(format!(
+                        "failed to create store checkpoint under {}: {error}",
+                        message_store_config.store_path_root_dir
+                    ))
+                },
+            )?,
         );
         let index_service = IndexService::new(
             message_store_config.clone(),
@@ -428,7 +454,7 @@ impl LocalFileMessageStore {
             message_store_config.mapped_file_size_commit_log,
         );
         let compaction_service = message_store_config.enable_compaction.then(CompactionService::new);
-        Self {
+        Ok(Self {
             message_store_config: message_store_config.clone(),
             broker_config,
             put_message_hook_list: vec![],
@@ -492,9 +518,10 @@ impl LocalFileMessageStore {
             ),
             scheduled_task_shutdown: CancellationToken::new(),
             scheduled_task_handles: Vec::new(),
+            ha_update_master_handles: Arc::new(StdMutex::new(Vec::new())),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
-        }
+        })
     }
 
     pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
@@ -709,11 +736,9 @@ impl LocalFileMessageStore {
         let mut consume_queue_store = self.consume_queue_store.clone();
         let mut delete_count = 0;
         for topic in delete_topics {
-            let queue_table = consume_queue_store.find_consume_queue_map(topic);
-            if queue_table.is_none() {
+            let Some(queue_table) = consume_queue_store.find_consume_queue_map(topic) else {
                 continue;
-            }
-            let queue_table = queue_table.unwrap();
+            };
             for (queue_id, consume_queue) in queue_table {
                 consume_queue_store.destroy_queue(consume_queue.as_ref().deref());
                 consume_queue_store.remove_topic_queue_table(topic, queue_id);
@@ -880,14 +905,21 @@ impl LocalFileMessageStore {
             .unwrap_or_else(|_| "true".to_string())
             .parse::<bool>()
             .unwrap_or(true);
+        let message_store = match self.message_store_arc_or_error("normal recovery") {
+            Ok(message_store) => message_store,
+            Err(error) => {
+                error!("skip normal recovery: {error}");
+                return;
+            }
+        };
 
         if use_optimized {
             self.commit_log
-                .recover_normally_optimized(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
+                .recover_normally_optimized(max_phy_offset_of_consume_queue, message_store)
                 .await;
         } else {
             self.commit_log
-                .recover_normally(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
+                .recover_normally(max_phy_offset_of_consume_queue, message_store)
                 .await;
         }
     }
@@ -898,14 +930,21 @@ impl LocalFileMessageStore {
             .unwrap_or_else(|_| "true".to_string())
             .parse::<bool>()
             .unwrap_or(true);
+        let message_store = match self.message_store_arc_or_error("abnormal recovery") {
+            Ok(message_store) => message_store,
+            Err(error) => {
+                error!("skip abnormal recovery: {error}");
+                return;
+            }
+        };
 
         if use_optimized {
             self.commit_log
-                .recover_abnormally_optimized(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
+                .recover_abnormally_optimized(max_phy_offset_of_consume_queue, message_store)
                 .await;
         } else {
             self.commit_log
-                .recover_abnormally(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
+                .recover_abnormally(max_phy_offset_of_consume_queue, message_store)
                 .await;
         }
     }
@@ -962,6 +1001,18 @@ impl LocalFileMessageStore {
             return;
         }
 
+        let message_store = match self.message_store_arc_or_error("starting scheduled tasks") {
+            Ok(message_store) => message_store,
+            Err(error) => {
+                error!("scheduled store tasks not started: {error}");
+                return;
+            }
+        };
+        let Some(store_checkpoint_arc) = self.store_checkpoint.clone() else {
+            error!("scheduled store tasks not started: store checkpoint is not initialized");
+            return;
+        };
+
         self.scheduled_task_shutdown = CancellationToken::new();
 
         // clean files  Periodically
@@ -983,7 +1034,6 @@ impl LocalFileMessageStore {
             }
         }));
 
-        let message_store = self.message_store_arc.clone().unwrap();
         let shutdown_token = self.scheduled_task_shutdown.clone();
         self.scheduled_task_handles.push(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
@@ -1001,7 +1051,6 @@ impl LocalFileMessageStore {
         }));
 
         // store check point flush
-        let store_checkpoint_arc = self.store_checkpoint.clone().unwrap();
         let shutdown_token = self.scheduled_task_shutdown.clone();
         self.scheduled_task_handles.push(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -1049,6 +1098,29 @@ impl LocalFileMessageStore {
             if let Err(error) = handle.await {
                 if !error.is_cancelled() {
                     error!("scheduled store task failed during shutdown: {error}");
+                }
+            }
+        }
+    }
+
+    async fn shutdown_ha_update_master_tasks(&self) {
+        let handles = match self.ha_update_master_handles.lock() {
+            Ok(mut handles) => handles.drain(..).collect::<Vec<_>>(),
+            Err(error) => {
+                error!("failed to drain HA master address update tasks during shutdown: {error}");
+                return;
+            }
+        };
+
+        for handle in handles {
+            match tokio::time::timeout(Duration::from_secs(3), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if error.is_cancelled() => {}
+                Ok(Err(error)) => {
+                    error!("HA master address update task failed during shutdown: {error}");
+                }
+                Err(_) => {
+                    warn!("Timed out waiting for HA master address update task to stop");
                 }
             }
         }
@@ -1233,7 +1305,10 @@ impl MessageStore for LocalFileMessageStore {
         }
 
         if result {
-            let checkpoint = self.store_checkpoint.as_ref().unwrap();
+            let Some(checkpoint) = self.store_checkpoint.as_ref() else {
+                error!("message store checkpoint is not initialized");
+                return false;
+            };
             self.master_flushed_offset = Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
             self.set_confirm_offset(checkpoint.confirm_phy_offset() as i64);
             result = self.index_service.load(last_exit_ok);
@@ -1391,6 +1466,7 @@ impl MessageStore for LocalFileMessageStore {
             }
 
             if let Some(ha_service) = self.ha_service.as_ref() {
+                self.shutdown_ha_update_master_tasks().await;
                 ha_service.shutdown().await;
             }
 
@@ -1608,7 +1684,7 @@ impl MessageStore for LocalFileMessageStore {
         let mut next_begin_offset = offset;
         let mut min_offset = 0;
         let mut max_offset = 0;
-        let mut get_result = Some(GetMessageResult::new());
+        let mut get_result = GetMessageResult::new();
         let max_offset_py = self.commit_log.get_max_offset();
         let consume_queue = self.find_consume_queue(topic, queue_id);
         if let Some(consume_queue) = consume_queue {
@@ -1643,7 +1719,7 @@ impl MessageStore for LocalFileMessageStore {
                 status = GetMessageStatus::NoMatchedMessage;
                 let mut max_phy_offset_pulling = 0;
                 let mut cq_file_num = 0;
-                while get_result.as_ref().unwrap().buffer_total_size() <= 0
+                while get_result.buffer_total_size() <= 0
                     && next_begin_offset < max_offset
                     && cq_file_num < self.message_store_config.travel_cq_file_num_when_get_message
                 {
@@ -1664,7 +1740,9 @@ impl MessageStore for LocalFileMessageStore {
                         break;
                     }
                     let mut next_phy_file_start_offset = i64::MIN;
-                    let mut buffer_consume_queue = buffer_consume_queue.unwrap();
+                    let Some(mut buffer_consume_queue) = buffer_consume_queue else {
+                        break;
+                    };
                     loop {
                         if next_begin_offset >= max_offset {
                             break;
@@ -1679,7 +1757,7 @@ impl MessageStore for LocalFileMessageStore {
                             {
                                 break;
                             }
-                            let get_result_ref = get_result.as_mut().unwrap();
+                            let get_result_ref = &mut get_result;
                             if is_the_batch_full(
                                 size_py,
                                 cq_unit.batch_num as i32,
@@ -1713,39 +1791,33 @@ impl MessageStore for LocalFileMessageStore {
                                 }
                             }
 
-                            let select_result = self.commit_log.get_message(offset_py, size_py);
-                            if select_result.is_none() {
+                            let Some(select_result) = self.commit_log.get_message(offset_py, size_py) else {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::MessageWasRemoving;
                                 }
                                 next_phy_file_start_offset = self.commit_log.roll_next_file(offset_py);
                                 continue;
-                            }
+                            };
                             if self.message_store_config.cold_data_flow_control_enable
                                 && !is_sys_consumer_group_for_no_cold_read_limit(group)
-                                && !select_result.as_ref().unwrap().is_in_cache
+                                && !select_result.is_in_cache
                             {
                                 get_result_ref.set_cold_data_sum(get_result_ref.cold_data_sum() + size_py as i64);
                             }
 
-                            if message_filter.is_some()
-                                && !message_filter
-                                    .as_ref()
-                                    .as_ref()
-                                    .unwrap()
-                                    .is_matched_by_commit_log(Some(select_result.as_ref().unwrap().get_buffer()), None)
-                            {
-                                if get_result_ref.buffer_total_size() == 0 {
-                                    status = GetMessageStatus::NoMatchedMessage;
+                            if let Some(filter) = message_filter.as_ref() {
+                                if !filter.is_matched_by_commit_log(Some(select_result.get_buffer()), None) {
+                                    if get_result_ref.buffer_total_size() == 0 {
+                                        status = GetMessageStatus::NoMatchedMessage;
+                                    }
+                                    continue;
                                 }
-                                drop(select_result);
-                                continue;
                             }
                             self.store_stats_service
                                 .get_message_transferred_msg_count()
                                 .fetch_add(cq_unit.batch_num as usize, Ordering::Relaxed);
-                            get_result.as_mut().unwrap().add_message(
-                                select_result.unwrap(),
+                            get_result.add_message(
+                                select_result,
                                 cq_unit.queue_offset as u64,
                                 cq_unit.batch_num as i32,
                             );
@@ -1756,19 +1828,17 @@ impl MessageStore for LocalFileMessageStore {
                 }
                 if disk_fall_recorded {
                     let fall_behind = max_offset_py - max_phy_offset_pulling;
-                    self.broker_stats_manager
-                        .as_ref()
-                        .unwrap()
-                        .record_disk_fall_behind_size(group, topic, queue_id, fall_behind);
+                    if let Some(broker_stats_manager) = self.broker_stats_manager.as_ref() {
+                        broker_stats_manager.record_disk_fall_behind_size(group, topic, queue_id, fall_behind);
+                    } else {
+                        warn!("disk fall behind recording is enabled but BrokerStatsManager is not initialized");
+                    }
                 }
                 let diff = max_offset_py - max_phy_offset_pulling;
                 let memory = ((*TOTAL_PHYSICAL_MEMORY_SIZE as f64)
                     * (self.message_store_config.access_message_in_memory_max_ratio as f64 / 100.0))
                     as i64;
-                get_result
-                    .as_mut()
-                    .unwrap()
-                    .set_suggest_pulling_from_slave(diff > memory);
+                get_result.set_suggest_pulling_from_slave(diff > memory);
             }
         } else {
             status = GetMessageStatus::NoMatchedLogicQueue;
@@ -1786,16 +1856,13 @@ impl MessageStore for LocalFileMessageStore {
         }
         let elapsed_time = begin_time.elapsed().as_millis() as u64;
         self.store_stats_service.set_get_message_entire_time_max(elapsed_time);
-        if get_result.is_none() {
-            get_result = Some(GetMessageResult::new_result_size(0));
-        }
-        let result = get_result.as_mut().unwrap();
+        let result = &mut get_result;
         result.set_status(Some(status));
         result.set_next_begin_offset(next_begin_offset);
         result.set_max_offset(max_offset);
         result.set_min_offset(min_offset);
 
-        get_result
+        Some(get_result)
     }
 
     /*    async fn get_message_with_size_limit_async(
@@ -2038,9 +2105,14 @@ impl MessageStore for LocalFileMessageStore {
         }*/
 
         let mut size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 8;
-        let result = self.broker_config.broker_ip1.to_string().parse::<IpAddr>().unwrap();
-        if result.is_ipv6() {
-            size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 20;
+        match self.broker_config.broker_ip1.to_string().parse::<IpAddr>() {
+            Ok(result) if result.is_ipv6() => {
+                size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 20;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!("failed to parse broker_ip1 when computing earliest message time: {error}");
+            }
         }
         self.commit_log.pickup_store_timestamp(min_phy_offset, size as i32)
     }
@@ -2152,11 +2224,13 @@ impl MessageStore for LocalFileMessageStore {
             query_message_result.index_last_update_timestamp = query_offset_result.get_index_last_update_timestamp();
             query_message_result.index_last_update_phyoffset = query_offset_result.get_index_last_update_phyoffset();
             let phy_offsets = query_offset_result.get_phy_offsets();
-            for m in 0..phy_offsets.len() {
-                let offset = *phy_offsets.get(m).unwrap();
-                let msg = self.look_message_by_offset(offset);
+            for (m, offset) in phy_offsets.iter().copied().enumerate() {
                 if m == 0 {
-                    last_query_msg_time = msg.as_ref().unwrap().store_timestamp;
+                    if let Some(msg) = self.look_message_by_offset(offset) {
+                        last_query_msg_time = msg.store_timestamp;
+                    } else {
+                        warn!("index query returned unreadable message offset {offset}");
+                    }
                 }
                 let result = self.commit_log.get_data_with_option(offset, false);
                 if let Some(sbr) = result {
@@ -2194,9 +2268,23 @@ impl MessageStore for LocalFileMessageStore {
     fn update_master_address(&self, new_addr: &CheetahString) {
         if let Some(ha_service) = self.ha_service.as_ref().cloned() {
             let new_addr = new_addr.clone();
-            tokio::spawn(async move {
+            let Ok(runtime_handle) = tokio::runtime::Handle::try_current() else {
+                error!("failed to update HA master address: no Tokio runtime is available");
+                return;
+            };
+            let handle = runtime_handle.spawn(async move {
                 ha_service.update_master_address(new_addr.as_str()).await;
             });
+            match self.ha_update_master_handles.lock() {
+                Ok(mut handles) => {
+                    handles.retain(|handle| !handle.is_finished());
+                    handles.push(handle);
+                }
+                Err(error) => {
+                    error!("failed to track HA master address update task: {error}");
+                    handle.abort();
+                }
+            }
         }
     }
 
@@ -2250,21 +2338,18 @@ impl MessageStore for LocalFileMessageStore {
     ) -> bool {
         let consume_queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
         let first_cqitem = consume_queue.get(consume_offset);
-        if first_cqitem.is_none() {
+        let Some(cq) = first_cqitem.as_ref() else {
             return false;
-        }
-        let cq = first_cqitem.as_ref().unwrap();
+        };
         let start_offset_py = cq.pos;
         if batch_size <= 1 {
             let size = cq.size;
             return self.check_in_mem_by_commit_offset(start_offset_py, size);
         }
-        let last_cqitem = consume_queue.get(consume_offset + batch_size as i64);
-        if last_cqitem.is_none() {
+        let Some(last_cqitem) = consume_queue.get(consume_offset + batch_size as i64) else {
             let size = cq.size;
             return self.check_in_mem_by_commit_offset(start_offset_py, size);
-        }
-        let last_cqitem = last_cqitem.as_ref().unwrap();
+        };
         let end_offset_py = last_cqitem.pos;
         let size = (end_offset_py - start_offset_py) + last_cqitem.size as i64;
         self.check_in_mem_by_commit_offset(start_offset_py, size as i32)
@@ -2466,20 +2551,26 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
-        let guard = self
-            .master_store_in_process
-            .read()
-            .expect("master_store_in_process lock poisoned");
+        let guard = match self.master_store_in_process.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                error!("master_store_in_process lock poisoned: {error}");
+                return None;
+            }
+        };
         let erased = guard.as_ref()?.clone();
         let boxed_master_store = erased.downcast::<Arc<M>>().ok()?;
         Some(Arc::clone(boxed_master_store.as_ref()))
     }
 
     fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
-        let mut guard = self
-            .master_store_in_process
-            .write()
-            .expect("master_store_in_process lock poisoned");
+        let mut guard = match self.master_store_in_process.write() {
+            Ok(guard) => guard,
+            Err(error) => {
+                error!("master_store_in_process lock poisoned: {error}");
+                return;
+            }
+        };
         *guard = Some(Arc::new(master_store_in_process) as Arc<dyn Any + Send + Sync>);
     }
 
@@ -2635,18 +2726,24 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn set_send_message_back_hook(&self, send_message_back_hook: Arc<dyn SendMessageBackHook>) {
-        let mut guard = self
-            .send_message_back_hook
-            .write()
-            .expect("send_message_back_hook lock poisoned");
+        let mut guard = match self.send_message_back_hook.write() {
+            Ok(guard) => guard,
+            Err(error) => {
+                error!("send_message_back_hook lock poisoned: {error}");
+                return;
+            }
+        };
         *guard = Some(send_message_back_hook);
     }
 
     fn get_send_message_back_hook(&self) -> Option<Arc<dyn SendMessageBackHook>> {
-        self.send_message_back_hook
-            .read()
-            .expect("send_message_back_hook lock poisoned")
-            .clone()
+        match self.send_message_back_hook.read() {
+            Ok(guard) => guard.clone(),
+            Err(error) => {
+                error!("send_message_back_hook lock poisoned: {error}");
+                None
+            }
+        }
     }
 
     fn get_last_file_from_offset(&self) -> i64 {
@@ -2843,9 +2940,13 @@ impl ReputMessageService {
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
         self.shutdown_token = CancellationToken::new();
+        let reput_from_offset = self
+            .reput_from_offset
+            .get_or_insert_with(|| Arc::new(AtomicI64::new(0)))
+            .clone();
 
         let mut inner = ReputMessageServiceInner {
-            reput_from_offset: self.reput_from_offset.clone().unwrap(),
+            reput_from_offset,
             commit_log,
             message_store_config,
             dispatcher: dispatcher.clone(),
@@ -2974,8 +3075,12 @@ impl ReputMessageService {
             self.reput_from_offset = Some(Arc::new(AtomicI64::new(0)));
         }
         if self.inner.is_none() {
+            let reput_from_offset = self
+                .reput_from_offset
+                .get_or_insert_with(|| Arc::new(AtomicI64::new(0)))
+                .clone();
             self.inner = Some(ReputMessageServiceInner {
-                reput_from_offset: self.reput_from_offset.clone().unwrap(),
+                reput_from_offset,
                 commit_log,
                 message_store_config,
                 dispatcher,
@@ -3079,11 +3184,9 @@ impl ReputMessageServiceInner {
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
 
         while do_next && self.is_commit_log_available() {
-            let result = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire));
-            if result.is_none() {
+            let Some(mut result) = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire)) else {
                 break;
-            }
-            let mut result = result.unwrap();
+            };
             self.reput_from_offset
                 .store(result.start_offset as i64, Ordering::Release);
             let mut read_size = 0i32;
@@ -3091,8 +3194,12 @@ impl ReputMessageServiceInner {
                 && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
                 && do_next
             {
+                let Some(bytes) = result.bytes.as_mut() else {
+                    warn!("commitlog data is missing bytes during reput dispatch");
+                    break;
+                };
                 let dispatch_request = commit_log::check_message_and_return_size(
-                    result.bytes.as_mut().unwrap(),
+                    bytes,
                     false,
                     false,
                     false,
@@ -3233,9 +3340,9 @@ impl ReputMessageServiceInner {
 
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
 
-        let result = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire));
-        result.as_ref()?;
-        let mut result = result.unwrap();
+        let mut result = self
+            .commit_log
+            .get_data(self.reput_from_offset.load(Ordering::Acquire))?;
         self.reput_from_offset
             .store(result.start_offset as i64, Ordering::Release);
         let mut read_size = 0i32;
@@ -3244,8 +3351,12 @@ impl ReputMessageServiceInner {
             && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
             && dispatch_batch.len() < 64
         {
+            let Some(bytes) = result.bytes.as_mut() else {
+                warn!("commitlog data is missing bytes during batch reput dispatch");
+                break;
+            };
             let dispatch_request = commit_log::check_message_and_return_size(
-                result.bytes.as_mut().unwrap(),
+                bytes,
                 false,
                 false,
                 false,
@@ -3672,37 +3783,42 @@ impl FlushConsumeQueueService {
         let consume_queue_store = self.consume_queue_store.clone();
         let store_checkpoint = self.store_checkpoint.clone();
 
-        *worker_handle = Some(
-            thread::Builder::new()
-                .name("flush-consume-queue".to_string())
-                .spawn(move || {
-                    let interval = message_store_config.flush_interval_consume_queue.max(1) as u64;
-                    let thorough_interval = message_store_config.flush_consume_queue_thorough_interval as u64;
-                    let default_least_pages = message_store_config.flush_consume_queue_least_pages as i32;
-                    let mut last_thorough_flush_timestamp = current_millis();
+        match thread::Builder::new()
+            .name("flush-consume-queue".to_string())
+            .spawn(move || {
+                let interval = message_store_config.flush_interval_consume_queue.max(1) as u64;
+                let thorough_interval = message_store_config.flush_consume_queue_thorough_interval as u64;
+                let default_least_pages = message_store_config.flush_consume_queue_least_pages as i32;
+                let mut last_thorough_flush_timestamp = current_millis();
 
-                    loop {
-                        let now = current_millis();
-                        let flush_least_pages =
-                            if thorough_interval == 0 || now >= last_thorough_flush_timestamp + thorough_interval {
-                                last_thorough_flush_timestamp = now;
-                                0
-                            } else {
-                                default_least_pages
-                            };
+                loop {
+                    let now = current_millis();
+                    let flush_least_pages =
+                        if thorough_interval == 0 || now >= last_thorough_flush_timestamp + thorough_interval {
+                            last_thorough_flush_timestamp = now;
+                            0
+                        } else {
+                            default_least_pages
+                        };
 
-                        Self::flush_once(&consume_queue_store, &store_checkpoint, flush_least_pages);
+                    Self::flush_once(&consume_queue_store, &store_checkpoint, flush_least_pages);
 
-                        match shutdown_rx.recv_timeout(Duration::from_millis(interval)) {
-                            Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        }
+                    match shutdown_rx.recv_timeout(Duration::from_millis(interval)) {
+                        Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
+                }
 
-                    Self::flush_once(&consume_queue_store, &store_checkpoint, 0);
-                })
-                .unwrap(),
-        );
+                Self::flush_once(&consume_queue_store, &store_checkpoint, 0);
+            }) {
+            Ok(handle) => {
+                *worker_handle = Some(handle);
+            }
+            Err(error) => {
+                error!("failed to start flush consume queue service thread: {error}");
+                let _ = self.shutdown_tx.lock().take();
+            }
+        }
     }
 
     fn shutdown(&self) {
@@ -3719,26 +3835,22 @@ impl FlushConsumeQueueService {
 }
 
 pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
-    let mut time_unit_table = HashMap::new();
-    time_unit_table.insert("s", 1000);
-    time_unit_table.insert("m", 1000 * 60);
-    time_unit_table.insert("h", 1000 * 60 * 60);
-    time_unit_table.insert("d", 1000 * 60 * 60 * 24);
-
     let mut delay_level_table = BTreeMap::new();
 
     let level_array: Vec<&str> = level_string.split(' ').collect();
     let mut max_delay_level = 0;
 
     for (i, value) in level_array.iter().enumerate() {
-        let ch = value.chars().last().unwrap().to_string();
-        let tu = time_unit_table
-            .get(&ch.as_str())
-            .ok_or(format!("Unknown time unit: {ch}"));
-        if tu.is_err() {
+        let Some(ch) = value.chars().last() else {
             continue;
-        }
-        let tu = *tu.unwrap();
+        };
+        let tu = match ch {
+            's' => 1000,
+            'm' => 1000 * 60,
+            'h' => 1000 * 60 * 60,
+            'd' => 1000 * 60 * 60 * 24,
+            _ => continue,
+        };
 
         let level = i as i32 + 1;
         if level > max_delay_level {
@@ -3746,11 +3858,9 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
         }
 
         let num_str = &value[0..value.len() - 1];
-        let num = num_str.parse::<i64>();
-        if num.is_err() {
+        let Ok(num) = num_str.parse::<i64>() else {
             continue;
-        }
-        let num = num.unwrap();
+        };
         let delay_time_millis = tu * num;
         delay_level_table.insert(level, delay_time_millis);
     }
@@ -3857,6 +3967,29 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+            ..MessageStoreConfig::default()
+        };
+        ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(message_store_config),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ))
+    }
+
+    #[tokio::test]
+    async fn recovery_without_message_store_arc_returns_without_panicking() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_unwired_test_store(&temp_dir);
+
+        store.recover_normally(0).await;
+        store.recover_abnormally(0).await;
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]

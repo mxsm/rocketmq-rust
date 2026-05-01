@@ -31,9 +31,13 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
@@ -274,17 +278,17 @@ impl HAService for DefaultHAService {
     async fn start(&mut self) -> HAResult<()> {
         self.accept_socket_service
             .as_mut()
-            .expect("AcceptSocketService not initialized")
+            .ok_or_else(|| HAError::Service("AcceptSocketService not initialized".to_string()))?
             .start()
             .await?;
         self.group_transfer_service
             .as_mut()
-            .expect("GroupTransferService not initialized")
+            .ok_or_else(|| HAError::Service("GroupTransferService not initialized".to_string()))?
             .start()
             .await?;
         self.ha_connection_state_notification_service
             .as_mut()
-            .expect("HAConnectionStateNotificationService not initialized")
+            .ok_or_else(|| HAError::Service("HAConnectionStateNotificationService not initialized".to_string()))?
             .start()
             .await?;
         if let Some(ref mut ha_client) = self.ha_client {
@@ -301,7 +305,7 @@ impl HAService for DefaultHAService {
         }
 
         if let Some(ref accept_socket_service) = self.accept_socket_service {
-            accept_socket_service.shutdown();
+            accept_socket_service.shutdown().await;
         }
         self.destroy_connections().await;
 
@@ -451,8 +455,9 @@ struct AcceptSocketService {
     socket_address_listen: SocketAddr,
     message_store_config: Arc<MessageStoreConfig>,
     is_auto_switch: bool,
-    shutdown_notify: Arc<Notify>,
+    shutdown_token: CancellationToken,
     default_ha_service: ArcMut<DefaultHAService>,
+    worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl AcceptSocketService {
@@ -467,8 +472,9 @@ impl AcceptSocketService {
             socket_address_listen,
             message_store_config,
             is_auto_switch,
-            shutdown_notify: Arc::new(Notify::new()),
+            shutdown_token: CancellationToken::new(),
             default_ha_service,
+            worker_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -490,19 +496,26 @@ impl AcceptSocketService {
     }
 
     pub async fn start(&mut self) -> HAResult<()> {
+        let mut worker_handle = self.worker_handle.lock().await;
+        if worker_handle.is_some() {
+            warn!("AcceptSocketService is already started");
+            return Ok(());
+        }
+
         let listener = TcpListener::bind(self.socket_address_listen)
             .await
             .map_err(HAError::Io)?;
-        let shutdown_notify = self.shutdown_notify.clone();
+        self.shutdown_token = CancellationToken::new();
+        let shutdown_token = self.shutdown_token.clone();
         let is_auto_switch = self.is_auto_switch;
         let message_store_config = self.message_store_config.clone();
         let default_ha_service = self.default_ha_service.clone();
-        tokio::spawn(async move {
+        *worker_handle = Some(tokio::spawn(async move {
             let message_store_config = message_store_config;
             let default_ha_service = default_ha_service;
             loop {
                 select! {
-                    _ = shutdown_notify.notified() => {
+                    _ = shutdown_token.cancelled() => {
                         info!("AcceptSocketService is shutting down");
                         break;
                     }
@@ -543,13 +556,26 @@ impl AcceptSocketService {
                     }
                 }
             }
-        });
+        }));
         Ok(())
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         info!("Shutting down AcceptSocketService");
-        self.shutdown_notify.notify_waiters();
+        self.shutdown_token.cancel();
+        let worker_handle = self.worker_handle.lock().await.take();
+        if let Some(handle) = worker_handle {
+            match timeout(Duration::from_secs(3), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if error.is_cancelled() => {}
+                Ok(Err(error)) => {
+                    error!("AcceptSocketService failed during shutdown: {error}");
+                }
+                Err(_) => {
+                    warn!("Timed out waiting for AcceptSocketService to stop");
+                }
+            }
+        }
     }
 }
 
@@ -616,6 +642,46 @@ mod tests {
         let client = TcpStream::connect(listen_addr).await.expect("connect loopback client");
         let (server_stream, remote_addr) = listener.accept().await.expect("accept loopback client");
         (server_stream, remote_addr, client)
+    }
+
+    #[tokio::test]
+    async fn start_without_init_returns_error() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-no-init-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, false);
+        let mut service = DefaultHAService::new(store);
+
+        let error = service.start().await.expect_err("start should fail before init");
+
+        assert!(matches!(error, HAError::Service(message) if message.contains("AcceptSocketService")));
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn accept_socket_service_shutdown_joins_worker() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-shutdown-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, true);
+        let mut service = ArcMut::new(DefaultHAService::new(store.clone()));
+        let auto_switch_service = ArcMut::new(AutoSwitchHAService::new(store));
+
+        DefaultHAService::init(
+            &mut service,
+            GeneralHAService::new_with_auto_switch_ha_service(auto_switch_service),
+        )
+        .expect("init default ha service");
+
+        let accept_service = service
+            .accept_socket_service
+            .as_mut()
+            .expect("accept socket service should be initialized");
+        accept_service.socket_address_listen = SocketAddr::from(([127u8, 0u8, 0u8, 1u8], 0));
+
+        accept_service.start().await.expect("start accept socket service");
+        assert!(accept_service.worker_handle.lock().await.is_some());
+
+        accept_service.shutdown().await;
+
+        assert!(accept_service.worker_handle.lock().await.is_none());
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[test]

@@ -514,13 +514,19 @@ impl BrokerRuntime {
         let mut flag = true;
         if self.inner.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let mut message_store = ArcMut::new(LocalFileMessageStore::new(
+            let mut message_store = match LocalFileMessageStore::try_new(
                 self.inner.message_store_config.clone(),
                 self.inner.broker_config.clone(),
                 self.inner.topic_config_manager().topic_config_table(),
                 self.inner.broker_stats_manager.clone(),
                 false,
-            ));
+            ) {
+                Ok(message_store) => ArcMut::new(message_store),
+                Err(error) => {
+                    error!("Initialize message store failed: {error}");
+                    return false;
+                }
+            };
             let message_store_clone = message_store.clone();
             message_store.set_message_store_arc(message_store_clone);
             self.inner.timer_message_store = message_store.get_timer_message_store().cloned();
