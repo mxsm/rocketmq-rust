@@ -450,6 +450,20 @@ impl LocalFileMessageStore {
             dispatcher_vec: vec![build_consume_queue, build_index],
         });
 
+        let transient_store_pool = TransientStorePool::new(
+            message_store_config.transient_store_pool_size,
+            message_store_config.mapped_file_size_commit_log,
+        );
+        let transient_store_pool_enable = message_store_config.transient_store_pool_enable
+            && (broker_config.enable_controller_mode || message_store_config.broker_role != BrokerRole::Slave);
+        let allocate_transient_store_pool = transient_store_pool_enable.then(|| Arc::new(transient_store_pool.clone()));
+        let allocate_mapped_file_service = Arc::new(AllocateMappedFileService::new_with_message_store_config(
+            allocate_transient_store_pool,
+            transient_store_pool_enable,
+            message_store_config.fast_fail_if_no_buffer_in_store_pool,
+            message_store_config.as_ref(),
+        ));
+
         let commit_log = ArcMut::new(CommitLog::new(
             message_store_config.clone(),
             broker_config.clone(),
@@ -457,6 +471,7 @@ impl LocalFileMessageStore {
             store_checkpoint.clone(),
             topic_config_table.clone(),
             consume_queue_store.clone(),
+            (*allocate_mapped_file_service).clone(),
         ));
         let compaction_store = Arc::new(CompactionStore::new());
         if message_store_config.enable_compaction {
@@ -473,10 +488,6 @@ impl LocalFileMessageStore {
         ensure_dir_ok(Self::get_store_path_logic(&message_store_config).as_str());
 
         let identity = broker_config.broker_identity.clone();
-        let transient_store_pool = TransientStorePool::new(
-            message_store_config.transient_store_pool_size,
-            message_store_config.mapped_file_size_commit_log,
-        );
         let compaction_service = message_store_config.enable_compaction.then(|| {
             CompactionService::new(
                 compaction_store.clone(),
@@ -495,7 +506,7 @@ impl LocalFileMessageStore {
             master_flushed_offset: Arc::new(AtomicI64::new(-1)),
             alive_replica_num_in_group: Arc::new(AtomicI32::new(1)),
             index_service: index_service.clone(),
-            allocate_mapped_file_service: Arc::new(AllocateMappedFileService::new()),
+            allocate_mapped_file_service,
             consume_queue_store: consume_queue_store.clone(),
             dispatcher,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
@@ -4026,6 +4037,14 @@ mod tests {
         let store_clone = store.clone();
         store.set_message_store_arc(store_clone);
         store
+    }
+
+    #[test]
+    fn commitlog_uses_allocate_mapped_file_service_for_file_creation() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+
+        assert!(store.commit_log.has_allocate_mapped_file_service());
     }
 
     fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {

@@ -54,6 +54,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::append_message_callback::DefaultAppendMessageCallback;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
@@ -195,11 +196,16 @@ impl CommitLog {
         store_checkpoint: Arc<StoreCheckpoint>,
         topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
+        allocate_mapped_file_service: AllocateMappedFileService,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(store_path, mapped_file_size as u64, None));
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
+            store_path,
+            mapped_file_size as u64,
+            Some(allocate_mapped_file_service),
+        ));
         Self {
             mapped_file_queue: mapped_file_queue.clone(),
             message_store_config: message_store_config.clone(),
@@ -225,6 +231,11 @@ impl CommitLog {
             begin_time_in_lock: Arc::new(AtomicU64::new(0)),
             cold_data_check_service: Arc::new(Default::default()),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_allocate_mapped_file_service(&self) -> bool {
+        self.mapped_file_queue.allocate_mapped_file_service.is_some()
     }
 }
 

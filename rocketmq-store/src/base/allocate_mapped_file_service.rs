@@ -33,11 +33,45 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::transient_store_pool::TransientStorePool;
+use crate::config::flush_disk_type::FlushDiskType;
+use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Copy)]
+struct WarmMappedFileConfig {
+    enabled: bool,
+    flush_disk_type: FlushDiskType,
+    mapped_file_size_commit_log: usize,
+    flush_least_pages_when_warm_mapped_file: usize,
+}
+
+impl WarmMappedFileConfig {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: usize::MAX,
+            flush_least_pages_when_warm_mapped_file: 0,
+        }
+    }
+
+    fn from_message_store_config(message_store_config: &MessageStoreConfig) -> Self {
+        Self {
+            enabled: message_store_config.warm_mapped_file_enable,
+            flush_disk_type: message_store_config.flush_disk_type,
+            mapped_file_size_commit_log: message_store_config.mapped_file_size_commit_log,
+            flush_least_pages_when_warm_mapped_file: message_store_config.flush_least_pages_when_warm_mapped_file,
+        }
+    }
+
+    fn should_warm(self, file_size: u64) -> bool {
+        self.enabled && file_size as usize >= self.mapped_file_size_commit_log
+    }
+}
 
 /// Background service for asynchronous MappedFile pre-allocation
 ///
@@ -76,6 +110,9 @@ pub struct AllocateMappedFileService {
 
     /// Whether to fast fail when no buffer available in pool
     fast_fail_if_no_buffer: bool,
+
+    /// CommitLog warm-up behavior copied from MessageStoreConfig.
+    warm_mapped_file_config: WarmMappedFileConfig,
 }
 
 impl Clone for AllocateMappedFileService {
@@ -91,6 +128,7 @@ impl Clone for AllocateMappedFileService {
             transient_store_pool: self.transient_store_pool.clone(),
             transient_store_pool_enable: self.transient_store_pool_enable,
             fast_fail_if_no_buffer: self.fast_fail_if_no_buffer,
+            warm_mapped_file_config: self.warm_mapped_file_config,
         }
     }
 }
@@ -131,13 +169,38 @@ impl AllocateMappedFileService {
             transient_store_pool,
             transient_store_pool_enable,
             fast_fail_if_no_buffer,
+            warm_mapped_file_config: WarmMappedFileConfig::disabled(),
         }
+    }
+
+    pub fn new_with_message_store_config(
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        transient_store_pool_enable: bool,
+        fast_fail_if_no_buffer: bool,
+        message_store_config: &MessageStoreConfig,
+    ) -> Self {
+        let mut service = Self::new_with_config(
+            transient_store_pool,
+            transient_store_pool_enable,
+            fast_fail_if_no_buffer,
+        );
+        service.warm_mapped_file_config = WarmMappedFileConfig::from_message_store_config(message_store_config);
+        service
     }
 
     /// Create a new AllocateMappedFileService with default configuration
     /// (no TransientStorePool)
     pub fn new() -> Self {
         Self::new_with_config(None, false, false)
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.worker_handle.lock().is_some() && !self.stopped.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn should_warm_mapped_file(&self, file_size: u64) -> bool {
+        self.warm_mapped_file_config.should_warm(file_size)
     }
 
     /// Start the background worker thread
@@ -158,6 +221,7 @@ impl AllocateMappedFileService {
         let stopped = self.stopped.clone();
         let transient_store_pool = self.transient_store_pool.clone();
         let worker_wakeup = self.worker_wakeup.clone();
+        let warm_mapped_file_config = self.warm_mapped_file_config;
 
         match thread::Builder::new()
             .name("allocate-mapped-file-service".to_string())
@@ -169,6 +233,7 @@ impl AllocateMappedFileService {
                     stopped,
                     transient_store_pool,
                     worker_wakeup,
+                    warm_mapped_file_config,
                 );
             }) {
             Ok(handle) => {
@@ -190,14 +255,20 @@ impl AllocateMappedFileService {
         stopped: Arc<AtomicBool>,
         transient_store_pool: Option<Arc<TransientStorePool>>,
         worker_wakeup: Arc<(StdMutex<()>, Condvar)>,
+        warm_mapped_file_config: WarmMappedFileConfig,
     ) {
         info!("AllocateMappedFileService: service started");
 
         while !stopped.load(Ordering::Relaxed) {
             while !stopped.load(Ordering::Relaxed)
-                && Self::mmap_operation(&request_table, &request_queue, &has_exception, &transient_store_pool)
-            {
-            }
+                && Self::mmap_operation(
+                    &request_table,
+                    &request_queue,
+                    &has_exception,
+                    &transient_store_pool,
+                    warm_mapped_file_config,
+                )
+            {}
 
             if stopped.load(Ordering::Relaxed) {
                 break;
@@ -226,6 +297,7 @@ impl AllocateMappedFileService {
         request_queue: &Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
         has_exception: &Arc<AtomicBool>,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
+        warm_mapped_file_config: WarmMappedFileConfig,
     ) -> bool {
         // Pop request from priority queue
         let req = {
@@ -270,7 +342,7 @@ impl AllocateMappedFileService {
         }
 
         // Perform actual file allocation
-        let result = Self::create_mapped_file(&req, transient_store_pool);
+        let result = Self::create_mapped_file(&req, transient_store_pool, warm_mapped_file_config);
 
         match result {
             Ok(mapped_file) => {
@@ -306,6 +378,7 @@ impl AllocateMappedFileService {
     fn create_mapped_file(
         req: &AllocateRequest,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
+        warm_mapped_file_config: WarmMappedFileConfig,
     ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
         let start = std::time::Instant::now();
         let file_path = req.file_path.clone();
@@ -328,6 +401,13 @@ impl AllocateMappedFileService {
             reason: error.to_string(),
         })?;
 
+        if warm_mapped_file_config.should_warm(file_size) {
+            mapped_file.warm_mapped_file(
+                warm_mapped_file_config.flush_disk_type,
+                warm_mapped_file_config.flush_least_pages_when_warm_mapped_file,
+            );
+        }
+
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 10 {
             let queue_size = 0; // TODO: pass queue size if needed
@@ -339,11 +419,6 @@ impl AllocateMappedFileService {
                 req.file_size
             );
         }
-
-        // TODO: Pre-warm mapped file if configured
-        // if file_size >= commitlog_size && warm_mapped_file_enable {
-        //     mapped_file.warm_mapped_file(...);
-        // }
 
         Ok(Arc::new(mapped_file))
     }
@@ -783,13 +858,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::config::message_store_config::MessageStoreConfig;
 
     #[tokio::test]
     async fn allocate_mapped_file_blocking_works_inside_runtime() {
         let temp_dir = tempdir().expect("temp dir");
         let file_path = temp_dir.path().join("00000000000000000000");
         let service = AllocateMappedFileService::new();
+        assert!(!service.is_started());
         service.start();
+        assert!(service.is_started());
 
         let mapped_file = service
             .allocate_mapped_file_blocking(file_path.to_string_lossy().to_string(), 1024)
@@ -799,5 +877,20 @@ mod tests {
         assert!(file_path.exists(), "mapped file should be created on disk");
 
         service.shutdown().await;
+        assert!(!service.is_started());
+    }
+
+    #[test]
+    fn warm_mapped_file_config_follows_commitlog_file_size_threshold() {
+        let config = MessageStoreConfig {
+            warm_mapped_file_enable: true,
+            mapped_file_size_commit_log: 1024,
+            flush_least_pages_when_warm_mapped_file: 1,
+            ..MessageStoreConfig::default()
+        };
+        let service = AllocateMappedFileService::new_with_message_store_config(None, false, false, &config);
+
+        assert!(!service.should_warm_mapped_file(1023));
+        assert!(service.should_warm_mapped_file(1024));
     }
 }

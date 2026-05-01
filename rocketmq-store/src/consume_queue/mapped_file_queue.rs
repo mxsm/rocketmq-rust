@@ -256,6 +256,10 @@ impl MappedFileQueue {
     #[inline]
     fn trigger_pre_allocation(&self, next_offset: u64) {
         if let Some(ref service) = self.allocate_mapped_file_service {
+            if !service.is_started() {
+                return;
+            }
+
             let next_file_path = PathBuf::from(self.store_path.clone()).join(offset_to_file_name(next_offset));
 
             // Submit async request (non-blocking)
@@ -314,18 +318,20 @@ impl MappedFileQueue {
 
         // Try async allocation if service available
         if let Some(ref service) = self.allocate_mapped_file_service {
-            match service.allocate_mapped_file_blocking(file_path_str.clone(), self.mapped_file_size) {
-                Ok(pre_allocated) => {
-                    // Trigger pre-allocation of N+2 file
-                    service.submit_request_in_background(
-                        next_file_path.to_string_lossy().to_string(),
-                        self.mapped_file_size,
-                    );
-                    // Return Arc directly
-                    return Some(pre_allocated);
-                }
-                Err(e) => {
-                    warn!("Pre-allocation failed: {}, using sync creation", e);
+            if service.is_started() {
+                match service.allocate_mapped_file_blocking(file_path_str.clone(), self.mapped_file_size) {
+                    Ok(pre_allocated) => {
+                        // Trigger pre-allocation of N+2 file
+                        service.submit_request_in_background(
+                            next_file_path.to_string_lossy().to_string(),
+                            self.mapped_file_size,
+                        );
+                        // Return Arc directly
+                        return Some(pre_allocated);
+                    }
+                    Err(e) => {
+                        warn!("Pre-allocation failed: {}, using sync creation", e);
+                    }
                 }
             }
         }
