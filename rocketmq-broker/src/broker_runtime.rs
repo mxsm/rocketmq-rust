@@ -3357,7 +3357,9 @@ mod tests {
     use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
     use rocketmq_common::common::attribute::subscription_group_attributes::LITE_BIND_TOPIC_ATTRIBUTE_NAME;
     use rocketmq_common::common::attribute::Attribute;
+    use rocketmq_common::common::boundary_type::BoundaryType;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
     use rocketmq_common::common::entity::ClientGroup;
     use rocketmq_common::common::lite::to_lmq_name;
     use rocketmq_common::common::message::message_decoder;
@@ -3387,6 +3389,8 @@ mod tests {
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
+    use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
     use rocketmq_remoting::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
     use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
@@ -3394,24 +3398,45 @@ mod tests {
     use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
     use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
     use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+    use rocketmq_remoting::protocol::body::kv_table::KVTable;
+    use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+    use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
+    use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
+    use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
+    use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
     use rocketmq_remoting::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
     use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
     use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+    use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+    use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+    use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
     use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+    use rocketmq_remoting::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
+    use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
     use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+    use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
     use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
     use rocketmq_remoting::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
     use rocketmq_remoting::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
+    use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+    use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+    use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+    use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
     use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
+    use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::protocol::RemotingDeserializable;
+    use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::remoting::RemotingService;
     use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
     use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
@@ -3423,7 +3448,9 @@ mod tests {
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
     use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
+    use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
     use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+    use rocketmq_store::utils::ffi::MADV_NORMAL;
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
     use tokio::time::sleep;
@@ -3541,6 +3568,50 @@ mod tests {
             .await
             .expect("processor dispatch should succeed")
             .expect("processor should return a response")
+    }
+
+    async fn send_message_through_broker_processor(
+        processor: &mut DefaultServerProcessor,
+        topic: CheetahString,
+        body: Bytes,
+    ) -> SendMessageResponseHeader {
+        let send_header = SendMessageRequestHeader {
+            producer_group: CheetahString::from_static_str("request-code-phase-producer"),
+            topic,
+            default_topic: CheetahString::from_static_str("TBW102"),
+            default_topic_queue_nums: 1,
+            queue_id: 0,
+            sys_flag: 0,
+            born_timestamp: current_millis() as i64,
+            flag: 0,
+            properties: None,
+            reconsume_times: None,
+            unit_mode: Some(false),
+            batch: Some(false),
+            max_reconsume_times: None,
+            topic_request_header: None,
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::SendMessage, send_header).set_body(body);
+        request.make_custom_header_to_net();
+
+        let mut harness = LocalRequestHarness::new().await.expect("local harness should start");
+        let direct_response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("send processor dispatch should succeed");
+        assert!(
+            direct_response.is_none(),
+            "successful SendMessage writes response to the remoting context"
+        );
+        let response = tokio::time::timeout(Duration::from_secs(5), harness.receive_response())
+            .await
+            .expect("send response should be written to the remoting peer")
+            .expect("send response receive should succeed")
+            .expect("send response should exist");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        response
+            .decode_command_custom_header::<SendMessageResponseHeader>()
+            .expect("send response should include SendMessageResponseHeader")
     }
 
     fn lite_test_root(label: &str) -> PathBuf {
@@ -4556,6 +4627,611 @@ mod tests {
         assert_eq!(topic_config.topic_config.topic_name.as_ref(), Some(&topic));
         assert_eq!(topic_config.topic_config.read_queue_nums, 2);
         assert_eq!(topic_config.topic_config.write_queue_nums, 3);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase4_broker_consumer_request_codes_dispatch_to_expected_processors() {
+        let mut runtime = new_phase3_test_runtime("phase4-dispatch").await;
+        let (processor, _) = runtime.init_processor();
+
+        for (request_code, expected_processor) in [
+            (RequestCode::PullMessage, "Pull"),
+            (RequestCode::LitePullMessage, "Pull"),
+            (RequestCode::PeekMessage, "Peek"),
+            (RequestCode::PopMessage, "Pop"),
+            (RequestCode::PopLiteMessage, "PopLite"),
+            (RequestCode::AckMessage, "Ack"),
+            (RequestCode::BatchAckMessage, "Ack"),
+            (RequestCode::ChangeMessageInvisibleTime, "ChangeInvisible"),
+            (RequestCode::Notification, "Notification"),
+            (RequestCode::PollingInfo, "PollingInfo"),
+            (RequestCode::GetConsumerListByGroup, "ConsumerManage"),
+            (RequestCode::UpdateConsumerOffset, "ConsumerManage"),
+            (RequestCode::QueryConsumerOffset, "ConsumerManage"),
+            (RequestCode::QueryAssignment, "QueryAssignment"),
+            (RequestCode::SetMessageRequestMode, "QueryAssignment"),
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some(expected_processor),
+                "{request_code:?} should dispatch to {expected_processor}"
+            );
+        }
+
+        for request_code in [
+            RequestCode::LockBatchMq,
+            RequestCode::UnlockBatchMq,
+            RequestCode::PopRollback,
+            RequestCode::ResetConsumerOffsetInBroker,
+            RequestCode::InvokeBrokerToResetOffset,
+            RequestCode::InvokeBrokerToGetConsumerStatus,
+            RequestCode::QueryTopicConsumeByWho,
+            RequestCode::QueryTopicsByConsumer,
+            RequestCode::QuerySubscriptionByConsumer,
+            RequestCode::QueryConsumeTimeSpan,
+            RequestCode::QueryCorrectionOffset,
+            RequestCode::ConsumeMessageDirectly,
+            RequestCode::CloneGroupOffset,
+            RequestCode::GetAllMessageRequestMode,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("AdminBroker"),
+                "{request_code:?} should fall back to AdminBrokerProcessor"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase4_consumer_offset_processors_round_trip_committed_offset() {
+        let mut runtime = new_phase3_test_runtime("phase4-offset").await;
+        let topic = CheetahString::from_static_str("phase4-offset-topic");
+        let group = CheetahString::from_static_str("phase4-consumer-group");
+        runtime
+            .inner_for_test()
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+
+        let mut group_config = SubscriptionGroupConfig::new(group.clone());
+        runtime
+            .inner_for_test()
+            .subscription_group_manager_mut()
+            .update_subscription_group_config(&mut group_config);
+
+        let (mut processor, _) = runtime.init_processor();
+        let update_header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            commit_offset: 42,
+            topic_request_header: None,
+        };
+        let mut update_request =
+            RemotingCommand::create_request_command(RequestCode::UpdateConsumerOffset, update_header);
+        update_request.make_custom_header_to_net();
+
+        let update_response = process_broker_request(&mut processor, &mut update_request).await;
+        assert_eq!(ResponseCode::from(update_response.code()), ResponseCode::Success);
+
+        let mut query_header = QueryConsumerOffsetRequestHeader::new(group.clone(), topic.clone(), 0);
+        query_header.set_zero_if_not_found = Some(false);
+        let mut query_request = RemotingCommand::create_request_command(RequestCode::QueryConsumerOffset, query_header);
+        query_request.make_custom_header_to_net();
+
+        let mut query_response = process_broker_request(&mut processor, &mut query_request).await;
+        assert_eq!(ResponseCode::from(query_response.code()), ResponseCode::Success);
+        query_response.make_custom_header_to_net();
+        let response_header = query_response
+            .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
+            .expect("QueryConsumerOffset response should include QueryConsumerOffsetResponseHeader");
+        assert_eq!(response_header.offset, Some(42));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase5_broker_admin_request_codes_dispatch_to_admin_processor() {
+        let mut runtime = new_phase3_test_runtime("phase5-dispatch").await;
+        let (processor, _) = runtime.init_processor();
+
+        for request_code in [
+            RequestCode::UpdateAndCreateTopic,
+            RequestCode::UpdateAndCreateTopicList,
+            RequestCode::GetAllTopicConfig,
+            RequestCode::UpdateBrokerConfig,
+            RequestCode::GetBrokerConfig,
+            RequestCode::GetBrokerRuntimeInfo,
+            RequestCode::UpdateAndCreateSubscriptionGroup,
+            RequestCode::UpdateAndCreateSubscriptionGroupList,
+            RequestCode::GetAllSubscriptionGroupConfig,
+            RequestCode::GetTopicStatsInfo,
+            RequestCode::GetConsumerConnectionList,
+            RequestCode::GetProducerConnectionList,
+            RequestCode::DeleteSubscriptionGroup,
+            RequestCode::GetConsumeStats,
+            RequestCode::GetSystemTopicListFromBroker,
+            RequestCode::GetConsumerRunningInfo,
+            RequestCode::ViewBrokerStatsData,
+            RequestCode::GetBrokerConsumeStats,
+            RequestCode::GetAllProducerInfo,
+            RequestCode::DeleteTopicInBroker,
+            RequestCode::GetTopicConfig,
+            RequestCode::GetSubscriptionGroupConfig,
+            RequestCode::UpdateAndGetGroupForbidden,
+            RequestCode::UpdateAndCreateStaticTopic,
+            RequestCode::UpdateColdDataFlowCtrConfig,
+            RequestCode::RemoveColdDataFlowCtrConfig,
+            RequestCode::GetColdDataFlowCtrInfo,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("AdminBroker"),
+                "{request_code:?} should fall back to AdminBrokerProcessor"
+            );
+        }
+
+        assert_eq!(
+            processor.dispatch_processor_variant_for_test(RequestCode::CheckClientConfig),
+            Some("ClientManage")
+        );
+        for request_code in [
+            RequestCode::GetBrokerLiteInfo,
+            RequestCode::GetParentTopicInfo,
+            RequestCode::GetLiteTopicInfo,
+            RequestCode::GetLiteClientInfo,
+            RequestCode::GetLiteGroupInfo,
+            RequestCode::TriggerLiteDispatch,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("LiteManager"),
+                "{request_code:?} should dispatch to LiteManagerProcessor"
+            );
+        }
+        assert_eq!(
+            processor.dispatch_processor_variant_for_test(RequestCode::LiteSubscriptionCtl),
+            Some("LiteSubscriptionCtl")
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
+        let mut runtime = new_phase3_test_runtime("phase5-subscription-group").await;
+        let group = CheetahString::from_static_str("phase5-admin-group");
+        let (mut processor, _) = runtime.init_processor();
+
+        let group_config = SubscriptionGroupConfig::new(group.clone());
+        let mut create_request =
+            RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
+                .set_body(group_config.encode().expect("subscription group config should encode"));
+        let create_response = process_broker_request(&mut processor, &mut create_request).await;
+        assert_eq!(ResponseCode::from(create_response.code()), ResponseCode::Success);
+
+        let get_header = GetSubscriptionGroupConfigRequestHeader {
+            group: group.clone(),
+            rpc_request_header: None,
+        };
+        let mut get_request =
+            RemotingCommand::create_request_command(RequestCode::GetSubscriptionGroupConfig, get_header);
+        get_request.make_custom_header_to_net();
+        let get_response = process_broker_request(&mut processor, &mut get_request).await;
+        assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
+        let decoded_group = SubscriptionGroupConfig::decode(
+            get_response
+                .body()
+                .expect("GetSubscriptionGroupConfig should include a body")
+                .as_ref(),
+        )
+        .expect("subscription group response body should decode");
+        assert_eq!(decoded_group.group_name(), &group);
+
+        let mut list_request = RemotingCommand::create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
+        let list_response = process_broker_request(&mut processor, &mut list_request).await;
+        assert_eq!(ResponseCode::from(list_response.code()), ResponseCode::Success);
+        let list_body = std::str::from_utf8(
+            list_response
+                .body()
+                .expect("GetAllSubscriptionGroupConfig should include a body")
+                .as_ref(),
+        )
+        .expect("subscription group list body should be utf8");
+        assert!(list_body.contains(group.as_str()));
+
+        let delete_header = DeleteSubscriptionGroupRequestHeader {
+            group_name: group.clone(),
+            clean_offset: true,
+            rpc_request_header: None,
+        };
+        let mut delete_request =
+            RemotingCommand::create_request_command(RequestCode::DeleteSubscriptionGroup, delete_header);
+        delete_request.make_custom_header_to_net();
+        let delete_response = process_broker_request(&mut processor, &mut delete_request).await;
+        assert_eq!(ResponseCode::from(delete_response.code()), ResponseCode::Success);
+        assert!(
+            !runtime
+                .inner_for_test()
+                .subscription_group_manager()
+                .subscription_group_table()
+                .contains_key(&group),
+            "DeleteSubscriptionGroup should remove the stored group before auto-create lookup"
+        );
+
+        let missing_header = GetSubscriptionGroupConfigRequestHeader {
+            group: group.clone(),
+            rpc_request_header: None,
+        };
+        let mut missing_request =
+            RemotingCommand::create_request_command(RequestCode::GetSubscriptionGroupConfig, missing_header);
+        missing_request.make_custom_header_to_net();
+        let missing_response = process_broker_request(&mut processor, &mut missing_request).await;
+        assert_eq!(ResponseCode::from(missing_response.code()), ResponseCode::Success);
+        let auto_created_group = SubscriptionGroupConfig::decode(
+            missing_response
+                .body()
+                .expect("GetSubscriptionGroupConfig should auto-create and return a body")
+                .as_ref(),
+        )
+        .expect("auto-created subscription group response body should decode");
+        assert_eq!(auto_created_group.group_name(), &group);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_compatible() {
+        let mut runtime = new_phase3_test_runtime("phase5-admin-query").await;
+        let topic = CheetahString::from_static_str("phase5-admin-topic");
+        let group = CheetahString::from_static_str("phase5-admin-consumer-group");
+        runtime
+            .inner_for_test()
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 2)));
+        let mut group_config = SubscriptionGroupConfig::new(group.clone());
+        runtime
+            .inner_for_test()
+            .subscription_group_manager_mut()
+            .update_subscription_group_config(&mut group_config);
+
+        let (mut processor, _) = runtime.init_processor();
+
+        let mut config_request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
+        let config_response = process_broker_request(&mut processor, &mut config_request).await;
+        assert_eq!(ResponseCode::from(config_response.code()), ResponseCode::Success);
+        let config_body = std::str::from_utf8(
+            config_response
+                .body()
+                .expect("GetBrokerConfig should include a body")
+                .as_ref(),
+        )
+        .expect("broker config body should be utf8");
+        assert!(config_body.contains("brokerName"));
+
+        let mut runtime_request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerRuntimeInfo);
+        let runtime_response = process_broker_request(&mut processor, &mut runtime_request).await;
+        assert_eq!(ResponseCode::from(runtime_response.code()), ResponseCode::Success);
+        let runtime_table: KVTable = serde_json::from_slice(
+            runtime_response
+                .body()
+                .expect("GetBrokerRuntimeInfo should include a body")
+                .as_ref(),
+        )
+        .expect("broker runtime body should decode as KVTable");
+        assert!(runtime_table.table.contains_key("brokerActive"));
+        assert!(runtime_table.table.contains_key("brokerVersionDesc"));
+
+        let topic_stats_header = GetTopicStatsRequestHeader {
+            topic: topic.clone(),
+            topic_request_header: None,
+        };
+        let mut topic_stats_request =
+            RemotingCommand::create_request_command(RequestCode::GetTopicStatsInfo, topic_stats_header);
+        topic_stats_request.make_custom_header_to_net();
+        let topic_stats_response = process_broker_request(&mut processor, &mut topic_stats_request).await;
+        assert_eq!(ResponseCode::from(topic_stats_response.code()), ResponseCode::Success);
+        let topic_stats: TopicStatsTable = serde_json::from_slice(
+            topic_stats_response
+                .body()
+                .expect("GetTopicStatsInfo should include a body")
+                .as_ref(),
+        )
+        .expect("topic stats body should decode");
+        assert_eq!(topic_stats.get_offset_table().len(), 2);
+
+        let consume_stats_header = GetConsumeStatsRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            topic_request_header: None,
+        };
+        let mut consume_stats_request =
+            RemotingCommand::create_request_command(RequestCode::GetConsumeStats, consume_stats_header);
+        consume_stats_request.make_custom_header_to_net();
+        let consume_stats_response = process_broker_request(&mut processor, &mut consume_stats_request).await;
+        assert_eq!(ResponseCode::from(consume_stats_response.code()), ResponseCode::Success);
+        let consume_stats = ConsumeStats::decode(
+            consume_stats_response
+                .body()
+                .expect("GetConsumeStats should include a body")
+                .as_ref(),
+        )
+        .expect("consume stats body should decode");
+        assert_eq!(consume_stats.get_offset_table().len(), 2);
+
+        let consumer_connection_header = GetConsumerConnectionListRequestHeader {
+            consumer_group: group.clone(),
+            rpc_request_header: None,
+        };
+        let mut consumer_connection_request =
+            RemotingCommand::create_request_command(RequestCode::GetConsumerConnectionList, consumer_connection_header);
+        consumer_connection_request.make_custom_header_to_net();
+        let consumer_connection_response =
+            process_broker_request(&mut processor, &mut consumer_connection_request).await;
+        assert_eq!(
+            ResponseCode::from(consumer_connection_response.code()),
+            ResponseCode::ConsumerNotOnline
+        );
+
+        let producer_connection_header = GetProducerConnectionListRequestHeader {
+            producer_group: CheetahString::from_static_str("phase5-producer-group"),
+            rpc_request_header: None,
+        };
+        let mut producer_connection_request =
+            RemotingCommand::create_request_command(RequestCode::GetProducerConnectionList, producer_connection_header);
+        producer_connection_request.make_custom_header_to_net();
+        let producer_connection_response =
+            process_broker_request(&mut processor, &mut producer_connection_request).await;
+        assert_eq!(
+            ResponseCode::from(producer_connection_response.code()),
+            ResponseCode::SystemError
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase6_store_delay_timer_request_codes_dispatch_to_expected_processors() {
+        let mut runtime = new_phase3_test_runtime("phase6-dispatch").await;
+        let (processor, _) = runtime.init_processor();
+
+        for request_code in [RequestCode::QueryMessage, RequestCode::ViewMessageById] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("QueryMessage"),
+                "{request_code:?} should dispatch to QueryMessageProcessor"
+            );
+        }
+
+        for request_code in [
+            RequestCode::SearchOffsetByTimestamp,
+            RequestCode::GetMaxOffset,
+            RequestCode::GetMinOffset,
+            RequestCode::GetEarliestMsgStoreTime,
+            RequestCode::GetAllConsumerOffset,
+            RequestCode::GetAllDelayOffset,
+            RequestCode::GetTimerCheckPoint,
+            RequestCode::GetTimerMetrics,
+            RequestCode::CleanExpiredConsumequeue,
+            RequestCode::CleanUnusedTopic,
+            RequestCode::QueryConsumeQueue,
+            RequestCode::DeleteExpiredCommitlog,
+            RequestCode::CheckRocksdbCqWriteProgress,
+            RequestCode::ExportRocksdbConfigToJson,
+            RequestCode::SetCommitlogReadMode,
+            RequestCode::SwitchTimerEngine,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("AdminBroker"),
+                "{request_code:?} should fall back to AdminBrokerProcessor"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models() {
+        let mut runtime = new_phase3_test_runtime("phase6-store-query").await;
+        let topic = CheetahString::from_static_str("phase6-store-topic");
+        runtime
+            .inner_for_test()
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+
+        let (mut processor, _) = runtime.init_processor();
+        let send_response_header = send_message_through_broker_processor(
+            &mut processor,
+            topic.clone(),
+            Bytes::from_static(b"phase6-message-body"),
+        )
+        .await;
+        assert_eq!(send_response_header.queue_id(), 0);
+        assert_eq!(send_response_header.queue_offset(), 0);
+
+        runtime
+            .inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .reput_once()
+            .await;
+
+        let max_header = GetMaxOffsetRequestHeader {
+            topic: topic.clone(),
+            queue_id: 0,
+            committed: false,
+            topic_request_header: None,
+        };
+        let mut max_request = RemotingCommand::create_request_command(RequestCode::GetMaxOffset, max_header);
+        max_request.make_custom_header_to_net();
+        let mut max_response = process_broker_request(&mut processor, &mut max_request).await;
+        assert_eq!(ResponseCode::from(max_response.code()), ResponseCode::Success);
+        max_response.make_custom_header_to_net();
+        let max_response_header = max_response
+            .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
+            .expect("GetMaxOffset should include response header");
+        assert_eq!(max_response_header.offset, 1);
+
+        let min_header = GetMinOffsetRequestHeader {
+            topic: topic.clone(),
+            queue_id: 0,
+            topic_request_header: None,
+        };
+        let mut min_request = RemotingCommand::create_request_command(RequestCode::GetMinOffset, min_header);
+        min_request.make_custom_header_to_net();
+        let mut min_response = process_broker_request(&mut processor, &mut min_request).await;
+        assert_eq!(ResponseCode::from(min_response.code()), ResponseCode::Success);
+        min_response.make_custom_header_to_net();
+        let min_response_header = min_response
+            .decode_command_custom_header::<GetMinOffsetResponseHeader>()
+            .expect("GetMinOffset should include response header");
+        assert_eq!(min_response_header.offset, 0);
+
+        let search_header = SearchOffsetRequestHeader {
+            topic: topic.clone(),
+            queue_id: 0,
+            timestamp: 0,
+            boundary_type: BoundaryType::Lower,
+            topic_request_header: None,
+        };
+        let mut search_request =
+            RemotingCommand::create_request_command(RequestCode::SearchOffsetByTimestamp, search_header);
+        search_request.make_custom_header_to_net();
+        let mut search_response = process_broker_request(&mut processor, &mut search_request).await;
+        assert_eq!(ResponseCode::from(search_response.code()), ResponseCode::Success);
+        search_response.make_custom_header_to_net();
+        let search_response_header = search_response
+            .decode_command_custom_header::<SearchOffsetResponseHeader>()
+            .expect("SearchOffsetByTimestamp should include response header");
+        assert_eq!(search_response_header.offset, 0);
+
+        let earliest_header = GetEarliestMsgStoretimeRequestHeader {
+            topic: topic.clone(),
+            queue_id: 0,
+            topic_request_header: None,
+        };
+        let mut earliest_request =
+            RemotingCommand::create_request_command(RequestCode::GetEarliestMsgStoreTime, earliest_header);
+        earliest_request.make_custom_header_to_net();
+        let mut earliest_response = process_broker_request(&mut processor, &mut earliest_request).await;
+        assert_eq!(ResponseCode::from(earliest_response.code()), ResponseCode::Success);
+        earliest_response.make_custom_header_to_net();
+        let earliest_response_header = earliest_response
+            .decode_command_custom_header::<GetEarliestMsgStoretimeResponseHeader>()
+            .expect("GetEarliestMsgStoreTime should include response header");
+        assert!(earliest_response_header.timestamp >= 0);
+
+        let query_cq_header = QueryConsumeQueueRequestHeader {
+            topic: topic.clone(),
+            queue_id: 0,
+            index: 0,
+            count: 16,
+            consumer_group: None,
+            rpc: None,
+        };
+        let mut query_cq_request =
+            RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, query_cq_header);
+        query_cq_request.make_custom_header_to_net();
+        let query_cq_response = process_broker_request(&mut processor, &mut query_cq_request).await;
+        assert_eq!(ResponseCode::from(query_cq_response.code()), ResponseCode::Success);
+        let query_cq_body: QueryConsumeQueueResponseBody = serde_json::from_slice(
+            query_cq_response
+                .body()
+                .expect("QueryConsumeQueue should include a body")
+                .as_ref(),
+        )
+        .expect("QueryConsumeQueue response body should decode");
+        assert_eq!(query_cq_body.min_queue_index, 0);
+        assert_eq!(query_cq_body.max_queue_index, 1);
+        assert_eq!(
+            query_cq_body
+                .queue_data
+                .expect("QueryConsumeQueue should include queue data")
+                .len(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses() {
+        let mut runtime = new_phase3_test_runtime("phase6-timer-clean").await;
+        let timer_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: runtime.message_store_config().store_path_root_dir.clone(),
+            timer_wheel_enable: true,
+            ..MessageStoreConfig::default()
+        });
+        let timer_message_store = TimerMessageStore::new_with_config(None, timer_config);
+        assert!(timer_message_store.load());
+        runtime.inner_for_test().set_timer_message_store(timer_message_store);
+
+        let (mut processor, _) = runtime.init_processor();
+
+        let mut metrics_request = RemotingCommand::create_remoting_command(RequestCode::GetTimerMetrics);
+        let metrics_response = process_broker_request(&mut processor, &mut metrics_request).await;
+        assert_eq!(ResponseCode::from(metrics_response.code()), ResponseCode::Success);
+        let metrics_json: serde_json::Value = serde_json::from_slice(
+            metrics_response
+                .body()
+                .expect("GetTimerMetrics should include a body")
+                .as_ref(),
+        )
+        .expect("GetTimerMetrics body should decode as json");
+        assert!(metrics_json.get("timerDist").is_some());
+
+        let mut checkpoint_request = RemotingCommand::create_remoting_command(RequestCode::GetTimerCheckPoint);
+        let checkpoint_response = process_broker_request(&mut processor, &mut checkpoint_request).await;
+        assert_eq!(ResponseCode::from(checkpoint_response.code()), ResponseCode::Success);
+        let checkpoint_snapshot = TimerCheckpointSnapshot::decode(
+            checkpoint_response
+                .body()
+                .expect("GetTimerCheckPoint should include a body")
+                .as_ref(),
+        )
+        .expect("GetTimerCheckPoint body should decode");
+        assert!(checkpoint_snapshot.last_read_time_ms() >= 0);
+
+        let mut delay_offset_request = RemotingCommand::create_remoting_command(RequestCode::GetAllDelayOffset);
+        let delay_offset_response = process_broker_request(&mut processor, &mut delay_offset_request).await;
+        assert_eq!(ResponseCode::from(delay_offset_response.code()), ResponseCode::Success);
+        assert!(!delay_offset_response
+            .body()
+            .expect("GetAllDelayOffset should include a body")
+            .is_empty());
+
+        let mut read_mode_request =
+            RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
+        read_mode_request.add_ext_field(CheetahString::from_static_str(READ_AHEAD_MODE), MADV_NORMAL.to_string());
+        let read_mode_response = process_broker_request(&mut processor, &mut read_mode_request).await;
+        assert_eq!(ResponseCode::from(read_mode_response.code()), ResponseCode::Success);
+
+        for request_code in [
+            RequestCode::CleanExpiredConsumequeue,
+            RequestCode::CleanUnusedTopic,
+            RequestCode::DeleteExpiredCommitlog,
+        ] {
+            let mut request = RemotingCommand::create_remoting_command(request_code);
+            let response = process_broker_request(&mut processor, &mut request).await;
+            assert_eq!(
+                ResponseCode::from(response.code()),
+                ResponseCode::Success,
+                "{request_code:?} should return success for local file store"
+            );
+        }
+
+        let mut switch_timer_request = RemotingCommand::create_remoting_command(RequestCode::SwitchTimerEngine);
+        let switch_timer_response = process_broker_request(&mut processor, &mut switch_timer_request).await;
+        assert_eq!(
+            ResponseCode::from(switch_timer_response.code()),
+            ResponseCode::InvalidParameter,
+            "new_phase3_test_runtime keeps timerWheelEnable disabled"
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

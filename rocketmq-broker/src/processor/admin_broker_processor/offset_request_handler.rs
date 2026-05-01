@@ -125,12 +125,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         mut request_header: GetMinOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mapping_detail = mapping_context
-            .mapping_detail
-            .as_ref()
-            .ok_or(rocketmq_error::RocketMQError::Internal(
-                "TopicQueueMappingDetail is None in static topic min offset request handling".to_string(),
-            ))?;
+        let Some(mapping_detail) = mapping_context.mapping_detail.as_ref() else {
+            return Ok(None);
+        };
         if !mapping_context.is_leader() {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue).set_remark(
@@ -195,12 +192,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         mut request_header: GetMaxOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mapping_detail = mapping_context
-            .mapping_detail
-            .as_ref()
-            .ok_or(rocketmq_error::RocketMQError::Internal(
-                "TopicQueueMappingDetail is None in static topic max offset request handling".to_string(),
-            ))?;
+        let Some(mapping_detail) = mapping_context.mapping_detail.as_ref() else {
+            return Ok(None);
+        };
         if !mapping_context.is_leader() {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue).set_remark(
