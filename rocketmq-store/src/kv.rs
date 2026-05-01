@@ -12,5 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod compaction_dispatch;
 pub(crate) mod compaction_service;
 pub(crate) mod compaction_store;

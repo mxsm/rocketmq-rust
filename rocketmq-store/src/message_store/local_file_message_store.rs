@@ -118,6 +118,7 @@ use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
 use crate::index::index_dispatch::CommitLogDispatcherBuildIndex;
 use crate::index::index_service::IndexService;
+use crate::kv::compaction_dispatch::CommitLogDispatcherCompaction;
 use crate::kv::compaction_service::CompactionService;
 use crate::kv::compaction_store::CompactionStore;
 use crate::log_file::commit_log;
@@ -445,7 +446,7 @@ impl LocalFileMessageStore {
         let build_consume_queue: Arc<dyn CommitLogDispatcher> =
             Arc::new(CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone()));
 
-        let dispatcher = ArcMut::new(CommitLogDispatcherDefault {
+        let mut dispatcher = ArcMut::new(CommitLogDispatcherDefault {
             dispatcher_vec: vec![build_consume_queue, build_index],
         });
 
@@ -457,6 +458,15 @@ impl LocalFileMessageStore {
             topic_config_table.clone(),
             consume_queue_store.clone(),
         ));
+        let compaction_store = Arc::new(CompactionStore::new());
+        if message_store_config.enable_compaction {
+            dispatcher.add_dispatcher(Arc::new(CommitLogDispatcherCompaction::new(
+                compaction_store.clone(),
+                commit_log.clone(),
+                message_store_config.clone(),
+                topic_config_table.clone(),
+            )));
+        }
 
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
@@ -467,7 +477,12 @@ impl LocalFileMessageStore {
             message_store_config.transient_store_pool_size,
             message_store_config.mapped_file_size_commit_log,
         );
-        let compaction_service = message_store_config.enable_compaction.then(CompactionService::new);
+        let compaction_service = message_store_config.enable_compaction.then(|| {
+            CompactionService::new(
+                compaction_store.clone(),
+                message_store_config.compaction_schedule_internal,
+            )
+        });
         Ok(Self {
             message_store_config: message_store_config.clone(),
             broker_config,
@@ -518,7 +533,7 @@ impl LocalFileMessageStore {
             message_arriving_listener: None,
             notify_message_arrive_in_batch,
             store_stats_service: Arc::new(StoreStatsService::new(Some(identity))),
-            compaction_store: Arc::new(CompactionStore::new()),
+            compaction_store,
             timer_message_store: None,
             transient_store_pool,
             message_store_arc: None,
@@ -1406,6 +1421,9 @@ impl MessageStore for LocalFileMessageStore {
             self.commit_log.start();
             self.consume_queue_store.start();
             self.store_stats_service.start();
+            if let Some(compaction_service) = self.compaction_service.as_mut() {
+                compaction_service.start();
+            }
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 timer_message_store.start();
             }
@@ -1516,8 +1534,8 @@ impl MessageStore for LocalFileMessageStore {
             // dispatch-related services must be shut down after reputMessageService
             self.index_service.shutdown();
 
-            if let Some(compaction_service) = self.compaction_service.as_ref() {
-                compaction_service.shutdown();
+            if let Some(compaction_service) = self.compaction_service.as_mut() {
+                compaction_service.shutdown_gracefully().await;
             }
 
             if self.message_store_config.rocksdb_cq_double_write_enable {
@@ -3962,6 +3980,7 @@ mod tests {
     use crate::filter::MessageFilter;
     use crate::hook::put_message_hook::PutMessageHook;
     use crate::hook::send_message_back_hook::SendMessageBackHook;
+    use crate::kv::compaction_service::CompactionService;
     use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
     use crate::queue::consume_queue::ConsumeQueueTrait;
     use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -4254,10 +4273,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compaction_topic_loads_and_reads_from_commitlog_until_compaction_backend_has_data() {
+    async fn compaction_topic_dispatches_and_reads_from_compaction_store() {
         let temp_dir = tempdir().unwrap();
-        let topic = CheetahString::from_static_str("compaction-fallback-topic");
-        let group = CheetahString::from_static_str("compaction-fallback-group");
+        let topic = CheetahString::from_static_str("compaction-dispatch-topic");
+        let group = CheetahString::from_static_str("compaction-dispatch-group");
         let mut store = new_configured_test_store(
             &temp_dir,
             MessageStoreConfig {
@@ -4290,9 +4309,12 @@ mod tests {
         let result = store
             .get_message(&group, &topic, 0, 0, 32, None)
             .await
-            .expect("compaction topic should fall back to commitlog read");
+            .expect("compaction topic should read from compaction store");
         assert_eq!(result.status(), Some(GetMessageStatus::Found));
         assert_eq!(result.message_count(), 1);
+        assert_eq!(store.compaction_store.message_count(&topic, 0), 1);
+        assert!(result.message_mapped_list()[0].mapped_file.is_none());
+        assert!(result.message_mapped_list()[0].get_bytes_ref().is_some());
     }
 
     #[tokio::test]
@@ -4352,6 +4374,7 @@ mod tests {
             &temp_dir,
             MessageStoreConfig {
                 duplication_enable: true,
+                enable_compaction: true,
                 timer_wheel_enable: true,
                 ..MessageStoreConfig::default()
             },
@@ -4361,6 +4384,10 @@ mod tests {
         store.start().await.expect("start store");
 
         assert!(store.store_stats_service.has_worker_handle());
+        assert!(store
+            .compaction_service
+            .as_ref()
+            .is_some_and(CompactionService::has_worker_handle));
         assert!(store.reput_message_service.reader_handle.is_some());
         assert!(store.reput_message_service.dispatcher_handle.is_some());
         assert!(store
@@ -4372,6 +4399,10 @@ mod tests {
         store.shutdown().await;
 
         assert!(!store.store_stats_service.has_worker_handle());
+        assert!(store
+            .compaction_service
+            .as_ref()
+            .is_some_and(|service| !service.has_worker_handle()));
         assert!(store.reput_message_service.reader_handle.is_none());
         assert!(store.reput_message_service.dispatcher_handle.is_none());
         assert!(!store
