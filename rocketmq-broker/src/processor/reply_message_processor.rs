@@ -45,6 +45,12 @@ use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::send_message_processor::Inner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
+const PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS: u64 = 10_000;
+
+fn push_reply_call_failed_remark(sender_id: &str) -> String {
+    format!("push reply message to {sender_id}fail.")
+}
+
 /// Processes reply messages in the Request-Reply pattern.
 ///
 /// This processor handles the server-side logic of sending reply messages back to
@@ -428,7 +434,7 @@ where
                 MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
             );
             return PushReplyResult::failure(format!(
-                "{} is null, can not reply message",
+                "reply message properties[{}] is null",
                 MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
             ));
         };
@@ -446,7 +452,10 @@ where
                 request_header.topic(),
                 request_header.queue_id
             );
-            return PushReplyResult::failure(format!("push reply message fail, channel of <{}> not found", sender_id));
+            return PushReplyResult::failure(format!(
+                "push reply message fail, channel of <{}> not found.",
+                sender_id
+            ));
         };
 
         // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
@@ -468,7 +477,7 @@ where
         match self
             .inner
             .broker_to_client
-            .call_client(&mut reply_channel, command, 3000)
+            .call_client(&mut reply_channel, command, PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS)
             .await
         {
             Ok(response) if response.code() == ResponseCode::Success as i32 => PushReplyResult::success(),
@@ -486,10 +495,7 @@ where
                     msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
                 );
                 // Reuse extracted values to avoid duplicate format
-                PushReplyResult::failure(format!(
-                    "push reply message to {} failed, code: {}, remark: {}",
-                    sender_id, code, remark
-                ))
+                PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
             }
             Err(error) => {
                 warn!(
@@ -501,7 +507,7 @@ where
                     request_header.queue_id
                 );
                 // Use compact error message to reduce allocation
-                PushReplyResult::failure(format!("push reply message to {} failed", sender_id))
+                PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
             }
         }
     }
@@ -674,5 +680,18 @@ mod tests {
         let result = PushReplyResult::failure(error);
         assert!(!result.success);
         assert_eq!(result.remark, "dynamic error");
+    }
+
+    #[test]
+    fn push_reply_message_to_client_timeout_matches_java_broker2client() {
+        assert_eq!(PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS, 10_000);
+    }
+
+    #[test]
+    fn push_reply_call_failed_remark_matches_java_semantics() {
+        assert_eq!(
+            push_reply_call_failed_remark("client-a"),
+            "push reply message to client-afail."
+        );
     }
 }
