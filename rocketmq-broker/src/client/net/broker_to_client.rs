@@ -28,6 +28,7 @@ use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetB
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::base::message_store::MessageStore;
@@ -124,6 +125,27 @@ impl Broker2Client {
             warn!(
                 "notifyConsumerIdsChanged exception. group={}, error={:?}",
                 consumer_group, e
+            );
+        }
+    }
+
+    /// Notify Lite clients that a Lite subscription has been removed.
+    ///
+    /// Java sends this as a one-way broker-to-client callback with a short timeout.
+    pub async fn notify_unsubscribe_lite(
+        &self,
+        channel: &mut Channel,
+        request_header: NotifyUnsubscribeLiteRequestHeader,
+    ) {
+        let lite_topic = request_header.lite_topic.clone();
+        let consumer_group = request_header.consumer_group.clone();
+        let client_id = request_header.client_id.clone();
+        let request = RemotingCommand::create_request_command(RequestCode::NotifyUnsubscribeLite, request_header);
+
+        if let Err(e) = channel.channel_inner_mut().send_oneway(request, 100).await {
+            error!(
+                "notifyUnsubscribeLite failed. liteTopic={}, group={}, clientId={}, error={:?}",
+                lite_topic, consumer_group, client_id, e
             );
         }
     }

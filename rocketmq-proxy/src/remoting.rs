@@ -64,6 +64,7 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -245,6 +246,7 @@ where
             RequestCode::UnregisterClient => self.dispatch_unregister_client(request).await,
             RequestCode::GetConsumerListByGroup => self.dispatch_get_consumer_list_by_group(request).await,
             RequestCode::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
+            RequestCode::NotifyUnsubscribeLite => self.dispatch_notify_unsubscribe_lite(request).await,
             RequestCode::LockBatchMq => self.dispatch_lock_batch_mq(request).await,
             RequestCode::UnlockBatchMq => self.dispatch_unlock_batch_mq(request).await,
             RequestCode::CheckClientConfig => self.dispatch_check_client_config(request).await,
@@ -442,6 +444,31 @@ where
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
                 format!("no consumer for this group, {}", header.consumer_group),
+            );
+        }
+        RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque())
+    }
+
+    async fn dispatch_notify_unsubscribe_lite(&self, request: &RemotingCommand) -> RemotingCommand {
+        let header = match request.decode_command_custom_header::<NotifyUnsubscribeLiteRequestHeader>() {
+            Ok(header) => header,
+            Err(error) => {
+                return decode_error_response(request.opaque(), "decode notifyUnsubscribeLite header", error);
+            }
+        };
+        if !self
+            .sessions
+            .consumer_client_ids(header.consumer_group.as_str())
+            .iter()
+            .any(|client_id| client_id.as_str() == header.client_id.as_str())
+        {
+            return response_with_code(
+                request.opaque(),
+                ResponseCode::ConsumerNotOnline,
+                format!(
+                    "no matching lite consumer for group {}, clientId {}",
+                    header.consumer_group, header.client_id
+                ),
             );
         }
         RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque())
@@ -1000,6 +1027,7 @@ fn remoting_rpc_name(code: i32) -> &'static str {
         RequestCode::UnregisterClient => "RemotingUnregisterClient",
         RequestCode::GetConsumerListByGroup => "RemotingGetConsumerListByGroup",
         RequestCode::NotifyConsumerIdsChanged => "RemotingNotifyConsumerIdsChanged",
+        RequestCode::NotifyUnsubscribeLite => "RemotingNotifyUnsubscribeLite",
         RequestCode::LockBatchMq => "RemotingLockBatchMq",
         RequestCode::UnlockBatchMq => "RemotingUnlockBatchMq",
         RequestCode::CheckClientConfig => "RemotingCheckClientConfig",
@@ -1519,6 +1547,7 @@ mod tests {
     use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+    use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
     use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
     use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
     use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -2113,6 +2142,78 @@ mod tests {
         let response = dispatcher.dispatch(&test_context(), &request).await;
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::ConsumerNotOnline);
+    }
+
+    #[tokio::test]
+    async fn dispatch_notify_unsubscribe_lite_validates_matching_session() {
+        let sessions = ClientSessionRegistry::default();
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let dispatcher = ProxyRemotingDispatcher::new(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            sessions.clone(),
+            None,
+        );
+
+        let mut missing_request = RemotingCommand::create_request_command(
+            RequestCode::NotifyUnsubscribeLite,
+            NotifyUnsubscribeLiteRequestHeader {
+                lite_topic: CheetahString::from_static_str("LiteTopic"),
+                consumer_group: CheetahString::from_static_str("GroupA"),
+                client_id: CheetahString::from_static_str("client-a"),
+                rpc_request_header: None,
+            },
+        );
+        missing_request.make_custom_header_to_net();
+        let missing_response = dispatcher.dispatch(&test_context(), &missing_request).await;
+        assert_eq!(
+            ResponseCode::from(missing_response.code()),
+            ResponseCode::ConsumerNotOnline
+        );
+
+        let heartbeat = HeartbeatData {
+            client_id: CheetahString::from_static_str("client-a"),
+            producer_data_set: HashSet::new(),
+            consumer_data_set: HashSet::from([ConsumerData {
+                group_name: CheetahString::from_static_str("GroupA"),
+                ..ConsumerData::default()
+            }]),
+            heartbeat_fingerprint: 0,
+            is_without_sub: false,
+        };
+        let mut heartbeat_request =
+            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
+                .set_body(heartbeat.encode().expect("heartbeat should encode"));
+        heartbeat_request.make_custom_header_to_net();
+        let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
+        assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::NotifyUnsubscribeLite,
+            NotifyUnsubscribeLiteRequestHeader {
+                lite_topic: CheetahString::from_static_str("LiteTopic"),
+                consumer_group: CheetahString::from_static_str("GroupA"),
+                client_id: CheetahString::from_static_str("client-a"),
+                rpc_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = dispatcher.dispatch(&test_context(), &request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
     }
 
     #[tokio::test]

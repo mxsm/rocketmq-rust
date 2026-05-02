@@ -86,6 +86,7 @@ pub mod client {
     pub use super::super::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
     pub use super::super::header::heartbeat_request_header::HeartbeatRequestHeader;
     pub use super::super::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+    pub use super::super::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
     pub use super::super::header::unregister_client_request_header::UnregisterClientRequestHeader;
 }
 

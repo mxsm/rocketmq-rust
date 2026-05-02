@@ -267,6 +267,23 @@ const RUST_LEGACY_REQUEST_CODE_EXTRAS: &[(&str, i32, RequestCode)] = &[
     ),
 ];
 
+const JAVA_DEFINITION_ONLY_SERVICE_UNSUPPORTED_REQUEST_CODES: &[(&str, i32)] = &[
+    ("QUERY_BROKER_OFFSET", 13),
+    ("GET_TOPIC_CONFIG_LIST", 22),
+    ("GET_TOPIC_NAME_LIST", 23),
+    ("TRIGGER_DELETE_FILES", 27),
+    ("GET_CLIENT_CONFIG", 47),
+    ("ACK_LITE_MESSAGE", 200072),
+    ("SUSPEND_CONSUMER", 209),
+    ("RESUME_CONSUMER", 210),
+    ("RESET_CONSUMER_OFFSET_IN_CONSUMER", 211),
+    ("RESET_CONSUMER_OFFSET_IN_BROKER", 212),
+    ("ADJUST_CONSUMER_THREAD_POOL", 213),
+    ("WHO_CONSUME_THE_MESSAGE", 214),
+    ("REGISTER_FILTER_SERVER", 301),
+    ("REGISTER_MESSAGE_FILTER_CLASS", 302),
+];
+
 #[test]
 fn protocol_compatibility_java_request_codes_are_defined() {
     assert_eq!(JAVA_REQUEST_CODES.len(), 169);
@@ -281,6 +298,23 @@ fn protocol_compatibility_java_request_codes_are_defined() {
             request_code.to_i32(),
             *value,
             "RequestCode round trip failed for {name}"
+        );
+    }
+}
+
+#[test]
+fn protocol_compatibility_java_definition_only_codes_stay_protocol_defined() {
+    for (name, value) in JAVA_DEFINITION_ONLY_SERVICE_UNSUPPORTED_REQUEST_CODES {
+        assert!(
+            JAVA_REQUEST_CODES
+                .iter()
+                .any(|(java_name, java_value)| java_name == name && java_value == value),
+            "{name}={value} should remain in the Java protocol baseline"
+        );
+        assert_ne!(
+            RequestCode::from(*value),
+            RequestCode::Unknown,
+            "{name}={value} must stay protocol-defined even when the service layer returns unsupported"
         );
     }
 }

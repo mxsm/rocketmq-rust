@@ -74,6 +74,7 @@ pub mod notification_request_header;
 pub mod notification_response_header;
 pub mod notify_broker_role_change_request_header;
 pub mod notify_consumer_ids_changed_request_header;
+pub mod notify_unsubscribe_lite_request_header;
 pub mod peek_message_request_header;
 pub mod polling_info_request_header;
 pub mod polling_info_response_header;

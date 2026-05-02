@@ -4739,6 +4739,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
+        let mut runtime = new_phase3_test_runtime("g8-definition-only-unsupported").await;
+        let (mut processor, _) = runtime.init_processor();
+
+        for request_code in [
+            RequestCode::QueryBrokerOffset,
+            RequestCode::GetTopicConfigList,
+            RequestCode::GetTopicNameList,
+            RequestCode::TriggerDeleteFiles,
+            RequestCode::GetClientConfig,
+            RequestCode::AckLiteMessage,
+            RequestCode::SuspendConsumer,
+            RequestCode::ResumeConsumer,
+            RequestCode::ResetConsumerOffsetInConsumer,
+            RequestCode::ResetConsumerOffsetInBroker,
+            RequestCode::AdjustConsumerThreadPool,
+            RequestCode::WhoConsumeTheMessage,
+            RequestCode::RegisterFilterServer,
+            RequestCode::RegisterMessageFilterClass,
+        ] {
+            let mut request = RemotingCommand::create_remoting_command(request_code);
+            let response = process_broker_request(&mut processor, &mut request).await;
+            assert_eq!(
+                ResponseCode::from(response.code()),
+                ResponseCode::RequestCodeNotSupported,
+                "{request_code:?} should keep an explicit unsupported contract"
+            );
+            assert!(
+                response
+                    .remark()
+                    .is_some_and(|remark| remark.contains(&request_code.to_i32().to_string())),
+                "{request_code:?} unsupported response should mention the request code"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
     async fn phase5_broker_admin_request_codes_dispatch_to_admin_processor() {
         let mut runtime = new_phase3_test_runtime("phase5-dispatch").await;
         let (processor, _) = runtime.init_processor();
