@@ -194,6 +194,10 @@ mod defaults {
         75
     }
 
+    pub fn file_reserved_time() -> usize {
+        72
+    }
+
     pub fn max_message_size() -> i32 {
         1024 * 1024 * 4 // 4MB
     }
@@ -511,7 +515,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::disk_max_used_space_ratio")]
     pub disk_max_used_space_ratio: usize,
 
-    #[serde(default)]
+    #[serde(default = "defaults::file_reserved_time")]
     pub file_reserved_time: usize,
 
     #[serde(default)]
@@ -1701,7 +1705,15 @@ mod tests {
         let config = MessageStoreConfig::default();
         assert_eq!(config.disk_space_warning_level_ratio, 90);
         assert_eq!(config.disk_space_clean_forcibly_ratio, 85);
+        assert_eq!(config.file_reserved_time, 72);
         assert!(config.clean_file_forcibly_enable);
+    }
+
+    #[test]
+    fn serde_defaults_keep_file_reserved_time_java_default() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str("{}")?;
+        assert_eq!(config.file_reserved_time, 72);
+        Ok(())
     }
 
     #[test]

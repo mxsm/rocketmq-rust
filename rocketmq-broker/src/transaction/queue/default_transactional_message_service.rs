@@ -434,7 +434,7 @@ where
                     MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
                 )) {
                     check_immunity_time = self.get_immunity_time(&immunity_time_str, transaction_timeout as i64);
-                    if value_of_current_minus_born < check_immunity_time
+                    if value_of_current_minus_born <= check_immunity_time
                         && self
                             .check_prepare_queue_offset(remove_map, done_op_offset, &msg_ext, &immunity_time_str)
                             .await?
@@ -443,6 +443,14 @@ where
                         consume_half_offset += 1;
                         continue;
                     }
+                } else if is_within_transaction_immunity(value_of_current_minus_born, check_immunity_time) {
+                    debug!(
+                        "New arrived, the miss offset={}, check it later checkImmunity={}, born={}",
+                        consume_half_offset,
+                        check_immunity_time,
+                        msg_ext.born_timestamp()
+                    );
+                    break;
                 }
 
                 // Determine if check is needed
@@ -630,13 +638,13 @@ where
         start_time: i64,
         transaction_timeout: i64,
     ) -> bool {
-        if let Some(messages) = op_msg {
-            if let Some(last_msg) = messages.last() {
-                return last_msg.born_timestamp() - start_time > transaction_timeout;
-            }
-        }
-
-        op_msg.is_none() && value_of_current_minus_born > check_immunity_time || value_of_current_minus_born <= -1
+        transaction_check_needed(
+            op_msg.map(Vec::as_slice),
+            value_of_current_minus_born,
+            check_immunity_time,
+            start_time,
+            transaction_timeout,
+        )
     }
 
     /// Check prepare queue offset
@@ -952,6 +960,24 @@ where
     }
 }
 
+fn transaction_check_needed(
+    op_msg: Option<&[ArcMut<MessageExt>]>,
+    value_of_current_minus_born: i64,
+    check_immunity_time: i64,
+    start_time: i64,
+    transaction_timeout: i64,
+) -> bool {
+    if let Some(last_msg) = op_msg.and_then(<[ArcMut<MessageExt>]>::last) {
+        return last_msg.born_timestamp() - start_time > transaction_timeout;
+    }
+
+    value_of_current_minus_born > check_immunity_time || value_of_current_minus_born <= -1
+}
+
+fn is_within_transaction_immunity(value_of_current_minus_born: i64, check_immunity_time: i64) -> bool {
+    (0..=check_immunity_time).contains(&value_of_current_minus_born)
+}
+
 impl<MS> TransactionalMessageService for DefaultTransactionalMessageService<MS>
 where
     MS: MessageStore + Send + Sync + 'static,
@@ -1057,5 +1083,60 @@ where
 
     fn set_transaction_metrics(&mut self, _transaction_metrics: TransactionMetrics) {
         unimplemented!("set_transaction_metrics")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transaction_check_needed_when_no_op_messages_after_immunity() {
+        assert!(transaction_check_needed(Some(&[]), 1_001, 1_000, 10_000, 1_000));
+        assert!(transaction_check_needed(None, 1_001, 1_000, 10_000, 1_000));
+    }
+
+    #[test]
+    fn transaction_check_not_needed_when_no_op_messages_within_immunity() {
+        assert!(!transaction_check_needed(Some(&[]), 1_000, 1_000, 10_000, 1_000));
+        assert!(!transaction_check_needed(None, 1_000, 1_000, 10_000, 1_000));
+    }
+
+    #[test]
+    fn transaction_check_needed_for_negative_born_delta() {
+        assert!(transaction_check_needed(Some(&[]), -1, 1_000, 10_000, 1_000));
+    }
+
+    #[test]
+    fn transaction_check_without_explicit_immunity_waits_until_timeout_expires() {
+        assert!(is_within_transaction_immunity(0, 1_000));
+        assert!(is_within_transaction_immunity(1_000, 1_000));
+        assert!(!is_within_transaction_immunity(1_001, 1_000));
+        assert!(!is_within_transaction_immunity(-1, 1_000));
+    }
+
+    #[test]
+    fn transaction_check_uses_latest_op_message_timestamp_when_ops_exist() {
+        let op_message = MessageExt {
+            born_timestamp: 11_001,
+            ..Default::default()
+        };
+        let op_messages = vec![ArcMut::new(op_message)];
+
+        assert!(transaction_check_needed(Some(&op_messages), 0, 1_000, 10_000, 1_000));
+
+        let recent_op_message = MessageExt {
+            born_timestamp: 10_500,
+            ..Default::default()
+        };
+        let recent_op_messages = vec![ArcMut::new(recent_op_message)];
+
+        assert!(!transaction_check_needed(
+            Some(&recent_op_messages),
+            2_000,
+            1_000,
+            10_000,
+            1_000
+        ));
     }
 }
