@@ -201,8 +201,10 @@ impl ProxyStatusMapper {
                 ResponseCode::NoPermission => v2::Code::Forbidden,
                 ResponseCode::TopicNotExist => v2::Code::TopicNotFound,
                 ResponseCode::SubscriptionGroupNotExist => v2::Code::ConsumerGroupNotFound,
+                ResponseCode::UserNotExist | ResponseCode::PolicyNotExist => v2::Code::NotFound,
                 ResponseCode::QueryNotFound => v2::Code::OffsetNotFound,
                 ResponseCode::PullOffsetMoved => v2::Code::IllegalOffset,
+                ResponseCode::RequestCodeNotSupported => v2::Code::Unsupported,
                 _ => v2::Code::InternalError,
             },
             RocketMQError::Timeout { .. } => v2::Code::ProxyTimeout,
@@ -215,6 +217,7 @@ impl ProxyStatusMapper {
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
+    use rocketmq_remoting::code::response_code::ResponseCode;
 
     use super::ProxyStatusMapper;
     use crate::error::ProxyError;
@@ -251,6 +254,43 @@ mod tests {
         assert_eq!(
             ProxyStatusMapper::to_tonic_status(&error).code(),
             tonic::Code::Unavailable
+        );
+    }
+
+    #[test]
+    fn phase7_broker_auth_and_permission_response_codes_map_to_grpc_payload_codes() {
+        for (response_code, expected_grpc_code) in [
+            (ResponseCode::NoPermission, v2::Code::Forbidden),
+            (ResponseCode::UserNotExist, v2::Code::NotFound),
+            (ResponseCode::PolicyNotExist, v2::Code::NotFound),
+        ] {
+            let error = ProxyError::RocketMQ(RocketMQError::broker_operation_failed(
+                "AUTH_ADMIN",
+                response_code.to_i32(),
+                "auth failed",
+            ));
+            let status = ProxyStatusMapper::from_error(&error);
+            assert_eq!(status.code, expected_grpc_code as i32);
+        }
+
+        let authentication_error = ProxyError::RocketMQ(RocketMQError::authentication_failed("bad credentials"));
+        let status = ProxyStatusMapper::from_error(&authentication_error);
+        assert_eq!(status.code, v2::Code::Unauthorized as i32);
+    }
+
+    #[test]
+    fn phase7_request_code_not_supported_maps_to_unsupported_and_unimplemented_transport() {
+        let error = ProxyError::RocketMQ(RocketMQError::broker_operation_failed(
+            "REMOTING",
+            ResponseCode::RequestCodeNotSupported.to_i32(),
+            "request code not supported",
+        ));
+
+        let payload_status = ProxyStatusMapper::from_error(&error);
+        assert_eq!(payload_status.code, v2::Code::Unsupported as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&error).code(),
+            tonic::Code::Unimplemented
         );
     }
 }

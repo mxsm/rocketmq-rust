@@ -187,6 +187,60 @@ mod tests {
     }
 
     #[test]
+    fn phase7_non_dledger_controller_request_set_has_stable_names() {
+        let expected_controller_requests = [
+            (
+                RequestCode::ControllerAlterSyncStateSet,
+                "controller_alter_sync_state_set",
+            ),
+            (RequestCode::ControllerElectMaster, "controller_elect_master"),
+            (RequestCode::ControllerRegisterBroker, "controller_register_broker"),
+            (RequestCode::ControllerGetReplicaInfo, "controller_get_replica_info"),
+            (RequestCode::ControllerGetMetadataInfo, "controller_get_metadata_info"),
+            (
+                RequestCode::ControllerGetSyncStateData,
+                "controller_get_sync_state_data",
+            ),
+            (RequestCode::GetBrokerEpochCache, "controller_get_broker_epoch_cache"),
+            (
+                RequestCode::NotifyBrokerRoleChanged,
+                "controller_notify_broker_role_changed",
+            ),
+            (RequestCode::BrokerHeartbeat, "controller_broker_heartbeat"),
+            (
+                RequestCode::UpdateControllerConfig,
+                "controller_update_controller_config",
+            ),
+            (RequestCode::GetControllerConfig, "controller_get_controller_config"),
+            (RequestCode::CleanBrokerData, "controller_clean_broker_data"),
+            (RequestCode::ControllerGetNextBrokerId, "controller_get_next_broker_id"),
+            (RequestCode::ControllerApplyBrokerId, "controller_apply_broker_id"),
+        ];
+
+        for (request_code, expected_name) in expected_controller_requests {
+            assert_eq!(request_code.get_controller_request_name(), Some(expected_name));
+            assert!(request_code.is_controller_request());
+        }
+    }
+
+    #[test]
+    fn phase7_dledger_request_codes_stay_outside_regular_controller_metrics() {
+        for request_code in [
+            RequestCode::BrokerCloseChannelRequest,
+            RequestCode::CheckNotActiveBrokerRequest,
+            RequestCode::GetBrokerLiveInfoRequest,
+            RequestCode::GetSyncStateDataRequest,
+            RequestCode::RaftBrokerHeartBeatEventRequest,
+        ] {
+            assert_eq!(request_code.get_controller_request_name(), None);
+            assert!(
+                !request_code.is_controller_request(),
+                "{request_code:?} is DLedger/raft-scoped and should not be classified as a regular controller request"
+            );
+        }
+    }
+
+    #[test]
     fn test_request_handle_status() {
         assert_eq!(RequestHandleStatus::Success.get_lower_case_name(), "success");
         assert_eq!(RequestHandleStatus::Failed.get_lower_case_name(), "failed");

@@ -3401,8 +3401,11 @@ mod tests {
     use rocketmq_remoting::protocol::body::kv_table::KVTable;
     use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+    use rocketmq_remoting::protocol::body::user_info::UserInfo;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+    use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
     use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+    use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
     use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
@@ -3420,6 +3423,8 @@ mod tests {
     use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
     use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
     use rocketmq_remoting::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
+    use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
+    use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
     use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_remoting::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
@@ -5231,6 +5236,117 @@ mod tests {
             ResponseCode::from(switch_timer_response.code()),
             ResponseCode::InvalidParameter,
             "new_phase3_test_runtime keeps timerWheelEnable disabled"
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase7_broker_auth_request_codes_dispatch_to_admin_processor() {
+        let mut runtime = new_phase3_test_runtime("phase7-auth-dispatch").await;
+        let (processor, _) = runtime.init_processor();
+
+        for request_code in [
+            RequestCode::AuthCreateUser,
+            RequestCode::AuthUpdateUser,
+            RequestCode::AuthDeleteUser,
+            RequestCode::AuthGetUser,
+            RequestCode::AuthListUsers,
+            RequestCode::AuthCreateAcl,
+            RequestCode::AuthUpdateAcl,
+            RequestCode::AuthDeleteAcl,
+            RequestCode::AuthGetAcl,
+            RequestCode::AuthListAcl,
+        ] {
+            assert_eq!(
+                processor.dispatch_processor_variant_for_test(request_code),
+                Some("AdminBroker"),
+                "{request_code:?} should fall back to AdminBrokerProcessor"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase7_auth_user_admin_lifecycle_returns_decodable_models() {
+        let mut runtime = new_phase3_test_runtime("phase7-auth-user").await;
+        let username = CheetahString::from_static_str("phase7-user");
+        let (mut processor, _) = runtime.init_processor();
+
+        let user_info = UserInfo {
+            username: None,
+            password: Some(CheetahString::from_static_str("secret")),
+            user_type: Some(CheetahString::from_static_str("Normal")),
+            user_status: Some(CheetahString::from_static_str("enable")),
+        };
+        let mut create_request = RemotingCommand::create_request_command(
+            RequestCode::AuthCreateUser,
+            CreateUserRequestHeader {
+                username: username.clone(),
+            },
+        )
+        .set_body(user_info.encode().expect("user info should encode"));
+        create_request.make_custom_header_to_net();
+        let create_response = process_broker_request(&mut processor, &mut create_request).await;
+        assert_eq!(ResponseCode::from(create_response.code()), ResponseCode::Success);
+
+        let mut get_request = RemotingCommand::create_request_command(
+            RequestCode::AuthGetUser,
+            GetUserRequestHeader {
+                username: username.clone(),
+            },
+        );
+        get_request.make_custom_header_to_net();
+        let get_response = process_broker_request(&mut processor, &mut get_request).await;
+        assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
+        let get_body = get_response.body().expect("AuthGetUser should include a body");
+        let fetched_user = UserInfo::decode(get_body.as_ref()).expect("AuthGetUser body should decode");
+        assert_eq!(fetched_user.username, Some(username.clone()));
+        assert_eq!(fetched_user.user_type.as_deref(), Some("Normal"));
+        assert_eq!(fetched_user.user_status.as_deref(), Some("enable"));
+
+        let mut list_request = RemotingCommand::create_request_command(
+            RequestCode::AuthListUsers,
+            ListUsersRequestHeader {
+                filter: CheetahString::from_static_str("phase7"),
+            },
+        );
+        list_request.make_custom_header_to_net();
+        let list_response = process_broker_request(&mut processor, &mut list_request).await;
+        assert_eq!(ResponseCode::from(list_response.code()), ResponseCode::Success);
+        let listed_users: Vec<UserInfo> = Vec::decode(
+            list_response
+                .body()
+                .expect("AuthListUsers should include a body")
+                .as_ref(),
+        )
+        .expect("AuthListUsers body should decode");
+        assert!(
+            listed_users
+                .iter()
+                .any(|user| user.username.as_ref() == Some(&username)),
+            "AuthListUsers should include the created user"
+        );
+
+        let mut delete_request = RemotingCommand::create_request_command(
+            RequestCode::AuthDeleteUser,
+            DeleteUserRequestHeader {
+                username: username.clone(),
+            },
+        );
+        delete_request.make_custom_header_to_net();
+        let delete_response = process_broker_request(&mut processor, &mut delete_request).await;
+        assert_eq!(ResponseCode::from(delete_response.code()), ResponseCode::Success);
+
+        let mut get_deleted_request =
+            RemotingCommand::create_request_command(RequestCode::AuthGetUser, GetUserRequestHeader { username });
+        get_deleted_request.make_custom_header_to_net();
+        let get_deleted_response = process_broker_request(&mut processor, &mut get_deleted_request).await;
+        assert_eq!(ResponseCode::from(get_deleted_response.code()), ResponseCode::Success);
+        assert!(
+            get_deleted_response.body().is_none(),
+            "AuthGetUser should return success without body after deletion"
         );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
