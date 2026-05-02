@@ -2197,6 +2197,36 @@ impl DefaultMQProducerImpl {
         }
     }
 
+    fn build_end_transaction_header_for_check(
+        producer_group: CheetahString,
+        check_request_header: &CheckTransactionStateRequestHeader,
+        msg_id: CheetahString,
+        transaction_state: LocalTransactionState,
+    ) -> EndTransactionRequestHeader {
+        EndTransactionRequestHeader {
+            topic: check_request_header.topic.clone().unwrap_or_default(),
+            producer_group,
+            tran_state_table_offset: check_request_header.tran_state_table_offset as u64,
+            commit_log_offset: check_request_header.commit_log_offset as u64,
+            commit_or_rollback: match transaction_state {
+                LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+                LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+                LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
+            },
+            from_transaction_check: true,
+            msg_id,
+            transaction_id: check_request_header.transaction_id.clone(),
+            rpc_request_header: RpcRequestHeader {
+                broker_name: check_request_header
+                    .rpc_request_header
+                    .clone()
+                    .unwrap_or_default()
+                    .broker_name,
+                ..Default::default()
+            },
+        }
+    }
+
     pub fn set_default_mqproducer_impl_inner(
         &mut self,
         default_mqproducer_impl_inner: WeakArcMut<DefaultMQProducerImpl>,
@@ -2252,12 +2282,11 @@ impl MQProducerInner for DefaultMQProducerImpl {
         // Use spawn_blocking to avoid blocking Tokio worker threads (matches Java's ExecutorService
         // behavior)
         tokio::task::spawn_blocking(move || {
-            let mut unique_key = msg.property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-            ));
-            if unique_key.is_none() {
-                unique_key = Some(msg.msg_id.clone());
-            }
+            let unique_key = msg
+                .property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                ))
+                .unwrap_or_else(|| msg.msg_id.clone());
 
             // Check local transaction state with exception handling (synchronous execution)
             let transaction_state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2277,43 +2306,31 @@ impl MQProducerInner for DefaultMQProducerImpl {
             // Switch back to async context for network I/O
             let handle = tokio::runtime::Handle::current();
             handle.spawn(async move {
-                let request_header = EndTransactionRequestHeader {
-                    topic: check_request_header.topic.clone().unwrap_or_default(),
-                    producer_group: CheetahString::from_string(
-                        producer_impl_inner.producer_config.producer_group().to_string(),
-                    ),
-                    tran_state_table_offset: check_request_header.commit_log_offset as u64,
-                    commit_log_offset: check_request_header.commit_log_offset as u64,
-                    commit_or_rollback: match transaction_state {
-                        LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
-                        LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
-                        LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
-                    },
-                    from_transaction_check: true,
-                    msg_id: unique_key.clone().unwrap_or_default(),
-                    transaction_id: check_request_header.transaction_id.clone(),
-                    rpc_request_header: RpcRequestHeader {
-                        broker_name: check_request_header.rpc_request_header.unwrap_or_default().broker_name,
-                        ..Default::default()
-                    },
-                };
+                let request_header = Self::build_end_transaction_header_for_check(
+                    producer_impl_inner.producer_config.producer_group().clone(),
+                    &check_request_header,
+                    unique_key.clone(),
+                    transaction_state,
+                );
                 // Execute end transaction hook
                 producer_impl_inner.do_execute_end_transaction_hook(
                     &msg.message,
-                    unique_key.as_ref().unwrap(),
+                    &unique_key,
                     &broker_addr,
                     transaction_state,
                     true,
                 );
 
                 // Send end transaction request with error handling
-                if let Err(e) = producer_impl_inner
-                    .client_instance
-                    .as_mut()
-                    .unwrap()
-                    .mq_client_api_impl
-                    .as_mut()
-                    .unwrap()
+                let Some(client_instance) = producer_impl_inner.client_instance.as_mut() else {
+                    tracing::warn!("endTransactionOneway skipped: client instance is not available");
+                    return;
+                };
+                let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                    tracing::warn!("endTransactionOneway skipped: MQClientAPIImpl is not available");
+                    return;
+                };
+                if let Err(e) = mq_client_api_impl
                     .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
                     .await
                 {
@@ -2805,5 +2822,75 @@ pub(crate) struct DefaultResolver {
 impl Resolver for DefaultResolver {
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString> {
         self.client_instance.find_broker_address_in_publish(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transaction_check_end_header_preserves_java_offsets() {
+        let check_header = CheckTransactionStateRequestHeader {
+            topic: Some(CheetahString::from_static_str("TopicA")),
+            tran_state_table_offset: 123,
+            commit_log_offset: 456,
+            msg_id: Some(CheetahString::from_static_str("msg-id")),
+            transaction_id: Some(CheetahString::from_static_str("tx-id")),
+            offset_msg_id: Some(CheetahString::from_static_str("offset-msg-id")),
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(CheetahString::from_static_str("broker-a")),
+                ..Default::default()
+            }),
+        };
+
+        let end_header = DefaultMQProducerImpl::build_end_transaction_header_for_check(
+            CheetahString::from_static_str("ProducerA"),
+            &check_header,
+            CheetahString::from_static_str("unique-msg-id"),
+            LocalTransactionState::CommitMessage,
+        );
+
+        assert_eq!(end_header.topic, "TopicA");
+        assert_eq!(end_header.producer_group, "ProducerA");
+        assert_eq!(end_header.tran_state_table_offset, 123);
+        assert_eq!(end_header.commit_log_offset, 456);
+        assert_eq!(end_header.commit_or_rollback, MessageSysFlag::TRANSACTION_COMMIT_TYPE);
+        assert!(end_header.from_transaction_check);
+        assert_eq!(end_header.msg_id, "unique-msg-id");
+        assert_eq!(end_header.transaction_id.as_deref(), Some("tx-id"));
+        assert_eq!(end_header.rpc_request_header.broker_name.as_deref(), Some("broker-a"));
+    }
+
+    #[test]
+    fn transaction_check_end_header_maps_local_transaction_state() {
+        let check_header = CheckTransactionStateRequestHeader {
+            tran_state_table_offset: 1,
+            commit_log_offset: 2,
+            ..Default::default()
+        };
+
+        let cases = [
+            (
+                LocalTransactionState::CommitMessage,
+                MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+            ),
+            (
+                LocalTransactionState::RollbackMessage,
+                MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+            ),
+            (LocalTransactionState::Unknown, MessageSysFlag::TRANSACTION_NOT_TYPE),
+        ];
+
+        for (state, expected_flag) in cases {
+            let end_header = DefaultMQProducerImpl::build_end_transaction_header_for_check(
+                CheetahString::from_static_str("ProducerA"),
+                &check_header,
+                CheetahString::from_static_str("msg-id"),
+                state,
+            );
+
+            assert_eq!(end_header.commit_or_rollback, expected_flag);
+        }
     }
 }

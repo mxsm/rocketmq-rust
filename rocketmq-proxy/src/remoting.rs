@@ -452,15 +452,43 @@ where
                 return decode_error_response(request.opaque(), "decode notifyConsumerIdsChanged header", error);
             }
         };
-        if self
-            .sessions
-            .consumer_client_ids(header.consumer_group.as_str())
-            .is_empty()
-        {
+        let client_ids = self.sessions.consumer_client_ids(header.consumer_group.as_str());
+        if client_ids.is_empty() {
             return response_with_code(
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
                 format!("no consumer for this group, {}", header.consumer_group),
+            );
+        }
+        let mut forwarded = 0usize;
+        for client_id in client_ids {
+            let Some(mut client_channel) = self.sessions.remoting_channel(client_id.as_str()) else {
+                continue;
+            };
+            if let Err(error) = client_channel
+                .channel_inner_mut()
+                .send_oneway(request.clone(), 10)
+                .await
+            {
+                return response_with_code(
+                    request.opaque(),
+                    ResponseCode::SystemError,
+                    format!(
+                        "forward notifyConsumerIdsChanged failed for group {}, clientId {}: {}",
+                        header.consumer_group, client_id, error
+                    ),
+                );
+            }
+            forwarded += 1;
+        }
+        if forwarded == 0 {
+            return response_with_code(
+                request.opaque(),
+                ResponseCode::ConsumerNotOnline,
+                format!(
+                    "no remoting channel for consumer group {}, clients are online",
+                    header.consumer_group
+                ),
             );
         }
         RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque())
@@ -2239,6 +2267,93 @@ mod tests {
         let response = dispatcher.dispatch(&test_context(), &request).await;
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::ConsumerNotOnline);
+    }
+
+    #[tokio::test]
+    async fn dispatch_notify_consumer_ids_changed_forwards_to_remoting_consumers() {
+        let sessions = ClientSessionRegistry::default();
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let dispatcher = ProxyRemotingDispatcher::new(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            sessions.clone(),
+            None,
+        );
+
+        let heartbeat = HeartbeatData {
+            client_id: CheetahString::from_static_str("client-a"),
+            producer_data_set: HashSet::new(),
+            consumer_data_set: HashSet::from([ConsumerData {
+                group_name: CheetahString::from_static_str("GroupA"),
+                ..ConsumerData::default()
+            }]),
+            heartbeat_fingerprint: 0,
+            is_without_sub: false,
+        };
+        let mut heartbeat_request =
+            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
+                .set_body(heartbeat.encode().expect("heartbeat should encode"));
+        heartbeat_request.make_custom_header_to_net();
+        let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
+        assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+
+        let mut missing_channel_request = RemotingCommand::create_request_command(
+            RequestCode::NotifyConsumerIdsChanged,
+            NotifyConsumerIdsChangedRequestHeader {
+                consumer_group: CheetahString::from_static_str("GroupA"),
+                rpc_request_header: None,
+            },
+        );
+        missing_channel_request.make_custom_header_to_net();
+        let missing_channel_response = dispatcher.dispatch(&test_context(), &missing_channel_request).await;
+        assert_eq!(
+            ResponseCode::from(missing_channel_response.code()),
+            ResponseCode::ConsumerNotOnline
+        );
+
+        let mut harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        sessions.bind_remoting_channel("client-a", harness.channel());
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::NotifyConsumerIdsChanged,
+            NotifyConsumerIdsChangedRequestHeader {
+                consumer_group: CheetahString::from_static_str("GroupA"),
+                rpc_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = dispatcher.dispatch(&test_context(), &request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let forwarded = timeout(std::time::Duration::from_secs(3), harness.receive_response())
+            .await
+            .expect("forwarded notify consumer ids changed should arrive before timeout")
+            .expect("forwarded notify consumer ids changed should decode")
+            .expect("forwarded notify consumer ids changed should be present");
+        assert_eq!(
+            RequestCode::from(forwarded.code()),
+            RequestCode::NotifyConsumerIdsChanged
+        );
+        assert!(forwarded.is_oneway_rpc());
+        let forwarded_header = forwarded
+            .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
+            .expect("forwarded notify header should decode");
+        assert_eq!(forwarded_header.consumer_group, "GroupA");
     }
 
     #[tokio::test]
