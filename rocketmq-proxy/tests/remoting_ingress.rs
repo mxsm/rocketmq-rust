@@ -189,6 +189,69 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
     );
 }
 
+#[tokio::test]
+async fn request_code_not_supported_over_remoting_integration_returns_compatible_response() {
+    let service_manager = Arc::new(ClusterServiceManager::with_services(
+        Arc::new(RecordingRouteService::default()),
+        Arc::new(StaticMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ));
+
+    let grpc_addr = free_local_addr();
+    let remoting_addr = free_local_addr();
+    let runtime = ProxyRuntime::builder(ProxyConfig {
+        grpc: GrpcConfig {
+            listen_addr: grpc_addr.to_string(),
+            ..GrpcConfig::default()
+        },
+        remoting: RemotingConfig {
+            enabled: true,
+            listen_addr: remoting_addr.to_string(),
+        },
+        ..ProxyConfig::default()
+    })
+    .with_service_manager(service_manager)
+    .build();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        runtime
+            .serve_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+
+    let mut connection = connect_remoting_with_retry(remoting_addr).await;
+    let request = RemotingCommand::create_remoting_command(RequestCode::AuthCreateUser).set_opaque(88);
+    let opaque = request.opaque();
+    connection
+        .send_command(request)
+        .await
+        .expect("unsupported remoting request should be sent");
+
+    let response = receive_remoting_response(&mut connection).await;
+    assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported as i32);
+    assert_eq!(response.opaque(), opaque);
+    assert!(
+        response
+            .remark()
+            .is_some_and(|remark| remark.contains("does not support request code 3001")),
+        "unsupported response should explain proxy remoting coverage, got {:?}",
+        response.remark()
+    );
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
 async fn connect_remoting_with_retry(addr: SocketAddr) -> Connection {
     let mut last_error = None;
     for _ in 0..20 {
@@ -202,6 +265,20 @@ async fn connect_remoting_with_retry(addr: SocketAddr) -> Connection {
     }
 
     panic!("remoting client failed to connect to {addr}: {last_error:?}");
+}
+
+async fn receive_remoting_response(connection: &mut Connection) -> RemotingCommand {
+    timeout(Duration::from_secs(3), async {
+        loop {
+            match connection.receive_command().await {
+                Some(Ok(response)) => break response,
+                Some(Err(error)) => panic!("failed to decode remoting response: {error}"),
+                None => continue,
+            }
+        }
+    })
+    .await
+    .expect("remoting response should arrive before timeout")
 }
 
 fn free_local_addr() -> SocketAddr {

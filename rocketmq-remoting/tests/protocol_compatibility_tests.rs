@@ -406,3 +406,82 @@ fn protocol_compatibility_response_command_codec_round_trip_preserves_wire_field
     assert_eq!(decoded.remark().map(|value| value.as_str()), Some("ok"));
     assert_eq!(decoded.body(), Some(&body));
 }
+
+#[test]
+fn protocol_compatibility_phase8_all_java_request_codes_codec_round_trip() {
+    let mut codec = RemotingCommandCodec::new();
+
+    for (index, (name, value)) in JAVA_REQUEST_CODES.iter().enumerate() {
+        let request_code = RequestCode::from(*value);
+        let body = Bytes::from(format!("phase8-request-body-{name}-{value}"));
+        let expected_remark = format!("phase8 request {name}");
+        let mut buffer = BytesMut::new();
+        let command = RemotingCommand::create_remoting_command(request_code)
+            .set_opaque(10_000 + index as i32)
+            .set_remark_option(Some(expected_remark.clone()))
+            .set_body(body.clone());
+
+        codec
+            .encode(command, &mut buffer)
+            .unwrap_or_else(|error| panic!("Java RequestCode {name}={value} should encode: {error}"));
+        let decoded = codec
+            .decode(&mut buffer)
+            .unwrap_or_else(|error| panic!("Java RequestCode {name}={value} should decode: {error}"))
+            .unwrap_or_else(|| panic!("Java RequestCode {name}={value} should produce a complete command"));
+
+        assert_eq!(
+            decoded.request_code(),
+            request_code,
+            "Java RequestCode {name}={value} request_code drifted after codec round trip"
+        );
+        assert_eq!(
+            decoded.code(),
+            *value,
+            "Java RequestCode {name}={value} numeric code drifted after codec round trip"
+        );
+        assert_eq!(decoded.opaque(), 10_000 + index as i32);
+        assert_eq!(
+            decoded.remark().map(|remark| remark.as_str()),
+            Some(expected_remark.as_str())
+        );
+        assert_eq!(decoded.body(), Some(&body));
+        assert!(buffer.is_empty(), "codec should consume the whole frame for {name}");
+    }
+}
+
+#[test]
+fn protocol_compatibility_phase8_all_java_response_codes_codec_round_trip() {
+    let mut codec = RemotingCommandCodec::new();
+
+    for (index, (name, value)) in JAVA_RESPONSE_CODES.iter().enumerate() {
+        let response_code = ResponseCode::from(*value);
+        let body = Bytes::from(format!("phase8-response-body-{name}-{value}"));
+        let expected_remark = format!("phase8 response {name}");
+        let mut buffer = BytesMut::new();
+        let command = RemotingCommand::create_response_command_with_code_remark(response_code, expected_remark.clone())
+            .set_opaque(20_000 + index as i32)
+            .set_body(body.clone());
+
+        codec
+            .encode(command, &mut buffer)
+            .unwrap_or_else(|error| panic!("Java ResponseCode {name}={value} should encode: {error}"));
+        let decoded = codec
+            .decode(&mut buffer)
+            .unwrap_or_else(|error| panic!("Java ResponseCode {name}={value} should decode: {error}"))
+            .unwrap_or_else(|| panic!("Java ResponseCode {name}={value} should produce a complete command"));
+
+        assert_eq!(
+            decoded.code(),
+            *value,
+            "Java ResponseCode {name}={value} numeric code drifted after codec round trip"
+        );
+        assert!(decoded.is_response_type());
+        assert_eq!(decoded.opaque(), 20_000 + index as i32);
+        assert_eq!(
+            decoded.remark().map(|remark| remark.as_str()),
+            Some(expected_remark.as_str())
+        );
+        assert_eq!(decoded.body(), Some(&body));
+        assert!(buffer.is_empty(), "codec should consume the whole frame for {name}");
+    }
+}
