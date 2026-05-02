@@ -611,6 +611,37 @@ async fn controller_request_contract_get_sync_state_data() {
 }
 
 #[tokio::test]
+async fn dledger_only_request_codes_return_request_code_not_supported() {
+    let mut harness = ProcessorHarness::new().await;
+
+    for request_code in [
+        RequestCode::BrokerCloseChannelRequest,
+        RequestCode::CheckNotActiveBrokerRequest,
+        RequestCode::GetBrokerLiveInfoRequest,
+        RequestCode::GetSyncStateDataRequest,
+        RequestCode::RaftBrokerHeartBeatEventRequest,
+    ] {
+        let response = harness
+            .send(RemotingCommand::create_remoting_command(request_code))
+            .await;
+
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::RequestCodeNotSupported,
+            "{request_code:?} should stay outside the non-DLedger controller contract"
+        );
+        assert!(
+            response
+                .remark()
+                .is_some_and(|remark| remark.contains(&request_code.to_i32().to_string())),
+            "{request_code:?} unsupported response should mention the request code"
+        );
+    }
+
+    harness.shutdown().await;
+}
+
+#[tokio::test]
 async fn controller_request_contract_update_controller_config() {
     let mut harness = ProcessorHarness::new().await;
     let response = harness

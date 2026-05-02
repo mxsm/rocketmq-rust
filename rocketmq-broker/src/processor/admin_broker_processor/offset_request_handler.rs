@@ -16,8 +16,6 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
-use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
 use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
 use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
@@ -29,7 +27,6 @@ use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -347,16 +344,11 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let _request_header = request.decode_command_custom_header::<CheckRocksdbCqWriteProgressRequestHeader>()?;
-        let body = CheckRocksdbCqWriteResult {
-            check_result: Some("It is not CombineConsumeQueueStore, no need check".into()),
-            check_status: CheckStatus::CheckOk as i32,
-        };
-
-        Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body.encode()?),
-        ))
+        Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::RequestCodeNotSupported,
+            "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker uses \
+             file-backed consume queues",
+        )))
     }
 
     pub async fn get_all_subscription_group_config(
@@ -479,14 +471,11 @@ mod tests {
     use rocketmq_remoting::connection::Connection;
     use rocketmq_remoting::net::channel::Channel;
     use rocketmq_remoting::net::channel::ChannelInner;
-    use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
-    use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
     use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
     use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
     use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
     use rocketmq_remoting::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -597,7 +586,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_rocksdb_cq_write_progress_returns_no_need_check_for_local_file_store() {
+    async fn check_rocksdb_cq_write_progress_without_rocksdb_returns_not_supported() {
         let mut runtime = new_test_runtime("check-rocksdb-progress").await;
         let inner = runtime.inner_for_test().clone();
         let mut handler = OffsetRequestHandler::new(inner);
@@ -613,24 +602,22 @@ mod tests {
         let channel = create_test_channel().await;
         let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 
-        let mut response = handler
+        let response = handler
             .check_rocksdb_cq_write_progress(channel, ctx, RequestCode::CheckRocksdbCqWriteProgress, &mut request)
             .await
             .expect("check rocksdb cq write progress should succeed")
             .expect("check rocksdb cq write progress should return response");
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let body = CheckRocksdbCqWriteResult::decode(
-            response
-                .take_body()
-                .expect("check rocksdb cq write progress should contain body")
-                .as_ref(),
-        )
-        .expect("decode check rocksdb cq write progress body");
-        assert_eq!(body.get_check_status(), CheckStatus::CheckOk);
         assert_eq!(
-            body.check_result.as_deref(),
-            Some("It is not CombineConsumeQueueStore, no need check")
+            ResponseCode::from(response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        assert_eq!(
+            response
+                .remark()
+                .expect("check rocksdb cq write progress should explain unsupported backend"),
+            "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker uses \
+             file-backed consume queues"
         );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());

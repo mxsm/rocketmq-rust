@@ -3402,6 +3402,7 @@ mod tests {
     use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
     use rocketmq_remoting::protocol::body::user_info::UserInfo;
+    use rocketmq_remoting::protocol::header::add_broker_request_header::AddBrokerRequestHeader;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
     use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
     use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
@@ -3433,6 +3434,7 @@ mod tests {
     use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
     use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
     use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    use rocketmq_remoting::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader;
     use rocketmq_remoting::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
     use rocketmq_remoting::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
     use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
@@ -4773,6 +4775,48 @@ mod tests {
                 "{request_code:?} unsupported response should mention the request code"
             );
         }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn add_remove_broker_without_container_returns_request_code_not_supported() {
+        let mut runtime = new_phase3_test_runtime("container-add-remove-unsupported").await;
+        let (mut processor, _) = runtime.init_processor();
+
+        let mut add_request = RemotingCommand::create_request_command(
+            RequestCode::AddBroker,
+            AddBrokerRequestHeader {
+                config_path: Some(CheetahString::from_static_str("broker.conf")),
+            },
+        );
+        add_request.make_custom_header_to_net();
+        let add_response = process_broker_request(&mut processor, &mut add_request).await;
+        assert_eq!(
+            ResponseCode::from(add_response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        assert!(add_response
+            .remark()
+            .is_some_and(|remark| remark.contains(&RequestCode::AddBroker.to_i32().to_string())));
+
+        let mut remove_request = RemotingCommand::create_request_command(
+            RequestCode::RemoveBroker,
+            RemoveBrokerRequestHeader {
+                broker_name: CheetahString::from_static_str("broker-a"),
+                broker_cluster_name: CheetahString::from_static_str("DefaultCluster"),
+                broker_id: 1,
+            },
+        );
+        remove_request.make_custom_header_to_net();
+        let remove_response = process_broker_request(&mut processor, &mut remove_request).await;
+        assert_eq!(
+            ResponseCode::from(remove_response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        assert!(remove_response
+            .remark()
+            .is_some_and(|remark| remark.contains(&RequestCode::RemoveBroker.to_i32().to_string())));
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

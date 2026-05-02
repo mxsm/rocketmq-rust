@@ -16,7 +16,6 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
@@ -26,7 +25,6 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
-use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
@@ -224,31 +222,17 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<ExportRocksdbConfigToJsonRequestHeader>()?;
-        let config_types = match request_header.fetch_config_type() {
-            Ok(config_types) => config_types,
-            Err(error) => {
-                return Ok(Some(
-                    response.set_code(ResponseCode::InvalidParameter).set_remark(error),
-                ));
-            }
-        };
-
-        for config_type in config_types {
-            match config_type {
-                ExportRocksdbConfigType::Topics => {
-                    self.broker_runtime_inner.topic_config_manager().persist();
-                }
-                ExportRocksdbConfigType::SubscriptionGroups => {
-                    self.broker_runtime_inner.subscription_group_manager().persist();
-                }
-                ExportRocksdbConfigType::ConsumerOffsets => {
-                    self.broker_runtime_inner.consumer_offset_manager().persist();
-                }
-            }
+        if let Err(error) = request_header.fetch_config_type() {
+            return Ok(Some(
+                response.set_code(ResponseCode::InvalidParameter).set_remark(error),
+            ));
         }
 
         Ok(Some(
-            response.set_code(ResponseCode::Success).set_remark("export done."),
+            response.set_code(ResponseCode::RequestCodeNotSupported).set_remark(
+                "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
+                 file-backed config managers",
+            ),
         ))
     }
 
@@ -670,8 +654,6 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
-    use rocketmq_common::common::config::TopicConfig;
-    use rocketmq_common::common::config_manager::ConfigManager;
     use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::TimeUtils::current_millis;
@@ -683,7 +665,6 @@ mod tests {
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_rust::ArcMut;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -907,27 +888,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_rocksdb_config_to_json_persists_requested_managers() {
+    async fn export_rocksdb_config_without_rocksdb_returns_not_supported() {
         let mut runtime = new_test_runtime("export-config", false).await;
-        let mut inner = runtime.inner_for_test().clone();
-        inner
-            .topic_config_manager_mut()
-            .update_topic_config(ArcMut::new(TopicConfig::with_queues("export-topic", 1, 1)));
-
-        let mut subscription_group_config = SubscriptionGroupConfig::default();
-        subscription_group_config.set_group_name(CheetahString::from_static_str("export-group"));
-        inner
-            .subscription_group_manager_mut()
-            .update_subscription_group_config(&mut subscription_group_config);
-        inner.consumer_offset_manager().commit_offset(
-            CheetahString::from_static_str("client"),
-            &CheetahString::from_static_str("export-group"),
-            &CheetahString::from_static_str("export-topic"),
-            0,
-            7,
-        );
-
-        let mut handler = BrokerConfigRequestHandler::new(inner.clone());
+        let inner = runtime.inner_for_test().clone();
+        let mut handler = BrokerConfigRequestHandler::new(inner);
         let channel = create_test_channel().await;
         let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -944,16 +908,17 @@ mod tests {
             .expect("export config should succeed")
             .expect("export config should return response");
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let topic_json =
-            fs::read_to_string(inner.topic_config_manager().config_file_path()).expect("topic config file");
-        let group_json =
-            fs::read_to_string(inner.subscription_group_manager().config_file_path()).expect("group config file");
-        let offset_json =
-            fs::read_to_string(inner.consumer_offset_manager().config_file_path()).expect("offset config file");
-        assert!(topic_json.contains("export-topic"));
-        assert!(group_json.contains("export-group"));
-        assert!(offset_json.contains("export-topic@export-group"));
+        assert_eq!(
+            ResponseCode::from(response.code()),
+            ResponseCode::RequestCodeNotSupported
+        );
+        assert_eq!(
+            response
+                .remark()
+                .expect("export rocksdb config should explain unsupported backend"),
+            "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
+             file-backed config managers"
+        );
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
