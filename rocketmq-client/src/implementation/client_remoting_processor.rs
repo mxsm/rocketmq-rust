@@ -27,11 +27,15 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
+use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetBody;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_remoting::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
+use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -67,9 +71,9 @@ impl RequestProcessor for ClientRemotingProcessor {
         info!("process_request: {:?}", request_code);
         match request_code {
             RequestCode::CheckTransactionState => self.check_transaction_state(channel, ctx, request).await,
-            RequestCode::ResetConsumerClientOffset
-            | RequestCode::GetConsumerStatusFromClient
-            | RequestCode::GetConsumerRunningInfo => Ok(Some(Self::unsupported_client_callback_response(request_code))),
+            RequestCode::ResetConsumerClientOffset => self.reset_consumer_client_offset(channel, request).await,
+            RequestCode::GetConsumerStatusFromClient => self.get_consumer_status_from_client(request).await,
+            RequestCode::GetConsumerRunningInfo => Ok(Some(Self::unsupported_client_callback_response(request_code))),
             RequestCode::ConsumeMessageDirectly => self.consume_message_directly(channel, ctx, request).await,
             //RPC message handle code
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
@@ -260,6 +264,79 @@ impl ClientRemotingProcessor {
         Ok(None)
     }
 
+    async fn reset_consumer_client_offset(
+        &mut self,
+        channel: Channel,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header = match request.decode_command_custom_header::<ResetOffsetRequestHeader>() {
+            Ok(header) => header,
+            Err(error) => {
+                warn!(
+                    "ignore malformed ResetConsumerClientOffset callback from {}: {}",
+                    channel.remote_address(),
+                    error
+                );
+                return Ok(None);
+            }
+        };
+        let Some(body) = request.get_body() else {
+            warn!(
+                "ignore ResetConsumerClientOffset callback with missing body from {}; topic={}, group={}",
+                channel.remote_address(),
+                request_header.topic,
+                request_header.group
+            );
+            return Ok(None);
+        };
+        let Some(reset_body) = ResetOffsetBody::decode(body) else {
+            warn!(
+                "ignore ResetConsumerClientOffset callback with malformed body from {}; topic={}, group={}",
+                channel.remote_address(),
+                request_header.topic,
+                request_header.group
+            );
+            return Ok(None);
+        };
+
+        self.client_instance
+            .reset_offset(&request_header.topic, &request_header.group, reset_body.offset_table)
+            .await;
+        Ok(None)
+    }
+
+    async fn get_consumer_status_from_client(
+        &mut self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let request_header = match request.decode_command_custom_header::<GetConsumerStatusRequestHeader>() {
+            Ok(header) => header,
+            Err(error) => {
+                warn!("decode GetConsumerStatusFromClient request header failed: {}", error);
+                return Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
+                    "decode GetConsumerStatusFromClient request header failed: {error}"
+                ))));
+            }
+        };
+
+        match self
+            .client_instance
+            .get_consumer_status(&request_header.topic, &request_header.group)
+            .await
+        {
+            Some(message_queue_table) => {
+                let mut body = GetConsumerStatusBody::new();
+                body.message_queue_table = message_queue_table;
+                Ok(Some(response.set_body(body.encode())))
+            }
+            None => Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
+                "The Consumer Group <{}> not exist in this consumer",
+                request_header.group
+            )))),
+        }
+    }
+
     async fn check_transaction_state(
         &mut self,
         channel: Channel,
@@ -365,11 +442,54 @@ mod tests {
     use std::collections::HashMap;
 
     use bytes::Bytes;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_remoting::local::LocalRequestHarness;
 
     use super::*;
     use crate::base::client_config::ClientConfig;
+    use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+    use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
+    use crate::consumer::store::offset_store::OffsetStore;
+    use crate::consumer::store::read_offset_type::ReadOffsetType;
+    use crate::consumer::store::remote_broker_offset_store::RemoteBrokerOffsetStore;
     use crate::producer::request_response_future::RequestResponseFuture;
+
+    async fn client_with_push_consumer(
+        group: CheetahString,
+        client_id: &str,
+    ) -> (ArcMut<MQClientInstance>, ArcMut<DefaultMQPushConsumerImpl>) {
+        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
+        let consumer_config = ConsumerConfig {
+            consumer_group: group.clone(),
+            ..Default::default()
+        };
+        let consumer_config = ArcMut::new(consumer_config);
+        let mut consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ));
+        let wrapper = consumer_impl.clone();
+        consumer_impl.set_default_mqpush_consumer_impl(wrapper);
+        consumer_impl.offset_store = Some(ArcMut::new(OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
+            client_instance.clone(),
+            group.clone(),
+        ))));
+
+        let registered = client_instance
+            .mut_from_ref()
+            .register_consumer(
+                &group,
+                MQConsumerInnerImpl {
+                    default_mqpush_consumer_impl: consumer_impl.clone(),
+                },
+            )
+            .await;
+        assert!(registered, "test consumer should register");
+
+        (client_instance, consumer_impl)
+    }
 
     fn valid_reply_message_header(correlation_id: Option<CheetahString>, sys_flag: i32) -> ReplyMessageRequestHeader {
         let properties = correlation_id.map(|correlation_id| {
@@ -398,6 +518,154 @@ mod tests {
             store_timestamp: current_millis() as i64,
             topic_request: None,
         }
+    }
+
+    #[tokio::test]
+    async fn reset_consumer_client_offset_updates_matching_consumer_offsets() {
+        let topic = CheetahString::from_static_str("reset-topic");
+        let group = CheetahString::from_static_str("reset-group");
+        let (client_instance, consumer_impl) =
+            client_with_push_consumer(group.clone(), "reset-consumer-offset-test").await;
+        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        let mq = MessageQueue::from_parts(topic.clone(), "broker-a", 0);
+        let mut reset_body = ResetOffsetBody::new();
+        reset_body.offset_table.insert(mq.clone(), 123);
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ResetConsumerClientOffset,
+            ResetOffsetRequestHeader {
+                topic: topic.clone(),
+                group: group.clone(),
+                queue_id: -1,
+                offset: None,
+                timestamp: current_millis() as i64,
+                is_force: true,
+                topic_request_header: None,
+            },
+        )
+        .set_body(reset_body.encode());
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("reset offset callback should not fail");
+
+        assert!(
+            response.is_none(),
+            "ResetConsumerClientOffset is a one-way broker callback"
+        );
+        let stored_offset = consumer_impl
+            .offset_store
+            .as_ref()
+            .expect("test consumer should have offset store")
+            .read_offset(&mq, ReadOffsetType::ReadFromMemory)
+            .await;
+        assert_eq!(stored_offset, 123);
+    }
+
+    #[tokio::test]
+    async fn reset_consumer_client_offset_with_missing_body_is_oneway_noop() {
+        let topic = CheetahString::from_static_str("reset-missing-body-topic");
+        let group = CheetahString::from_static_str("reset-missing-body-group");
+        let (client_instance, _) = client_with_push_consumer(group.clone(), "reset-missing-body-test").await;
+        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ResetConsumerClientOffset,
+            ResetOffsetRequestHeader {
+                topic,
+                group,
+                queue_id: -1,
+                offset: None,
+                timestamp: current_millis() as i64,
+                is_force: true,
+                topic_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("missing-body reset offset callback should not fail");
+
+        assert!(response.is_none(), "missing reset body should be a one-way noop");
+    }
+
+    #[tokio::test]
+    async fn get_consumer_status_from_client_returns_offset_table_body() {
+        let topic = CheetahString::from_static_str("status-topic");
+        let group = CheetahString::from_static_str("status-group");
+        let (client_instance, consumer_impl) = client_with_push_consumer(group.clone(), "consumer-status-test").await;
+        let mq = MessageQueue::from_parts(topic.clone(), "broker-a", 1);
+        consumer_impl
+            .offset_store
+            .as_ref()
+            .expect("test consumer should have offset store")
+            .update_offset(&mq, 456, false)
+            .await;
+
+        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetConsumerStatusFromClient,
+            GetConsumerStatusRequestHeader {
+                topic,
+                group,
+                client_addr: None,
+                rpc_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("consumer status callback should not fail")
+            .expect("consumer status callback should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let body = response.body().expect("consumer status response should have body");
+        let body = GetConsumerStatusBody::decode(body).expect("consumer status body should decode");
+        assert_eq!(body.message_queue_table.get(&mq), Some(&456));
+    }
+
+    #[tokio::test]
+    async fn get_consumer_status_from_client_missing_group_returns_system_error() {
+        let client_instance =
+            MQClientInstance::new_arc(ClientConfig::default(), 0, "consumer-status-missing-test", None);
+        let mut processor = ClientRemotingProcessor::new(client_instance);
+        let harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetConsumerStatusFromClient,
+            GetConsumerStatusRequestHeader {
+                topic: CheetahString::from_static_str("missing-status-topic"),
+                group: CheetahString::from_static_str("missing-status-group"),
+                client_addr: None,
+                rpc_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("missing-group consumer status callback should not fail")
+            .expect("missing-group consumer status callback should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.contains("not exist in this consumer")));
     }
 
     #[tokio::test]
@@ -629,11 +897,7 @@ mod tests {
         let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "client-callback-test", None);
         let mut processor = ClientRemotingProcessor::new(client_instance);
 
-        for request_code in [
-            RequestCode::ResetConsumerClientOffset,
-            RequestCode::GetConsumerStatusFromClient,
-            RequestCode::GetConsumerRunningInfo,
-        ] {
+        for request_code in [RequestCode::GetConsumerRunningInfo] {
             let harness = LocalRequestHarness::new()
                 .await
                 .expect("local remoting harness should start");

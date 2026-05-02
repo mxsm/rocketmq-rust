@@ -174,6 +174,7 @@ where
                 return Ok(Some(auth_error_response(request.opaque(), error)));
             }
         }
+        self.dispatcher.bind_remoting_channel_if_heartbeat(&channel, request);
         Ok(Some(self.dispatcher.dispatch(&context, request).await))
     }
 
@@ -269,6 +270,22 @@ where
                     request.code()
                 ),
             ),
+        }
+    }
+
+    fn bind_remoting_channel_if_heartbeat(&self, channel: &Channel, request: &RemotingCommand) {
+        if RequestCode::from(request.code()) != RequestCode::HeartBeat {
+            return;
+        }
+        let Some(body) = request.body() else {
+            return;
+        };
+        let Ok(heartbeat) = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body.as_ref()) else {
+            return;
+        };
+        if !heartbeat.client_id.is_empty() {
+            self.sessions
+                .bind_remoting_channel(heartbeat.client_id.as_str(), channel.clone());
         }
     }
 
@@ -468,6 +485,30 @@ where
                 format!(
                     "no matching lite consumer for group {}, clientId {}",
                     header.consumer_group, header.client_id
+                ),
+            );
+        }
+        let Some(mut client_channel) = self.sessions.remoting_channel(header.client_id.as_str()) else {
+            return response_with_code(
+                request.opaque(),
+                ResponseCode::ConsumerNotOnline,
+                format!(
+                    "no remoting channel for lite consumer group {}, clientId {}",
+                    header.consumer_group, header.client_id
+                ),
+            );
+        };
+        if let Err(error) = client_channel
+            .channel_inner_mut()
+            .send_oneway(request.clone(), 100)
+            .await
+        {
+            return response_with_code(
+                request.opaque(),
+                ResponseCode::SystemError,
+                format!(
+                    "forward notifyUnsubscribeLite failed for group {}, clientId {}: {}",
+                    header.consumer_group, header.client_id, error
                 ),
             );
         }
@@ -1529,6 +1570,7 @@ mod tests {
     use rocketmq_error::RocketMQError;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::code::response_code::ResponseCode;
+    use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::prelude::RemotingDeserializable;
     use rocketmq_remoting::prelude::RemotingSerializable;
     use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
@@ -1564,9 +1606,12 @@ mod tests {
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_remoting::runtime::processor::RequestProcessor;
+    use tokio::time::timeout;
 
     use super::ProxyRemotingBackend;
     use super::ProxyRemotingDispatcher;
+    use super::ProxyRemotingRequestProcessor;
     use crate::auth::ProxyAuthRuntime;
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
@@ -1955,6 +2000,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_request_heartbeat_binds_remoting_channel() {
+        let sessions = ClientSessionRegistry::default();
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let mut request_processor = ProxyRemotingRequestProcessor::new(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            sessions.clone(),
+            None,
+            None,
+        );
+        let harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        let heartbeat = HeartbeatData {
+            client_id: CheetahString::from_static_str("client-a"),
+            producer_data_set: HashSet::new(),
+            consumer_data_set: HashSet::from([ConsumerData {
+                group_name: CheetahString::from_static_str("GroupA"),
+                ..ConsumerData::default()
+            }]),
+            heartbeat_fingerprint: 0,
+            is_without_sub: false,
+        };
+        let mut heartbeat_request =
+            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
+                .set_body(heartbeat.encode().expect("heartbeat should encode"));
+        heartbeat_request.make_custom_header_to_net();
+
+        let response = request_processor
+            .process_request(harness.channel(), harness.context(), &mut heartbeat_request)
+            .await
+            .expect("heartbeat should process")
+            .expect("heartbeat should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(sessions.consumer_client_ids("GroupA"), vec!["client-a".to_owned()]);
+        assert!(sessions.remoting_channel("client-a").is_some());
+    }
+
+    #[tokio::test]
     async fn dispatch_unregister_client_removes_membership() {
         let sessions = ClientSessionRegistry::default();
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
@@ -2199,6 +2296,10 @@ mod tests {
         heartbeat_request.make_custom_header_to_net();
         let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
         assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+        let mut harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+        sessions.bind_remoting_channel("client-a", harness.channel());
 
         let mut request = RemotingCommand::create_request_command(
             RequestCode::NotifyUnsubscribeLite,
@@ -2214,6 +2315,18 @@ mod tests {
         let response = dispatcher.dispatch(&test_context(), &request).await;
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let forwarded = timeout(std::time::Duration::from_secs(3), harness.receive_response())
+            .await
+            .expect("forwarded notify unsubscribe lite should arrive before timeout")
+            .expect("forwarded notify unsubscribe lite should decode")
+            .expect("forwarded notify unsubscribe lite should be present");
+        assert_eq!(RequestCode::from(forwarded.code()), RequestCode::NotifyUnsubscribeLite);
+        assert!(forwarded.is_oneway_rpc());
+        let forwarded_header = forwarded
+            .decode_command_custom_header::<NotifyUnsubscribeLiteRequestHeader>()
+            .expect("forwarded notify header should decode");
+        assert_eq!(forwarded_header.consumer_group, "GroupA");
+        assert_eq!(forwarded_header.client_id, "client-a");
     }
 
     #[tokio::test]

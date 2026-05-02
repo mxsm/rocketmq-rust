@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
@@ -81,6 +82,12 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
 
     /// Returns whether the consumer is in unit mode.
     fn is_unit_mode(&self) -> bool;
+
+    /// Replaces the in-memory offsets for queues belonging to the given topic.
+    async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>);
+
+    /// Returns a snapshot of the consumer offsets for the given topic.
+    async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64>;
 
     /// Returns the running information of the consumer.
     fn consumer_running_info(&self) -> ConsumerRunningInfo;
@@ -182,6 +189,16 @@ impl MQConsumerInner for MQConsumerInnerImpl {
     #[inline]
     fn is_unit_mode(&self) -> bool {
         MQConsumerInner::is_unit_mode(self.default_mqpush_consumer_impl.as_ref())
+    }
+
+    #[inline]
+    async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
+        MQConsumerInner::reset_offsets(self.default_mqpush_consumer_impl.as_ref(), topic, offsets).await
+    }
+
+    #[inline]
+    async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64> {
+        MQConsumerInner::consumer_status(self.default_mqpush_consumer_impl.as_ref(), topic).await
     }
 
     #[inline]

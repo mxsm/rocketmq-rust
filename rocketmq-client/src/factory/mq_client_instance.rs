@@ -1576,6 +1576,34 @@ impl MQClientInstance {
         self.consumer_table.get(group).map(|entry| entry.value().clone())
     }
 
+    pub async fn reset_offset(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        offset_table: HashMap<MessageQueue, i64>,
+    ) -> bool {
+        let Some(consumer) = self.select_consumer(group).await else {
+            warn!("reset offset failed because consumer group does not exist. group={group}, topic={topic}");
+            return false;
+        };
+
+        consumer.reset_offsets(topic, offset_table).await;
+        true
+    }
+
+    pub async fn get_consumer_status(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+    ) -> Option<HashMap<MessageQueue, i64>> {
+        let Some(consumer) = self.select_consumer(group).await else {
+            warn!("get consumer status failed because consumer group does not exist. group={group}, topic={topic}");
+            return None;
+        };
+
+        Some(consumer.consumer_status(topic).await)
+    }
+
     pub async fn select_producer(&self, group: &str) -> Option<MQProducerInnerImpl> {
         self.producer_table.get(group).map(|entry| entry.value().clone())
     }

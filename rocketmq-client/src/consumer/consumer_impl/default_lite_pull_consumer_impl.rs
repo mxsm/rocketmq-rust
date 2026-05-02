@@ -1544,6 +1544,34 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
         self.client_config.unit_mode
     }
 
+    async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
+        let Some(offset_store) = self.offset_store.as_ref() else {
+            warn!(
+                "lite pull reset offset ignored because offset store is not initialized. group={}, topic={}",
+                self.consumer_config.consumer_group, topic
+            );
+            return;
+        };
+
+        for (mq, offset) in offsets {
+            if mq.topic() == topic {
+                offset_store.update_and_freeze_offset(&mq, offset).await;
+            }
+        }
+    }
+
+    async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64> {
+        let Some(offset_store) = self.offset_store.as_ref() else {
+            warn!(
+                "lite pull consumer status is empty because offset store is not initialized. group={}, topic={}",
+                self.consumer_config.consumer_group, topic
+            );
+            return HashMap::new();
+        };
+
+        offset_store.clone_offset_table(topic).await
+    }
+
     fn consumer_running_info(&self) -> rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo {
         rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo::default()
     }

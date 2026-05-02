@@ -20,6 +20,7 @@ use std::time::SystemTime;
 use dashmap::DashMap;
 use rocketmq_common::get_parent_and_lite_topic;
 use rocketmq_common::to_lmq_name;
+use rocketmq_remoting::net::channel::Channel;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -334,6 +335,7 @@ pub struct ClientSessionRegistry {
     lite_subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscriptionSnapshot>>,
     prepared_transactions: Arc<DashMap<PreparedTransactionKey, PreparedTransactionHandle>>,
     telemetry_links: Arc<DashMap<String, TelemetryLink>>,
+    remoting_channels: Arc<DashMap<String, Channel>>,
     pending_telemetry_commands: Arc<DashMap<TelemetryCommandKey, PendingTelemetryCommand>>,
     thread_stack_traces: Arc<DashMap<ThreadStackTraceKey, ThreadStackTraceReport>>,
     verify_message_reports: Arc<DashMap<TelemetryCommandKey, VerifyMessageReport>>,
@@ -656,6 +658,14 @@ impl ClientSessionRegistry {
 
     pub fn has_telemetry_link(&self, client_id: &str) -> bool {
         self.telemetry_links.contains_key(client_id)
+    }
+
+    pub fn bind_remoting_channel(&self, client_id: impl Into<String>, channel: Channel) {
+        self.remoting_channels.insert(client_id.into(), channel);
+    }
+
+    pub fn remoting_channel(&self, client_id: &str) -> Option<Channel> {
+        self.remoting_channels.get(client_id).map(|entry| entry.clone())
     }
 
     pub fn register_pending_telemetry_command(&self, client_id: &str, kind: TelemetryCommandKind, nonce: &str) -> bool {
@@ -1013,6 +1023,7 @@ impl ClientSessionRegistry {
             let _ = self.prepared_transactions.remove(&key);
         }
         self.telemetry_links.remove(client_id);
+        self.remoting_channels.remove(client_id);
         let pending_telemetry_keys = self
             .pending_telemetry_commands
             .iter()
@@ -1082,6 +1093,10 @@ impl ClientSessionRegistry {
 
     pub fn telemetry_link_count(&self) -> usize {
         self.telemetry_links.len()
+    }
+
+    pub fn remoting_channel_count(&self) -> usize {
+        self.remoting_channels.len()
     }
 
     pub fn pending_telemetry_command_count(&self) -> usize {
