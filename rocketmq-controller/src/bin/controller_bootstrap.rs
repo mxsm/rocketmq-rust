@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+use std::time::Duration;
+
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_controller::parse_command_line;
+use rocketmq_controller::typ::Node;
 use rocketmq_controller::ControllerManager;
+use rocketmq_error::ControllerError;
 use rocketmq_error::Result;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::ArcMut;
@@ -94,6 +99,7 @@ pub async fn main() -> Result<()> {
     }
 
     ControllerManager::start(ArcMut::clone(&controller_manager)).await?;
+    initialize_single_node_cluster_if_configured(&controller_manager).await?;
 
     info!("Controller started successfully!");
     info!("  Node ID: {}", controller_manager.controller_config().node_id);
@@ -118,4 +124,41 @@ pub async fn main() -> Result<()> {
 
     info!("Controller shutdown completed.");
     Ok(())
+}
+
+async fn initialize_single_node_cluster_if_configured(controller_manager: &ArcMut<ControllerManager>) -> Result<()> {
+    let config = controller_manager.controller_config();
+    if config.raft_peers.len() != 1 {
+        return Ok(());
+    }
+
+    let peer = config.raft_peers[0].clone();
+    if peer.id != config.node_id {
+        return Ok(());
+    }
+    if controller_manager.controller().has_committed_log()? {
+        info!("Single-node controller cluster already has committed logs; skip bootstrap");
+        return Ok(());
+    }
+
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        peer.id,
+        Node {
+            node_id: peer.id,
+            rpc_addr: peer.addr.to_string(),
+        },
+    );
+    info!("Bootstrapping single-node controller cluster with node {}", peer.id);
+    controller_manager.controller().initialize_cluster(nodes).await?;
+
+    for _ in 0..30 {
+        if controller_manager.is_leader() {
+            info!("Single-node controller cluster elected local node as leader");
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    Err(ControllerError::Internal("single-node controller did not become leader after bootstrap".to_string()).into())
 }

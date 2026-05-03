@@ -112,7 +112,7 @@ impl ConsumeStats {
     }
 }
 
-pub(super) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
+pub(crate) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
     let chars = input.chars().collect::<Vec<_>>();
     let mut output = String::with_capacity(input.len());
     let mut index = 0;
@@ -160,7 +160,10 @@ pub(super) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
     output
 }
 
-fn append_message_queue_object_key(output: &mut String, queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()> {
+pub(crate) fn append_message_queue_object_key(
+    output: &mut String,
+    queue: &MessageQueue,
+) -> rocketmq_error::RocketMQResult<()> {
     output.push('{');
     output.push_str("\"topic\":");
     output.push_str(&serde_json::to_string(queue.topic_str())?);
