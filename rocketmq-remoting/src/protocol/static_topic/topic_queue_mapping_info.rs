@@ -19,6 +19,8 @@ use rocketmq_common::common::mix_all::METADATA_SCOPE_GLOBAL;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::protocol::static_topic::i32_key_map_serde;
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub struct TopicQueueMappingInfo {
     pub topic: Option<CheetahString>,
@@ -29,6 +31,7 @@ pub struct TopicQueueMappingInfo {
     pub epoch: i64,
     pub dirty: bool,
     #[serde(rename = "currIdMap")]
+    #[serde(default, deserialize_with = "i32_key_map_serde::deserialize_optional_i32_key_map")]
     pub curr_id_map: Option<HashMap<i32, i32>>,
 }
 

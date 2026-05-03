@@ -110,6 +110,10 @@ mod defaults {
         true
     }
 
+    pub fn timer_max_delay_sec() -> u64 {
+        3600 * 24 * 3
+    }
+
     pub fn timer_wheel_enable() -> bool {
         true
     }
@@ -419,7 +423,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub timer_intercept_delay_level: bool,
 
-    #[serde(default)]
+    #[serde(default = "defaults::timer_max_delay_sec")]
     pub timer_max_delay_sec: u64,
 
     #[serde(default = "defaults::timer_wheel_enable")]
@@ -1739,5 +1743,12 @@ mod tests {
         assert_eq!(properties["timerRocksDBRollRangeHours"], "2");
         assert_eq!(properties["timerRecallToTimeWheelEnable"], "true");
         assert_eq!(properties["timerRecallToTimelineEnable"], "true");
+    }
+
+    #[test]
+    fn serde_defaults_keep_timer_max_delay_sec_java_default() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str("{}")?;
+        assert_eq!(config.timer_max_delay_sec, 3600 * 24 * 3);
+        Ok(())
     }
 }

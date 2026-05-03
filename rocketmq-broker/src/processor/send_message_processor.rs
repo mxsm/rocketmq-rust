@@ -69,8 +69,10 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
+use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -471,8 +473,7 @@ where
         message_ext.message_ext_inner.message.set_body(request.body().cloned());
         message_ext.message_ext_inner.message.set_flag(request_header.flag);
 
-        let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
-        if !uniq_key.is_some_and(|uniq_key_inner| uniq_key_inner.is_empty()) {
+        if should_create_uniq_key(&ori_props) {
             ori_props.insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
                 CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
@@ -910,20 +911,13 @@ where
     }
 
     fn build_recall_handle(&self, message: &MessageExtBrokerInner) -> Option<CheetahString> {
-        let timestamp_str = message
-            .message_ext_inner
-            .message
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))?;
-        let real_topic = message
-            .message_ext_inner
-            .message
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))?;
+        let (real_topic, timestamp) =
+            recall_handle_topic_and_timestamp(message, self.inner.broker_runtime_inner.message_store_config())?;
         if real_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return None;
         }
 
         let uniq_id = MessageClientIDSetter::get_uniq_id(&message.message_ext_inner.message)?;
-        let timestamp = timestamp_str.parse::<i64>().ok()?.checked_add(1)?;
         let broker_name = self
             .inner
             .broker_runtime_inner
@@ -1564,6 +1558,55 @@ where
     }
 }
 
+fn recall_handle_topic_and_timestamp(
+    message: &MessageExtBrokerInner,
+    message_store_config: &MessageStoreConfig,
+) -> Option<(CheetahString, i64)> {
+    if let (Some(timestamp_str), Some(real_topic)) = (
+        message.property(MessageConst::PROPERTY_TIMER_OUT_MS),
+        message.property(MessageConst::PROPERTY_REAL_TOPIC),
+    ) {
+        let timestamp = timestamp_str.parse::<i64>().ok()?.checked_add(1)?;
+        return Some((real_topic, timestamp));
+    }
+
+    if message.message_ext_inner.message.delay_time_level() > 0 || message.topic().as_str() == TIMER_TOPIC {
+        return None;
+    }
+
+    let deliver_ms = message
+        .property(MessageConst::PROPERTY_TIMER_DELIVER_MS)?
+        .parse::<u64>()
+        .ok()?;
+    let now = TimeUtils::current_millis();
+    if deliver_ms <= now {
+        return None;
+    }
+
+    let max_delay_ms = message_store_config.timer_max_delay_sec.checked_mul(1000)?;
+    if deliver_ms.saturating_sub(now) > max_delay_ms {
+        return None;
+    }
+
+    let precision_ms = message_store_config.timer_precision_ms;
+    let timer_out_ms = if precision_ms == 0 {
+        deliver_ms
+    } else if deliver_ms % precision_ms == 0 {
+        deliver_ms.saturating_sub(precision_ms)
+    } else {
+        (deliver_ms / precision_ms) * precision_ms
+    };
+    let timestamp = i64::try_from(timer_out_ms).ok()?.checked_add(1)?;
+    Some((message.topic().clone(), timestamp))
+}
+
+fn should_create_uniq_key(properties: &HashMap<CheetahString, CheetahString>) -> bool {
+    properties
+        .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+        .map(|uniq_key| uniq_key.is_empty())
+        .unwrap_or(true)
+}
+
 fn rewrite_response_for_static_topic(
     response_header: &mut SendMessageResponseHeader,
     mapping_context: &TopicQueueMappingContext,
@@ -1589,4 +1632,72 @@ fn rewrite_response_for_static_topic(
     response_header.set_queue_id(mapping_context.global_id.unwrap());
     response_header.set_queue_offset(static_logic_offset);
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message_with_topic(topic: &str) -> MessageExtBrokerInner {
+        let mut message = MessageExtBrokerInner::default();
+        message
+            .message_ext_inner
+            .message
+            .set_topic(CheetahString::from_string(topic.to_string()));
+        message
+    }
+
+    #[test]
+    fn recall_handle_timestamp_uses_transformed_timer_properties() {
+        let mut message = message_with_topic(TIMER_TOPIC);
+        message.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
+            CheetahString::from_static_str("123000"),
+        );
+        message.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+            CheetahString::from_static_str("RecallTopic"),
+        );
+
+        let (topic, timestamp) =
+            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+
+        assert_eq!(topic, "RecallTopic");
+        assert_eq!(timestamp, 123001);
+    }
+
+    #[test]
+    fn recall_handle_timestamp_uses_absolute_deliver_time_before_store_transform() {
+        let now = TimeUtils::current_millis();
+        let deliver_ms = ((now + 60_000) / 1000) * 1000;
+        let mut message = message_with_topic("RecallTopic");
+        message.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS),
+            CheetahString::from_string(deliver_ms.to_string()),
+        );
+
+        let (topic, timestamp) =
+            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+
+        assert_eq!(topic, "RecallTopic");
+        assert_eq!(timestamp, i64::try_from(deliver_ms - 1000).unwrap() + 1);
+    }
+
+    #[test]
+    fn should_create_uniq_key_only_when_missing_or_empty() {
+        let mut properties = HashMap::new();
+        assert!(should_create_uniq_key(&properties));
+
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::new(),
+        );
+        assert!(should_create_uniq_key(&properties));
+
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+            CheetahString::from_static_str("java-uniq-id"),
+        );
+        assert!(!should_create_uniq_key(&properties));
+    }
 }

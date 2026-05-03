@@ -14,6 +14,7 @@
 
 pub mod logic_queue_mapping_item;
 
+pub(crate) mod i32_key_map_serde;
 pub mod topic_config_and_queue_mapping;
 pub mod topic_queue_mapping_context;
 pub mod topic_queue_mapping_detail;

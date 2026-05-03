@@ -224,6 +224,7 @@ where
             &mut response,
             begin_time_millis,
             CheetahString::from_string(handle_topic.to_string()),
+            CheetahString::from_string(handle_message_id.to_string()),
         )?;
 
         Ok(response)
@@ -322,6 +323,7 @@ where
         response: &mut RemotingCommand,
         begin_time_millis: u64,
         topic: CheetahString,
+        message_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
         let append_result = match put_message_result.append_message_result() {
             Some(result) => result,
@@ -359,9 +361,7 @@ where
                         .read_custom_header_mut::<RecallMessageResponseHeader>()
                         .ok_or_else(|| RocketMQError::Internal("Response header missing".to_string()))?;
 
-                    if let Some(msg_id) = &append_result.msg_id {
-                        response_header.set_msg_id(msg_id.as_str());
-                    }
+                    response_header.set_msg_id(message_id.as_str());
                 }
 
                 response.set_code_mut(ResponseCode::Success);
@@ -374,9 +374,7 @@ where
                         .read_custom_header_mut::<RecallMessageResponseHeader>()
                         .ok_or_else(|| RocketMQError::Internal("Response header missing".to_string()))?;
 
-                    if let Some(msg_id) = &append_result.msg_id {
-                        response_header.set_msg_id(msg_id.as_str());
-                    }
+                    response_header.set_msg_id(message_id.as_str());
                 }
 
                 response.set_code_mut(ResponseCode::Success);

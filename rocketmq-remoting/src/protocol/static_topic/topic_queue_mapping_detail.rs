@@ -18,6 +18,7 @@ use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::protocol::static_topic::i32_key_map_serde;
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
@@ -27,6 +28,7 @@ pub struct TopicQueueMappingDetail {
     pub topic_queue_mapping_info: TopicQueueMappingInfo,
 
     #[serde(rename = "hostedQueues")]
+    #[serde(default, deserialize_with = "i32_key_map_serde::deserialize_optional_i32_key_map")]
     pub hosted_queues: Option<HashMap<i32 /* global id */, Vec<LogicQueueMappingItem>>>,
 }
 

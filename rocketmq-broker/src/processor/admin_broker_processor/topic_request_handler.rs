@@ -50,6 +50,70 @@ use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
+fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
+    match serde_json::from_slice::<TopicQueueMappingDetail>(body) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let text = std::str::from_utf8(body).map_err(|utf8_error| {
+                format!("decode TopicQueueMappingDetail failed: {error}; body is not utf8: {utf8_error}")
+            })?;
+            let normalized = quote_unquoted_numeric_json_keys(text);
+            serde_json::from_str::<TopicQueueMappingDetail>(&normalized).map_err(|normalized_error| {
+                format!("{error}; normalized Java numeric map keys failed: {normalized_error}")
+            })
+        }
+    }
+}
+
+fn quote_unquoted_numeric_json_keys(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        output.push(byte as char);
+        index += 1;
+
+        if byte != b'{' && byte != b',' {
+            continue;
+        }
+
+        let whitespace_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+
+        let key_start = index;
+        if index < bytes.len() && bytes[index] == b'-' {
+            index += 1;
+        }
+        let digit_start = index;
+        while index < bytes.len() && bytes[index].is_ascii_digit() {
+            index += 1;
+        }
+        let key_end = index;
+
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+
+        if key_end > digit_start && index < bytes.len() && bytes[index] == b':' {
+            output.push_str(&input[whitespace_start..key_start]);
+            output.push('"');
+            output.push_str(&input[key_start..key_end]);
+            output.push('"');
+            output.push_str(&input[key_end..index]);
+            output.push(':');
+            index += 1;
+        } else {
+            output.push_str(&input[whitespace_start..index]);
+        }
+    }
+
+    output
+}
+
 #[derive(Clone)]
 pub(super) struct TopicRequestHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -198,7 +262,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark("topic queue mapping detail is missing"),
             ));
         };
-        let mut topic_queue_mapping_detail = match serde_json::from_slice::<TopicQueueMappingDetail>(body.as_ref()) {
+        let mut topic_queue_mapping_detail = match decode_topic_queue_mapping_detail(body.as_ref()) {
             Ok(value) => value,
             Err(error) => {
                 return Ok(Some(
@@ -756,6 +820,32 @@ mod tests {
         let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
         let inner = ArcMut::new(ChannelInner::new(connection, response_table));
         Channel::new(inner, local_addr, local_addr)
+    }
+
+    #[test]
+    fn decode_topic_queue_mapping_detail_accepts_java_fastjson_numeric_keys() {
+        let body = br#"{"topic":"static-topic","scope":"__global__","totalQueues":2,"bname":"interopBroker","epoch":1,"dirty":false,"currIdMap":{0:0,1:1},"hostedQueues":{0:[{"gen":0,"queueId":0,"bname":"interopBroker","logicOffset":0,"startOffset":0,"endOffset":-1,"timeOfStart":-1,"timeOfEnd":-1}],1:[{"gen":0,"queueId":1,"bname":"interopBroker","logicOffset":0,"startOffset":0,"endOffset":-1,"timeOfStart":-1,"timeOfEnd":-1}]}}"#;
+
+        let detail = decode_topic_queue_mapping_detail(body).expect("Java FastJSON body should decode");
+
+        assert_eq!(detail.topic_queue_mapping_info.topic.as_deref(), Some("static-topic"));
+        assert_eq!(
+            detail
+                .topic_queue_mapping_info
+                .curr_id_map
+                .as_ref()
+                .and_then(|curr_id_map| curr_id_map.get(&1)),
+            Some(&1)
+        );
+        assert_eq!(
+            detail
+                .hosted_queues
+                .as_ref()
+                .and_then(|hosted_queues| hosted_queues.get(&1))
+                .and_then(|items| items.first())
+                .map(|item| item.queue_id),
+            Some(1)
+        );
     }
 
     #[tokio::test]
