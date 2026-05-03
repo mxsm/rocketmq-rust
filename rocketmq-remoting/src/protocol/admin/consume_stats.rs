@@ -87,9 +87,32 @@ impl ConsumeStats {
             }
         }
     }
+
+    pub fn encode_java_compatible(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+        Ok(self.to_java_compatible_json()?.into_bytes())
+    }
+
+    pub fn to_java_compatible_json(&self) -> rocketmq_error::RocketMQResult<String> {
+        let mut body = String::new();
+        body.push_str("{\"offsetTable\":{");
+
+        for (index, (queue, offset)) in self.offset_table.iter().enumerate() {
+            if index > 0 {
+                body.push(',');
+            }
+            append_message_queue_object_key(&mut body, queue)?;
+            body.push(':');
+            body.push_str(&serde_json::to_string(offset)?);
+        }
+
+        body.push_str("},\"consumeTps\":");
+        body.push_str(&serde_json::to_string(&self.consume_tps)?);
+        body.push('}');
+        Ok(body)
+    }
 }
 
-fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
+pub(super) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
     let chars = input.chars().collect::<Vec<_>>();
     let mut output = String::with_capacity(input.len());
     let mut index = 0;
@@ -135,6 +158,18 @@ fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
         index = next_index;
     }
     output
+}
+
+fn append_message_queue_object_key(output: &mut String, queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()> {
+    output.push('{');
+    output.push_str("\"topic\":");
+    output.push_str(&serde_json::to_string(queue.topic_str())?);
+    output.push_str(",\"brokerName\":");
+    output.push_str(&serde_json::to_string(queue.broker_name().as_str())?);
+    output.push_str(",\"queueId\":");
+    output.push_str(&queue.queue_id().to_string());
+    output.push('}');
+    Ok(())
 }
 
 fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, usize) {
@@ -376,5 +411,24 @@ mod tests {
             normalized,
             r#"{"offsetTable":{"{\"topic\":\"TopicTest\",\"brokerName\":\"broker-a\",\"queueId\":1}":{"brokerOffset":120}},"consumeTps":1.5}"#
         );
+    }
+
+    #[test]
+    fn java_compatible_encode_uses_object_keys_for_offset_table() {
+        let mut stats = ConsumeStats::new();
+        stats
+            .get_offset_table_mut()
+            .insert(create_mq("TopicTest", 1), create_offset_wrapper(120, 20, 80));
+        stats.set_consume_tps(1.5);
+
+        let encoded = String::from_utf8(stats.encode_java_compatible().expect("encode consume stats"))
+            .expect("utf8 consume stats");
+
+        assert!(encoded.contains(r#""offsetTable":{{"topic":"TopicTest","brokerName":"broker_1","queueId":1}:"#));
+        assert!(!encoded.contains(r#""{\"topic\""#));
+
+        let decoded = ConsumeStats::decode(encoded.as_bytes()).expect("decode java-compatible consume stats");
+        assert_eq!(decoded.get_offset_table().len(), 1);
+        assert_eq!(decoded.compute_total_diff(), 100);
     }
 }

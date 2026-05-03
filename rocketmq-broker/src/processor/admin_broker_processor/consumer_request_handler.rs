@@ -231,7 +231,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             let new_consume_tps = consume_stats.get_consume_tps() + consume_tps;
             consume_stats.set_consume_tps(new_consume_tps);
         }
-        let body = consume_stats.encode().expect("consume stats encode failed");
+        let body = consume_stats.encode_java_compatible()?;
         response.set_body_mut_ref(body);
         Ok(Some(response))
     }
@@ -288,7 +288,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         Ok(Some(
             RemotingCommand::create_response_command()
                 .set_code(ResponseCode::Success)
-                .set_body(body.encode()?),
+                .set_body(body.encode_java_compatible()?),
         ))
     }
 
@@ -1196,7 +1196,7 @@ mod tests {
             .expect("get broker consume stats should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        let body: ConsumeStatsList = serde_json::from_slice(
+        let body = ConsumeStatsList::decode(
             response
                 .take_body()
                 .expect("broker consume stats should contain body")

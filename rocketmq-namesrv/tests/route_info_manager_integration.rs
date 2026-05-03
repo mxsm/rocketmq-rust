@@ -118,7 +118,9 @@ impl NamesrvHarness {
                     last_error = Some(error);
                     let _ = shutdown_tx.send(());
                     client.mut_from_ref().shutdown();
-                    let _ = tokio::time::timeout(Duration::from_secs(1), &mut server_task).await;
+                    if !server_task.is_finished() {
+                        let _ = tokio::time::timeout(Duration::from_secs(1), &mut server_task).await;
+                    }
                 }
             }
         }
