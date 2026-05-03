@@ -43,12 +43,6 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = self.broker_runtime_inner.as_mut();
 
-        let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager() {
-            replicas_manage
-        } else {
-            panic!("`replicas_manage` object is empty")
-        };
-
         let broker_config = broker_runtime_inner.broker_config();
         let response = RemotingCommand::create_response_command();
 
@@ -60,9 +54,29 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
             ));
         }
 
+        let replicas_manage = match broker_runtime_inner.replicas_manager() {
+            Some(replicas_manage) => replicas_manage,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("replicas manager is not initialized"),
+                ));
+            }
+        };
+
         let broker_identity = &broker_config.broker_identity;
 
-        let message_store = broker_runtime_inner.message_store().unwrap();
+        let message_store = match broker_runtime_inner.message_store() {
+            Some(message_store) => message_store,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is not available"),
+                ));
+            }
+        };
 
         let entry_code = EpochEntryCache::new(
             &broker_identity.broker_cluster_name,

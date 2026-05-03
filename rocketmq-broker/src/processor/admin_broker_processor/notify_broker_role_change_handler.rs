@@ -57,10 +57,7 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
 
         if self.broker_runtime_inner.replicas_manager().is_none() {
             warn!("Ignore notifyBrokerRoleChanged because controller mode is not initialized");
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                "controller mode is not initialized",
-            )));
+            return Ok(Some(response.set_code(ResponseCode::Success)));
         }
 
         if let Ok(request_header) = request_header {

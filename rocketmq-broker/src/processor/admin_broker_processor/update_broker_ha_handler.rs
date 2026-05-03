@@ -45,45 +45,66 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let exchange_request_header = request
             .decode_command_custom_header::<ExchangeHAInfoRequestHeader>()
-            .unwrap();
+            .unwrap_or_default();
 
-        let mut response = RemotingCommand::default();
+        let mut response = RemotingCommand::create_response_command_with_header(ExchangeHaInfoResponseHeader {
+            master_ha_address: None,
+            master_flush_offset: None,
+            master_address: None,
+        });
 
         if let Some(master_ha_addr) = exchange_request_header.master_ha_address.as_ref() {
-            if !master_ha_addr.is_empty() {
-                if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                    message_store.update_ha_master_address(master_ha_addr.as_str()).await;
+            if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                message_store.update_ha_master_address(master_ha_addr.as_str()).await;
 
-                    let master_address = exchange_request_header.master_address.unwrap_or_default();
-                    message_store.update_master_address(&master_address);
+                let master_address = exchange_request_header.master_address.unwrap_or_default();
+                message_store.update_master_address(&master_address);
 
-                    let should_sync_master_flush_offset_on_startup = self
-                        .broker_runtime_inner
-                        .message_store_config()
-                        .sync_master_flush_offset_when_startup;
-                    if message_store.get_master_flushed_offset() == 0x0000 && should_sync_master_flush_offset_on_startup
-                    {
-                        let master_flush_offset = exchange_request_header.master_flush_offset.unwrap();
+                let should_sync_master_flush_offset_on_startup = self
+                    .broker_runtime_inner
+                    .message_store_config()
+                    .sync_master_flush_offset_when_startup;
+                if message_store.get_master_flushed_offset() == 0x0000
+                    && should_sync_master_flush_offset_on_startup
+                    && exchange_request_header.master_flush_offset.is_some()
+                {
+                    let master_flush_offset = exchange_request_header.master_flush_offset.unwrap_or_default();
 
-                        info!("Set master flush offset in slave to {}", master_flush_offset);
-                        message_store.set_master_flushed_offset(master_flush_offset);
-                    }
+                    info!("Set master flush offset in slave to {}", master_flush_offset);
+                    message_store.set_master_flushed_offset(master_flush_offset);
                 }
-            } else if self.broker_runtime_inner.broker_config().broker_identity.broker_id == MASTER_ID {
-                let response_header = response
-                    .read_custom_header_mut::<ExchangeHaInfoResponseHeader>()
-                    .unwrap();
-
-                response_header.master_ha_address = Some(self.broker_runtime_inner.get_ha_server_addr());
-
-                if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                    response_header.master_flush_offset = Some(message_store.get_broker_init_max_offset());
-                }
-                response_header.master_address = Some(self.broker_runtime_inner.get_broker_addr().clone());
             }
+        } else if self.broker_runtime_inner.broker_config().broker_identity.broker_id == MASTER_ID {
+            let Some(response_header) = response.read_custom_header_mut::<ExchangeHaInfoResponseHeader>() else {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("exchange HA info response header is not available"),
+                ));
+            };
+
+            let master_ha_address = self.broker_runtime_inner.get_ha_server_addr();
+            let master_flush_offset = self
+                .broker_runtime_inner
+                .message_store()
+                .map(|store| store.get_broker_init_max_offset());
+            let master_address = self.broker_runtime_inner.get_broker_addr().clone();
+
+            response_header.master_ha_address = Some(master_ha_address.clone());
+
+            if let Some(master_flush_offset) = master_flush_offset {
+                response_header.master_flush_offset = Some(master_flush_offset);
+            }
+            response_header.master_address = Some(master_address.clone());
+
+            response.ensure_ext_fields_initialized();
+            response.add_ext_field("masterHaAddress", master_ha_address);
+            if let Some(master_flush_offset) = master_flush_offset {
+                response.add_ext_field("masterFlushOffset", master_flush_offset.to_string());
+            }
+            response.add_ext_field("masterAddress", master_address);
         }
 
-        response.set_code_ref(ResponseCode::Success);
-        Ok(Some(response))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 }
