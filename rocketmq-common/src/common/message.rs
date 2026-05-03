@@ -294,6 +294,7 @@ pub trait MessageTrait: Any + Display + Debug {
 
 #[cfg(test)]
 mod tests {
+    use super::MessageConst;
     use super::MessageTrait;
     use crate::common::message::message_builder::MessageBuilder;
     use crate::common::message::message_single::Message;
@@ -310,6 +311,13 @@ mod tests {
         let message_trait: &dyn MessageTrait = &message;
 
         assert_eq!(message_trait.transaction_id(), Some(&CheetahString::from("tx-123")));
+    }
+
+    #[test]
+    fn timer_engine_type_uses_java_protocol_key() {
+        assert_eq!(MessageConst::TIMER_ENGINE_TYPE, "E_T");
+        assert_eq!(MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL, "F");
+        assert_eq!(MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE, "R");
     }
 }
 
@@ -495,7 +503,7 @@ impl MessageConst {
     /// Timer engine type identifier for file-based time wheel implementation.
     pub const TIMER_ENGINE_FILE_TIME_WHEEL: &'static str = "F";
     /// Property name for timer engine type.
-    pub const TIMER_ENGINE_TYPE: &'static str = "timerEngineType";
+    pub const TIMER_ENGINE_TYPE: &'static str = "E_T";
 
     /// Index type identifier for message key indexing.
     pub const INDEX_KEY_TYPE: &'static str = "K";

@@ -39,17 +39,10 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::default();
+        let response = RemotingCommand::create_response_command();
 
-        let body = match request.get_body() {
-            Some(body) => body,
-            None => {
-                return Ok(Some(
-                    response
-                        .set_code(ResponseCode::InvalidParameter)
-                        .set_remark("Request body is empty"),
-                ));
-            }
+        let Some(body) = request.get_body() else {
+            return Ok(Some(response.set_code(ResponseCode::Success)));
         };
 
         let body = mix_all::string_to_properties(&String::from_utf8_lossy(body));
@@ -73,7 +66,7 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
             }
             None => Ok(Some(
                 response
-                    .set_code(ResponseCode::InvalidParameter)
+                    .set_code(ResponseCode::SystemError)
                     .set_remark("string2Properties error"),
             )),
         }
@@ -86,13 +79,9 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::default();
+        let response = RemotingCommand::create_response_command();
         let Some(body) = request.get_body() else {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::InvalidParameter)
-                    .set_remark("Request body is empty"),
-            ));
+            return Ok(Some(response.set_code(ResponseCode::Success)));
         };
         let Some(service) = self.broker_runtime_inner.cold_data_cg_ctr_service() else {
             return Ok(Some(
@@ -102,8 +91,10 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
             ));
         };
 
-        let consumer_group = String::from_utf8_lossy(body).trim().to_owned();
-        service.remove_group_config(&consumer_group);
+        let consumer_group = String::from_utf8_lossy(body);
+        if !consumer_group.is_empty() {
+            service.remove_group_config(&consumer_group);
+        }
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
@@ -114,7 +105,7 @@ impl<MS: MessageStore> UpdateColdDataFlowCtrGroupConfigRequestHandler<MS> {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::default();
+        let mut response = RemotingCommand::create_response_command();
         let Some(service) = self.broker_runtime_inner.cold_data_cg_ctr_service() else {
             return Ok(Some(
                 response
@@ -207,6 +198,15 @@ mod tests {
             .expect("update cold data flow ctr should succeed")
             .expect("update cold data flow ctr should return response");
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert!(response.is_response_type());
+        assert!(!inner
+            .cold_data_cg_ctr_service()
+            .expect("cold data service")
+            .is_cg_need_cold_data_flow_ctr("group-a"));
+        inner
+            .cold_data_cg_ctr_service()
+            .expect("cold data service")
+            .cold_acc("group-a", 128);
         assert!(inner
             .cold_data_cg_ctr_service()
             .expect("cold data service")
@@ -220,6 +220,7 @@ mod tests {
             .expect("get cold data flow ctr info should succeed")
             .expect("get cold data flow ctr info should return response");
         assert_eq!(ResponseCode::from(info_response.code()), ResponseCode::Success);
+        assert!(info_response.is_response_type());
 
         let value: serde_json::Value = serde_json::from_slice(
             info_response
@@ -230,7 +231,65 @@ mod tests {
         .expect("decode cold data flow ctr info body");
         assert_eq!(value["configTable"]["group-a"], 128);
         assert_eq!(value["configTable"]["group-b"], 256);
+        assert_eq!(value["runtimeTable"]["group-a"]["coldAcc"], 128);
+        assert!(
+            value["runtimeTable"]["group-a"]["createTimeMills"]
+                .as_i64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(
+            value["runtimeTable"]["group-a"]["lastColdReadTimeMills"]
+                .as_i64()
+                .unwrap_or(0)
+                > 0
+        );
         assert_eq!(value["coldDataFlowControlEnable"], true);
+        assert_eq!(value["cgColdReadThreshold"], 3 * 1024 * 1024);
+        assert_eq!(value["globalColdReadThreshold"], 100 * 1024 * 1024);
+        assert_eq!(value["globalAcc"], 128);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn update_and_remove_cold_data_flow_ctr_empty_body_match_java_noop_success() {
+        let mut runtime = new_test_runtime("empty-body", true).await;
+        let inner = runtime.inner_for_test().clone();
+        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(inner);
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+
+        let mut update_request =
+            RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {});
+        let update_response = handler
+            .update_cold_data_flow_ctr_group_config(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::UpdateColdDataFlowCtrConfig,
+                &mut update_request,
+            )
+            .await
+            .expect("empty update should succeed")
+            .expect("empty update should return response");
+        assert_eq!(ResponseCode::from(update_response.code()), ResponseCode::Success);
+        assert!(update_response.is_response_type());
+
+        let mut remove_request =
+            RemotingCommand::create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {});
+        let remove_response = handler
+            .remove_cold_data_flow_ctr_group_config(
+                channel,
+                ctx,
+                RequestCode::RemoveColdDataFlowCtrConfig,
+                &mut remove_request,
+            )
+            .await
+            .expect("empty remove should succeed")
+            .expect("empty remove should return response");
+        assert_eq!(ResponseCode::from(remove_response.code()), ResponseCode::Success);
+        assert!(remove_response.is_response_type());
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
@@ -262,6 +321,7 @@ mod tests {
             .expect("remove cold data flow ctr should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert!(response.is_response_type());
         assert!(!inner
             .cold_data_cg_ctr_service()
             .expect("cold data service")

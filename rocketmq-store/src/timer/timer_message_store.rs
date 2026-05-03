@@ -2020,7 +2020,7 @@ mod tests {
 
         assert!(timer_message_store.load());
         let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
-        let future_read_time = now_floor + timer_message_store.precision_ms();
+        let future_read_time = now_floor + timer_message_store.precision_ms() * 120;
         {
             let checkpoint_guard = timer_message_store.timer_checkpoint.lock();
             let checkpoint = checkpoint_guard.as_ref().unwrap();
@@ -2030,7 +2030,11 @@ mod tests {
 
         timer_message_store.set_should_running_dequeue(true);
 
-        assert_eq!(timer_message_store.curr_read_time_ms.load(Ordering::Relaxed), now_floor);
+        let restored_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
+        let now_after_resume = timer_message_store.floor_time_ms(current_millis() as i64);
+        assert!(restored_read_time >= now_floor);
+        assert!(restored_read_time <= now_after_resume);
+        assert!(restored_read_time < future_read_time);
     }
 
     #[tokio::test]
