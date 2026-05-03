@@ -22,6 +22,7 @@ use serde::Serialize;
 use crate::protocol::route::route_data_view::BrokerData;
 use crate::protocol::route::route_data_view::QueueData;
 use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+use crate::protocol::RemotingDeserializable;
 use crate::protocol::RemotingSerializable;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Eq, PartialEq)]
@@ -34,7 +35,7 @@ pub struct TopicRouteData {
     pub broker_datas: Vec<BrokerData>,
     #[serde(rename = "filterServerTable")]
     pub filter_server_table: HashMap<CheetahString, Vec<CheetahString>>,
-    #[serde(rename = "topicQueueMappingInfo")]
+    #[serde(rename = "topicQueueMappingInfo", alias = "topicQueueMappingByBroker")]
     pub topic_queue_mapping_by_broker: Option<HashMap<CheetahString, TopicQueueMappingInfo>>,
 }
 
@@ -78,6 +79,96 @@ impl TopicRouteData {
     /// which mirrors Java's `MapSortField` behavior for route responses.
     pub fn encode_standard_json(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
         StandardJsonTopicRouteData::from(self).encode()
+    }
+
+    pub fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+        match <Self as RemotingDeserializable>::decode(bytes) {
+            Ok(route_data) => Ok(route_data),
+            Err(error) => {
+                let Ok(raw_body) = std::str::from_utf8(bytes) else {
+                    return Err(error);
+                };
+                let Some(normalized_body) = quote_unquoted_numeric_object_keys(raw_body) else {
+                    return Err(error);
+                };
+                <Self as RemotingDeserializable>::decode_str(&normalized_body)
+            }
+        }
+    }
+}
+
+fn quote_unquoted_numeric_object_keys(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len() + 8);
+    let mut last_copied = 0;
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut changed = false;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if byte == b'"' {
+            in_string = true;
+            index += 1;
+            continue;
+        }
+
+        if byte == b'{' || byte == b',' {
+            let mut key_start = index + 1;
+            while key_start < bytes.len() && bytes[key_start].is_ascii_whitespace() {
+                key_start += 1;
+            }
+
+            let mut digit_start = key_start;
+            if digit_start < bytes.len() && bytes[digit_start] == b'-' {
+                digit_start += 1;
+            }
+
+            if digit_start < bytes.len() && bytes[digit_start].is_ascii_digit() {
+                let mut digit_end = digit_start + 1;
+                while digit_end < bytes.len() && bytes[digit_end].is_ascii_digit() {
+                    digit_end += 1;
+                }
+
+                let mut colon_index = digit_end;
+                while colon_index < bytes.len() && bytes[colon_index].is_ascii_whitespace() {
+                    colon_index += 1;
+                }
+
+                if colon_index < bytes.len() && bytes[colon_index] == b':' {
+                    output.push_str(&input[last_copied..key_start]);
+                    output.push('"');
+                    output.push_str(&input[key_start..digit_end]);
+                    output.push('"');
+                    last_copied = digit_end;
+                    changed = true;
+                    index = digit_end;
+                    continue;
+                }
+            }
+        }
+
+        index += 1;
+    }
+
+    if changed {
+        output.push_str(&input[last_copied..]);
+        Some(output)
+    } else {
+        None
     }
 }
 
@@ -235,6 +326,27 @@ mod tests {
         assert!(serialized.contains("\"brokerDatas\":["));
         assert!(serialized.contains("\"filterServerTable\":{\"key\":[\"value\"]}"));
         assert!(serialized.contains("\"topicQueueMappingInfo\":{\"broker\":{"));
+    }
+
+    #[test]
+    fn decode_java_fastjson_topic_route_data() {
+        let java_body = br#"{"brokerDatas":[{"brokerAddrs":{0:"127.0.0.1:10911"},"brokerName":"interopBroker","cluster":"DefaultCluster","enableActingMaster":false}],"filterServerTable":{},"queueDatas":[{"brokerName":"interopBroker","perm":6,"readQueueNums":4,"topicSysFlag":0,"writeQueueNums":4}],"topicQueueMappingByBroker":{"interopBroker":{"topic":"TopicA","scope":"ScopeA","totalQueues":4,"bname":"interopBroker","epoch":1,"dirty":false,"currIdMap":{0:0}}}}"#;
+
+        let decoded = TopicRouteData::decode(java_body).expect("decode Java fastjson route data");
+
+        assert_eq!(decoded.queue_datas.len(), 1);
+        assert_eq!(decoded.queue_datas[0].broker_name, CheetahString::from("interopBroker"));
+        assert_eq!(decoded.broker_datas.len(), 1);
+        assert_eq!(
+            decoded.broker_datas[0].broker_addrs().get(&0),
+            Some(&CheetahString::from("127.0.0.1:10911"))
+        );
+        let mapping = decoded
+            .topic_queue_mapping_by_broker
+            .as_ref()
+            .and_then(|items| items.get(&CheetahString::from("interopBroker")))
+            .expect("topicQueueMappingByBroker alias should decode");
+        assert_eq!(mapping.curr_id_map.as_ref().and_then(|items| items.get(&0)), Some(&0));
     }
 
     #[test]

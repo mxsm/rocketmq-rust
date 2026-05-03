@@ -243,7 +243,6 @@ mod tests {
     use rocketmq_remoting::local::LocalRequestHarness;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-    use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::runtime::processor::RequestProcessor;
 
     fn sample_topic_route_data() -> TopicRouteData {

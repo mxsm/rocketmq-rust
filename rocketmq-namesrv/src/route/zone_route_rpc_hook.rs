@@ -22,7 +22,6 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::RPCHook;
 
