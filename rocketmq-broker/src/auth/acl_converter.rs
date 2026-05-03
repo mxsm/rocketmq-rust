@@ -89,7 +89,7 @@ impl AclConverter {
             resource: entry.resource().resource_key().map(CheetahString::from_string),
             actions: entry
                 .to_actions_str()
-                .map(|actions| CheetahString::from_string(actions.join(","))),
+                .map(|actions| actions.into_iter().map(CheetahString::from_string).collect()),
             source_ips: entry.environment().map(|environment| {
                 environment
                     .source_ips()
@@ -114,7 +114,8 @@ impl AclConverter {
             .actions
             .as_ref()
             .ok_or_else(|| RocketMQError::illegal_argument("The actions is empty."))?
-            .split(',')
+            .iter()
+            .flat_map(|action| action.as_str().split(','))
             .map(str::trim)
             .filter(|action| !action.is_empty())
             .map(|action| {
@@ -209,7 +210,13 @@ mod tests {
 
         let entry = policy.entries.unwrap().pop().unwrap();
         assert_eq!(entry.resource, Some(CheetahString::from_static_str("Topic:topic-a")));
-        assert_eq!(entry.actions, Some(CheetahString::from_static_str("Pub,Sub")));
+        assert_eq!(
+            entry.actions,
+            Some(vec![
+                CheetahString::from_static_str("Pub"),
+                CheetahString::from_static_str("Sub")
+            ])
+        );
         assert_eq!(
             entry.source_ips.unwrap(),
             vec![CheetahString::from_static_str("127.0.0.1")]
@@ -225,7 +232,10 @@ mod tests {
                 policy_type: Some(CheetahString::from_static_str("Custom")),
                 entries: Some(vec![PolicyEntryInfo {
                     resource: Some(CheetahString::from_static_str("Topic:topic-a")),
-                    actions: Some(CheetahString::from_static_str("Pub,Sub")),
+                    actions: Some(vec![
+                        CheetahString::from_static_str("Pub"),
+                        CheetahString::from_static_str("Sub"),
+                    ]),
                     source_ips: Some(vec![CheetahString::from_static_str("127.0.0.1")]),
                     decision: Some(CheetahString::from_static_str("Allow")),
                 }]),

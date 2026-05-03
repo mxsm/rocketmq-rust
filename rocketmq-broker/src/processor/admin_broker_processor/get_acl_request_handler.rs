@@ -163,7 +163,14 @@ mod tests {
                 policy_type: Some(CheetahString::from_static_str("Custom")),
                 entries: Some(vec![PolicyEntryInfo {
                     resource: Some(CheetahString::from_string(resource.to_string())),
-                    actions: Some(CheetahString::from_string(actions.to_string())),
+                    actions: Some(
+                        actions
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|action| !action.is_empty())
+                            .map(CheetahString::from)
+                            .collect(),
+                    ),
                     source_ips: None,
                     decision: Some(CheetahString::from_static_str("Allow")),
                 }]),

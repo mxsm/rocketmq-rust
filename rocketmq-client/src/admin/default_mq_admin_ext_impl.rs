@@ -221,7 +221,15 @@ impl DefaultMQAdminExtImpl {
                         let actions: Vec<CheetahString> = entry
                             .actions
                             .as_ref()
-                            .map(|a| a.split(',').map(|s| CheetahString::from(s.trim())).collect())
+                            .map(|actions| {
+                                actions
+                                    .iter()
+                                    .flat_map(|action| action.as_str().split(','))
+                                    .map(str::trim)
+                                    .filter(|action| !action.is_empty())
+                                    .map(CheetahString::from)
+                                    .collect()
+                            })
                             .unwrap_or_default();
 
                         let source_ips: Vec<CheetahString> = entry.source_ips.clone().unwrap_or_default();
@@ -265,7 +273,15 @@ impl DefaultMQAdminExtImpl {
                         let actions: Vec<CheetahString> = entry
                             .actions
                             .as_ref()
-                            .map(|a| a.split(',').map(|s| CheetahString::from(s.trim())).collect())
+                            .map(|actions| {
+                                actions
+                                    .iter()
+                                    .flat_map(|action| action.as_str().split(','))
+                                    .map(str::trim)
+                                    .filter(|action| !action.is_empty())
+                                    .map(CheetahString::from)
+                                    .collect()
+                            })
                             .unwrap_or_default();
 
                         let source_ips: Vec<CheetahString> = entry.source_ips.clone().unwrap_or_default();

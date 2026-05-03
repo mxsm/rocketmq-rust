@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
+use serde::de::Error;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyEntryInfo {
     pub resource: Option<CheetahString>,
-    pub actions: Option<CheetahString>,
+    #[serde(default, deserialize_with = "deserialize_actions")]
+    pub actions: Option<Vec<CheetahString>>,
     pub source_ips: Option<Vec<CheetahString>>,
     pub decision: Option<CheetahString>,
 }
@@ -37,6 +40,40 @@ pub struct PolicyInfo {
 pub struct AclInfo {
     pub subject: Option<CheetahString>,
     pub policies: Option<Vec<PolicyInfo>>,
+}
+
+fn deserialize_actions<'de, D>(deserializer: D) -> Result<Option<Vec<CheetahString>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(value)) => Ok(Some(split_actions(&value))),
+        Some(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .map(|value| match value {
+                serde_json::Value::String(action) => Ok(split_actions(&action)),
+                other => Err(D::Error::custom(format!(
+                    "actions entries must be strings, got {other:?}"
+                ))),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|chunks| chunks.into_iter().flatten().collect::<Vec<_>>())
+            .map(Some),
+        Some(other) => Err(D::Error::custom(format!(
+            "actions must be a string or string array, got {other:?}"
+        ))),
+    }
+}
+
+fn split_actions(value: &str) -> Vec<CheetahString> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|action| !action.is_empty())
+        .map(CheetahString::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -58,12 +95,12 @@ mod tests {
     fn policy_entry_info_with_values() {
         let policy_entry = PolicyEntryInfo {
             resource: Some(CheetahString::from("resource")),
-            actions: Some(CheetahString::from("actions")),
+            actions: Some(vec![CheetahString::from("actions")]),
             source_ips: Some(vec![CheetahString::from("192.168.1.1")]),
             decision: Some(CheetahString::from("allow")),
         };
         assert_eq!(policy_entry.resource, Some(CheetahString::from("resource")));
-        assert_eq!(policy_entry.actions, Some(CheetahString::from("actions")));
+        assert_eq!(policy_entry.actions, Some(vec![CheetahString::from("actions")]));
         assert_eq!(policy_entry.source_ips, Some(vec![CheetahString::from("192.168.1.1")]));
         assert_eq!(policy_entry.decision, Some(CheetahString::from("allow")));
     }
@@ -72,13 +109,13 @@ mod tests {
     fn serialize_policy_entry_info() {
         let policy_entry = PolicyEntryInfo {
             resource: Some(CheetahString::from("resource")),
-            actions: Some(CheetahString::from("actions")),
+            actions: Some(vec![CheetahString::from("actions")]),
             source_ips: Some(vec![CheetahString::from("192.168.1.1")]),
             decision: Some(CheetahString::from("allow")),
         };
         let serialized = serde_json::to_string(&policy_entry).unwrap();
         assert!(serialized.contains("\"resource\":\"resource\""));
-        assert!(serialized.contains("\"actions\":\"actions\""));
+        assert!(serialized.contains("\"actions\":[\"actions\"]"));
         assert!(serialized.contains("\"sourceIps\":[\"192.168.1.1\"]"));
         assert!(serialized.contains("\"decision\":\"allow\""));
     }
@@ -87,15 +124,33 @@ mod tests {
     fn deserialize_policy_entry_info() {
         let json = r#"{
             "resource": "resource",
-            "actions": "actions",
+            "actions": ["Pub", "Sub"],
             "sourceIps": ["192.168.1.1"],
             "decision": "allow"
         }"#;
         let deserialized: PolicyEntryInfo = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.resource, Some(CheetahString::from("resource")));
-        assert_eq!(deserialized.actions, Some(CheetahString::from("actions")));
+        assert_eq!(
+            deserialized.actions,
+            Some(vec![CheetahString::from("Pub"), CheetahString::from("Sub")])
+        );
         assert_eq!(deserialized.source_ips, Some(vec![CheetahString::from("192.168.1.1")]));
         assert_eq!(deserialized.decision, Some(CheetahString::from("allow")));
+    }
+
+    #[test]
+    fn deserialize_policy_entry_info_accepts_legacy_comma_string_actions() {
+        let json = r#"{
+            "resource": "resource",
+            "actions": "Pub,Sub",
+            "decision": "allow"
+        }"#;
+        let deserialized: PolicyEntryInfo = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            deserialized.actions,
+            Some(vec![CheetahString::from("Pub"), CheetahString::from("Sub")])
+        );
     }
 
     #[test]

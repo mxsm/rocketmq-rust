@@ -112,7 +112,17 @@ fn print_acl(acl: &AclInfo) {
 
         for entry in entries.unwrap() {
             let resource = entry.resource.as_ref().map(|r| r.as_str()).unwrap_or("");
-            let actions = entry.actions.as_ref().map(|a| a.as_str()).unwrap_or("");
+            let actions = entry
+                .actions
+                .as_ref()
+                .map(|actions| {
+                    actions
+                        .iter()
+                        .map(|action| action.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
             let source_ips = entry
                 .source_ips
                 .as_ref()

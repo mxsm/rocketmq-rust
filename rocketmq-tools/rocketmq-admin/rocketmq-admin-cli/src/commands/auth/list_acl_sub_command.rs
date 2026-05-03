@@ -15,6 +15,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_admin_core::core::auth::AuthService;
@@ -142,7 +143,7 @@ fn expand_acl_rows(acls: Vec<AclInfo>) -> Vec<AclRow> {
                 rows.push(AclRow {
                     subject: subject.clone(),
                     resource: value_or_default(entry.resource.as_ref().map(|v| v.as_str())),
-                    actions: value_or_default(entry.actions.as_ref().map(|v| v.as_str())),
+                    actions: actions_or_default(entry.actions.as_deref()),
                     source_ips,
                     decision: value_or_default(entry.decision.as_ref().map(|v| v.as_str())),
                     policy_type: policy_type.clone(),
@@ -171,6 +172,20 @@ fn value_or_default(value: Option<&str>) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "*".to_string())
+}
+
+fn actions_or_default(actions: Option<&[CheetahString]>) -> String {
+    actions
+        .filter(|actions| !actions.is_empty())
+        .map(|actions| {
+            actions
+                .iter()
+                .map(|action| action.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|actions| !actions.trim().is_empty())
         .unwrap_or_else(|| "*".to_string())
 }
 

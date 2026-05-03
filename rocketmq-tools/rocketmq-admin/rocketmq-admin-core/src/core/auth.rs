@@ -1319,7 +1319,7 @@ fn build_acl_info(
 ) -> AclInfo {
     let entry = PolicyEntryInfo {
         resource: Some(join_cheetah_strings(resources)),
-        actions: Some(join_cheetah_strings(actions)),
+        actions: Some(actions.to_vec()),
         source_ips: if source_ips.is_empty() {
             None
         } else {

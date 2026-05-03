@@ -123,7 +123,16 @@ fn auth_acl_create_request_trims_fields_and_builds_acl_info() {
         entry.resource.as_ref().map(|resource| resource.as_str()),
         Some("Topic:order-topic,Topic:user-topic")
     );
-    assert_eq!(entry.actions.as_ref().map(|actions| actions.as_str()), Some("PUB,SUB"));
+    assert_eq!(
+        entry.actions.as_ref().map(|actions| {
+            actions
+                .iter()
+                .map(|action| action.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        }),
+        Some("PUB,SUB".to_string())
+    );
     assert_eq!(entry.decision.as_ref().map(|decision| decision.as_str()), Some("ALLOW"));
     assert_eq!(
         entry
