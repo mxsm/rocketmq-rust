@@ -160,14 +160,19 @@ pub fn string_to_properties(input: &str) -> Option<HashMap<CheetahString, Cheeta
             continue;
         }
 
-        if let Some((key, value)) = line.split_once('=') {
-            // Convert key and value to CheetahString
-            let key = CheetahString::from(key.trim());
-            let value = CheetahString::from(value.trim());
-            properties.insert(key, value);
-        } else {
-            return None; // Return None if the line isn't in `key=value` format
-        }
+        let separator_index = match (line.find('='), line.find(':')) {
+            (Some(equals), Some(colon)) => Some(equals.min(colon)),
+            (Some(equals), None) => Some(equals),
+            (None, Some(colon)) => Some(colon),
+            (None, None) => None,
+        };
+
+        let separator_index = separator_index?;
+        let (key, value) = line.split_at(separator_index);
+        let value = &value[1..];
+        let key = CheetahString::from(key.trim());
+        let value = CheetahString::from(value.trim());
+        properties.insert(key, value);
     }
 
     Some(properties)
@@ -253,6 +258,29 @@ mod tests {
         expected.insert(CheetahString::from("key1"), CheetahString::from("value1"));
         expected.insert(CheetahString::from("key2"), CheetahString::from("value2"));
         expected.insert(CheetahString::from("key3"), CheetahString::from("value3"));
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_string_to_properties_accepts_colon_separator() {
+        let input = r#"
+             brokerName:broker-a
+             namesrvAddr=127.0.0.1:9876
+             storePathRootDir:C:\rocketmq\store
+         "#;
+
+        let result = string_to_properties(input).expect("Parsing should succeed");
+        let mut expected = HashMap::new();
+        expected.insert(CheetahString::from("brokerName"), CheetahString::from("broker-a"));
+        expected.insert(
+            CheetahString::from("namesrvAddr"),
+            CheetahString::from("127.0.0.1:9876"),
+        );
+        expected.insert(
+            CheetahString::from("storePathRootDir"),
+            CheetahString::from(r"C:\rocketmq\store"),
+        );
 
         assert_eq!(result, expected);
     }
