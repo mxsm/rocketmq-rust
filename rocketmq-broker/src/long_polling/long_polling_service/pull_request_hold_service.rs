@@ -203,7 +203,7 @@ where
     }
 
     pub async fn notify_master_online(&self) {
-        for (_, mpr) in self.pull_request_table.read().iter() {
+        for mpr in self.pull_request_table.read().values() {
             if let Some(request_list) = mpr.clone_list_and_clear() {
                 for request in request_list {
                     info!(

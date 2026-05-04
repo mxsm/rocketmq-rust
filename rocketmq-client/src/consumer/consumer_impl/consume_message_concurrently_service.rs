@@ -92,7 +92,7 @@ impl ConsumeMessageConcurrentlyService {
             .process_queue_table
             .read()
             .await;
-        for (_, process_queue) in process_queue_table.iter() {
+        for process_queue in process_queue_table.values() {
             process_queue
                 .clean_expired_msg(self.default_mqpush_consumer_impl.clone())
                 .await;

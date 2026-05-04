@@ -518,10 +518,7 @@ mod tests {
         context.put("key1", "value1");
         context.put("key2", "value2");
 
-        let mut count = 0;
-        for (_key, _value) in context.iter() {
-            count += 1;
-        }
+        let count = context.iter().count();
         assert_eq!(count, 2);
     }
 

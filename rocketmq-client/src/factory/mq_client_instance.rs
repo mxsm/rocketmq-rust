@@ -1383,7 +1383,7 @@ impl MQClientInstance {
     async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
         for entry in self.topic_route_table.iter() {
             for bd in entry.value().broker_datas.iter() {
-                for (_, value) in bd.broker_addrs().iter() {
+                for value in bd.broker_addrs().values() {
                     if value.as_str() == broker_name {
                         return true;
                     }
@@ -1683,7 +1683,7 @@ impl MQClientInstance {
     async fn is_broker_addr_exist_in_topic_route_table(&self, addr: &str) -> bool {
         for entry in self.topic_route_table.iter() {
             for bd in entry.value().broker_datas.iter() {
-                for (_, value) in bd.broker_addrs().iter() {
+                for value in bd.broker_addrs().values() {
                     if value.as_str() == addr {
                         return true;
                     }

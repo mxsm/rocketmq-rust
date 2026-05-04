@@ -154,7 +154,7 @@ where
     pub fn which_group_by_topic(&self, topic: &str) -> HashSet<CheetahString> {
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut groups = HashSet::new();
-        for (key, _) in read_guard.iter() {
+        for key in read_guard.keys() {
             let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
             if arr.len() == 2 && arr[0] == topic {
                 let group = CheetahString::from_string(arr[1].to_string());
@@ -290,7 +290,7 @@ where
     pub fn which_topic_by_consumer(&self, group: &CheetahString) -> HashSet<CheetahString> {
         let read_guard = self.consumer_offset_wrapper.offset_table.read();
         let mut topics = HashSet::new();
-        for (key, _) in read_guard.iter() {
+        for key in read_guard.keys() {
             let arr: Vec<&str> = key.split(TOPIC_GROUP_SEPARATOR).collect();
             if arr.len() == 2 && arr[1] == group {
                 let topic = CheetahString::from_string(arr[0].to_string());

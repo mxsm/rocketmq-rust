@@ -215,8 +215,8 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
 
     async fn recover(&self) {
         let mut mutex = self.inner.consume_queue_table.lock().clone();
-        for (_topic, consume_queue_table) in mutex.iter_mut() {
-            for (_queue_id, consume_queue) in consume_queue_table.iter() {
+        for consume_queue_table in mutex.values_mut() {
+            for consume_queue in consume_queue_table.values() {
                 let queue_id = consume_queue.get_queue_id();
                 let topic = consume_queue.get_topic();
                 let mut file_queue_life_cycle = self.get_life_cycle(topic, queue_id);

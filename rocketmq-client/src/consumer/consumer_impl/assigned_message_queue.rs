@@ -186,7 +186,7 @@ impl AssignedMessageQueue {
     /// Clears all assigned queues.
     pub async fn clear(&self) {
         let mut map = self.queue_map.write().await;
-        for (_, aq) in map.iter() {
+        for aq in map.values() {
             aq.process_queue.set_dropped(true);
         }
         map.clear();

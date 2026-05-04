@@ -63,7 +63,7 @@ impl GetColdDataFlowCtrInfoSubCommand {
 
         if let Some(runtime_table) = json_value.get_mut("runtimeTable") {
             if let Some(table_obj) = runtime_table.as_object_mut() {
-                for (_key, entry) in table_obj.iter_mut() {
+                for entry in table_obj.values_mut() {
                     if let Some(entry_obj) = entry.as_object_mut() {
                         if let Some(last_cold_read_time) = entry_obj.remove("lastColdReadTimeMills") {
                             let millis = match &last_cold_read_time {

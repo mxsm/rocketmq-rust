@@ -89,7 +89,7 @@ impl StatisticsManager {
                 interval.tick().await;
 
                 let stats_table = stats_table.read();
-                for (_kind, item_map) in stats_table.iter() {
+                for item_map in stats_table.values() {
                     let tmp_item_map: HashMap<_, _> = item_map.clone().into_iter().collect();
 
                     for item in tmp_item_map.values() {

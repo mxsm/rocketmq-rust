@@ -451,7 +451,7 @@ async fn test_high_concurrency_stress() {
             for _ in 0..100 {
                 let result = tokio::time::timeout(Duration::from_secs(1), async {
                     let table = rebalance_clone.process_queue_table.read().await;
-                    for (_, pq) in table.iter() {
+                    for pq in table.values() {
                         if pq.is_dropped() {
                             return Err(());
                         }
