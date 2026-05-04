@@ -34,10 +34,13 @@ export const useConsumerCatalog = (address?: string) => {
 
         setError('');
         try {
-            const next = await ConsumerService.queryConsumerGroups({
+            const request = {
                 skipSysGroup: false,
                 address: normalizedAddress,
-            });
+            };
+            const next = mode === 'initial'
+                ? await ConsumerService.queryConsumerGroups(request)
+                : await ConsumerService.refreshAllConsumerGroups(request);
             setResponse(next);
             return next;
         } catch (loadError) {

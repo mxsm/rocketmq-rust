@@ -51,6 +51,17 @@ pub async fn refresh_consumer_group(
 }
 
 #[tauri::command]
+pub async fn refresh_all_consumer_groups(
+    request: ConsumerGroupListRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+) -> Result<ConsumerGroupListResponse, String> {
+    consumer_manager
+        .refresh_all_consumer_groups(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn query_consumer_connection(
     request: ConsumerConnectionQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,

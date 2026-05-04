@@ -24,6 +24,12 @@ export class ConsumerService {
         return invoke<ConsumerGroupListItem>('refresh_consumer_group', { request });
     }
 
+    static async refreshAllConsumerGroups(
+        request: ConsumerGroupListRequest = {},
+    ): Promise<ConsumerGroupListResponse> {
+        return invoke<ConsumerGroupListResponse>('refresh_all_consumer_groups', { request });
+    }
+
     static async queryConsumerConnection(request: ConsumerConnectionQueryRequest): Promise<ConsumerConnectionView> {
         return invoke<ConsumerConnectionView>('query_consumer_connection', { request });
     }
