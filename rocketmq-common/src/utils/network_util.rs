@@ -33,3 +33,26 @@ impl NetworkUtil {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn get_local_address_returns_valid_ip_or_none() {
+        let result = NetworkUtil::get_local_address();
+
+        if let Some(addr) = result {
+            assert!(
+                addr.parse::<IpAddr>().is_ok(),
+                "expected a valid IP address, got: {addr}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_local_address_does_not_panic() {
+        let _ = NetworkUtil::get_local_address();
+    }
+}
