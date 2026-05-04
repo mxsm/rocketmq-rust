@@ -138,9 +138,9 @@ mod tests {
     fn serde_json_roundtrip_variants() {
         for &variant in &[PolicyType::Custom, PolicyType::Default] {
             let serialized = serde_json::to_string(&variant)
-                .unwrap_or_else(|e| panic!("Could not serialize PolicyType::{:?}: {}", &variant.name(), e));
+                .unwrap_or_else(|e| panic!("Could not serialize PolicyType::{:?}: {}", variant.name(), e));
             let parsed: PolicyType = serde_json::from_str(&serialized)
-                .unwrap_or_else(|e| panic!("Could not parse {:?} as PolicyType: {}", &serialized, e));
+                .unwrap_or_else(|e| panic!("Could not parse {:?} as PolicyType: {}", serialized, e));
             assert_eq!(variant, parsed);
         }
     }

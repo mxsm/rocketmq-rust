@@ -277,7 +277,7 @@ impl PullAPIWrapper {
                 {
                     return Err(mq_client_err!(format!(
                         "The broker[{}],[{}] does not support consumer to filter message by tag[{}]",
-                        mq.get_broker_name(),
+                        mq.broker_name(),
                         find_broker_result.broker_version,
                         expression_type
                     )));
@@ -332,10 +332,7 @@ impl PullAPIWrapper {
             )
             .await
         } else {
-            Err(mq_client_err!(format!(
-                "The broker[{}] not exist",
-                mq.get_broker_name(),
-            )))
+            Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name(),)))
         }
     }
 
@@ -435,10 +432,7 @@ impl PullAPIWrapper {
                 )
                 .await
         } else {
-            Err(mq_client_err!(format!(
-                "The broker[{}] not exist",
-                mq.get_broker_name(),
-            )))
+            Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name(),)))
         }
     }
 

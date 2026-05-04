@@ -138,7 +138,7 @@ pub fn filter_by_zone_name(topic_route_data: &mut TopicRouteData, zone_name: &Ch
     // Remove filter server entries whose broker addresses belong to removed brokers
 
     if !topic_route_data.filter_server_table.is_empty() {
-        for (_, bd) in broker_data_removed.iter() {
+        for bd in broker_data_removed.values() {
             for addr in bd.broker_addrs().values() {
                 topic_route_data.filter_server_table.remove(addr);
             }

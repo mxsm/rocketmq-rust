@@ -462,9 +462,9 @@ where
     ) {
         let lock_key = CheetahString::from_string(format!(
             "{}{}{}{}{}",
-            &topic,
+            topic,
             PopAckConstants::SPLIT,
-            &consume_group,
+            consume_group,
             PopAckConstants::SPLIT,
             q_id
         ));

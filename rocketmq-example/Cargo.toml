@@ -85,3 +85,7 @@ path = "examples/producer/send_with_selector.rs"
 [[example]]
 name = "producer-send-with-selector-advanced"
 path = "examples/producer/send_with_selector_advanced.rs"
+
+[[example]]
+name = "request-code-smoke"
+path = "examples/interop/request_code_smoke.rs"

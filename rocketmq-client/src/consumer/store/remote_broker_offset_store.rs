@@ -93,7 +93,7 @@ impl RemoteBrokerOffsetStore {
                 .query_consumer_offset(find_broker_result.broker_addr.as_str(), request_header, 5_000)
                 .await
         } else {
-            Err(mq_client_err!(format!("broker not found, {}", mq.get_broker_name())))
+            Err(mq_client_err!(format!("broker not found, {}", mq.broker_name())))
         }
     }
 }
@@ -289,7 +289,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             };
             Ok(())
         } else {
-            Err(mq_client_err!(format!("broker not found, {}", mq.get_broker_name())))
+            Err(mq_client_err!(format!("broker not found, {}", mq.broker_name())))
         }
     }
 }

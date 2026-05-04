@@ -1919,7 +1919,7 @@ impl MQClientAPIImpl {
             warn!(
                 "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
                 tmp,
-                msg.get_topic(),
+                msg.topic(),
                 addr,
                 retry_broker_name
             );
