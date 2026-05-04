@@ -25,6 +25,7 @@ pub mod message;
 pub mod models;
 pub mod nameserver;
 pub mod producer;
+pub mod proxy;
 pub mod service;
 pub mod topic;
 
@@ -36,5 +37,6 @@ pub use message::*;
 pub use models::*;
 pub use nameserver::*;
 pub use producer::*;
+pub use proxy::*;
 pub use service::*;
 pub use topic::*;
