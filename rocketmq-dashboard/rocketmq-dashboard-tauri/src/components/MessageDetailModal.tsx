@@ -304,13 +304,13 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
                     {detail.messageTrackList && detail.messageTrackList.length > 0 ? (
                       <div className="space-y-2">
                         {detail.messageTrackList.map((track) => (
-                          <div key={`${track.consumerGroup}-${track.trackType}`} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm dark:border-gray-800 dark:bg-gray-800/40">
+                          <div key={`${track.consumerGroup}-${track.trackType}`} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm dark:border-gray-800 dark:bg-gray-800/50">
                             <div className="font-medium text-gray-900 dark:text-white">{track.consumerGroup}</div>
                             <div className="mt-1 text-gray-600 dark:text-gray-300">{track.trackType}</div>
                             <button
                               onClick={() => void handleDirectConsume(track.consumerGroup)}
                               disabled={consumingGroup === track.consumerGroup}
-                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
+                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-amber-400 dark:hover:border-gray-600 dark:hover:bg-gray-700"
                             >
                               <RefreshCw className={`h-3.5 w-3.5 ${consumingGroup === track.consumerGroup ? 'animate-spin' : ''}`} />
                               {consumingGroup === track.consumerGroup ? 'Requesting...' : 'Resend'}
