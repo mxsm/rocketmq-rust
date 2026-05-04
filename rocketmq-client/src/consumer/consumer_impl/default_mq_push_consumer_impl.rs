@@ -32,6 +32,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::DEFAULT_CONSUMER_GROUP;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_common::common::FAQUrl;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::ClientErr;

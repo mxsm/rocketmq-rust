@@ -39,8 +39,8 @@ macro_rules! mq_client_err {
 
     // Handle errors without a ResponseCode, using only the error message (accepts both &str and String)
     ($error_message:expr) => {{
-        let error_msg: &str = "Body is empty";
-        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_msg));
+        let error_msg = format!("{}", $error_message);
+        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_msg.as_str()));
         rocketmq_error::RocketMQError::illegal_argument(faq_msg)
     }};
 }
@@ -86,3 +86,19 @@ pub mod utils;
 
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 pub use crate::trace::trace_data_encoder::TraceDataEncoder;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mq_client_err_without_response_code_preserves_message() {
+        let err = crate::mq_client_err!("simple client error");
+
+        match err {
+            rocketmq_error::RocketMQError::IllegalArgument(message) => {
+                assert!(message.contains("simple client error"));
+                assert!(!message.contains("Body is empty"));
+            }
+            other => panic!("expected illegal argument error, got {other:?}"),
+        }
+    }
+}

@@ -284,8 +284,12 @@ impl DefaultMQPushConsumerBuilder {
         if let Some(value) = self.consume_from_where {
             consumer_config.consume_from_where = value;
         }
-        consumer_config.consume_timestamp = self.consume_timestamp.take();
-        consumer_config.allocate_message_queue_strategy = self.allocate_message_queue_strategy.take();
+        if let Some(value) = self.consume_timestamp {
+            consumer_config.consume_timestamp = Some(value);
+        }
+        if let Some(value) = self.allocate_message_queue_strategy.take() {
+            consumer_config.allocate_message_queue_strategy = Some(value);
+        }
         if let Some(value) = self.subscription {
             consumer_config.subscription = value;
         }

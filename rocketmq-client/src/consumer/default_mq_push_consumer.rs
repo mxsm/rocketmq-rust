@@ -564,3 +564,22 @@ impl DefaultMQPushConsumer {
         self.consumer_config.consume_from_where = consume_from_where;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_preserves_default_allocate_message_queue_strategy() {
+        let consumer = DefaultMQPushConsumer::builder()
+            .consumer_group("builder_default_strategy_group")
+            .build();
+
+        let strategy = consumer
+            .consumer_config
+            .allocate_message_queue_strategy
+            .as_ref()
+            .expect("default allocation strategy should be preserved");
+        assert_eq!("AVG", strategy.get_name());
+    }
+}
