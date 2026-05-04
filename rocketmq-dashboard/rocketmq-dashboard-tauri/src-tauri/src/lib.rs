@@ -17,6 +17,7 @@
 mod auth;
 mod cluster;
 mod consumer;
+mod dashboard;
 mod message;
 mod nameserver;
 mod producer;
@@ -104,11 +105,14 @@ pub fn run() {
             cluster::commands::get_cluster_broker_status,
             consumer::commands::query_consumer_groups,
             consumer::commands::refresh_consumer_group,
+            consumer::commands::refresh_all_consumer_groups,
             consumer::commands::query_consumer_connection,
             consumer::commands::query_consumer_topic_detail,
             consumer::commands::query_consumer_config,
             consumer::commands::create_or_update_consumer_group,
             consumer::commands::delete_consumer_group,
+            dashboard::commands::get_dashboard_broker_overview,
+            dashboard::commands::query_dashboard_topic_current,
             message::commands::query_message_by_topic_key,
             message::commands::query_message_by_id,
             message::commands::query_message_page_by_topic,

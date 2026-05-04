@@ -157,6 +157,13 @@ impl ConsumerManager {
         }
     }
 
+    pub(crate) async fn refresh_all_consumer_groups(
+        &self,
+        request: ConsumerGroupListRequest,
+    ) -> ConsumerResult<ConsumerGroupListResponse> {
+        self.query_consumer_groups(request).await
+    }
+
     pub(crate) async fn query_consumer_connection(
         &self,
         request: ConsumerConnectionQueryRequest,
