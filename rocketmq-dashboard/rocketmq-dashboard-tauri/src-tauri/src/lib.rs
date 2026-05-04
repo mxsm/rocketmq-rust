@@ -21,6 +21,7 @@ mod dashboard;
 mod message;
 mod nameserver;
 mod producer;
+mod proxy;
 mod topic;
 
 use rocketmq_dashboard_common::NameServerConfigStore;
@@ -74,6 +75,13 @@ pub fn run() {
             let message_manager = message::MessageManager::new(nameserver_runtime.clone());
             let producer_manager = producer::ProducerManager::new(nameserver_runtime.clone());
             let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
+            let proxy_db = proxy::ProxyDb::new(app.handle())?;
+            proxy_db.init()?;
+            log::info!(
+                "Local Proxy SQLite tables initialized at: {}",
+                proxy_db.db_path().display()
+            );
+            let proxy_manager = proxy::ProxyManager::new(proxy_db)?;
 
             app.manage(auth_service);
             app.manage(auth::SessionState::default());
@@ -83,6 +91,7 @@ pub fn run() {
             app.manage(consumer_manager);
             app.manage(message_manager);
             app.manage(producer_manager);
+            app.manage(proxy_manager);
             app.manage(topic_manager);
 
             Ok(())
@@ -128,6 +137,10 @@ pub fn run() {
             message::commands::view_message_trace_detail,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
+            proxy::commands::get_proxy_home_page,
+            proxy::commands::add_proxy_addr,
+            proxy::commands::switch_proxy_addr,
+            proxy::commands::delete_proxy_addr,
             topic::commands::get_topic_list,
             topic::commands::get_topic_route,
             topic::commands::get_topic_stats,
