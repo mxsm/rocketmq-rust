@@ -8,8 +8,6 @@ import {
     ResponsiveContainer,
     BarChart,
     Bar,
-    LineChart,
-    Line,
 } from 'recharts';
 import { Card } from '../../../components/ui/LegacyCard';
 import { Button } from '../../../components/ui/LegacyButton';
@@ -74,6 +72,13 @@ interface BrokerTopChartItem {
     name: string;
     messages: number;
     address: string;
+}
+
+interface BrokerTpsChartItem {
+    name: string;
+    address: string;
+    produceTps: number;
+    consumeTps: number;
 }
 
 const BrokerTopChart = ({ data }: { data: BrokerTopChartItem[] }) => {
@@ -175,6 +180,94 @@ const BrokerTopChart = ({ data }: { data: BrokerTopChartItem[] }) => {
     );
 };
 
+const MetricBar = ({
+    label,
+    value,
+    maxValue,
+    accentColor,
+    trackColor,
+}: {
+    label: string;
+    value: number;
+    maxValue: number;
+    accentColor: string;
+    trackColor: string;
+}) => {
+    const width = `${Math.max((value / Math.max(maxValue, 1)) * 100, value > 0 ? 3 : 0)}%`;
+
+    return (
+        <div>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+                    <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: accentColor }} />
+                    {label}
+                </div>
+                <div className="font-mono text-sm font-semibold text-white">
+                    {formatNumber(value)}
+                </div>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full" style={{ backgroundColor: trackColor }}>
+                <div className="h-full rounded-full" style={{ width, backgroundColor: accentColor }} />
+            </div>
+        </div>
+    );
+};
+
+const BrokerTpsCompactCards = ({ data }: { data: BrokerTpsChartItem[] }) => {
+    const maxTps = Math.max(...data.flatMap((item) => [item.produceTps, item.consumeTps]), 1);
+
+    return (
+        <div className="mt-4 flex flex-wrap items-start gap-3">
+            {data.map((item) => {
+                const totalTps = item.produceTps + item.consumeTps;
+
+                return (
+                    <div
+                        key={`${item.name}-${item.address}`}
+                        className="w-full max-w-[440px] rounded-xl border border-slate-700/80 bg-slate-950/30 p-4"
+                    >
+                        <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-white">
+                                    {item.name}
+                                </div>
+                                <div className="mt-1 truncate font-mono text-xs text-slate-400">
+                                    {item.address}
+                                </div>
+                            </div>
+                            <div className="shrink-0 rounded-lg border border-teal-400/25 bg-teal-950/30 px-3 py-1.5 text-right">
+                                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-teal-300">
+                                    Total
+                                </div>
+                                <div className="font-mono text-sm font-semibold text-white">
+                                    {formatNumber(totalTps)}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            <MetricBar
+                                label="Producer TPS"
+                                value={item.produceTps}
+                                maxValue={maxTps}
+                                accentColor="#fb7185"
+                                trackColor="rgba(251, 113, 133, 0.18)"
+                            />
+                            <MetricBar
+                                label="Consumer TPS"
+                                value={item.consumeTps}
+                                maxValue={maxTps}
+                                accentColor="#3b82f6"
+                                trackColor="rgba(59, 130, 246, 0.18)"
+                            />
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
 export const DashboardCharts = () => {
     const {
         brokerOverview,
@@ -200,6 +293,7 @@ export const DashboardCharts = () => {
         () =>
             (brokerOverview?.brokerTps ?? []).map((item) => ({
                 name: `${item.brokerName}-${item.brokerId}`,
+                address: item.address,
                 produceTps: Number(item.produceTps.toFixed(2)),
                 consumeTps: Number(item.consumeTps.toFixed(2)),
             })),
@@ -260,41 +354,7 @@ export const DashboardCharts = () => {
                     error={brokerError}
                     isEmpty={brokerTpsData.length === 0}
                 >
-                    <div className="mt-4 min-w-0 h-[300px] w-full">
-                        <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={200}>
-                            <LineChart data={brokerTpsData}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                                <XAxis
-                                    dataKey="name"
-                                    tick={{ fontSize: 11, fill: '#9ca3af' }}
-                                    tickFormatter={compactLabel}
-                                    axisLine={false}
-                                    tickLine={false}
-                                />
-                                <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                                <Tooltip
-                                    contentStyle={chartTooltipStyle}
-                                    formatter={(value: number) => [formatNumber(value), 'TPS']}
-                                />
-                                <Line
-                                    type="monotone"
-                                    dataKey="produceTps"
-                                    name="Produce TPS"
-                                    stroke="#ef4444"
-                                    strokeWidth={2}
-                                    dot={false}
-                                />
-                                <Line
-                                    type="monotone"
-                                    dataKey="consumeTps"
-                                    name="Consume TPS"
-                                    stroke="#2563eb"
-                                    strokeWidth={2}
-                                    dot={false}
-                                />
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </div>
+                    <BrokerTpsCompactCards data={brokerTpsData} />
                 </ChartState>
             </Card>
 

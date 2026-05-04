@@ -528,38 +528,31 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn get_broker_puts_num_without_system_topic(&self) -> u64 {
-        if let Some(stats) = self.stats_table.get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC) {
-            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
-        } else {
-            0
-        }
+        self.current_stats_value(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC, &self.cluster_name)
     }
 
     #[inline]
     pub fn get_broker_gets_num_without_system_topic(&self) -> u64 {
-        if let Some(stats) = self.stats_table.get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC) {
-            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
-        } else {
-            0
-        }
+        self.current_stats_value(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC, &self.cluster_name)
     }
 
     #[inline]
     pub fn get_broker_put_nums(&self) -> u64 {
-        if let Some(stats) = self.stats_table.get(Stats::BROKER_PUT_NUMS) {
-            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
-        } else {
-            0
-        }
+        self.current_stats_value(Stats::BROKER_PUT_NUMS, &self.cluster_name)
     }
 
     #[inline]
     pub fn get_broker_get_nums(&self) -> u64 {
-        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_NUMS) {
-            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
-        } else {
-            0
-        }
+        self.current_stats_value(Stats::BROKER_GET_NUMS, &self.cluster_name)
+    }
+
+    #[inline]
+    fn current_stats_value(&self, stats_name: &str, stats_key: &str) -> u64 {
+        self.stats_table
+            .get(stats_name)
+            .and_then(|stats| stats.get_stats_item(stats_key))
+            .map(|item| item.get_value())
+            .unwrap_or(0)
     }
 
     #[inline]
@@ -1178,6 +1171,22 @@ mod tests {
                 assert_eq!(item.get_value(), 100);
             }
         };
+    }
+
+    #[tokio::test]
+    async fn broker_num_getters_return_current_totals_before_sampling() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_broker_put_nums("UserTopic", 500);
+        manager.inc_broker_put_nums("SCHEDULE_TOPIC_XXXX", 50);
+        manager.inc_broker_get_nums("UserTopic", 300);
+        manager.inc_broker_get_nums("SCHEDULE_TOPIC_XXXX", 70);
+
+        assert_eq!(manager.get_broker_put_nums(), 550);
+        assert_eq!(manager.get_broker_get_nums(), 370);
+        assert_eq!(manager.get_broker_puts_num_without_system_topic(), 500);
+        assert_eq!(manager.get_broker_gets_num_without_system_topic(), 300);
     }
 
     #[tokio::test]
