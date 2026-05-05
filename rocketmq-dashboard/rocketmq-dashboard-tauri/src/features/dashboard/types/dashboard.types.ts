@@ -47,6 +47,16 @@ export interface DashboardTopicQueueItem {
     totalQueueCount: number;
 }
 
+export interface DashboardTopicTopItem {
+    topic: string;
+    totalMsg: number;
+    producedMsgCount24h: number;
+    consumedMsgCount24h: number;
+    inTps: number;
+    outTps: number;
+    consumerGroupCount: number;
+}
+
 export interface DashboardTopicCategoryItem {
     category: string;
     count: number;
@@ -57,6 +67,7 @@ export interface DashboardTopicCurrentResponse {
     useVipChannel: boolean;
     useTls: boolean;
     totalTopics: number;
+    topicTop: DashboardTopicTopItem[];
     topicQueueTop: DashboardTopicQueueItem[];
     topicCategoryDistribution: DashboardTopicCategoryItem[];
 }

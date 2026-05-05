@@ -90,6 +90,18 @@ pub(crate) struct DashboardTopicQueueItem {
     pub(crate) total_queue_count: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DashboardTopicTopItem {
+    pub(crate) topic: String,
+    pub(crate) total_msg: u64,
+    pub(crate) produced_msg_count_24h: u64,
+    pub(crate) consumed_msg_count_24h: u64,
+    pub(crate) in_tps: f64,
+    pub(crate) out_tps: f64,
+    pub(crate) consumer_group_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DashboardTopicCategoryItem {
@@ -97,13 +109,14 @@ pub(crate) struct DashboardTopicCategoryItem {
     pub(crate) count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DashboardTopicCurrentResponse {
     pub(crate) current_namesrv: String,
     pub(crate) use_vip_channel: bool,
     pub(crate) use_tls: bool,
     pub(crate) total_topics: usize,
+    pub(crate) topic_top: Vec<DashboardTopicTopItem>,
     pub(crate) topic_queue_top: Vec<DashboardTopicQueueItem>,
     pub(crate) topic_category_distribution: Vec<DashboardTopicCategoryItem>,
 }

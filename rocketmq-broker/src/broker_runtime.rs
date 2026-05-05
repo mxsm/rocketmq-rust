@@ -185,6 +185,7 @@ impl BrokerRuntime {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let store_host = broker_address.parse::<SocketAddr>().expect("parse store_host failed");
         let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
+        let scheduled_task_manager = ScheduledTaskManager::default();
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
         let topic_queue_mapping_manager = TopicQueueMappingManager::new(broker_config.clone());
@@ -273,7 +274,10 @@ impl BrokerRuntime {
             min_broker_addr_in_group: Default::default(),
             lock: Default::default(),
         });
-        let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
+        let mut stats_manager = BrokerStatsManager::new_with_scheduler(
+            inner.broker_config.clone(),
+            Some(Arc::new(scheduled_task_manager.clone())),
+        );
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
             broker_runtime_inner: inner.clone(),
         }));
@@ -302,7 +306,7 @@ impl BrokerRuntime {
             shutdown_hook: None,
             proxy_request_processor: None,
             consumer_ids_change_listener,
-            scheduled_task_manager: Default::default(),
+            scheduled_task_manager,
         }
     }
 

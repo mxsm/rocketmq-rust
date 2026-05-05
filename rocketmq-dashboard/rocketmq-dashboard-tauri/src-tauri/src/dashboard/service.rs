@@ -24,13 +24,16 @@ use crate::dashboard::types::DashboardResult;
 use crate::dashboard::types::DashboardTopicCategoryItem;
 use crate::dashboard::types::DashboardTopicCurrentResponse;
 use crate::dashboard::types::DashboardTopicQueueItem;
+use crate::dashboard::types::DashboardTopicTopItem;
 use crate::topic::service::TopicManager;
+use crate::topic::types::TopicCurrentStatsItem;
 use crate::topic::types::TopicListItem;
 use crate::topic::types::TopicListResponse;
 use rocketmq_dashboard_common::ClusterHomePageRequest;
 use rocketmq_dashboard_common::DashboardBrokerOverviewRequest;
 use rocketmq_dashboard_common::TopicListRequest;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 const TOP_LIMIT: usize = 10;
 
@@ -58,8 +61,20 @@ pub(crate) async fn query_dashboard_topic_current(
         })
         .await
         .map_err(|error| DashboardError::Topic(error.to_string()))?;
+    let stats_response = topic_manager
+        .get_topic_current_stats()
+        .await
+        .map_err(|error| DashboardError::Topic(error.to_string()))?;
 
-    Ok(build_topic_current(topic_response))
+    for failure in &stats_response.failures {
+        log::warn!(
+            "Failed to collect dashboard topic current stats for `{}`: {}",
+            failure.topic,
+            failure.error
+        );
+    }
+
+    Ok(build_topic_current(topic_response, stats_response.items))
 }
 
 fn build_broker_overview(cluster_response: ClusterHomePageResponse) -> DashboardBrokerOverviewResponse {
@@ -81,12 +96,16 @@ fn build_broker_overview(cluster_response: ClusterHomePageResponse) -> Dashboard
     }
 }
 
-fn build_topic_current(topic_response: TopicListResponse) -> DashboardTopicCurrentResponse {
+fn build_topic_current(
+    topic_response: TopicListResponse,
+    topic_stats: Vec<TopicCurrentStatsItem>,
+) -> DashboardTopicCurrentResponse {
     DashboardTopicCurrentResponse {
         current_namesrv: topic_response.current_namesrv,
         use_vip_channel: topic_response.use_vip_channel,
         use_tls: topic_response.use_tls,
         total_topics: topic_response.total,
+        topic_top: build_topic_top(topic_stats, &topic_response.items),
         topic_queue_top: build_topic_queue_top(&topic_response.items),
         topic_category_distribution: build_topic_category_distribution(&topic_response.items),
     }
@@ -165,6 +184,31 @@ fn build_topic_queue_top(items: &[TopicListItem]) -> Vec<DashboardTopicQueueItem
         .collect()
 }
 
+fn build_topic_top(items: Vec<TopicCurrentStatsItem>, topic_items: &[TopicListItem]) -> Vec<DashboardTopicTopItem> {
+    let java_collectable_topics = topic_items
+        .iter()
+        .filter(|item| !item.system_topic && !matches!(item.category.as_str(), "RETRY" | "DLQ"))
+        .map(|item| item.topic.as_str())
+        .collect::<HashSet<_>>();
+    let mut sorted = items;
+    sorted.retain(|item| java_collectable_topics.contains(item.topic.as_str()));
+    sorted.sort_by(|left, right| right.total_msg.cmp(&left.total_msg).then(left.topic.cmp(&right.topic)));
+
+    sorted
+        .into_iter()
+        .take(TOP_LIMIT)
+        .map(|item| DashboardTopicTopItem {
+            topic: item.topic,
+            total_msg: item.total_msg,
+            produced_msg_count_24h: item.produced_msg_count_24h,
+            consumed_msg_count_24h: item.consumed_msg_count_24h,
+            in_tps: item.in_tps,
+            out_tps: item.out_tps,
+            consumer_group_count: item.consumer_group_count,
+        })
+        .collect()
+}
+
 fn build_topic_category_distribution(items: &[TopicListItem]) -> Vec<DashboardTopicCategoryItem> {
     let mut counts = BTreeMap::<String, usize>::new();
     for item in items {
@@ -185,7 +229,9 @@ mod tests {
     use super::build_broker_tps;
     use super::build_topic_category_distribution;
     use super::build_topic_queue_top;
+    use super::build_topic_top;
     use crate::cluster::types::ClusterBrokerCardItem;
+    use crate::topic::types::TopicCurrentStatsItem;
     use crate::topic::types::TopicListItem;
     use std::collections::BTreeMap;
 
@@ -211,6 +257,20 @@ mod tests {
     }
 
     fn topic(name: &str, category: &str, read_queue_count: u32, write_queue_count: u32) -> TopicListItem {
+        topic_with_system_flag(name, category, read_queue_count, write_queue_count, false)
+    }
+
+    fn system_topic(name: &str) -> TopicListItem {
+        topic_with_system_flag(name, "SYSTEM", 1, 1, true)
+    }
+
+    fn topic_with_system_flag(
+        name: &str,
+        category: &str,
+        read_queue_count: u32,
+        write_queue_count: u32,
+        system_topic: bool,
+    ) -> TopicListItem {
         TopicListItem {
             topic: name.into(),
             category: category.into(),
@@ -221,7 +281,19 @@ mod tests {
             write_queue_count,
             perm: 6,
             order: false,
-            system_topic: false,
+            system_topic,
+        }
+    }
+
+    fn topic_stats(topic: &str, total_msg: u64) -> TopicCurrentStatsItem {
+        TopicCurrentStatsItem {
+            topic: topic.into(),
+            total_msg,
+            produced_msg_count_24h: total_msg + 10,
+            consumed_msg_count_24h: total_msg,
+            in_tps: 1.0,
+            out_tps: 2.0,
+            consumer_group_count: 1,
         }
     }
 
@@ -253,6 +325,39 @@ mod tests {
 
         assert_eq!(top[0].topic, "topic-b");
         assert_eq!(top[0].total_queue_count, 12);
+    }
+
+    #[test]
+    fn topic_top_uses_java_total_msg_descending() {
+        let items = vec![topic_stats("topic-a", 20), topic_stats("topic-b", 50)];
+        let topic_items = vec![topic("topic-a", "NORMAL", 2, 2), topic("topic-b", "NORMAL", 2, 2)];
+
+        let top = build_topic_top(items, &topic_items);
+
+        assert_eq!(top[0].topic, "topic-b");
+        assert_eq!(top[0].total_msg, 50);
+    }
+
+    #[test]
+    fn topic_top_filters_java_dashboard_non_collectable_topics() {
+        let items = vec![
+            topic_stats("TopicTest1111", 7),
+            topic_stats("SCHEDULE_TOPIC_XXXX", 90),
+            topic_stats("%RETRY%group-a", 80),
+            topic_stats("%DLQ%group-a", 70),
+        ];
+        let topic_items = vec![
+            topic("TopicTest1111", "NORMAL", 2, 2),
+            system_topic("SCHEDULE_TOPIC_XXXX"),
+            topic("%RETRY%group-a", "RETRY", 1, 1),
+            topic("%DLQ%group-a", "DLQ", 1, 1),
+        ];
+
+        let top = build_topic_top(items, &topic_items);
+
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].topic, "TopicTest1111");
+        assert_eq!(top[0].total_msg, 7);
     }
 
     #[test]

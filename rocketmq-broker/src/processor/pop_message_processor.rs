@@ -969,6 +969,19 @@ where
             }
             Some(result_inner) => {
                 if !result_inner.message_mapped_list().is_empty() {
+                    let broker_stats = self.broker_runtime_inner.broker_stats_manager();
+                    broker_stats.inc_broker_get_nums(request_header.topic.as_str(), result_inner.message_count());
+                    broker_stats.inc_group_get_nums(
+                        request_header.consumer_group.as_str(),
+                        topic.as_str(),
+                        result_inner.message_count(),
+                    );
+                    broker_stats.inc_group_get_size(
+                        request_header.consumer_group.as_str(),
+                        topic.as_str(),
+                        result_inner.buffer_total_size(),
+                    );
+
                     if is_order {
                         self.broker_runtime_inner.consumer_order_info_manager().update(
                             request_header.attempt_id.clone().unwrap_or_default(),
