@@ -102,6 +102,55 @@ impl<P> TieredFileSegment<P> {
     fn current_status(&self) -> FileSegmentStatus {
         self.metadata.lock().status
     }
+
+    pub fn max_size(&self) -> u64 {
+        self.max_size
+    }
+
+    pub fn next_absolute_offset(&self) -> u64 {
+        self.base_offset
+            .saturating_add(self.append_position.load(Ordering::Acquire))
+    }
+
+    pub fn committed_absolute_end(&self) -> u64 {
+        self.base_offset
+            .saturating_add(self.commit_position.load(Ordering::Acquire))
+    }
+
+    pub fn min_timestamp(&self) -> i64 {
+        self.metadata.lock().begin_timestamp
+    }
+
+    pub fn max_timestamp(&self) -> i64 {
+        self.metadata.lock().end_timestamp
+    }
+
+    pub fn can_hold(&self, absolute_offset: u64, len: usize) -> bool {
+        if self.current_status() != FileSegmentStatus::New {
+            return false;
+        }
+        let relative_offset = absolute_offset.saturating_sub(self.base_offset);
+        absolute_offset >= self.base_offset && relative_offset.saturating_add(len as u64) <= self.max_size
+    }
+
+    pub fn contains_committed_range(&self, absolute_offset: u64, len: usize) -> bool {
+        if self.current_status() == FileSegmentStatus::Deleted {
+            return false;
+        }
+        absolute_offset >= self.base_offset
+            && absolute_offset.saturating_add(len as u64) <= self.committed_absolute_end()
+    }
+
+    pub fn is_expired_sealed(&self, expire_before_millis: i64) -> bool {
+        let metadata = self.metadata.lock();
+        metadata.status == FileSegmentStatus::Sealed
+            && metadata.end_timestamp != i64::MIN
+            && metadata.end_timestamp < expire_before_millis
+    }
+
+    pub fn mark_deleted(&self) {
+        self.metadata.lock().status = FileSegmentStatus::Deleted;
+    }
 }
 
 impl<P> FileSegment for TieredFileSegment<P>

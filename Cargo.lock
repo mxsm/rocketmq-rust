@@ -3971,6 +3971,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-remoting",
  "rocketmq-rust",
+ "rocketmq-tieredstore",
  "serde",
  "serde_json",
  "sysinfo",

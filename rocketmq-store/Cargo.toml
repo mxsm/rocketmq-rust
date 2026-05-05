@@ -44,6 +44,7 @@ io_uring = ["dep:tokio-uring"]
 fast-load = []
 # Safe sequential loading fallback (disables fast-load)
 safe-load = []
+tieredstore = ["dep:rocketmq-tieredstore"]
 
 
 [dependencies]
@@ -51,6 +52,7 @@ rocketmq-common   = { workspace = true }
 rocketmq-rust     = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
+rocketmq-tieredstore = { path = "../rocketmq-tieredstore", optional = true }
 
 #tools
 dirs.workspace = true

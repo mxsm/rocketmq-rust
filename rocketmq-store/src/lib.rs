@@ -33,5 +33,7 @@ pub mod stats;
 pub mod store;
 pub mod store_error;
 pub mod store_path_config_helper;
+#[cfg(feature = "tieredstore")]
+pub mod tieredstore;
 pub mod timer;
 pub mod utils;

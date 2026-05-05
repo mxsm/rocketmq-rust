@@ -103,6 +103,7 @@ where
                         .append_commit_log(message, request.store_timestamp)
                         .await?;
                     file.append_consume_queue(
+                        request.queue_offset,
                         ConsumeQueueUnit {
                             commit_log_offset: tiered_offset as i64,
                             size: request.message_size,
