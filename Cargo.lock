@@ -3998,6 +3998,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-tieredstore"
+version = "0.8.0"
+dependencies = [
+ "bytes",
+ "dashmap",
+ "parking_lot",
+ "rocketmq-common",
+ "rocketmq-error",
+ "rocketmq-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "trait-variant",
+]
+
+[[package]]
 name = "rocksdb"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
