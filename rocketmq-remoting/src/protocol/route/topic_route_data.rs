@@ -26,11 +26,11 @@ use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 pub struct TopicRouteData {
     #[serde(rename = "orderTopicConf")]
     pub order_topic_conf: Option<CheetahString>,
-    #[serde(rename = "queueDatas")]
+    #[serde(default, rename = "queueDatas")]
     pub queue_datas: Vec<QueueData>,
-    #[serde(rename = "brokerDatas")]
+    #[serde(default, rename = "brokerDatas")]
     pub broker_datas: Vec<BrokerData>,
-    #[serde(rename = "filterServerTable")]
+    #[serde(default, rename = "filterServerTable")]
     pub filter_server_table: HashMap<CheetahString, Vec<CheetahString>>,
     #[serde(rename = "topicQueueMappingInfo")]
     pub topic_queue_mapping_by_broker: Option<HashMap<CheetahString, TopicQueueMappingInfo>>,

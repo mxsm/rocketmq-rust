@@ -30,7 +30,7 @@ pub struct BrokerData {
     broker_addrs: HashMap<u64 /* broker id */, CheetahString /* broker ip */>,
     #[serde(rename = "zoneName")]
     zone_name: Option<CheetahString>,
-    #[serde(rename = "enableActingMaster")]
+    #[serde(default, rename = "enableActingMaster")]
     enable_acting_master: bool,
 }
 
@@ -151,7 +151,7 @@ pub struct QueueData {
     #[serde(rename = "writeQueueNums")]
     pub write_queue_nums: u32,
     pub perm: u32,
-    #[serde(rename = "topicSysFlag")]
+    #[serde(default, rename = "topicSysFlag", alias = "topicSynFlag")]
     pub topic_sys_flag: u32,
 }
 

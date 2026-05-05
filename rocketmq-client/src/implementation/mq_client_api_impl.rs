@@ -421,7 +421,7 @@ impl MQClientAPIImpl {
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
         let request_header = GetRouteInfoRequestHeader {
             topic: CheetahString::from_slice(topic),
-            accept_standard_json_only: None,
+            accept_standard_json_only: Some(true),
             topic_request_header: None,
         };
         let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
@@ -434,7 +434,25 @@ impl MQClientAPIImpl {
                     ResponseCode::Success => {
                         let body = result.take_body();
                         if let Some(body_inner) = body {
-                            let route_data = TopicRouteData::decode(body_inner.as_ref())?;
+                            let route_data = TopicRouteData::decode(body_inner.as_ref())
+                                .or_else(|first_err| {
+                                    let mut normalized =
+                                        String::from_utf8_lossy(body_inner.as_ref()).to_string();
+                                    for i in 0..=9 {
+                                        let key = i.to_string();
+                                        normalized = normalized
+                                            .replace(
+                                                &format!("{{{}:", key),
+                                                &format!("{{\"{}\":", key),
+                                            )
+                                            .replace(
+                                                &format!(",{}:", key),
+                                                &format!(",\"{}\":", key),
+                                            );
+                                    }
+                                    TopicRouteData::decode(normalized.as_bytes())
+                                        .map_err(|_| first_err)
+                                })?;
                             return Ok(Some(route_data));
                         }
                     }

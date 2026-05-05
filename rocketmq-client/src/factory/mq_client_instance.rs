@@ -530,7 +530,13 @@ impl MQClientInstance {
                 .unwrap()
                 .get_topic_route_info_from_name_server(topic, self.client_config.mq_client_api_timeout)
                 .await
-                .unwrap_or(None)
+                .map_or_else(
+                    |err| {
+                        warn!("getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}", topic, err);
+                        None
+                    },
+                    |v| v,
+                )
         };
         if let Some(mut topic_route_data) = topic_route_data {
             let mut topic_route_table = self.topic_route_table.write().await;
