@@ -71,6 +71,35 @@ pub(crate) struct TopicListResponse {
     pub(crate) use_tls: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TopicCurrentStatsItem {
+    pub(crate) topic: String,
+    pub(crate) total_msg: u64,
+    pub(crate) produced_msg_count_24h: u64,
+    pub(crate) consumed_msg_count_24h: u64,
+    pub(crate) in_tps: f64,
+    pub(crate) out_tps: f64,
+    pub(crate) consumer_group_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TopicCurrentStatsFailure {
+    pub(crate) topic: String,
+    pub(crate) error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TopicCurrentStatsResponse {
+    pub(crate) items: Vec<TopicCurrentStatsItem>,
+    pub(crate) failures: Vec<TopicCurrentStatsFailure>,
+    pub(crate) current_namesrv: String,
+    pub(crate) use_vip_channel: bool,
+    pub(crate) use_tls: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TopicBrokerAddressView {

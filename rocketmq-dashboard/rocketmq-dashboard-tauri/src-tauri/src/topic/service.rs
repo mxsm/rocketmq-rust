@@ -19,6 +19,9 @@ use crate::topic::types::TopicConfigView;
 use crate::topic::types::TopicConsumerGroupListResponse;
 use crate::topic::types::TopicConsumerInfoResponse;
 use crate::topic::types::TopicConsumerInfoView;
+use crate::topic::types::TopicCurrentStatsFailure;
+use crate::topic::types::TopicCurrentStatsItem;
+use crate::topic::types::TopicCurrentStatsResponse;
 use crate::topic::types::TopicError;
 use crate::topic::types::TopicListItem;
 use crate::topic::types::TopicListResponse;
@@ -33,6 +36,9 @@ use crate::topic::types::TopicStatusView;
 use crate::topic::types::TopicTargetOption;
 use cheetah_string::CheetahString;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use rocketmq_admin_core::core::stats::StatsAllQueryRequest;
+use rocketmq_admin_core::core::stats::StatsAllRow;
+use rocketmq_admin_core::core::stats::StatsService;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
@@ -63,6 +69,7 @@ use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -137,6 +144,42 @@ impl TopicManager {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
                     log::warn!("Retrying `get_topic_list` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn get_topic_current_stats(&self) -> TopicResult<TopicCurrentStatsResponse> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let snapshot = session_guard
+                .as_ref()
+                .expect("topic admin session should be initialized before use")
+                .snapshot
+                .clone();
+            let result = {
+                let session = session_guard
+                    .as_ref()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_current_stats_with_admin(&session.admin, &snapshot).await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_current_stats failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_current_stats` after reconnect: {}", error);
                 }
                 Err(error) => return Err(error),
             }
@@ -525,6 +568,32 @@ impl TopicManager {
     ) -> TopicResult<TopicRouteView> {
         let route = require_topic_route(admin, &request.topic).await?;
         Ok(map_route_view(&request.topic, &route))
+    }
+
+    async fn get_topic_current_stats_with_admin(
+        &self,
+        admin: &DefaultMQAdminExt,
+        snapshot: &NameServerConfigSnapshot,
+    ) -> TopicResult<TopicCurrentStatsResponse> {
+        let request = StatsAllQueryRequest::new(false, None::<String>);
+        let stats_result = StatsService::query_stats_all_with_admin(admin, &request)
+            .await
+            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+
+        Ok(TopicCurrentStatsResponse {
+            items: build_topic_current_stats_items(stats_result.rows),
+            failures: stats_result
+                .failures
+                .into_iter()
+                .map(|failure| TopicCurrentStatsFailure {
+                    topic: failure.topic.to_string(),
+                    error: failure.error,
+                })
+                .collect(),
+            current_namesrv: snapshot.current_namesrv.clone().unwrap_or_default(),
+            use_vip_channel: snapshot.use_vip_channel,
+            use_tls: snapshot.use_tls,
+        })
     }
 
     async fn get_topic_stats_with_admin(
@@ -998,6 +1067,49 @@ impl TopicManager {
 
         Ok(map_send_result(request.topic, send_result))
     }
+}
+
+#[derive(Default)]
+struct TopicCurrentStatsAccumulator {
+    produced_msg_count_24h: u64,
+    consumed_msg_count_24h: u64,
+    in_tps: f64,
+    out_tps: f64,
+    consumer_group_count: usize,
+}
+
+fn build_topic_current_stats_items(rows: Vec<StatsAllRow>) -> Vec<TopicCurrentStatsItem> {
+    let mut by_topic = BTreeMap::<String, TopicCurrentStatsAccumulator>::new();
+
+    for row in rows {
+        let topic = row.topic.to_string();
+        let entry = by_topic.entry(topic).or_default();
+        entry.produced_msg_count_24h = entry.produced_msg_count_24h.max(row.in_msg_count_24h);
+        entry.in_tps = entry.in_tps.max(row.in_tps);
+
+        if let Some(out_msg_count_24h) = row.out_msg_count_24h {
+            entry.consumed_msg_count_24h += out_msg_count_24h;
+        }
+        if let Some(out_tps) = row.out_tps {
+            entry.out_tps += out_tps;
+        }
+        if row.consumer_group.is_some() {
+            entry.consumer_group_count += 1;
+        }
+    }
+
+    by_topic
+        .into_iter()
+        .map(|(topic, stats)| TopicCurrentStatsItem {
+            topic,
+            total_msg: stats.consumed_msg_count_24h,
+            produced_msg_count_24h: stats.produced_msg_count_24h,
+            consumed_msg_count_24h: stats.consumed_msg_count_24h,
+            in_tps: stats.in_tps,
+            out_tps: stats.out_tps,
+            consumer_group_count: stats.consumer_group_count,
+        })
+        .collect()
 }
 
 async fn send_transaction_message_with_runtime(
@@ -1712,6 +1824,7 @@ fn quote_numeric_object_keys(input: &str) -> String {
 mod tests {
     use super::TopicBrokerConfigSnapshot;
     use super::build_send_message;
+    use super::build_topic_current_stats_items;
     use super::classify_topic;
     use super::cluster_targets_from_cluster_info;
     use super::find_master_addr_by_broker_name;
@@ -1723,6 +1836,7 @@ mod tests {
     use super::normalize_topic_message_body;
     use super::quote_numeric_object_keys;
     use cheetah_string::CheetahString;
+    use rocketmq_admin_core::core::stats::StatsAllRow;
     use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
     use rocketmq_client_rust::producer::send_result::SendResult;
     use rocketmq_client_rust::producer::send_status::SendStatus;
@@ -1763,6 +1877,58 @@ mod tests {
         assert_eq!(category, "FIFO");
         assert_eq!(message_type, "FIFO");
         assert!(!system_topic);
+    }
+
+    #[test]
+    fn build_topic_current_stats_items_aggregates_java_topic_current_rows() {
+        let rows = vec![
+            StatsAllRow {
+                topic: CheetahString::from_static_str("TopicA"),
+                consumer_group: Some(CheetahString::from_static_str("GroupA")),
+                accumulation: 0,
+                in_tps: 12.0,
+                out_tps: Some(3.0),
+                in_msg_count_24h: 100,
+                out_msg_count_24h: Some(20),
+            },
+            StatsAllRow {
+                topic: CheetahString::from_static_str("TopicA"),
+                consumer_group: Some(CheetahString::from_static_str("GroupB")),
+                accumulation: 0,
+                in_tps: 12.0,
+                out_tps: Some(5.0),
+                in_msg_count_24h: 100,
+                out_msg_count_24h: Some(30),
+            },
+            StatsAllRow {
+                topic: CheetahString::from_static_str("TopicB"),
+                consumer_group: None,
+                accumulation: 0,
+                in_tps: 2.0,
+                out_tps: None,
+                in_msg_count_24h: 7,
+                out_msg_count_24h: None,
+            },
+        ];
+
+        let items = build_topic_current_stats_items(rows);
+        let topic_a = items
+            .iter()
+            .find(|item| item.topic == "TopicA")
+            .expect("TopicA should be present");
+        let topic_b = items
+            .iter()
+            .find(|item| item.topic == "TopicB")
+            .expect("TopicB should be present");
+
+        assert_eq!(topic_a.total_msg, 50);
+        assert_eq!(topic_a.produced_msg_count_24h, 100);
+        assert_eq!(topic_a.consumed_msg_count_24h, 50);
+        assert_eq!(topic_a.out_tps, 8.0);
+        assert_eq!(topic_a.consumer_group_count, 2);
+        assert_eq!(topic_b.total_msg, 0);
+        assert_eq!(topic_b.produced_msg_count_24h, 7);
+        assert_eq!(topic_b.consumer_group_count, 0);
     }
 
     #[test]

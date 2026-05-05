@@ -8,6 +8,7 @@ import {
     ResponsiveContainer,
     BarChart,
     Bar,
+    LabelList,
 } from 'recharts';
 import { Card } from '../../../components/ui/LegacyCard';
 import { Button } from '../../../components/ui/LegacyButton';
@@ -25,9 +26,11 @@ const compactLabel = (value: string) => {
 };
 
 const chartTooltipStyle = {
-    borderRadius: '12px',
-    border: 'none',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+    borderRadius: '10px',
+    border: '1px solid rgba(71, 85, 105, 0.8)',
+    backgroundColor: '#0f172a',
+    color: '#e2e8f0',
+    boxShadow: '0 16px 32px rgba(0,0,0,0.28)',
 };
 
 const ChartState = ({
@@ -79,6 +82,14 @@ interface BrokerTpsChartItem {
     address: string;
     produceTps: number;
     consumeTps: number;
+}
+
+interface TopicTopChartItem {
+    topic: string;
+    totalMsg: number;
+    producedMsgCount24h: number;
+    consumedMsgCount24h: number;
+    consumerGroupCount: number;
 }
 
 const BrokerTopChart = ({ data }: { data: BrokerTopChartItem[] }) => {
@@ -268,6 +279,76 @@ const BrokerTpsCompactCards = ({ data }: { data: BrokerTpsChartItem[] }) => {
     );
 };
 
+const TopicTopBarChart = ({ data }: { data: TopicTopChartItem[] }) => {
+    const chartHeight = Math.max(300, data.length * 34 + 56);
+
+    return (
+        <div className="mt-4">
+            <div className="mb-3 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 font-semibold text-slate-300">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-indigo-400" />
+                    TotalMsg
+                </div>
+                <div className="text-slate-500">
+                    24h consumed messages
+                </div>
+            </div>
+
+            <div className="min-w-0 w-full" style={{ height: `${chartHeight}px` }}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={200}>
+                    <BarChart
+                        data={data}
+                        layout="vertical"
+                        margin={{ top: 8, right: 92, bottom: 8, left: 8 }}
+                        barCategoryGap={8}
+                    >
+                        <CartesianGrid horizontal={false} stroke="rgba(148, 163, 184, 0.18)" />
+                        <XAxis
+                            type="number"
+                            tick={{ fontSize: 11, fill: '#94a3b8' }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(value) => formatNumber(Number(value))}
+                        />
+                        <YAxis
+                            type="category"
+                            dataKey="topic"
+                            width={142}
+                            tick={{ fontSize: 11, fill: '#cbd5e1', fontWeight: 600 }}
+                            tickFormatter={compactLabel}
+                            axisLine={false}
+                            tickLine={false}
+                        />
+                        <Tooltip
+                            cursor={{ fill: 'rgba(30, 41, 59, 0.45)' }}
+                            contentStyle={chartTooltipStyle}
+                            labelFormatter={(topic) => `Topic: ${topic}`}
+                            formatter={(value: number, name: string, item) => {
+                                if (name === 'totalMsg') {
+                                    return [formatNumber(value), 'TotalMsg'];
+                                }
+
+                                return [formatNumber(value), item.name];
+                            }}
+                        />
+                        <Bar dataKey="totalMsg" name="TotalMsg" fill="#818cf8" radius={[0, 6, 6, 0]} barSize={18}>
+                            <LabelList
+                                dataKey="totalMsg"
+                                position="right"
+                                formatter={(value: number) => formatNumber(value)}
+                                fill="#e0e7ff"
+                                fontSize={11}
+                                fontWeight={700}
+                                fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+                            />
+                        </Bar>
+                    </BarChart>
+                </ResponsiveContainer>
+            </div>
+        </div>
+    );
+};
+
 export const DashboardCharts = () => {
     const {
         brokerOverview,
@@ -300,6 +381,18 @@ export const DashboardCharts = () => {
         [brokerOverview?.brokerTps]
     );
 
+    const topicTopData = useMemo(
+        () =>
+            (topicCurrent?.topicTop ?? []).map((item) => ({
+                topic: item.topic,
+                totalMsg: item.totalMsg,
+                producedMsgCount24h: item.producedMsgCount24h,
+                consumedMsgCount24h: item.consumedMsgCount24h,
+                consumerGroupCount: item.consumerGroupCount,
+            })),
+        [topicCurrent?.topicTop]
+    );
+
     const topicQueueData = useMemo(
         () =>
             (topicCurrent?.topicQueueTop ?? []).map((item) => ({
@@ -321,7 +414,8 @@ export const DashboardCharts = () => {
     );
 
     const isBrokerLoading = isLoading && brokerTopData.length === 0;
-    const isTopicLoading = isLoading && topicQueueData.length === 0;
+    const isTopicLoading =
+        isLoading && topicTopData.length === 0 && topicQueueData.length === 0 && topicCategoryData.length === 0;
 
     const handleRefresh = async () => {
         await refresh();
@@ -358,6 +452,16 @@ export const DashboardCharts = () => {
                 </ChartState>
             </Card>
 
+            <Card title="Topic TOP 10" description="TotalMsg ranked by topic">
+                <ChartState
+                    isLoading={isTopicLoading}
+                    error={topicError}
+                    isEmpty={topicTopData.length === 0}
+                >
+                    <TopicTopBarChart data={topicTopData} />
+                </ChartState>
+            </Card>
+
             <Card title="Topic Queue Top 10" description="Largest topics by read and write queue count">
                 <ChartState
                     isLoading={isTopicLoading}
@@ -367,7 +471,7 @@ export const DashboardCharts = () => {
                     <div className="mt-4 min-w-0 h-[300px] w-full">
                         <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={200}>
                             <BarChart data={topicQueueData}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148, 163, 184, 0.22)" />
                                 <XAxis
                                     dataKey="name"
                                     tick={{ fontSize: 11, fill: '#9ca3af' }}
@@ -377,7 +481,7 @@ export const DashboardCharts = () => {
                                 />
                                 <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
                                 <Tooltip
-                                    cursor={{ fill: '#f9fafb' }}
+                                    cursor={{ fill: 'rgba(30, 41, 59, 0.45)' }}
                                     contentStyle={chartTooltipStyle}
                                     formatter={(value: number) => [formatNumber(value), 'Queues']}
                                 />
@@ -397,7 +501,7 @@ export const DashboardCharts = () => {
                     <div className="mt-4 min-w-0 h-[300px] w-full">
                         <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={200}>
                             <BarChart data={topicCategoryData}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(148, 163, 184, 0.22)" />
                                 <XAxis
                                     dataKey="name"
                                     tick={{ fontSize: 11, fill: '#9ca3af' }}
@@ -406,11 +510,11 @@ export const DashboardCharts = () => {
                                 />
                                 <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
                                 <Tooltip
-                                    cursor={{ fill: '#f9fafb' }}
+                                    cursor={{ fill: 'rgba(30, 41, 59, 0.45)' }}
                                     contentStyle={chartTooltipStyle}
                                     formatter={(value: number) => [formatNumber(value), 'Topics']}
                                 />
-                                <Bar dataKey="count" fill="#0f766e" radius={[4, 4, 0, 0]} barSize={30} />
+                                <Bar dataKey="count" fill="#2dd4bf" radius={[4, 4, 0, 0]} barSize={30} />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>

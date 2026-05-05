@@ -31,7 +31,6 @@ use rocketmq_common::common::stats::stats_item::StatsItem;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use tokio::time::Duration;
 use tracing::info;
@@ -118,33 +117,38 @@ impl BrokerStatsManager {
     fn start_sampling_tasks(&self, scheduler: &Arc<ScheduledTaskManager>) {
         // Task 1: Sample every 10 seconds for minute-level statistics
         let stats_table = Arc::clone(&self.stats_table);
-        let task_id = scheduler.add_fixed_rate_task(Duration::from_secs(10), Duration::from_secs(10), move |_cancel| {
+        let task_id = scheduler.add_fixed_rate_task(Duration::ZERO, Duration::from_secs(10), move |_cancel| {
             let stats_table = Arc::clone(&stats_table);
             async move {
-                for entry in stats_table.iter() {
-                    entry.value().sampling_in_minutes();
-                }
+                Self::sample_stats_table_in_seconds(&stats_table);
                 Ok(())
             }
         });
         self.task_ids.lock().push(task_id);
 
-        // Task 2: Sample every minute (aligned to minute boundary)
+        // Task 2: Sample every 10 minutes for hour-level statistics
         let stats_table = Arc::clone(&self.stats_table);
-        let initial_delay = Self::compute_initial_delay_to_next_minute();
-        let task_id = scheduler.add_fixed_rate_task(initial_delay, Duration::from_secs(60), move |_cancel| {
+        let task_id = scheduler.add_fixed_rate_task(Duration::ZERO, Duration::from_secs(600), move |_cancel| {
             let stats_table = Arc::clone(&stats_table);
             async move {
-                info!("Executing minute-level sampling for all stats");
-                for entry in stats_table.iter() {
-                    entry.value().sampling_in_minutes();
-                }
+                Self::sample_stats_table_in_minutes(&stats_table);
                 Ok(())
             }
         });
         self.task_ids.lock().push(task_id);
 
-        // Task 3: Clean up expired stats every 10 minutes
+        // Task 3: Sample every hour for day-level statistics
+        let stats_table = Arc::clone(&self.stats_table);
+        let task_id = scheduler.add_fixed_rate_task(Duration::ZERO, Duration::from_secs(3600), move |_cancel| {
+            let stats_table = Arc::clone(&stats_table);
+            async move {
+                Self::sample_stats_table_in_hours(&stats_table);
+                Ok(())
+            }
+        });
+        self.task_ids.lock().push(task_id);
+
+        // Task 4: Clean up expired stats every 10 minutes
         let stats_table = Arc::clone(&self.stats_table);
         let task_id =
             scheduler.add_fixed_rate_task(Duration::from_secs(600), Duration::from_secs(600), move |_cancel| {
@@ -163,14 +167,22 @@ impl BrokerStatsManager {
         );
     }
 
-    /// Compute delay to next minute boundary
-    fn compute_initial_delay_to_next_minute() -> Duration {
-        let now = current_millis();
+    fn sample_stats_table_in_seconds(stats_table: &DashMap<String, StatsItemSet>) {
+        for entry in stats_table.iter() {
+            entry.value().sampling_in_seconds();
+        }
+    }
 
-        let next_minute = ((now / 60000) + 1) * 60000;
-        let delay_ms = next_minute - now;
+    fn sample_stats_table_in_minutes(stats_table: &DashMap<String, StatsItemSet>) {
+        for entry in stats_table.iter() {
+            entry.value().sampling_in_minutes();
+        }
+    }
 
-        Duration::from_millis(delay_ms)
+    fn sample_stats_table_in_hours(stats_table: &DashMap<String, StatsItemSet>) {
+        for entry in stats_table.iter() {
+            entry.value().sampling_in_hours();
+        }
     }
 
     #[inline]
@@ -1117,6 +1129,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sampling_helpers_populate_java_compatible_stats_windows() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_topic_put_nums("TestTopic", 100, 1);
+        manager.inc_group_get_nums("TestGroup", "TestTopic", 40);
+
+        BrokerStatsManager::sample_stats_table_in_seconds(&manager.stats_table);
+        BrokerStatsManager::sample_stats_table_in_minutes(&manager.stats_table);
+        BrokerStatsManager::sample_stats_table_in_hours(&manager.stats_table);
+
+        let stats = manager
+            .stats_table
+            .get(Stats::TOPIC_PUT_NUMS)
+            .expect("topic stats should exist");
+        let item = stats
+            .get_stats_item("TestTopic")
+            .expect("topic stats item should exist");
+
+        assert_eq!(stats.get_stats_data_in_minute("TestTopic").get_sum(), 100);
+        assert_eq!(stats.get_stats_data_in_hour("TestTopic").get_sum(), 100);
+        assert_eq!(item.get_stats_data_in_day().get_sum(), 100);
+
+        let group_stats_key = build_stats_key(Some("TestTopic"), Some("TestGroup"));
+        let group_stats = manager
+            .stats_table
+            .get(Stats::GROUP_GET_NUMS)
+            .expect("group get stats should exist");
+        let group_item = group_stats
+            .get_stats_item(&group_stats_key)
+            .expect("group get stats item should exist");
+
+        assert_eq!(group_stats.get_stats_data_in_minute(&group_stats_key).get_sum(), 40);
+        assert_eq!(group_stats.get_stats_data_in_hour(&group_stats_key).get_sum(), 40);
+        assert_eq!(group_item.get_stats_data_in_day().get_sum(), 40);
+    }
+
+    #[tokio::test]
     async fn test_inc_topic_put_nums() {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = BrokerStatsManager::new(broker_config);
@@ -1376,7 +1426,7 @@ mod tests {
 
         manager.start();
 
-        assert_eq!(manager.task_ids.lock().len(), 3);
+        assert_eq!(manager.task_ids.lock().len(), 4);
     }
 
     #[tokio::test]
@@ -1387,7 +1437,7 @@ mod tests {
 
         manager.start();
         let task_count_before = manager.task_ids.lock().len();
-        assert_eq!(task_count_before, 3);
+        assert_eq!(task_count_before, 4);
 
         manager.shutdown();
         let task_count_after = manager.task_ids.lock().len();
