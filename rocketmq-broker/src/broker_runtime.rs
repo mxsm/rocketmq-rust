@@ -2714,20 +2714,24 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .replicas_manager()
             .map(|replicas_manager| replicas_manager.heartbeat_targets())
             .unwrap_or_default();
+        let mut first_reachable = None;
         for address in targets {
             match this.broker_outer_api.get_controller_metadata(&address).await {
                 Ok(metadata) => {
                     if let Some(controller_leader_address) = metadata.controller_leader_address {
                         return Some(controller_leader_address);
                     }
-                    return Some(address);
+                    if metadata.is_leader == Some(true) {
+                        return Some(address);
+                    }
+                    first_reachable.get_or_insert(address);
                 }
                 Err(error) => {
                     warn!("Discover controller leader failed via {}: {}", address, error);
                 }
             }
         }
-        None
+        first_reachable
     }
 
     async fn refresh_controller_leader(mut this: ArcMut<Self>) -> Option<CheetahString> {
