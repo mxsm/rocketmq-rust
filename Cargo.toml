@@ -28,6 +28,7 @@ members = [
   "rocketmq-proxy",
   "rocketmq-remoting",
   "rocketmq-runtime",
+  "rocketmq-tieredstore",
   "rocketmq-store",
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
