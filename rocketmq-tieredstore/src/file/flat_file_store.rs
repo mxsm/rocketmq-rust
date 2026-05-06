@@ -55,7 +55,8 @@ where
     pub async fn load(&self) -> Result<(), RocketMQError> {
         let queues = self.metadata_store.list_queues().await?;
         for queue in queues {
-            self.get_or_create(queue.topic, queue.queue_id)?;
+            let flat_file = self.get_or_create(queue.topic, queue.queue_id)?;
+            flat_file.recover().await?;
         }
         Ok(())
     }
@@ -78,6 +79,7 @@ where
                 topic,
                 queue_id,
                 self.config.clone(),
+                self.metadata_store.clone(),
                 self.provider.clone(),
             ))
         });
@@ -85,7 +87,10 @@ where
     }
 
     pub async fn cleanup_expired(&self, now_millis: i64) -> Result<(), RocketMQError> {
-        let _ = now_millis;
+        let flat_files = self.files.iter().map(|entry| entry.value().clone()).collect::<Vec<_>>();
+        for flat_file in flat_files {
+            flat_file.cleanup_expired(now_millis).await?;
+        }
         Ok(())
     }
 
