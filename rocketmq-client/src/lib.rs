@@ -39,8 +39,8 @@ macro_rules! mq_client_err {
 
     // Handle errors without a ResponseCode, using only the error message (accepts both &str and String)
     ($error_message:expr) => {{
-        let error_msg: &str = "Body is empty";
-        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_msg));
+        let error_msg: String = $error_message.to_string();
+        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_msg.as_str()));
         rocketmq_error::RocketMQError::illegal_argument(faq_msg)
     }};
 }
