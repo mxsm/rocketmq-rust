@@ -55,7 +55,7 @@ thiserror      = { workspace = true }
 async-trait = "0.1"
 prost       = "0.14"
 prost-types = "0.14"
-tonic       = { version = "0.14.5", features = ["transport", "codegen"] }
+tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
 tonic-prost = "0.14"
 
 [build-dependencies]
