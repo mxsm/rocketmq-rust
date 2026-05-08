@@ -56,7 +56,7 @@ hmac = "0.13.0"
 sha1 = "0.11"
 
 # Optional: gRPC support
-tonic = { version = "0.14.5", optional = true }
+tonic = { version = "0.14.6", optional = true }
 
 # Error handling
 thiserror = { workspace = true }
