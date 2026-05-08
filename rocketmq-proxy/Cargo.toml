@@ -59,7 +59,7 @@ tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
 tonic-prost = "0.14"
 
 [build-dependencies]
-tonic-prost-build = "0.14.5"
+tonic-prost-build = "0.14.6"
 
 [dev-dependencies]
 hex = "0.4"
