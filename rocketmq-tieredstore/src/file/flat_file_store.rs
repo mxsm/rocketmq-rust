@@ -19,6 +19,7 @@ use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
+use crate::file::IndexFileSegment;
 use crate::file::TieredFlatFile;
 use crate::file::TieredIndexEntry;
 use crate::metadata::JsonMetadataStore;
@@ -46,6 +47,7 @@ where
     provider: P,
     files: DashMap<FlatFileKey, Arc<TieredFlatFile<P>>>,
     index: DashMap<IndexKey, Vec<TieredIndexEntry>>,
+    index_file: IndexFileSegment<P>,
 }
 
 impl<P> TieredFlatFileStore<P>
@@ -53,12 +55,19 @@ where
     P: TieredStoreProvider,
 {
     pub fn new(config: Arc<TieredStoreConfig>, metadata_store: Arc<JsonMetadataStore>, provider: P) -> Self {
+        let index_file = IndexFileSegment::with_limits(
+            IndexFileSegment::<P>::default_path().to_owned(),
+            provider.clone(),
+            config.index_file_max_hash_slot_num as usize,
+            config.index_file_max_index_num as usize,
+        );
         Self {
             config,
             metadata_store,
             provider,
             files: DashMap::new(),
             index: DashMap::new(),
+            index_file,
         }
     }
 
@@ -108,6 +117,7 @@ where
         self.metadata_store
             .delete_index_entries_before(expire_before_millis)
             .await?;
+        self.compact_index_file().await?;
         Ok(())
     }
 
@@ -136,6 +146,7 @@ where
         }
 
         for entry in entries {
+            self.index_file.append_entry(&entry).await?;
             self.metadata_store.upsert_index_entry(entry.clone()).await?;
             self.put_index_entry(entry);
         }
@@ -181,10 +192,37 @@ where
 
     async fn load_index(&self) -> Result<(), RocketMQError> {
         self.index.clear();
+        for entry in self.index_file.load_entries().await? {
+            self.put_index_entry(entry);
+        }
         for entry in self.metadata_store.list_index_entries().await? {
             self.put_index_entry(entry);
         }
         Ok(())
+    }
+
+    async fn compact_index_file(&self) -> Result<(), RocketMQError> {
+        let entries = self.index_entries_snapshot();
+        self.index_file.compact_entries(&entries).await
+    }
+
+    fn index_entries_snapshot(&self) -> Vec<TieredIndexEntry> {
+        let mut entries = self
+            .index
+            .iter()
+            .flat_map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| {
+            (
+                entry.topic.clone(),
+                entry.key.clone(),
+                entry.store_timestamp,
+                entry.queue_id,
+                entry.queue_offset,
+            )
+        });
+        entries.dedup();
+        entries
     }
 
     fn put_index_entry(&self, entry: TieredIndexEntry) {
@@ -273,6 +311,8 @@ mod tests {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             file_reserved_time: Duration::from_millis(10),
             backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
         });
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
@@ -291,6 +331,9 @@ mod tests {
         let entries = store.query_index("TopicA", "keyA", 10, 0, 500);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].store_timestamp, 195);
+        let compacted_entries = store.index_file.load_entries().await?;
+        assert!(!compacted_entries.is_empty());
+        assert!(compacted_entries.iter().all(|entry| entry.store_timestamp >= 190));
         Ok(())
     }
 
@@ -300,6 +343,8 @@ mod tests {
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
         });
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
@@ -314,6 +359,41 @@ mod tests {
         let reloaded_metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         reloaded_metadata_store.load().await?;
         let reloaded_store = TieredFlatFileStore::new(config, reloaded_metadata_store, provider);
+        reloaded_store.load().await?;
+
+        let entries = reloaded_store.query_index("TopicA", "keyA", 10, 0, 500);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].store_timestamp, 100);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_restores_index_entries_from_provider_index_file() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().join("metadata-a"),
+            backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
+            ..TieredStoreConfig::default()
+        });
+        let provider = MemoryProvider::default();
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let store = TieredFlatFileStore::new(config.clone(), metadata_store, provider.clone());
+
+        let request = test_request(100, "keyA");
+        store.append_index(&request, 0).await?;
+
+        let reloaded_config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().join("metadata-b"),
+            backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
+            ..TieredStoreConfig::default()
+        });
+        let reloaded_metadata_store = Arc::new(JsonMetadataStore::new(reloaded_config.clone()));
+        reloaded_metadata_store.load().await?;
+        let reloaded_store = TieredFlatFileStore::new(reloaded_config, reloaded_metadata_store, provider);
         reloaded_store.load().await?;
 
         let entries = reloaded_store.query_index("TopicA", "keyA", 10, 0, 500);
