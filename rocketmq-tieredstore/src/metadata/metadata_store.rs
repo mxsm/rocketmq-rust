@@ -22,6 +22,7 @@ use tokio::fs;
 
 use crate::config::TieredStoreConfig;
 use crate::error;
+use crate::file::TieredIndexEntry;
 use crate::metadata::FileSegmentMetadata;
 use crate::metadata::TopicMetadata;
 use crate::metadata::TopicQueueMetadata;
@@ -49,6 +50,12 @@ pub trait TieredMetadataStore: Send + Sync {
     async fn upsert_file_segment(&self, metadata: FileSegmentMetadata) -> Result<(), RocketMQError>;
 
     async fn mark_file_segment_deleted(&self, path: &str, base_offset: u64) -> Result<(), RocketMQError>;
+
+    async fn list_index_entries(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError>;
+
+    async fn upsert_index_entry(&self, entry: TieredIndexEntry) -> Result<(), RocketMQError>;
+
+    async fn delete_index_entries_before(&self, timestamp_millis: i64) -> Result<(), RocketMQError>;
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -57,6 +64,8 @@ struct MetadataState {
     topics: HashMap<String, TopicMetadata>,
     queues: HashMap<String, TopicQueueMetadata>,
     segments: HashMap<String, FileSegmentMetadata>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    index: HashMap<String, Vec<TieredIndexEntry>>,
 }
 
 pub struct JsonMetadataStore {
@@ -81,6 +90,10 @@ impl JsonMetadataStore {
 
     fn segment_key(path: &str, base_offset: u64) -> String {
         format!("{path}@{base_offset:020}")
+    }
+
+    fn index_key(topic: &str, key: &str) -> String {
+        format!("{topic}@{key}")
     }
 }
 
@@ -201,6 +214,42 @@ impl TieredMetadataStore for JsonMetadataStore {
         }
         self.persist().await
     }
+
+    async fn list_index_entries(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+        Ok(self
+            .state
+            .read()
+            .index
+            .values()
+            .flat_map(|entries| entries.iter().cloned())
+            .collect())
+    }
+
+    async fn upsert_index_entry(&self, entry: TieredIndexEntry) -> Result<(), RocketMQError> {
+        {
+            let mut state = self.state.write();
+            let entries = state
+                .index
+                .entry(Self::index_key(&entry.topic, &entry.key))
+                .or_default();
+            if !entries.contains(&entry) {
+                entries.push(entry);
+                entries.sort_by_key(|entry| (entry.store_timestamp, entry.queue_id, entry.queue_offset));
+            }
+        }
+        self.persist().await
+    }
+
+    async fn delete_index_entries_before(&self, timestamp_millis: i64) -> Result<(), RocketMQError> {
+        {
+            let mut state = self.state.write();
+            for entries in state.index.values_mut() {
+                entries.retain(|entry| entry.store_timestamp >= timestamp_millis);
+            }
+            state.index.retain(|_, entries| !entries.is_empty());
+        }
+        self.persist().await
+    }
 }
 
 fn path_to_string(path: &std::path::Path) -> String {
@@ -220,6 +269,7 @@ mod tests {
     use crate::metadata::TieredMetadataStore;
     use crate::metadata::TopicMetadata;
     use crate::metadata::TopicQueueMetadata;
+    use crate::TieredIndexEntry;
 
     #[tokio::test]
     async fn persists_and_loads_metadata() -> Result<(), RocketMQError> {
@@ -254,6 +304,16 @@ mod tests {
                 0,
             ))
             .await?;
+        let index_entry = TieredIndexEntry {
+            topic: "TopicA".to_owned(),
+            key: "keyA".to_owned(),
+            queue_id: 0,
+            queue_offset: 10,
+            commit_log_offset: 0,
+            message_size: 4,
+            store_timestamp: 100,
+        };
+        metadata_store.upsert_index_entry(index_entry.clone()).await?;
 
         let reloaded_store = JsonMetadataStore::new(config);
         reloaded_store.load().await?;
@@ -261,6 +321,7 @@ mod tests {
         assert_eq!(reloaded_store.get_topic("TopicA").await?, Some(topic_metadata));
         assert_eq!(reloaded_store.get_queue("TopicA", 0).await?, Some(queue_metadata));
         assert_eq!(reloaded_store.list_file_segments("TopicA", 0).await?.len(), 1);
+        assert_eq!(reloaded_store.list_index_entries().await?, vec![index_entry]);
         Ok(())
     }
 }

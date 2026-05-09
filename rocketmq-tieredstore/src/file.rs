@@ -30,3 +30,4 @@ pub use flat_file::TieredFlatFile;
 pub use flat_file::CONSUME_QUEUE_UNIT_SIZE;
 pub use flat_file_store::TieredFlatFileStore;
 pub use index_file_segment::IndexFileSegment;
+pub use index_file_segment::TieredIndexEntry;

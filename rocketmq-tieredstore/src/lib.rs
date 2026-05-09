@@ -40,6 +40,7 @@ pub use file::IndexFileSegment;
 pub use file::TieredFileSegment;
 pub use file::TieredFlatFile;
 pub use file::TieredFlatFileStore;
+pub use file::TieredIndexEntry;
 pub use lifecycle::TieredLifecycle;
 pub use metadata::FileSegmentMetadata;
 pub use metadata::JsonMetadataStore;
