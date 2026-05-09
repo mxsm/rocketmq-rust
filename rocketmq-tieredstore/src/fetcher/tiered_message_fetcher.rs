@@ -239,12 +239,28 @@ where
         begin: i64,
         end: i64,
     ) -> Result<TieredQueryResult<Bytes>, RocketMQError> {
-        let _ = topic;
-        let _ = key;
-        let _ = max_num;
-        let _ = begin;
-        let _ = end;
-        Ok(TieredQueryResult::default())
+        let max_num = max_num.max(0) as usize;
+        let entries = self.flat_file_store.query_index(&topic, &key, max_num, begin, end);
+        if entries.is_empty() {
+            return Ok(TieredQueryResult::default());
+        }
+
+        let mut values = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if values.len() >= max_num {
+                break;
+            }
+            let Some(flat_file) = self.flat_file_store.get(&entry.topic, entry.queue_id) else {
+                continue;
+            };
+            if let Some(message) = flat_file
+                .read_commit_log(entry.commit_log_offset, entry.message_size)
+                .await?
+            {
+                values.push(message);
+            }
+        }
+        Ok(TieredQueryResult { values })
     }
 }
 
@@ -258,9 +274,11 @@ mod tests {
 
     use super::*;
     use crate::config::TieredStoreConfig;
+    use crate::dispatcher::TieredDispatchRequest;
     use crate::file::ConsumeQueueUnit;
     use crate::file::TieredFlatFileStore;
     use crate::metadata::JsonMetadataStore;
+    use crate::metadata::TieredMetadataStore;
     use crate::provider::MemoryProvider;
 
     async fn build_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
@@ -337,6 +355,60 @@ mod tests {
         Ok(DefaultTieredMessageFetcher::new(config, flat_file_store))
     }
 
+    async fn build_query_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(config.clone(), metadata_store, provider));
+        let flat_file = flat_file_store.get_or_create("TopicA".to_owned(), 0)?;
+
+        for (queue_offset, timestamp, body, keys, uniq_key) in [
+            (3, 100, Bytes::from_static(b"first"), Some("keyA keyB"), Some("uniqA")),
+            (4, 200, Bytes::from_static(b"second"), Some("keyA"), Some("uniqB")),
+            (5, 300, Bytes::from_static(b"third"), Some("keyC"), None),
+        ] {
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), timestamp).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 1,
+                    },
+                    timestamp,
+                )
+                .await?;
+            flat_file.commit().await?;
+            flat_file_store
+                .append_index(
+                    &TieredDispatchRequest {
+                        topic: "TopicA".to_owned(),
+                        queue_id: 0,
+                        queue_offset,
+                        commit_log_offset: 0,
+                        message_size: body.len() as i32,
+                        tags_code: 1,
+                        store_timestamp: timestamp,
+                        keys: keys.map(str::to_owned),
+                        uniq_key: uniq_key.map(str::to_owned),
+                        offset_id: None,
+                        sys_flag: 0,
+                        body: Some(body),
+                    },
+                    commit_log_offset,
+                )
+                .await?;
+        }
+
+        Ok(DefaultTieredMessageFetcher::new(config, flat_file_store))
+    }
+
     fn message_with_store_timestamp(timestamp: i64) -> Bytes {
         let mut bytes = BytesMut::zeroed(64);
         bytes[56..64].copy_from_slice(&timestamp.to_be_bytes());
@@ -408,6 +480,113 @@ mod tests {
         assert_eq!(fetcher.get_offset_by_time("TopicA".to_owned(), 0, 300).await?, 5);
         assert_eq!(fetcher.get_offset_by_time("TopicA".to_owned(), 0, 301).await?, 6);
         assert_eq!(fetcher.get_offset_by_time("MissingTopic".to_owned(), 0, 100).await?, -1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queries_messages_by_key_and_time_range() -> Result<(), RocketMQError> {
+        let fetcher = build_query_fetcher().await?;
+
+        let result = fetcher
+            .query_message("TopicA".to_owned(), "keyA".to_owned(), 10, 0, 250)
+            .await?;
+
+        assert_eq!(
+            result.values,
+            vec![Bytes::from_static(b"first"), Bytes::from_static(b"second")]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queries_messages_by_uniq_key() -> Result<(), RocketMQError> {
+        let fetcher = build_query_fetcher().await?;
+
+        let result = fetcher
+            .query_message("TopicA".to_owned(), "uniqB".to_owned(), 10, 0, 500)
+            .await?;
+
+        assert_eq!(result.values, vec![Bytes::from_static(b"second")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_message_respects_max_num() -> Result<(), RocketMQError> {
+        let fetcher = build_query_fetcher().await?;
+
+        let result = fetcher
+            .query_message("TopicA".to_owned(), "keyA".to_owned(), 1, 0, 500)
+            .await?;
+
+        assert_eq!(result.values, vec![Bytes::from_static(b"first")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_message_recovers_index_and_segments_after_load() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(
+            config.clone(),
+            metadata_store.clone(),
+            provider.clone(),
+        ));
+        let flat_file = flat_file_store.get_or_create("TopicA".to_owned(), 0)?;
+        let message = Bytes::from_static(b"persisted");
+        let commit_log_offset = flat_file.append_commit_log(message.clone(), 100).await?;
+        flat_file
+            .append_consume_queue(
+                3,
+                ConsumeQueueUnit {
+                    commit_log_offset: commit_log_offset as i64,
+                    size: message.len() as i32,
+                    tags_code: 1,
+                },
+                100,
+            )
+            .await?;
+        flat_file.commit().await?;
+        flat_file_store
+            .append_index(
+                &TieredDispatchRequest {
+                    topic: "TopicA".to_owned(),
+                    queue_id: 0,
+                    queue_offset: 3,
+                    commit_log_offset: 0,
+                    message_size: message.len() as i32,
+                    tags_code: 1,
+                    store_timestamp: 100,
+                    keys: Some("keyA".to_owned()),
+                    uniq_key: None,
+                    offset_id: None,
+                    sys_flag: 0,
+                    body: Some(message.clone()),
+                },
+                commit_log_offset,
+            )
+            .await?;
+
+        let reloaded_metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        reloaded_metadata_store.load().await?;
+        let reloaded_flat_file_store = Arc::new(TieredFlatFileStore::new(
+            config.clone(),
+            reloaded_metadata_store,
+            provider,
+        ));
+        reloaded_flat_file_store.load().await?;
+        let fetcher = DefaultTieredMessageFetcher::new(config, reloaded_flat_file_store);
+
+        let result = fetcher
+            .query_message("TopicA".to_owned(), "keyA".to_owned(), 1, 0, 500)
+            .await?;
+
+        assert_eq!(result.values, vec![message]);
         Ok(())
     }
 }

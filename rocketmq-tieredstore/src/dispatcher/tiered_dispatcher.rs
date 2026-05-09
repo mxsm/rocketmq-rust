@@ -98,7 +98,7 @@ where
                         RocketMQError::Internal(err.to_string())
                     })?;
                     let file = flat_file_store.get_or_create(request.topic.clone(), request.queue_id)?;
-                    let message = request.body.unwrap_or_default();
+                    let message = request.body.clone().unwrap_or_default();
                     let tiered_offset = file
                         .append_commit_log(message, request.store_timestamp)
                         .await?;
@@ -113,6 +113,7 @@ where
                     )
                     .await?;
                     file.commit().await?;
+                    flat_file_store.append_index(&request, tiered_offset).await?;
                     drop(permit);
                 }
             }
