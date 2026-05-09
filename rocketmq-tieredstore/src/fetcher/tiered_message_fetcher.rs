@@ -286,6 +286,8 @@ mod tests {
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
         });
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
@@ -328,6 +330,8 @@ mod tests {
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
             ..TieredStoreConfig::default()
         });
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
