@@ -81,6 +81,10 @@ use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredLifecycle;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredStore;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -136,6 +140,8 @@ use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_lock_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
+#[cfg(feature = "tieredstore")]
+use crate::tieredstore::TieredCommitLogDispatcher;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
@@ -300,6 +306,8 @@ pub struct LocalFileMessageStore {
     allocate_mapped_file_service: Arc<AllocateMappedFileService>,
     consume_queue_store: ConsumeQueueStore,
     dispatcher: ArcMut<CommitLogDispatcherDefault>,
+    #[cfg(feature = "tieredstore")]
+    tiered_store: Option<Arc<TieredStore>>,
     broker_init_max_offset: Arc<AtomicI64>,
     state_machine_version: Arc<AtomicI64>,
     lifecycle_state: Arc<AtomicU8>,
@@ -482,6 +490,8 @@ impl LocalFileMessageStore {
                 topic_config_table.clone(),
             )));
         }
+        #[cfg(feature = "tieredstore")]
+        let tiered_store = Self::build_tiered_store(message_store_config.clone(), commit_log.clone(), &mut dispatcher)?;
 
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
@@ -509,6 +519,8 @@ impl LocalFileMessageStore {
             allocate_mapped_file_service,
             consume_queue_store: consume_queue_store.clone(),
             dispatcher,
+            #[cfg(feature = "tieredstore")]
+            tiered_store,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
             state_machine_version: Arc::new(AtomicI64::new(0)),
             lifecycle_state: Arc::new(AtomicU8::new(StoreLifecycleState::Created.as_u8())),
@@ -562,6 +574,51 @@ impl LocalFileMessageStore {
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
         })
+    }
+
+    #[cfg(feature = "tieredstore")]
+    fn build_tiered_store(
+        message_store_config: Arc<MessageStoreConfig>,
+        commit_log: ArcMut<CommitLog>,
+        dispatcher: &mut CommitLogDispatcherDefault,
+    ) -> Result<Option<Arc<TieredStore>>, StoreError> {
+        let Some(tiered_store_config) = message_store_config.tiered_store_config.clone() else {
+            return Ok(None);
+        };
+        if !tiered_store_config.storage_level.enabled() {
+            return Ok(None);
+        }
+
+        let tiered_store = Arc::new(TieredStore::new(tiered_store_config).map_err(|error| {
+            StoreError::General(format!(
+                "failed to create tieredstore for local file message store: {error}"
+            ))
+        })?);
+        let commit_log_for_dispatch = commit_log;
+        let body_resolver = Arc::new(move |request: &DispatchRequest| -> Option<Bytes> {
+            Self::resolve_tiered_dispatch_body(&commit_log_for_dispatch, request)
+        });
+        dispatcher.add_dispatcher(Arc::new(TieredCommitLogDispatcher::new(
+            tiered_store.dispatcher(),
+            body_resolver,
+        )));
+
+        Ok(Some(tiered_store))
+    }
+
+    #[cfg(feature = "tieredstore")]
+    fn resolve_tiered_dispatch_body(commit_log: &CommitLog, request: &DispatchRequest) -> Option<Bytes> {
+        if request.commit_log_offset < 0 || request.msg_size <= 0 {
+            return None;
+        }
+
+        let size = usize::try_from(request.msg_size).ok()?;
+        let result = commit_log.get_message(request.commit_log_offset, request.msg_size)?;
+        let bytes = result.get_bytes()?;
+        if bytes.len() < size {
+            return None;
+        }
+        Some(bytes.slice(..size))
     }
 
     pub fn get_store_path_physic(message_store_config: &Arc<MessageStoreConfig>) -> String {
@@ -1366,6 +1423,15 @@ impl MessageStore for LocalFileMessageStore {
             self.master_flushed_offset = Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
             self.set_confirm_offset(checkpoint.confirm_phy_offset() as i64);
             result = self.index_service.load(last_exit_ok);
+            #[cfg(feature = "tieredstore")]
+            if result {
+                if let Some(tiered_store) = self.tiered_store.as_ref() {
+                    if let Err(error) = tiered_store.load().await {
+                        error!("tieredstore load failed: {}", error);
+                        return false;
+                    }
+                }
+            }
 
             //recover commit log and consume queue
             self.recover(last_exit_ok).await;
@@ -1423,6 +1489,14 @@ impl MessageStore for LocalFileMessageStore {
 
             self.index_service.start();
 
+            #[cfg(feature = "tieredstore")]
+            if let Some(tiered_store) = self.tiered_store.as_ref() {
+                tiered_store
+                    .start()
+                    .await
+                    .map_err(|error| StoreError::General(format!("failed to start tieredstore: {error}")))?;
+            }
+
             self.reput_message_service
                 .set_reput_from_offset(self.commit_log.get_confirm_offset());
             let message_store_arc = self.message_store_arc_or_error("start")?;
@@ -1466,6 +1540,12 @@ impl MessageStore for LocalFileMessageStore {
                 Ok(())
             }
             Err(error) => {
+                #[cfg(feature = "tieredstore")]
+                if let Some(tiered_store) = self.tiered_store.as_ref() {
+                    if let Err(shutdown_error) = tiered_store.shutdown().await {
+                        warn!("tieredstore shutdown after start failure failed: {}", shutdown_error);
+                    }
+                }
                 self.release_store_lock();
                 Err(error)
             }
@@ -1546,6 +1626,12 @@ impl MessageStore for LocalFileMessageStore {
             self.commit_log.shutdown_gracefully().await;
 
             self.reput_message_service.shutdown().await;
+            #[cfg(feature = "tieredstore")]
+            if let Some(tiered_store) = self.tiered_store.as_ref() {
+                if let Err(error) = tiered_store.shutdown().await {
+                    error!("tieredstore shutdown failed: {}", error);
+                }
+            }
             self.consume_queue_store.shutdown();
 
             // dispatch-related services must be shut down after reputMessageService
@@ -4001,6 +4087,14 @@ mod tests {
     use rocketmq_common::CRC32Utils::crc32;
     use rocketmq_common::TopicAttributes::TopicAttributes;
     use rocketmq_rust::ArcMut;
+    #[cfg(feature = "tieredstore")]
+    use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
+    #[cfg(feature = "tieredstore")]
+    use rocketmq_tieredstore::TieredMessageFetcher;
+    #[cfg(feature = "tieredstore")]
+    use rocketmq_tieredstore::TieredStorageLevel;
+    #[cfg(feature = "tieredstore")]
+    use rocketmq_tieredstore::TieredStoreConfig;
     use tempfile::tempdir;
 
     use super::run_blocking_scheduled_task;
@@ -4319,6 +4413,59 @@ mod tests {
             .init()
             .await
             .expect("rocksdb-typed store should accept rocksdb flags");
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[tokio::test]
+    async fn tieredstore_write_path_dispatches_commitlog_reput_messages() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("tieredstore-write-path-topic");
+        let body = Bytes::from_static(b"tiered-write-body");
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                duplication_enable: true,
+                read_uncommitted: true,
+                timer_wheel_enable: false,
+                tiered_store_config: Some(TieredStoreConfig {
+                    storage_level: TieredStorageLevel::Force,
+                    backend_provider: "memory".to_string(),
+                    store_path_root_dir: temp_dir.path().join("tieredstore"),
+                    max_pending_tasks: 16,
+                    ..TieredStoreConfig::default()
+                }),
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        store.init().await.expect("init tieredstore-enabled store");
+        assert!(store.load().await, "load tieredstore-enabled store");
+        store.start().await.expect("start tieredstore-enabled store");
+
+        let tiered_store = store
+            .tiered_store
+            .as_ref()
+            .expect("tieredstore should be initialized")
+            .clone();
+        let put_result = store.put_message(build_test_message(&topic, body.clone())).await;
+        assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
+        let queue_offset = put_result
+            .append_message_result()
+            .expect("put result should include append result")
+            .logics_offset;
+        store.reput_once().await;
+        store.shutdown().await;
+
+        let fetched = tiered_store
+            .fetcher()
+            .get_message(topic.to_string(), 0, queue_offset, 1)
+            .await
+            .expect("fetch tiered message after store shutdown drains dispatcher");
+        assert_eq!(fetched.status, TieredGetMessageStatus::Found);
+        assert_eq!(fetched.messages.len(), 1);
+        assert!(fetched.messages[0]
+            .windows(body.len())
+            .any(|window| window == body.as_ref()));
     }
 
     #[tokio::test]

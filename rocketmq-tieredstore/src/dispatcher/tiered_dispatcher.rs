@@ -88,37 +88,60 @@ where
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
+                    while let Ok(request) = receiver.try_recv() {
+                        Self::dispatch_one(flat_file_store.clone(), permits.clone(), request).await?;
+                    }
                     break;
                 }
                 maybe_request = receiver.recv() => {
                     let Some(request) = maybe_request else {
                         break;
                     };
-                    let permit = permits.clone().acquire_owned().await.map_err(|err| {
-                        RocketMQError::Internal(err.to_string())
-                    })?;
-                    let file = flat_file_store.get_or_create(request.topic.clone(), request.queue_id)?;
-                    let message = request.body.clone().unwrap_or_default();
-                    let tiered_offset = file
-                        .append_commit_log(message, request.store_timestamp)
-                        .await?;
-                    file.append_consume_queue(
-                        request.queue_offset,
-                        ConsumeQueueUnit {
-                            commit_log_offset: tiered_offset as i64,
-                            size: request.message_size,
-                            tags_code: request.tags_code,
-                        },
-                        request.store_timestamp,
-                    )
-                    .await?;
-                    file.commit().await?;
-                    flat_file_store.append_index(&request, tiered_offset).await?;
-                    drop(permit);
+                    Self::dispatch_one(flat_file_store.clone(), permits.clone(), request).await?;
                 }
             }
         }
         Ok(())
+    }
+
+    async fn dispatch_one(
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        permits: Arc<Semaphore>,
+        request: TieredDispatchRequest,
+    ) -> Result<(), RocketMQError> {
+        let _permit = permits
+            .acquire_owned()
+            .await
+            .map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let file = flat_file_store.get_or_create(request.topic.clone(), request.queue_id)?;
+        let consume_queue_min_offset = file.consume_queue_min_offset();
+        let consume_queue_commit_offset = file.consume_queue_commit_offset();
+        if consume_queue_commit_offset > consume_queue_min_offset {
+            if request.queue_offset < consume_queue_commit_offset {
+                return Ok(());
+            }
+            if request.queue_offset > consume_queue_commit_offset {
+                return Err(RocketMQError::illegal_argument(format!(
+                    "tiered consume queue offset gap, expected {consume_queue_commit_offset}, got {}",
+                    request.queue_offset
+                )));
+            }
+        }
+
+        let message = request.body.clone().unwrap_or_default();
+        let tiered_offset = file.append_commit_log(message, request.store_timestamp).await?;
+        file.append_consume_queue(
+            request.queue_offset,
+            ConsumeQueueUnit {
+                commit_log_offset: tiered_offset as i64,
+                size: request.message_size,
+                tags_code: request.tags_code,
+            },
+            request.store_timestamp,
+        )
+        .await?;
+        file.commit().await?;
+        flat_file_store.append_index(&request, tiered_offset).await
     }
 }
 
