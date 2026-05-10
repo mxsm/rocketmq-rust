@@ -582,6 +582,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 request_header.timestamp,
                 request_header.offset,
             )
+            .await
         } else {
             let broker_to_client = Broker2Client;
             if request.language() == LanguageCode::CPP {
@@ -878,7 +879,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         }
     }
 
-    fn reset_offset_inner(
+    async fn reset_offset_inner(
         &mut self,
         topic: &cheetah_string::CheetahString,
         group: &cheetah_string::CheetahString,
@@ -916,7 +917,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
 
         let mut queue_offset_map = std::collections::HashMap::new();
         if queue_id >= 0 {
-            match self.resolve_reset_offset(topic, queue_id, timestamp, offset) {
+            match self.resolve_reset_offset(topic, queue_id, timestamp, offset).await {
                 Ok(target_offset) => {
                     queue_offset_map.insert(queue_id, target_offset);
                 }
@@ -924,7 +925,10 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             }
         } else {
             for queue_index in 0..topic_config.read_queue_nums {
-                match self.resolve_reset_offset(topic, queue_index as i32, timestamp, None) {
+                match self
+                    .resolve_reset_offset(topic, queue_index as i32, timestamp, None)
+                    .await
+                {
                     Ok(target_offset) => {
                         queue_offset_map.insert(queue_index as i32, target_offset);
                     }
@@ -964,7 +968,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         response
     }
 
-    fn resolve_reset_offset(
+    async fn resolve_reset_offset(
         &self,
         topic: &cheetah_string::CheetahString,
         queue_id: i32,
@@ -993,7 +997,18 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         let target_offset = if timestamp < 0 {
             message_store.get_max_offset_in_queue(topic, queue_id)
         } else {
-            message_store.get_offset_in_queue_by_time(topic, queue_id, timestamp)
+            match message_store
+                .get_offset_in_queue_by_time_async(topic, queue_id, timestamp)
+                .await
+            {
+                Ok(offset) => offset,
+                Err(error) => {
+                    response = response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark(format!("Resolve offset by timestamp failed: {error}"));
+                    return Err(response);
+                }
+            }
         };
         Ok(target_offset)
     }

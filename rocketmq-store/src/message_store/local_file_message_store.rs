@@ -666,6 +666,20 @@ impl LocalFileMessageStore {
     }
 
     #[cfg(feature = "tieredstore")]
+    fn should_try_tiered_offset_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> bool {
+        let Some(logic_queue) = self.get_consume_queue(topic, queue_id) else {
+            return true;
+        };
+        if logic_queue.get_message_total_in_queue() <= 0 {
+            return true;
+        }
+        logic_queue
+            .get_earliest_unit_and_store_time()
+            .map(|(_, earliest_store_time)| timestamp < earliest_store_time)
+            .unwrap_or(true)
+    }
+
+    #[cfg(feature = "tieredstore")]
     fn to_store_get_message_result(
         fetched: TieredGetMessageResult,
         requested_offset: i64,
@@ -2280,6 +2294,45 @@ impl MessageStore for LocalFileMessageStore {
     ) -> i64 {
         self.consume_queue_store
             .get_offset_in_queue_by_time(topic, queue_id, timestamp, boundary_type)
+    }
+
+    async fn get_offset_in_queue_by_time_async(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+    ) -> Result<i64, StoreError> {
+        self.get_offset_in_queue_by_time_with_boundary_async(topic, queue_id, timestamp, BoundaryType::Lower)
+            .await
+    }
+
+    async fn get_offset_in_queue_by_time_with_boundary_async(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+    ) -> Result<i64, StoreError> {
+        #[cfg(feature = "tieredstore")]
+        if self.should_try_tiered_offset_by_time(topic, queue_id, timestamp) {
+            if let Some(tiered_store) = self.tiered_store.as_ref() {
+                match tiered_store
+                    .fetcher()
+                    .get_offset_by_time_with_boundary(topic.to_string(), queue_id, timestamp, boundary_type)
+                    .await
+                {
+                    Ok(offset) if offset >= 0 => return Ok(offset),
+                    Ok(_) => {}
+                    Err(error) => {
+                        return Err(StoreError::General(format!(
+                            "tieredstore offset by time lookup failed: {error}"
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(self.get_offset_in_queue_by_time_with_boundary(topic, queue_id, timestamp, boundary_type))
     }
 
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
@@ -4803,6 +4856,28 @@ mod tests {
             .await
             .expect("tieredstore timestamp fallback");
         assert_eq!(timestamp, store_timestamp);
+
+        assert_eq!(
+            store
+                .get_offset_in_queue_by_time_async(&topic, 0, store_timestamp - 1)
+                .await
+                .expect("tieredstore offset lower fallback"),
+            queue_offset
+        );
+        assert_eq!(
+            store
+                .get_offset_in_queue_by_time_with_boundary_async(&topic, 0, store_timestamp, BoundaryType::Upper)
+                .await
+                .expect("tieredstore offset upper fallback"),
+            queue_offset
+        );
+        assert_eq!(
+            store
+                .get_offset_in_queue_by_time_async(&topic, 0, store_timestamp + 1)
+                .await
+                .expect("tieredstore offset overflow fallback"),
+            queue_offset + 1
+        );
 
         let query_result = store
             .query_message(&topic, &key, 10, 0, i64::MAX)
