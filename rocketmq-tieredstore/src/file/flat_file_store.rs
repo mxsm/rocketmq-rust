@@ -83,6 +83,14 @@ where
         self.files.get(&key).map(|entry| entry.value().clone())
     }
 
+    pub fn flat_file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub async fn index_segment_count(&self) -> Result<usize, RocketMQError> {
+        self.index_file.segment_count().await
+    }
+
     pub fn get_or_create(&self, topic: String, queue_id: i32) -> Result<Arc<TieredFlatFile<P>>, RocketMQError> {
         let key = FlatFileKey {
             topic: topic.clone(),

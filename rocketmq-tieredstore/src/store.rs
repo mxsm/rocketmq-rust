@@ -27,6 +27,7 @@ use crate::metadata::JsonMetadataStore;
 use crate::metadata::TieredMetadataStore;
 use crate::provider::ProviderKind;
 use crate::provider::TieredStoreProvider;
+use crate::service::CommitLogRecoverService;
 use crate::service::TieredServiceSet;
 
 pub struct TieredStore<P = ProviderKind>
@@ -101,8 +102,8 @@ where
     P: TieredStoreProvider,
 {
     async fn load(&self) -> Result<(), RocketMQError> {
-        self.metadata_store.load().await?;
-        self.flat_file_store.load().await
+        let recover_service = CommitLogRecoverService::new(self.metadata_store.clone(), self.flat_file_store.clone());
+        recover_service.recover().await.map(|_| ())
     }
 
     async fn start(&self) -> Result<(), RocketMQError> {

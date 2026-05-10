@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod cleanup_service;
+pub mod commit_log_recover_service;
 
 use std::sync::Arc;
 
@@ -24,6 +25,8 @@ use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
 use crate::provider::TieredStoreProvider;
 use crate::service::cleanup_service::CleanupService;
+pub use crate::service::commit_log_recover_service::CommitLogRecoverService;
+pub use crate::service::commit_log_recover_service::TieredRecoverResult;
 
 pub struct TieredServiceSet<P>
 where
