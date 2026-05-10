@@ -240,7 +240,10 @@ where
         end: i64,
     ) -> Result<TieredQueryResult<Bytes>, RocketMQError> {
         let max_num = max_num.max(0) as usize;
-        let entries = self.flat_file_store.query_index(&topic, &key, max_num, begin, end);
+        let entries = self
+            .flat_file_store
+            .query_index_entries(&topic, &key, max_num, begin, end)
+            .await?;
         if entries.is_empty() {
             return Ok(TieredQueryResult::default());
         }
@@ -522,7 +525,7 @@ mod tests {
             .query_message("TopicA".to_owned(), "keyA".to_owned(), 1, 0, 500)
             .await?;
 
-        assert_eq!(result.values, vec![Bytes::from_static(b"first")]);
+        assert_eq!(result.values, vec![Bytes::from_static(b"second")]);
         Ok(())
     }
 

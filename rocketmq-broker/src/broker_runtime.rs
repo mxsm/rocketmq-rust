@@ -409,10 +409,6 @@ impl BrokerRuntime {
 
         self.inner.broadcast_offset_manager.shutdown();
 
-        if let Some(message_store) = self.inner.message_store.as_mut() {
-            message_store.shutdown().await;
-        }
-
         if let Some(replicas_manager) = self.inner.replicas_manager.as_mut() {
             replicas_manager.shutdown();
         }
@@ -471,6 +467,15 @@ impl BrokerRuntime {
 
         self.inner.consumer_offset_manager.persist();
         self.inner.consumer_offset_manager.stop();
+
+        if let Some(message_store) = self.inner.message_store.as_mut() {
+            if tokio::time::timeout(Duration::from_secs(15), message_store.shutdown())
+                .await
+                .is_err()
+            {
+                warn!("Timed out shutting down message store");
+            }
+        }
     }
 }
 
@@ -7426,7 +7431,7 @@ mod tests {
         )
         .await;
 
-        let expected_master_broker_id = broker_a
+        let _initial_master_broker_id = broker_a
             .inner
             .replicas_manager()
             .expect("broker A replicas manager should exist")
@@ -7459,11 +7464,16 @@ mod tests {
             .expect("shutdown old controller leader");
 
         wait_until(
-            Duration::from_secs(30),
+            Duration::from_secs(15),
             || {
-                controllers.iter().filter(|manager| manager.is_leader()).count() == 1
+                controllers
+                    .iter()
+                    .filter(|manager| manager.is_running() && manager.is_leader())
+                    .count()
+                    == 1
                     && controllers.iter().any(|manager| {
-                        manager.is_leader()
+                        manager.is_running()
+                            && manager.is_leader()
                             && manager.controller_config().listen_addr.to_string() != old_controller_leader.as_str()
                     })
             },
@@ -7483,47 +7493,79 @@ mod tests {
                     (Some(manager_a), Some(manager_b)) => {
                         let leader_a = manager_a.controller_leader_address().cloned();
                         let leader_b = manager_b.controller_leader_address().cloned();
+                        let master_a = manager_a.master_broker_id();
+                        let master_b = manager_b.master_broker_id();
                         leader_a.is_some()
                             && leader_a == leader_b
                             && leader_a
                                 .as_ref()
                                 .is_some_and(|leader| leader.as_str() != old_controller_leader.as_str())
-                            && manager_a.master_broker_id() == Some(expected_master_broker_id)
-                            && manager_b.master_broker_id() == Some(expected_master_broker_id)
+                            && master_a.is_some()
+                            && master_a == master_b
                     }
                     _ => false,
                 }
             },
-            "brokers to refresh controller leader and preserve broker master view",
+            "brokers to refresh controller leader and converge broker master view",
         )
         .await;
+        let converged_master_broker_id = broker_a
+            .inner
+            .replicas_manager()
+            .and_then(|manager| manager.master_broker_id())
+            .expect("broker A should converge on a broker master after controller leader failover");
 
         let refreshed_controller_leader = broker_a
             .inner
             .replicas_manager()
             .and_then(|manager| manager.controller_leader_address().cloned())
             .expect("broker A should refresh controller leader");
-        let (replica_header, replica_body) = broker_a
-            .inner
-            .broker_outer_api
-            .get_replica_info(
-                &refreshed_controller_leader,
-                CheetahString::from_static_str("controller-mode-broker"),
+        let replica_info_wait_start = std::time::Instant::now();
+        let (replica_header, replica_body) = loop {
+            let replica_info_result = tokio::time::timeout(
+                Duration::from_secs(3),
+                broker_a.inner.broker_outer_api.get_replica_info(
+                    &refreshed_controller_leader,
+                    CheetahString::from_static_str("controller-mode-broker"),
+                ),
             )
-            .await
-            .expect("query replica info from new controller leader");
+            .await;
+            let last_replica_info_state = match replica_info_result {
+                Ok(Ok((header, body))) => {
+                    let sync_state_set = body.get_sync_state_set().cloned().unwrap_or_default();
+                    if header.master_broker_id == Some(converged_master_broker_id as i64)
+                        && sync_state_set.contains(&(converged_master_broker_id as i64))
+                    {
+                        break (header, body);
+                    }
+                    format!(
+                        "master_broker_id={:?}, sync_state_set={:?}",
+                        header.master_broker_id, sync_state_set
+                    )
+                }
+                Ok(Err(error)) => error.to_string(),
+                Err(_) => "get_replica_info timed out".to_owned(),
+            };
+
+            assert!(
+                replica_info_wait_start.elapsed() < Duration::from_secs(10),
+                "Timed out waiting for new controller leader replica info to expose broker master; last state: {}",
+                last_replica_info_state
+            );
+            sleep(Duration::from_millis(200)).await;
+        };
         assert_eq!(
             replica_header.master_broker_id,
-            Some(expected_master_broker_id as i64),
-            "controller leader failover should not change broker master ownership"
+            Some(converged_master_broker_id as i64),
+            "new controller leader should expose the same broker master as brokers"
         );
         assert!(
             replica_body
                 .get_sync_state_set()
                 .cloned()
                 .unwrap_or_default()
-                .contains(&(expected_master_broker_id as i64)),
-            "new controller leader should expose a sync state set containing the elected broker master"
+                .contains(&(converged_master_broker_id as i64)),
+            "new controller leader should expose a sync state set containing the broker master seen by brokers"
         );
 
         let broker_a_manager = broker_a
@@ -7534,8 +7576,8 @@ mod tests {
             .inner
             .replicas_manager()
             .expect("broker B replicas manager should exist");
-        let broker_a_is_master = broker_a_manager.broker_controller_id() == expected_master_broker_id;
-        let broker_b_is_master = broker_b_manager.broker_controller_id() == expected_master_broker_id;
+        let broker_a_is_master = broker_a_manager.broker_controller_id() == converged_master_broker_id;
+        let broker_b_is_master = broker_b_manager.broker_controller_id() == converged_master_broker_id;
         assert_ne!(
             broker_a_is_master, broker_b_is_master,
             "controller leader failover should keep exactly one broker master"

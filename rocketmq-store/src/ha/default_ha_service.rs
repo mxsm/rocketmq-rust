@@ -209,9 +209,18 @@ impl DefaultHAService {
     }
 
     pub async fn destroy_connections(&self) {
-        let mut connections = self.connections.lock().await;
-        for (_, mut connection) in connections.drain() {
-            connection.shutdown().await;
+        let connections = {
+            let mut connections = self.connections.lock().await;
+            connections
+                .drain()
+                .map(|(_, connection)| connection)
+                .collect::<Vec<_>>()
+        };
+        for mut connection in connections {
+            let connection_id = connection.get_ha_connection_id().to_owned();
+            if timeout(Duration::from_secs(3), connection.shutdown()).await.is_err() {
+                warn!("Timed out shutting down HA connection {}", connection_id);
+            }
         }
     }
 
@@ -301,20 +310,45 @@ impl HAService for DefaultHAService {
         info!("Shutting down DefaultHAService");
 
         if let Some(ref ha_client) = self.ha_client {
-            ha_client.shutdown().await;
+            if timeout(Duration::from_secs(3), ha_client.shutdown()).await.is_err() {
+                warn!("Timed out shutting down HA client");
+            }
         }
 
         if let Some(ref accept_socket_service) = self.accept_socket_service {
-            accept_socket_service.shutdown().await;
+            if timeout(Duration::from_secs(3), accept_socket_service.shutdown())
+                .await
+                .is_err()
+            {
+                warn!("Timed out shutting down HA accept socket service");
+            }
         }
-        self.destroy_connections().await;
+        if timeout(Duration::from_secs(3), self.destroy_connections())
+            .await
+            .is_err()
+        {
+            warn!("Timed out destroying HA connections");
+        }
 
         if let Some(ref group_transfer_service) = self.group_transfer_service {
-            group_transfer_service.shutdown().await;
+            if timeout(Duration::from_secs(3), group_transfer_service.shutdown())
+                .await
+                .is_err()
+            {
+                warn!("Timed out shutting down HA group transfer service");
+            }
         }
 
         if let Some(ref ha_connection_state_notification_service) = self.ha_connection_state_notification_service {
-            ha_connection_state_notification_service.shutdown().await;
+            if timeout(
+                Duration::from_secs(3),
+                ha_connection_state_notification_service.shutdown(),
+            )
+            .await
+            .is_err()
+            {
+                warn!("Timed out shutting down HA connection state notification service");
+            }
         }
     }
 
@@ -732,6 +766,33 @@ mod tests {
 
         connection.shutdown().await;
 
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn destroy_connections_does_not_hold_connection_table_lock_during_connection_shutdown() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-destroy-{}", current_millis()));
+        let (service, auto_switch_service) = new_auto_switch_services(&temp_root);
+        auto_switch_service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+        let (server_stream, remote_addr, _client) = new_server_stream().await;
+        let mut connection = AcceptSocketService::build_connection(
+            service.clone(),
+            service.get_default_message_store().message_store_config(),
+            server_stream,
+            remote_addr,
+            true,
+        )
+        .await
+        .expect("build auto-switch connection");
+        let connection_weak = ArcMut::downgrade(&connection);
+        connection.start(connection_weak).await.expect("start connection");
+        service.add_connection(connection).await;
+
+        tokio::time::timeout(Duration::from_secs(3), service.destroy_connections())
+            .await
+            .expect("destroy_connections should not deadlock on connection table lock");
+
+        assert_eq!(service.get_connection_count().load(Ordering::SeqCst), 0);
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
