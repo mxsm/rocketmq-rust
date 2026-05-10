@@ -28,6 +28,8 @@ use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
+#[cfg(feature = "tieredstore")]
+use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
 use tracing::info;
@@ -98,7 +100,7 @@ async fn main() -> Result<()> {
     }
 
     // Print startup info
-    print_startup_info(&broker_config);
+    print_startup_info(&broker_config, &message_store_config);
 
     // Start broker
     Builder::new()
@@ -192,16 +194,40 @@ fn apply_command_line_args(broker_config: &mut BrokerConfig, args: &Args) {
 /// - Validate name server address format
 /// - Check broker role configuration
 /// - Validate broker ID
-fn validate_broker_config(broker_config: &BrokerConfig, _message_store_config: &MessageStoreConfig) -> Result<()> {
+fn validate_broker_config(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) -> Result<()> {
     // Validate name server address if set
     if let Some(ref namesrv_addr) = broker_config.namesrv_addr {
         validate_namesrv_address(namesrv_addr.as_str())?;
     }
 
+    validate_tieredstore_config(message_store_config)?;
+
     // Validate broker ID based on role (if not using controller mode)
     // Note: broker_id is u64, so it's always >= 0
     // No need to check for negative values
 
+    Ok(())
+}
+
+#[cfg(feature = "tieredstore")]
+fn validate_tieredstore_config(message_store_config: &MessageStoreConfig) -> Result<()> {
+    let Some(tiered_store_config) = message_store_config.tiered_store_config.as_ref() else {
+        return Ok(());
+    };
+    if !tiered_store_config.storage_level.enabled() {
+        return Ok(());
+    }
+    if message_store_config.store_type != StoreType::LocalFile {
+        anyhow::bail!(
+            "tieredstore currently requires storeType=LocalFile, actual storeType={}",
+            message_store_config.store_type.get_store_type()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "tieredstore"))]
+fn validate_tieredstore_config(_message_store_config: &MessageStoreConfig) -> Result<()> {
     Ok(())
 }
 
@@ -267,6 +293,24 @@ fn print_important_message_store_config(config: &MessageStoreConfig) {
     println!("    storePathCommitLog: {:?}", config.store_path_commit_log);
     println!("    deleteWhen: {}", config.delete_when);
     println!("    flushDiskType: {:?}", config.flush_disk_type);
+    #[cfg(feature = "tieredstore")]
+    print_important_tieredstore_config(config);
+}
+
+#[cfg(feature = "tieredstore")]
+fn print_important_tieredstore_config(config: &MessageStoreConfig) {
+    let Some(tiered_store_config) = config.tiered_store_config.as_ref() else {
+        println!("    tieredStoreEnable: false");
+        return;
+    };
+
+    println!("    tieredStoreEnable: {}", tiered_store_config.storage_level.enabled());
+    println!("    tieredStorageLevel: {:?}", tiered_store_config.storage_level);
+    println!("    tieredBackendProvider: {}", tiered_store_config.backend_provider);
+    println!(
+        "    tieredStorePathRootDir: {}",
+        tiered_store_config.store_path_root_dir.display()
+    );
 }
 
 /// Print all broker configuration items
@@ -288,10 +332,54 @@ fn print_all_message_store_config(config: &MessageStoreConfig) {
     println!("    deleteWhen: {}", config.delete_when);
     println!("    flushDiskType: {:?}", config.flush_disk_type);
     println!("    commitLogFileSize: {}", config.mapped_file_size_commit_log);
+    #[cfg(feature = "tieredstore")]
+    print_all_tieredstore_config(config);
+}
+
+#[cfg(feature = "tieredstore")]
+fn print_all_tieredstore_config(config: &MessageStoreConfig) {
+    let Some(tiered_store_config) = config.tiered_store_config.as_ref() else {
+        println!("    tieredStoreConfig: None");
+        return;
+    };
+
+    println!("    tieredStoreConfig:");
+    println!("      storageLevel: {:?}", tiered_store_config.storage_level);
+    println!("      backendProvider: {}", tiered_store_config.backend_provider);
+    println!("      metadataProvider: {}", tiered_store_config.metadata_provider);
+    println!(
+        "      storePathRootDir: {}",
+        tiered_store_config.store_path_root_dir.display()
+    );
+    println!(
+        "      commitLogSegmentSize: {}",
+        tiered_store_config.commit_log_segment_size
+    );
+    println!(
+        "      consumeQueueSegmentSize: {}",
+        tiered_store_config.consume_queue_segment_size
+    );
+    println!(
+        "      indexFileMaxHashSlotNum: {}",
+        tiered_store_config.index_file_max_hash_slot_num
+    );
+    println!(
+        "      indexFileMaxIndexNum: {}",
+        tiered_store_config.index_file_max_index_num
+    );
+    println!("      messageIndexEnable: {}", tiered_store_config.message_index_enable);
+    println!("      deleteFileEnable: {}", tiered_store_config.delete_file_enable);
+    println!("      groupCommit: {}", tiered_store_config.group_commit);
+    println!("      maxPendingTasks: {}", tiered_store_config.max_pending_tasks);
+    println!(
+        "      readAheadCacheEnable: {}",
+        tiered_store_config.read_ahead_cache_enable
+    );
+    println!("      crcCheckEnable: {}", tiered_store_config.crc_check_enable);
 }
 
 /// Print broker startup information
-fn print_startup_info(broker_config: &BrokerConfig) {
+fn print_startup_info(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) {
     info!(
         "Starting broker: brokerName={}, brokerClusterName={}, brokerId={}",
         broker_config.broker_identity.broker_name,
@@ -307,11 +395,50 @@ fn print_startup_info(broker_config: &BrokerConfig) {
         "Broker listening on: {}:{}",
         broker_config.broker_ip1, broker_config.listen_port
     );
+
+    #[cfg(feature = "tieredstore")]
+    print_tieredstore_startup_info(message_store_config);
+}
+
+#[cfg(feature = "tieredstore")]
+fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
+    match message_store_config.tiered_store_config.as_ref() {
+        Some(config) if config.storage_level.enabled() => {
+            info!(
+                "Tieredstore enabled: storageLevel={:?}, backendProvider={}, storePathRootDir={}",
+                config.storage_level,
+                config.backend_provider,
+                config.store_path_root_dir.display()
+            );
+        }
+        Some(config) => {
+            info!("Tieredstore disabled by storageLevel={:?}", config.storage_level);
+        }
+        None => {
+            info!("Tieredstore disabled: tieredStoreConfig is not configured");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "tieredstore")]
+    fn tieredstore_message_store_config(store_type: StoreType) -> MessageStoreConfig {
+        let mut config: MessageStoreConfig = serde_json::from_value(serde_json::json!({
+            "storePathRootDir": "target/tieredstore-broker-config-test",
+            "tieredStoreConfig": {
+                "storageLevel": "force",
+                "backendProvider": "memory",
+                "metadataProvider": "json",
+                "storePathRootDir": "target/tieredstore-broker-config-test/tiered"
+            }
+        }))
+        .expect("deserialize tieredstore message store config");
+        config.store_type = store_type;
+        config
+    }
 
     #[test]
     fn test_validate_namesrv_address_single() {
@@ -331,5 +458,25 @@ mod tests {
     #[test]
     fn test_validate_namesrv_address_empty() {
         assert!(validate_namesrv_address("").is_ok());
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[test]
+    fn validate_broker_config_accepts_tieredstore_with_local_file_store() {
+        let broker_config = BrokerConfig::default();
+        let message_store_config = tieredstore_message_store_config(StoreType::LocalFile);
+
+        assert!(validate_broker_config(&broker_config, &message_store_config).is_ok());
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[test]
+    fn validate_broker_config_rejects_tieredstore_with_rocksdb_store() {
+        let broker_config = BrokerConfig::default();
+        let message_store_config = tieredstore_message_store_config(StoreType::RocksDB);
+
+        let error = validate_broker_config(&broker_config, &message_store_config)
+            .expect_err("tieredstore should reject non-local-file message stores");
+        assert!(error.to_string().contains("storeType=LocalFile"));
     }
 }

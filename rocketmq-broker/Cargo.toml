@@ -31,6 +31,7 @@ rust-version.workspace = true
 [features]
 default          = ["local_file_store"]
 local_file_store = ["rocketmq-store/local_file_store"]
+tieredstore      = ["local_file_store", "rocketmq-store/tieredstore"]
 
 [dependencies]
 rocketmq-rust        = { workspace = true }
