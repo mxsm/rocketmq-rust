@@ -47,6 +47,9 @@ impl Default for SelectMappedBufferResult {
 impl SelectMappedBufferResult {
     /// Returns the buffer.
     pub fn get_buffer(&self) -> &[u8] {
+        if let Some(bytes) = self.bytes.as_ref() {
+            return bytes.as_ref();
+        }
         self.mapped_file.as_ref().unwrap().get_mapped_file()
             [self.start_offset as usize..(self.start_offset + self.size as u64) as usize]
             .as_ref()

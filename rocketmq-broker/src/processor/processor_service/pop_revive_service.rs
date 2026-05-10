@@ -1022,16 +1022,7 @@ fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {
 fn decode_msg_list(get_message_result: GetMessageResult, de_compress_body: bool) -> Vec<ArcMut<MessageExt>> {
     let mut found_list = Vec::new();
     for (index, bb) in get_message_result.message_mapped_list().iter().enumerate() {
-        let mapped_file = match bb.mapped_file.as_ref() {
-            Some(mf) => mf,
-            None => {
-                error!("decode_msg_list: mapped_file is null at index={}", index);
-                continue;
-            }
-        };
-        let data =
-            &mapped_file.get_mapped_file()[bb.start_offset as usize..(bb.start_offset + bb.size as u64) as usize];
-        let mut bytes = Bytes::copy_from_slice(data);
+        let mut bytes = Bytes::copy_from_slice(bb.get_buffer());
         let msg_ext = message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
         match msg_ext {
             Some(msg_ext) => {

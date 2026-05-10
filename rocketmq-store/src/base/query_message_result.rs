@@ -33,7 +33,12 @@ impl QueryMessageResult {
 
         let mut bytes_mut = BytesMut::with_capacity(self.buffer_total_size as usize);
         for msg in self.message_maped_list.iter() {
-            let data = &msg.mapped_file.as_ref().unwrap().get_mapped_file()
+            if let Some(bytes) = msg.get_bytes_ref() {
+                bytes_mut.extend_from_slice(bytes.as_ref());
+                continue;
+            }
+            let mapped_file = msg.mapped_file.as_ref()?;
+            let data = &mapped_file.get_mapped_file()
                 [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
             bytes_mut.extend_from_slice(data);
         }

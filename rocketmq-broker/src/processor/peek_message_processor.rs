@@ -501,11 +501,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         let mut bytes_mut = BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
 
         for msg in get_message_result.message_mapped_list() {
-            if let Some(mapped_file) = &msg.mapped_file {
-                let data = &mapped_file.get_mapped_file()
-                    [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
-                bytes_mut.extend_from_slice(data);
-            }
+            bytes_mut.extend_from_slice(msg.get_buffer());
         }
 
         Some(bytes_mut.freeze())
