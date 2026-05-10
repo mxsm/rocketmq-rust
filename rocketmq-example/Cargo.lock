@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-admin-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-client-rust"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-common"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-error"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "config",
@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-example"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "cheetah-string",
  "rand 0.8.5",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-macros"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-remoting"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -2077,14 +2077,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-runtime"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "rocketmq-rust"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
