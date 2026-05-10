@@ -657,6 +657,7 @@ mod tests {
     use std::time::Duration;
 
     use bytes::Bytes;
+    use bytes::BytesMut;
     use rocketmq_error::RocketMQError;
 
     use super::*;
@@ -674,6 +675,14 @@ mod tests {
             file_reserved_time: Duration::from_millis(1),
             ..TieredStoreConfig::default()
         })
+    }
+
+    fn message_with_store_timestamp(store_timestamp: i64, body: &[u8]) -> Bytes {
+        let mut bytes = BytesMut::zeroed(MESSAGE_STORE_TIMESTAMP_POSITION + std::mem::size_of::<i64>());
+        bytes[MESSAGE_STORE_TIMESTAMP_POSITION..MESSAGE_STORE_TIMESTAMP_POSITION + std::mem::size_of::<i64>()]
+            .copy_from_slice(&store_timestamp.to_be_bytes());
+        bytes.extend_from_slice(body);
+        bytes.freeze()
     }
 
     #[tokio::test]
@@ -715,6 +724,129 @@ mod tests {
             )
             .await;
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn append_rolls_commit_log_and_consume_queue_segments() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = test_config(temp_dir.path().to_path_buf());
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file = TieredFlatFile::new("TopicA".to_owned(), 0, config, metadata_store, provider.clone());
+
+        for (queue_offset, body, timestamp) in [
+            (0, Bytes::from_static(b"aaaa"), 100),
+            (1, Bytes::from_static(b"bbbb"), 101),
+            (2, Bytes::from_static(b"cccc"), 102),
+        ] {
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), timestamp).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 1,
+                    },
+                    timestamp,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+
+        assert_eq!(
+            provider
+                .segment_size(segment_path("TopicA", 0, FileSegmentType::CommitLog, 0))
+                .await?,
+            8
+        );
+        assert_eq!(
+            provider
+                .segment_size(segment_path("TopicA", 0, FileSegmentType::CommitLog, 8))
+                .await?,
+            4
+        );
+        assert_eq!(
+            provider
+                .segment_size(segment_path("TopicA", 0, FileSegmentType::ConsumeQueue, 0))
+                .await?,
+            (CONSUME_QUEUE_UNIT_SIZE * 2) as u64
+        );
+        assert_eq!(
+            provider
+                .segment_size(segment_path("TopicA", 0, FileSegmentType::ConsumeQueue, 40))
+                .await?,
+            CONSUME_QUEUE_UNIT_SIZE as u64
+        );
+        assert_eq!(
+            flat_file.read_message_by_queue_offset(0).await?,
+            Some(Bytes::from_static(b"aaaa"))
+        );
+        assert_eq!(
+            flat_file.read_message_by_queue_offset(2).await?,
+            Some(Bytes::from_static(b"cccc"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queue_offset_by_time_respects_lower_and_upper_boundaries() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            commit_log_segment_size: 512,
+            consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64 * 4,
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let flat_file = TieredFlatFile::new(
+            "TopicA".to_owned(),
+            0,
+            config,
+            metadata_store,
+            MemoryProvider::default(),
+        );
+
+        for (queue_offset, timestamp) in [(0, 100), (1, 200), (2, 300)] {
+            let body = message_with_store_timestamp(timestamp, format!("body-{queue_offset}").as_bytes());
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), timestamp).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 1,
+                    },
+                    timestamp,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+
+        assert_eq!(flat_file.queue_offset_by_time(50).await?, 0);
+        assert_eq!(flat_file.queue_offset_by_time(150).await?, 1);
+        assert_eq!(flat_file.queue_offset_by_time(301).await?, 3);
+        assert_eq!(
+            flat_file
+                .queue_offset_by_time_with_boundary(150, BoundaryType::Upper)
+                .await?,
+            0
+        );
+        assert_eq!(
+            flat_file
+                .queue_offset_by_time_with_boundary(300, BoundaryType::Upper)
+                .await?,
+            2
+        );
+        assert_eq!(
+            flat_file
+                .queue_offset_by_time_with_boundary(301, BoundaryType::Upper)
+                .await?,
+            2
+        );
         Ok(())
     }
 

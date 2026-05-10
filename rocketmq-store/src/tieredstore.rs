@@ -101,6 +101,13 @@ pub fn to_tiered_dispatch_request(dispatch_request: &DispatchRequest, body: Byte
 mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQError;
+    use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
+    use rocketmq_tieredstore::TieredLifecycle;
+    use rocketmq_tieredstore::TieredMessageFetcher;
+    use rocketmq_tieredstore::TieredStorageLevel;
+    use rocketmq_tieredstore::TieredStore;
+    use rocketmq_tieredstore::TieredStoreConfig;
 
     use super::*;
 
@@ -134,5 +141,49 @@ mod tests {
         assert_eq!(tiered_request.uniq_key.as_deref(), Some("uniqA"));
         assert_eq!(tiered_request.offset_id.as_deref(), Some("offsetA"));
         assert_eq!(tiered_request.body, Some(Bytes::from_static(b"test")));
+    }
+
+    #[tokio::test]
+    async fn dispatcher_adapter_writes_commitlog_and_consumequeue_to_tieredstore() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let tiered_store = TieredStore::new(TieredStoreConfig {
+            storage_level: TieredStorageLevel::Force,
+            backend_provider: "memory".to_owned(),
+            store_path_root_dir: temp_dir.path().join("tieredstore"),
+            max_pending_tasks: 8,
+            ..TieredStoreConfig::default()
+        })?;
+        tiered_store.load().await?;
+        tiered_store.start().await?;
+
+        let body = Bytes::from_static(b"adapter-dispatched-body");
+        let resolver_body = body.clone();
+        let adapter = TieredCommitLogDispatcher::new(
+            tiered_store.dispatcher(),
+            Arc::new(move |_| Some(resolver_body.clone())),
+        );
+        let mut dispatch_request = DispatchRequest {
+            topic: CheetahString::from("TopicA"),
+            queue_id: 0,
+            commit_log_offset: 1024,
+            msg_size: body.len() as i32,
+            tags_code: 7,
+            store_timestamp: 100,
+            consume_queue_offset: 0,
+            keys: CheetahString::from("keyA"),
+            success: true,
+            uniq_key: Some(CheetahString::from("uniqA")),
+            offset_id: Some(CheetahString::from("offsetA")),
+            sys_flag: 0,
+            ..DispatchRequest::default()
+        };
+
+        adapter.dispatch(&mut dispatch_request);
+        tiered_store.shutdown().await?;
+
+        let fetched = tiered_store.fetcher().get_message("TopicA".to_owned(), 0, 0, 1).await?;
+        assert_eq!(fetched.status, TieredGetMessageStatus::Found);
+        assert_eq!(fetched.messages, vec![body]);
+        Ok(())
     }
 }

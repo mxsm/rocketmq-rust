@@ -39,11 +39,15 @@ pub trait TieredMetadataStore: Send + Sync {
 
     async fn upsert_topic(&self, metadata: TopicMetadata) -> Result<(), RocketMQError>;
 
+    async fn delete_topic(&self, topic: &str) -> Result<(), RocketMQError>;
+
     async fn get_queue(&self, topic: &str, queue_id: i32) -> Result<Option<TopicQueueMetadata>, RocketMQError>;
 
     async fn list_queues(&self) -> Result<Vec<TopicQueueMetadata>, RocketMQError>;
 
     async fn upsert_queue(&self, metadata: TopicQueueMetadata) -> Result<(), RocketMQError>;
+
+    async fn delete_queue(&self, topic: &str, queue_id: i32) -> Result<(), RocketMQError>;
 
     async fn list_file_segments(&self, topic: &str, queue_id: i32) -> Result<Vec<FileSegmentMetadata>, RocketMQError>;
 
@@ -161,6 +165,13 @@ impl TieredMetadataStore for JsonMetadataStore {
         self.persist().await
     }
 
+    async fn delete_topic(&self, topic: &str) -> Result<(), RocketMQError> {
+        {
+            self.state.write().topics.remove(topic);
+        }
+        self.persist().await
+    }
+
     async fn get_queue(&self, topic: &str, queue_id: i32) -> Result<Option<TopicQueueMetadata>, RocketMQError> {
         Ok(self.state.read().queues.get(&Self::queue_key(topic, queue_id)).cloned())
     }
@@ -175,6 +186,13 @@ impl TieredMetadataStore for JsonMetadataStore {
                 .write()
                 .queues
                 .insert(Self::queue_key(&metadata.topic, metadata.queue_id), metadata);
+        }
+        self.persist().await
+    }
+
+    async fn delete_queue(&self, topic: &str, queue_id: i32) -> Result<(), RocketMQError> {
+        {
+            self.state.write().queues.remove(&Self::queue_key(topic, queue_id));
         }
         self.persist().await
     }
@@ -305,13 +323,12 @@ mod tests {
 
         metadata_store.upsert_topic(topic_metadata.clone()).await?;
         metadata_store.upsert_queue(queue_metadata.clone()).await?;
-        metadata_store
-            .upsert_file_segment(FileSegmentMetadata::new(
-                "TopicA/0/commitlog/00000000000000000000".to_owned(),
-                FileSegmentType::CommitLog,
-                0,
-            ))
-            .await?;
+        let segment = FileSegmentMetadata::new(
+            "TopicA/0/commitlog/00000000000000000000".to_owned(),
+            FileSegmentType::CommitLog,
+            0,
+        );
+        metadata_store.upsert_file_segment(segment.clone()).await?;
         let index_entry = TieredIndexEntry {
             topic: "TopicA".to_owned(),
             key: "keyA".to_owned(),
@@ -329,7 +346,58 @@ mod tests {
         assert_eq!(reloaded_store.get_topic("TopicA").await?, Some(topic_metadata));
         assert_eq!(reloaded_store.get_queue("TopicA", 0).await?, Some(queue_metadata));
         assert_eq!(reloaded_store.list_file_segments("TopicA", 0).await?.len(), 1);
+        assert_eq!(reloaded_store.list_all_file_segments().await?, vec![segment]);
         assert_eq!(reloaded_store.list_index_entries().await?, vec![index_entry]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn supports_topic_queue_and_segment_delete_semantics() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = JsonMetadataStore::new(config.clone());
+        metadata_store
+            .upsert_topic(TopicMetadata {
+                topic_id: 1,
+                topic: "TopicA".to_owned(),
+                reserve_time_millis: 10_000,
+                status: 0,
+                update_timestamp: 100,
+            })
+            .await?;
+        metadata_store
+            .upsert_queue(TopicQueueMetadata {
+                topic: "TopicA".to_owned(),
+                queue_id: 0,
+                min_offset: 0,
+                max_offset: 2,
+                update_timestamp: 101,
+            })
+            .await?;
+        let segment = FileSegmentMetadata::new(
+            "TopicA/0/consumequeue/00000000000000000000".to_owned(),
+            FileSegmentType::ConsumeQueue,
+            0,
+        );
+        metadata_store.upsert_file_segment(segment.clone()).await?;
+
+        metadata_store.delete_topic("TopicA").await?;
+        metadata_store.delete_queue("TopicA", 0).await?;
+        metadata_store
+            .mark_file_segment_deleted(&segment.path, segment.base_offset)
+            .await?;
+
+        let reloaded_store = JsonMetadataStore::new(config);
+        reloaded_store.load().await?;
+
+        assert_eq!(reloaded_store.get_topic("TopicA").await?, None);
+        assert_eq!(reloaded_store.get_queue("TopicA", 0).await?, None);
+        let segments = reloaded_store.list_file_segments("TopicA", 0).await?;
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].status, crate::file::FileSegmentStatus::Deleted);
         Ok(())
     }
 }
