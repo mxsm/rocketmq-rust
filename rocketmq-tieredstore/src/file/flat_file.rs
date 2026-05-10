@@ -255,19 +255,22 @@ where
     pub async fn cleanup_expired(&self, now_millis: i64) -> Result<(), RocketMQError> {
         let reserved_millis = self.config.file_reserved_time.as_millis() as i64;
         let expire_before_millis = now_millis.saturating_sub(reserved_millis);
+        let previous_consume_queue_commit_offset = self.consume_queue_commit_offset();
 
-        let mut expired = Vec::new();
-        expired.extend(self.expired_segments(FileSegmentType::CommitLog, expire_before_millis));
-        expired.extend(self.expired_segments(FileSegmentType::ConsumeQueue, expire_before_millis));
+        for segment in self.expired_segments(FileSegmentType::ConsumeQueue, expire_before_millis) {
+            self.delete_segment(segment).await?;
+        }
+        self.refresh_queue_metadata(previous_consume_queue_commit_offset)
+            .await?;
 
-        for segment in expired {
-            let metadata = segment.metadata();
-            self.provider.delete(metadata.path.clone()).await?;
-            segment.mark_deleted();
-            self.metadata_store
-                .mark_file_segment_deleted(&metadata.path, metadata.base_offset)
-                .await?;
-            self.remove_segment(metadata.segment_type, metadata.base_offset, &metadata.path);
+        let first_retained_commit_log_offset = self.first_retained_commit_log_offset().await?;
+        let expired_commit_log_segments = self
+            .expired_segments(FileSegmentType::CommitLog, expire_before_millis)
+            .into_iter()
+            .filter(|segment| commit_log_segment_is_unreferenced(segment, first_retained_commit_log_offset));
+
+        for segment in expired_commit_log_segments {
+            self.delete_segment(segment).await?;
         }
         Ok(())
     }
@@ -459,6 +462,54 @@ where
         segments.retain(|segment| segment.base_offset() != base_offset || segment.path() != path);
     }
 
+    async fn delete_segment(&self, segment: Arc<TieredFileSegment<P>>) -> Result<(), RocketMQError> {
+        let metadata = segment.metadata();
+        self.metadata_store
+            .mark_file_segment_deleted(&metadata.path, metadata.base_offset)
+            .await?;
+        segment.mark_deleted();
+        self.provider.delete(metadata.path.clone()).await?;
+        self.remove_segment(metadata.segment_type, metadata.base_offset, &metadata.path);
+        Ok(())
+    }
+
+    async fn refresh_queue_metadata(&self, previous_commit_offset: i64) -> Result<(), RocketMQError> {
+        let has_consume_queue_segments = !self.consume_queue_segments.lock().is_empty();
+        let (min_offset, max_offset) = if has_consume_queue_segments {
+            (self.consume_queue_min_offset(), self.consume_queue_commit_offset())
+        } else {
+            (previous_commit_offset, previous_commit_offset)
+        };
+        self.metadata_store
+            .upsert_queue(TopicQueueMetadata {
+                topic: self.topic.clone(),
+                queue_id: self.queue_id,
+                min_offset,
+                max_offset,
+                update_timestamp: current_time_millis(),
+            })
+            .await
+    }
+
+    async fn first_retained_commit_log_offset(&self) -> Result<Option<u64>, RocketMQError> {
+        let consume_queue_segments = self.consume_queue_segments.lock().clone();
+        let mut first_offset: Option<u64> = None;
+        for segment in consume_queue_segments {
+            if segment.commit_position() < CONSUME_QUEUE_UNIT_SIZE as u64 {
+                continue;
+            }
+            let unit = ConsumeQueueUnit::decode(segment.read(0..CONSUME_QUEUE_UNIT_SIZE as u64).await?)?;
+            if unit.commit_log_offset < 0 {
+                continue;
+            }
+            first_offset = Some(match first_offset {
+                Some(offset) => offset.min(unit.commit_log_offset as u64),
+                None => unit.commit_log_offset as u64,
+            });
+        }
+        Ok(first_offset)
+    }
+
     fn timestamp_search_range(&self, timestamp_millis: i64, cq_min: i64, cq_max: i64) -> (i64, i64) {
         let segments = self.consume_queue_segments.lock().clone();
         for segment in segments {
@@ -500,6 +551,15 @@ where
             .await?;
         Ok(Some(bytes))
     }
+}
+
+fn commit_log_segment_is_unreferenced<P>(
+    segment: &TieredFileSegment<P>,
+    first_retained_commit_log_offset: Option<u64>,
+) -> bool {
+    first_retained_commit_log_offset
+        .map(|offset| segment.committed_absolute_end() <= offset)
+        .unwrap_or(true)
 }
 
 fn segment_path(topic: &str, queue_id: i32, segment_type: FileSegmentType, base_offset: u64) -> String {
@@ -554,6 +614,7 @@ mod tests {
 
     use super::*;
     use crate::metadata::JsonMetadataStore;
+    use crate::metadata::TieredMetadataStore;
     use crate::provider::MemoryProvider;
     use crate::provider::TieredStoreProvider;
 
@@ -667,6 +728,94 @@ mod tests {
 
         assert_eq!(provider.segment_size(first_path).await?, 0);
         assert_eq!(flat_file.commit_log_append_offset(), 12);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_keeps_expired_commit_log_referenced_by_retained_consume_queue() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            commit_log_segment_size: 8,
+            consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64 * 3,
+            file_reserved_time: Duration::from_millis(1),
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file = TieredFlatFile::new("TopicA".to_owned(), 0, config, metadata_store, provider.clone());
+
+        for (queue_offset, body, timestamp) in [
+            (0, Bytes::from_static(b"abcd"), 10),
+            (1, Bytes::from_static(b"efgh"), 11),
+            (2, Bytes::from_static(b"ijkl"), 1_000),
+        ] {
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), timestamp).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 1,
+                    },
+                    timestamp,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+
+        let first_path = segment_path("TopicA", 0, FileSegmentType::CommitLog, 0);
+        flat_file.cleanup_expired(2_000).await?;
+
+        assert_eq!(provider.segment_size(first_path).await?, 8);
+        assert_eq!(
+            flat_file.read_message_by_queue_offset(0).await?,
+            Some(Bytes::from_static(b"abcd"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_deletes_commit_log_after_referencing_consume_queue_expires() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = test_config(temp_dir.path().to_path_buf());
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file = TieredFlatFile::new("TopicA".to_owned(), 0, config, metadata_store.clone(), provider.clone());
+
+        for (queue_offset, body, timestamp) in [
+            (0, Bytes::from_static(b"abcd"), 10),
+            (1, Bytes::from_static(b"efgh"), 11),
+            (2, Bytes::from_static(b"ijkl"), 1_000),
+        ] {
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), timestamp).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 1,
+                    },
+                    timestamp,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+
+        let first_path = segment_path("TopicA", 0, FileSegmentType::CommitLog, 0);
+        flat_file.cleanup_expired(2_000).await?;
+
+        assert_eq!(provider.segment_size(first_path).await?, 0);
+        assert_eq!(flat_file.consume_queue_min_offset(), 2);
+        let queue_metadata = metadata_store
+            .get_queue("TopicA", 0)
+            .await?
+            .ok_or_else(|| RocketMQError::Internal("missing topic queue metadata".to_owned()))?;
+        assert_eq!(queue_metadata.min_offset, 2);
+        assert_eq!(queue_metadata.max_offset, 3);
         Ok(())
     }
 }

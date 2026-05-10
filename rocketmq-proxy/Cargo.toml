@@ -27,6 +27,10 @@ readme                 = "README.md"
 description            = "RocketMQ Proxy Module - gRPC proxy runtime for the Rust implementation"
 rust-version.workspace = true
 
+[features]
+default     = []
+tieredstore = ["rocketmq-broker/tieredstore", "rocketmq-store/tieredstore"]
+
 [dependencies]
 rocketmq-common   = { workspace = true }
 rocketmq-broker   = { workspace = true }
