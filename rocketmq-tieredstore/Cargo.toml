@@ -54,4 +54,9 @@ tracing = { workspace = true }
 trait-variant = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.27.0"
+criterion = { version = "0.8", features = ["html_reports"] }
+tempfile  = "3.27.0"
+
+[[bench]]
+name    = "tieredstore_bench"
+harness = false

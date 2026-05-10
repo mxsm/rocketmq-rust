@@ -72,3 +72,81 @@ fn current_time_millis() -> i64 {
         Err(_) => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use rocketmq_error::RocketMQError;
+    use tokio::time::sleep;
+
+    use super::*;
+    use crate::file::ConsumeQueueUnit;
+    use crate::file::CONSUME_QUEUE_UNIT_SIZE;
+    use crate::metadata::JsonMetadataStore;
+    use crate::provider::MemoryProvider;
+
+    #[tokio::test]
+    async fn cleanup_service_runs_periodically_and_stops_on_shutdown() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            commit_log_segment_size: 8,
+            consume_queue_segment_size: CONSUME_QUEUE_UNIT_SIZE as u64,
+            file_reserved_time: Duration::from_millis(1),
+            delete_file_interval: Duration::from_millis(10),
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(
+            config.clone(),
+            metadata_store,
+            provider.clone(),
+        ));
+        let flat_file = flat_file_store.get_or_create("CleanupTopic".to_owned(), 0)?;
+
+        for (queue_offset, body, timestamp) in [
+            (0, Bytes::from_static(b"old-a"), 10),
+            (1, Bytes::from_static(b"old-b"), 11),
+            (2, Bytes::from_static(b"new-c"), current_time_millis()),
+        ] {
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), timestamp).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 0,
+                    },
+                    timestamp,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+
+        let first_commit_log_path = "CleanupTopic/0/commitlog/00000000000000000000".to_owned();
+        assert_eq!(provider.segment_size(first_commit_log_path.clone()).await?, 5);
+
+        let shutdown = CancellationToken::new();
+        let service = CleanupService::new(config, flat_file_store, shutdown.clone());
+        let handle = tokio::spawn(service.run());
+
+        for _ in 0..50 {
+            if provider.segment_size(first_commit_log_path.clone()).await? == 0 {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+
+        shutdown.cancel();
+        handle.await.map_err(|err| RocketMQError::Internal(err.to_string()))??;
+
+        assert_eq!(provider.segment_size(first_commit_log_path).await?, 0);
+        Ok(())
+    }
+}

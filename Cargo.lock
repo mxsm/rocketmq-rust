@@ -4051,6 +4051,7 @@ name = "rocketmq-tieredstore"
 version = "0.8.0"
 dependencies = [
  "bytes",
+ "criterion",
  "dashmap",
  "parking_lot",
  "rocketmq-common",

@@ -1757,4 +1757,23 @@ mod tests {
         assert_eq!(config.timer_max_delay_sec, 3600 * 24 * 3);
         Ok(())
     }
+
+    #[cfg(not(feature = "tieredstore"))]
+    #[test]
+    fn tieredstore_feature_is_disabled_by_default() {
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.store_type, crate::base::store_enum::StoreType::LocalFile);
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[test]
+    fn tieredstore_feature_defaults_to_no_tiered_store_config() {
+        let config = MessageStoreConfig::default();
+
+        assert!(
+            config.tiered_store_config.is_none(),
+            "enabling the Cargo feature must not enable tieredstore without explicit config"
+        );
+    }
 }
