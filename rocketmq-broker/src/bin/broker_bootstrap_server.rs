@@ -380,6 +380,9 @@ fn print_all_tieredstore_config(config: &MessageStoreConfig) {
 
 /// Print broker startup information
 fn print_startup_info(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) {
+    #[cfg(not(feature = "tieredstore"))]
+    let _ = message_store_config;
+
     info!(
         "Starting broker: brokerName={}, brokerClusterName={}, brokerId={}",
         broker_config.broker_identity.broker_name,
@@ -478,5 +481,14 @@ mod tests {
         let error = validate_broker_config(&broker_config, &message_store_config)
             .expect_err("tieredstore should reject non-local-file message stores");
         assert!(error.to_string().contains("storeType=LocalFile"));
+    }
+
+    #[cfg(not(feature = "tieredstore"))]
+    #[test]
+    fn validate_broker_config_keeps_default_path_without_tieredstore_feature() {
+        let broker_config = BrokerConfig::default();
+        let message_store_config = MessageStoreConfig::default();
+
+        assert!(validate_broker_config(&broker_config, &message_store_config).is_ok());
     }
 }

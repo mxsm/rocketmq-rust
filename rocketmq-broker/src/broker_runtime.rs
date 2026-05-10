@@ -3679,6 +3679,84 @@ mod tests {
         runtime
     }
 
+    #[cfg(feature = "tieredstore")]
+    fn allocate_broker_runtime_test_port() -> u16 {
+        loop {
+            let Ok(listener) = TcpListener::bind(("127.0.0.1", 0)) else {
+                continue;
+            };
+            let Ok(addr) = listener.local_addr() else {
+                continue;
+            };
+            let port = addr.port();
+            if port <= 1024 + 2 {
+                continue;
+            }
+            if TcpListener::bind(("127.0.0.1", port - 2)).is_ok() {
+                return port;
+            }
+        }
+    }
+
+    #[cfg(feature = "tieredstore")]
+    fn tieredstore_message_store_config(root: &Path) -> MessageStoreConfig {
+        serde_json::from_value(serde_json::json!({
+            "storePathRootDir": root.to_string_lossy(),
+            "duplicationEnable": true,
+            "flushDiskType": "ASYNC_FLUSH",
+            "readUncommitted": true,
+            "timerWheelEnable": false,
+            "tieredStoreConfig": {
+                "storageLevel": "force",
+                "backendProvider": "memory",
+                "metadataProvider": "json",
+                "storePathRootDir": root.join("tieredstore").to_string_lossy(),
+                "maxPendingTasks": 16
+            }
+        }))
+        .expect("deserialize tieredstore-enabled message store config")
+    }
+
+    #[cfg(feature = "tieredstore")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn broker_runtime_tieredstore_start_shutdown_e2e() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-tiered-e2e-{}", current_millis()));
+        let listen_port = allocate_broker_runtime_test_port();
+        let broker_config = Arc::new(BrokerConfig {
+            broker_server_config: ServerConfig {
+                listen_port: listen_port as u32,
+                bind_address: "127.0.0.1".to_owned(),
+            },
+            broker_ip1: CheetahString::from_static_str("127.0.0.1"),
+            listen_port: listen_port as u32,
+            namesrv_addr: None,
+            skip_pre_online: true,
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(tieredstore_message_store_config(&temp_root));
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+
+        let initialized = tokio::time::timeout(Duration::from_secs(15), runtime.initialize())
+            .await
+            .expect("tieredstore broker initialize should not hang");
+        assert!(initialized, "tieredstore broker initialize should succeed");
+        assert!(
+            runtime.inner_for_test().message_store().is_some(),
+            "message store should be initialized before broker start"
+        );
+
+        tokio::time::timeout(Duration::from_secs(15), runtime.start())
+            .await
+            .expect("tieredstore broker start should not hang");
+        tokio::time::timeout(Duration::from_secs(15), runtime.shutdown())
+            .await
+            .expect("tieredstore broker shutdown should not hang");
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
     fn seed_lite_query_state(runtime: &mut BrokerRuntime) {
         let inner = runtime.inner_for_test();
         let mut topic_config = TopicConfig::with_queues("parent-topic", 1, 1);
