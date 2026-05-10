@@ -323,46 +323,43 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
         let mut store_timestamp: i64 = 0;
 
         for msg in get_message_result.message_mapped_list() {
-            if let Some(mapped_file) = msg.mapped_file.as_ref() {
-                let data = &mapped_file.get_mapped_file()
-                    [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
-                bytes_mut.extend_from_slice(data);
+            let data = msg.get_buffer();
+            bytes_mut.extend_from_slice(data);
 
-                // Parse storeTimestamp from the last message
-                // The position depends on whether bornHost is IPv4 or IPv6
-                if data.len() > MessageDecoder::SYSFLAG_POSITION + 4 {
-                    let sys_flag = i32::from_be_bytes([
-                        data[MessageDecoder::SYSFLAG_POSITION],
-                        data[MessageDecoder::SYSFLAG_POSITION + 1],
-                        data[MessageDecoder::SYSFLAG_POSITION + 2],
-                        data[MessageDecoder::SYSFLAG_POSITION + 3],
+            // Parse storeTimestamp from the last message
+            // The position depends on whether bornHost is IPv4 or IPv6
+            if data.len() > MessageDecoder::SYSFLAG_POSITION + 4 {
+                let sys_flag = i32::from_be_bytes([
+                    data[MessageDecoder::SYSFLAG_POSITION],
+                    data[MessageDecoder::SYSFLAG_POSITION + 1],
+                    data[MessageDecoder::SYSFLAG_POSITION + 2],
+                    data[MessageDecoder::SYSFLAG_POSITION + 3],
+                ]);
+
+                // bornHost: IPv4 = 8 bytes, IPv6 = 20 bytes
+                let bornhost_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+                    8
+                } else {
+                    20
+                };
+
+                // storeTimestamp position = 4(TOTALSIZE) + 4(MAGICCODE) + 4(BODYCRC)
+                //                         + 4(QUEUEID) + 4(FLAG) + 8(QUEUEOFFSET)
+                //                         + 8(PHYSICALOFFSET) + 4(SYSFLAG) + 8(BORNTIMESTAMP)
+                //                         + bornhost_length
+                let store_timestamp_pos = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + bornhost_length;
+
+                if data.len() > store_timestamp_pos + 8 {
+                    store_timestamp = i64::from_be_bytes([
+                        data[store_timestamp_pos],
+                        data[store_timestamp_pos + 1],
+                        data[store_timestamp_pos + 2],
+                        data[store_timestamp_pos + 3],
+                        data[store_timestamp_pos + 4],
+                        data[store_timestamp_pos + 5],
+                        data[store_timestamp_pos + 6],
+                        data[store_timestamp_pos + 7],
                     ]);
-
-                    // bornHost: IPv4 = 8 bytes, IPv6 = 20 bytes
-                    let bornhost_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
-                        8
-                    } else {
-                        20
-                    };
-
-                    // storeTimestamp position = 4(TOTALSIZE) + 4(MAGICCODE) + 4(BODYCRC)
-                    //                         + 4(QUEUEID) + 4(FLAG) + 8(QUEUEOFFSET)
-                    //                         + 8(PHYSICALOFFSET) + 4(SYSFLAG) + 8(BORNTIMESTAMP)
-                    //                         + bornhost_length
-                    let store_timestamp_pos = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + bornhost_length;
-
-                    if data.len() > store_timestamp_pos + 8 {
-                        store_timestamp = i64::from_be_bytes([
-                            data[store_timestamp_pos],
-                            data[store_timestamp_pos + 1],
-                            data[store_timestamp_pos + 2],
-                            data[store_timestamp_pos + 3],
-                            data[store_timestamp_pos + 4],
-                            data[store_timestamp_pos + 5],
-                            data[store_timestamp_pos + 6],
-                            data[store_timestamp_pos + 7],
-                        ]);
-                    }
                 }
             }
         }

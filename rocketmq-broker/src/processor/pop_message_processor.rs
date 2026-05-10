@@ -1370,9 +1370,7 @@ where
     ) -> Option<Bytes> {
         let mut bytes_mut = BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
         for msg in get_message_result.message_mapped_list() {
-            let data = &msg.mapped_file.as_ref().unwrap().get_mapped_file()
-                [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
-            bytes_mut.extend_from_slice(data);
+            bytes_mut.extend_from_slice(msg.get_buffer());
         }
         Some(bytes_mut.freeze())
     }
