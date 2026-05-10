@@ -1765,8 +1765,7 @@ mod tests {
             .collect::<Vec<_>>();
         fields.sort_by(|left, right| left.0.cmp(&right.0));
         let mut content = Vec::new();
-        for (key, value) in fields {
-            content.extend_from_slice(key.as_bytes());
+        for (_, value) in fields {
             content.extend_from_slice(value.as_bytes());
         }
         if let Some(body) = command.body() {

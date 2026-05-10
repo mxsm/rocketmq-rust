@@ -121,9 +121,9 @@ impl DefaultAuthenticationContextBuilder {
     ) -> Vec<u8> {
         let mut content = Vec::new();
 
-        // Add all sorted field values
-        for (key, value) in sorted_fields {
-            content.extend_from_slice(key.as_bytes());
+        // Match Java AclUtils.combineRequestContent: concatenate sorted ext field
+        // values only, then append the request body. Field names are not signed.
+        for value in sorted_fields.values() {
             content.extend_from_slice(value.as_bytes());
         }
 
@@ -282,6 +282,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_hex_to_base64() {
@@ -295,6 +296,18 @@ mod tests {
         let hex = "ZZZZ";
         let result = DefaultAuthenticationContextBuilder::hex_to_base64(hex);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_combine_request_content_matches_java_value_only_order() {
+        let request = RemotingCommand::create_remoting_command(10).set_body(Vec::from("body"));
+        let mut sorted_fields = BTreeMap::new();
+        sorted_fields.insert(CheetahString::from("AccessKey"), CheetahString::from("alice"));
+        sorted_fields.insert(CheetahString::from("topic"), CheetahString::from("topic-a"));
+
+        let content = DefaultAuthenticationContextBuilder::combine_request_content(&request, &sorted_fields);
+
+        assert_eq!(content, b"alicetopic-abody");
     }
 
     #[test]
@@ -318,5 +331,24 @@ mod tests {
 
         assert_eq!(result.base.channel_id(), Some(&CheetahString::from("test-channel")));
         assert!(result.username().is_none());
+    }
+
+    #[test]
+    fn test_build_from_remoting_uses_java_signature_content() {
+        let mut ext_fields = HashMap::new();
+        ext_fields.insert(CheetahString::from("topic"), CheetahString::from("topic-a"));
+        ext_fields.insert(CheetahString::from("AccessKey"), CheetahString::from("alice"));
+        ext_fields.insert(CheetahString::from("Signature"), CheetahString::from("sig"));
+
+        let request = RemotingCommand::create_remoting_command(10)
+            .set_ext_fields(ext_fields)
+            .set_body(Vec::from("body"));
+        let builder = DefaultAuthenticationContextBuilder::new();
+
+        let context = builder.build_from_remoting(&request, Some("test-channel")).unwrap();
+
+        assert_eq!(context.username(), Some(&CheetahString::from("alice")));
+        assert_eq!(context.signature(), Some(&CheetahString::from("sig")));
+        assert_eq!(context.content(), Some(b"alicetopic-abody".as_slice()));
     }
 }
