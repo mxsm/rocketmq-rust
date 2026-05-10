@@ -132,3 +132,68 @@ impl TieredStoreProvider for PosixProvider {
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use rocketmq_error::RocketMQError;
+
+    use super::PosixProvider;
+    use crate::file::FileSegment;
+    use crate::file::FileSegmentType;
+    use crate::file::TieredFileSegment;
+    use crate::metadata::FileSegmentMetadata;
+    use crate::provider::TieredStoreProvider;
+
+    #[tokio::test]
+    async fn write_read_size_and_delete() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let provider = PosixProvider::new(temp_dir.path().to_path_buf());
+
+        provider
+            .write("topic/0/commitlog/000".to_owned(), 0, Bytes::from_static(b"abc"))
+            .await?;
+        provider
+            .write("topic/0/commitlog/000".to_owned(), 3, Bytes::from_static(b"def"))
+            .await?;
+
+        assert_eq!(provider.segment_size("topic/0/commitlog/000".to_owned()).await?, 6);
+        assert_eq!(
+            provider.read("topic/0/commitlog/000".to_owned(), 1, 4).await?,
+            Bytes::from_static(b"bcde")
+        );
+
+        provider.delete("topic/0/commitlog/000".to_owned()).await?;
+        assert_eq!(provider.segment_size("topic/0/commitlog/000".to_owned()).await?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_append_commit_and_recover_segment() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let provider = PosixProvider::new(temp_dir.path().to_path_buf());
+        let path = "topic/0/commitlog/00000000000000000000".to_owned();
+        let segment = provider
+            .create_segment(path.clone(), FileSegmentType::CommitLog, 0, 64)
+            .await?;
+
+        segment.append(Bytes::from_static(b"hello"), 100).await?;
+        segment.append(Bytes::from_static(b"-posix"), 101).await?;
+        assert_eq!(segment.append_position(), 11);
+        assert_eq!(segment.commit_position(), 0);
+
+        segment.commit().await?;
+        assert_eq!(segment.commit_position(), 11);
+        assert_eq!(segment.read(0..11).await?, Bytes::from_static(b"hello-posix"));
+
+        let mut metadata = FileSegmentMetadata::new(path.clone(), FileSegmentType::CommitLog, 0);
+        metadata.size = provider.segment_size(path.clone()).await?;
+        metadata.begin_timestamp = 100;
+        metadata.end_timestamp = 101;
+        let recovered = TieredFileSegment::new(path, FileSegmentType::CommitLog, 0, 64, metadata, provider);
+
+        assert_eq!(recovered.commit_position(), 11);
+        assert_eq!(recovered.read(6..11).await?, Bytes::from_static(b"posix"));
+        Ok(())
+    }
+}
