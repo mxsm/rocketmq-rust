@@ -16,6 +16,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum TieredStorageLevel {
     Disable = 0,
     NotInDisk = 1,
@@ -35,7 +37,9 @@ impl TieredStorageLevel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, rename_all = "camelCase"))]
 pub struct TieredStoreConfig {
     pub storage_level: TieredStorageLevel,
     pub store_path_root_dir: PathBuf,

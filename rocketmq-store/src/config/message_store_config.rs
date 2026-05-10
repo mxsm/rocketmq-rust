@@ -884,6 +884,10 @@ pub struct MessageStoreConfig {
 
     #[serde(default)]
     pub enable_controller_mode: bool,
+
+    #[cfg(feature = "tieredstore")]
+    #[serde(default)]
+    pub tiered_store_config: Option<rocketmq_tieredstore::TieredStoreConfig>,
 }
 
 impl Default for MessageStoreConfig {
@@ -1079,6 +1083,8 @@ impl Default for MessageStoreConfig {
             rocksdb_cq_double_write_enable: false,
             read_uncommitted: false,
             enable_controller_mode: false,
+            #[cfg(feature = "tieredstore")]
+            tiered_store_config: None,
         }
     }
 }
