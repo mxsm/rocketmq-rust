@@ -47,6 +47,8 @@ pub trait TieredMetadataStore: Send + Sync {
 
     async fn list_file_segments(&self, topic: &str, queue_id: i32) -> Result<Vec<FileSegmentMetadata>, RocketMQError>;
 
+    async fn list_all_file_segments(&self) -> Result<Vec<FileSegmentMetadata>, RocketMQError>;
+
     async fn upsert_file_segment(&self, metadata: FileSegmentMetadata) -> Result<(), RocketMQError>;
 
     async fn mark_file_segment_deleted(&self, path: &str, base_offset: u64) -> Result<(), RocketMQError>;
@@ -188,6 +190,12 @@ impl TieredMetadataStore for JsonMetadataStore {
             .cloned()
             .collect::<Vec<_>>();
         segments.sort_by_key(|segment| (segment.segment_type, segment.base_offset));
+        Ok(segments)
+    }
+
+    async fn list_all_file_segments(&self) -> Result<Vec<FileSegmentMetadata>, RocketMQError> {
+        let mut segments = self.state.read().segments.values().cloned().collect::<Vec<_>>();
+        segments.sort_by_key(|segment| (segment.path.clone(), segment.segment_type, segment.base_offset));
         Ok(segments)
     }
 

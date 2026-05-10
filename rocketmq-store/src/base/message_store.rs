@@ -208,6 +208,24 @@ pub trait MessageStoreInner: Sync + 'static {
         boundary_type: BoundaryType,
     ) -> i64;
 
+    /// Look up the logical offset by timestamp, allowing asynchronous tiered-store fallback.
+    async fn get_offset_in_queue_by_time_async(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+    ) -> Result<i64, StoreError>;
+
+    /// Look up the logical offset by timestamp with boundary type, allowing asynchronous
+    /// tiered-store fallback.
+    async fn get_offset_in_queue_by_time_with_boundary_async(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+    ) -> Result<i64, StoreError>;
+
     /// Look up the message by given commit log offset.
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt>;
 

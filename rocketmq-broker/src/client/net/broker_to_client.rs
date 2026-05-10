@@ -246,9 +246,22 @@ impl Broker2Client {
                     .map(|store| store.get_max_offset_in_queue(topic, queue_id))
                     .unwrap_or(0)
             } else {
-                message_store
-                    .map(|store| store.get_offset_in_queue_by_time(topic, queue_id, timestamp))
-                    .unwrap_or(0)
+                match message_store {
+                    Some(store) => match store
+                        .get_offset_in_queue_by_time_async(topic, queue_id, timestamp)
+                        .await
+                    {
+                        Ok(offset) => offset,
+                        Err(error) => {
+                            warn!(
+                                "reset offset by timestamp failed. topic={}, queueId={}, timestamp={}, error={}",
+                                topic, queue_id, timestamp, error
+                            );
+                            0
+                        }
+                    },
+                    None => 0,
+                }
             };
 
             let timestamp_offset = if timestamp_offset < 0 {

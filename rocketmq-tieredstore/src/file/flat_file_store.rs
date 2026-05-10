@@ -19,6 +19,8 @@ use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
+use crate::file::FileSegmentStatus;
+use crate::file::FileSegmentType;
 use crate::file::IndexFileSegment;
 use crate::file::TieredFlatFile;
 use crate::file::TieredIndexEntry;
@@ -64,9 +66,9 @@ where
     }
 
     pub async fn load(&self) -> Result<(), RocketMQError> {
-        let queues = self.metadata_store.list_queues().await?;
-        for queue in queues {
-            let flat_file = self.get_or_create(queue.topic, queue.queue_id)?;
+        let keys = self.recoverable_flat_file_keys().await?;
+        for key in keys {
+            let flat_file = self.get_or_create(key.topic, key.queue_id)?;
             flat_file.recover().await?;
         }
         self.recover_index_file().await?;
@@ -201,6 +203,53 @@ where
         entries.dedup();
         Ok(entries)
     }
+
+    async fn recoverable_flat_file_keys(&self) -> Result<Vec<FlatFileKey>, RocketMQError> {
+        let mut keys = self
+            .metadata_store
+            .list_queues()
+            .await?
+            .into_iter()
+            .map(|queue| FlatFileKey {
+                topic: queue.topic,
+                queue_id: queue.queue_id,
+            })
+            .collect::<Vec<_>>();
+
+        for segment in self.metadata_store.list_all_file_segments().await? {
+            if segment.status == FileSegmentStatus::Deleted || segment.segment_type == FileSegmentType::Index {
+                continue;
+            }
+            let Some(key) = flat_file_key_from_segment_path(&segment.path) else {
+                continue;
+            };
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+
+        keys.sort_by(|left, right| left.topic.cmp(&right.topic).then(left.queue_id.cmp(&right.queue_id)));
+        keys.dedup();
+        Ok(keys)
+    }
+}
+
+fn flat_file_key_from_segment_path(path: &str) -> Option<FlatFileKey> {
+    let mut parts = path.rsplitn(4, '/');
+    let _base_offset = parts.next()?;
+    let segment_name = parts.next()?;
+    let queue_id = parts.next()?.parse::<i32>().ok()?;
+    let topic = parts.next()?;
+    if topic.is_empty() {
+        return None;
+    }
+    match segment_name {
+        "commitlog" | "consumequeue" => Some(FlatFileKey {
+            topic: topic.to_owned(),
+            queue_id,
+        }),
+        _ => None,
+    }
 }
 
 fn build_index_entries(request: &TieredDispatchRequest, tiered_commit_log_offset: u64) -> Vec<TieredIndexEntry> {
@@ -246,11 +295,15 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use bytes::Bytes;
     use rocketmq_error::RocketMQError;
 
     use super::*;
+    use crate::file::ConsumeQueueUnit;
+    use crate::file::FileSegment;
     use crate::metadata::JsonMetadataStore;
     use crate::provider::MemoryProvider;
+    use crate::provider::TieredStoreProvider;
 
     fn test_request(timestamp: i64, keys: &str) -> TieredDispatchRequest {
         TieredDispatchRequest {
@@ -407,5 +460,90 @@ mod tests {
 
         assert_eq!(entries, vec![entry]);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_recovers_queue_from_segment_metadata_when_queue_metadata_is_missing() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            commit_log_segment_size: 8,
+            consume_queue_segment_size: crate::file::CONSUME_QUEUE_UNIT_SIZE as u64,
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+
+        let commit_log_segment = provider
+            .create_segment(
+                "TopicA/0/commitlog/00000000000000000000".to_owned(),
+                FileSegmentType::CommitLog,
+                0,
+                config.commit_log_segment_size,
+            )
+            .await?;
+        commit_log_segment.append(Bytes::from_static(b"body"), 100).await?;
+        commit_log_segment.commit().await?;
+        metadata_store
+            .upsert_file_segment(commit_log_segment.metadata())
+            .await?;
+
+        let consume_queue_segment = provider
+            .create_segment(
+                "TopicA/0/consumequeue/00000000000000000000".to_owned(),
+                FileSegmentType::ConsumeQueue,
+                0,
+                config.consume_queue_segment_size,
+            )
+            .await?;
+        consume_queue_segment
+            .append(
+                ConsumeQueueUnit {
+                    commit_log_offset: 0,
+                    size: 4,
+                    tags_code: 1,
+                }
+                .encode(),
+                100,
+            )
+            .await?;
+        consume_queue_segment.commit().await?;
+        metadata_store
+            .upsert_file_segment(consume_queue_segment.metadata())
+            .await?;
+
+        let reloaded_metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        reloaded_metadata_store.load().await?;
+        let store = TieredFlatFileStore::new(config, reloaded_metadata_store.clone(), provider);
+        store.load().await?;
+
+        let flat_file = store
+            .get("TopicA", 0)
+            .ok_or_else(|| RocketMQError::Internal("missing recovered flat file".to_owned()))?;
+        assert_eq!(
+            flat_file.read_message_by_queue_offset(0).await?,
+            Some(Bytes::from_static(b"body"))
+        );
+        let queue_metadata = reloaded_metadata_store
+            .get_queue("TopicA", 0)
+            .await?
+            .ok_or_else(|| RocketMQError::Internal("missing recovered queue metadata".to_owned()))?;
+        assert_eq!(queue_metadata.min_offset, 0);
+        assert_eq!(queue_metadata.max_offset, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn parses_flat_file_key_from_segment_path() {
+        assert_eq!(
+            flat_file_key_from_segment_path("TopicA/3/commitlog/00000000000000000000"),
+            Some(FlatFileKey {
+                topic: "TopicA".to_owned(),
+                queue_id: 3,
+            })
+        );
+        assert_eq!(flat_file_key_from_segment_path("TopicA/3/index/000"), None);
+        assert_eq!(flat_file_key_from_segment_path("bad-path"), None);
     }
 }

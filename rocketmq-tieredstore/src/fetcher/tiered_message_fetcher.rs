@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
@@ -69,6 +70,14 @@ pub trait TieredMessageFetcher: Send + Sync {
         topic: String,
         queue_id: i32,
         timestamp_millis: i64,
+    ) -> Result<i64, RocketMQError>;
+
+    async fn get_offset_by_time_with_boundary(
+        &self,
+        topic: String,
+        queue_id: i32,
+        timestamp_millis: i64,
+        boundary_type: BoundaryType,
     ) -> Result<i64, RocketMQError>;
 
     async fn query_message(
@@ -225,10 +234,23 @@ where
         queue_id: i32,
         timestamp_millis: i64,
     ) -> Result<i64, RocketMQError> {
+        self.get_offset_by_time_with_boundary(topic, queue_id, timestamp_millis, BoundaryType::Lower)
+            .await
+    }
+
+    async fn get_offset_by_time_with_boundary(
+        &self,
+        topic: String,
+        queue_id: i32,
+        timestamp_millis: i64,
+        boundary_type: BoundaryType,
+    ) -> Result<i64, RocketMQError> {
         let Some(flat_file) = self.flat_file_store.get(&topic, queue_id) else {
             return Ok(-1);
         };
-        flat_file.queue_offset_by_time(timestamp_millis).await
+        flat_file
+            .queue_offset_by_time_with_boundary(timestamp_millis, boundary_type)
+            .await
     }
 
     async fn query_message(
@@ -487,6 +509,49 @@ mod tests {
         assert_eq!(fetcher.get_offset_by_time("TopicA".to_owned(), 0, 300).await?, 5);
         assert_eq!(fetcher.get_offset_by_time("TopicA".to_owned(), 0, 301).await?, 6);
         assert_eq!(fetcher.get_offset_by_time("MissingTopic".to_owned(), 0, 100).await?, -1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finds_upper_bound_offset_by_store_timestamp() -> Result<(), RocketMQError> {
+        let fetcher = build_timestamp_fetcher().await?;
+
+        assert_eq!(
+            fetcher
+                .get_offset_by_time_with_boundary("TopicA".to_owned(), 0, 50, BoundaryType::Upper)
+                .await?,
+            3
+        );
+        assert_eq!(
+            fetcher
+                .get_offset_by_time_with_boundary("TopicA".to_owned(), 0, 100, BoundaryType::Upper)
+                .await?,
+            3
+        );
+        assert_eq!(
+            fetcher
+                .get_offset_by_time_with_boundary("TopicA".to_owned(), 0, 150, BoundaryType::Upper)
+                .await?,
+            3
+        );
+        assert_eq!(
+            fetcher
+                .get_offset_by_time_with_boundary("TopicA".to_owned(), 0, 300, BoundaryType::Upper)
+                .await?,
+            5
+        );
+        assert_eq!(
+            fetcher
+                .get_offset_by_time_with_boundary("TopicA".to_owned(), 0, 301, BoundaryType::Upper)
+                .await?,
+            5
+        );
+        assert_eq!(
+            fetcher
+                .get_offset_by_time_with_boundary("MissingTopic".to_owned(), 0, 100, BoundaryType::Upper)
+                .await?,
+            -1
+        );
         Ok(())
     }
 

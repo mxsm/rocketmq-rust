@@ -93,12 +93,24 @@ where
                 ));
             }
         };
-        let offset = message_store.get_offset_in_queue_by_time_with_boundary(
-            &search_offset_request_header.topic,
-            search_offset_request_header.queue_id,
-            search_offset_request_header.timestamp,
-            search_offset_request_header.boundary_type,
-        );
+        let offset = match message_store
+            .get_offset_in_queue_by_time_with_boundary_async(
+                &search_offset_request_header.topic,
+                search_offset_request_header.queue_id,
+                search_offset_request_header.timestamp,
+                search_offset_request_header.boundary_type,
+            )
+            .await
+        {
+            Ok(offset) => offset,
+            Err(error) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark(format!("search offset by timestamp failed: {error}")),
+                ));
+            }
+        };
         let response_header = SearchOffsetResponseHeader { offset };
 
         Ok(Some(response.set_command_custom_header(response_header)))
@@ -352,12 +364,23 @@ where
             if mapping_detail.topic_queue_mapping_info.bname == item.bname {
                 // Local broker - query directly from message store
                 if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                    let local_offset = message_store.get_offset_in_queue_by_time_with_boundary(
-                        &mapping_context.topic,
-                        item.queue_id,
-                        timestamp,
-                        request_header.boundary_type,
-                    );
+                    let local_offset = match message_store
+                        .get_offset_in_queue_by_time_with_boundary_async(
+                            &mapping_context.topic,
+                            item.queue_id,
+                            timestamp,
+                            request_header.boundary_type,
+                        )
+                        .await
+                    {
+                        Ok(offset) => offset,
+                        Err(error) => {
+                            return Ok(Some(
+                                RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+                                    .set_remark(format!("search offset by timestamp failed: {error}")),
+                            ));
+                        }
+                    };
                     if local_offset > 0 {
                         offset = item.compute_static_queue_offset_strictly(local_offset);
                         break;

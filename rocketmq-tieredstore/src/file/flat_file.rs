@@ -19,6 +19,7 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use parking_lot::Mutex;
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
@@ -218,6 +219,17 @@ where
         consume_queue_segments.sort_by_key(|segment| segment.base_offset());
         *self.commit_log_segments.lock() = commit_log_segments;
         *self.consume_queue_segments.lock() = consume_queue_segments;
+        if !self.consume_queue_segments.lock().is_empty() {
+            self.metadata_store
+                .upsert_queue(TopicQueueMetadata {
+                    topic: self.topic.clone(),
+                    queue_id: self.queue_id,
+                    min_offset: self.consume_queue_min_offset(),
+                    max_offset: self.consume_queue_commit_offset(),
+                    update_timestamp: current_time_millis(),
+                })
+                .await?;
+        }
         Ok(())
     }
 
@@ -315,8 +327,18 @@ where
     }
 
     pub async fn queue_offset_by_time(&self, timestamp_millis: i64) -> Result<i64, RocketMQError> {
+        self.queue_offset_by_time_with_boundary(timestamp_millis, BoundaryType::Lower)
+            .await
+    }
+
+    pub async fn queue_offset_by_time_with_boundary(
+        &self,
+        timestamp_millis: i64,
+        boundary_type: BoundaryType,
+    ) -> Result<i64, RocketMQError> {
         let cq_min = self.consume_queue_min_offset();
-        let cq_max = self.consume_queue_commit_offset().saturating_sub(1);
+        let cq_commit = self.consume_queue_commit_offset();
+        let cq_max = cq_commit.saturating_sub(1);
         if cq_max == -1 || cq_max < cq_min {
             return Ok(cq_min);
         }
@@ -325,7 +347,10 @@ where
             return Ok(cq_min);
         };
         if max_store_time < timestamp_millis {
-            return Ok(cq_max.saturating_add(1));
+            return Ok(match boundary_type {
+                BoundaryType::Lower => cq_commit,
+                BoundaryType::Upper => cq_max,
+            });
         }
 
         let Some(min_store_time) = self.read_message_store_timestamp(cq_min).await? else {
@@ -336,18 +361,40 @@ where
         }
 
         let (mut low, mut high) = self.timestamp_search_range(timestamp_millis, cq_min, cq_max);
-        while low < high {
-            let middle = low.saturating_add((high - low) / 2);
-            let Some(store_time) = self.read_message_store_timestamp(middle).await? else {
-                return Ok(low);
-            };
-            if store_time < timestamp_millis {
-                low = middle.saturating_add(1);
-            } else {
-                high = middle;
+        match boundary_type {
+            BoundaryType::Lower => {
+                while low < high {
+                    let middle = low.saturating_add((high - low) / 2);
+                    let Some(store_time) = self.read_message_store_timestamp(middle).await? else {
+                        return Ok(low);
+                    };
+                    if store_time < timestamp_millis {
+                        low = middle.saturating_add(1);
+                    } else {
+                        high = middle;
+                    }
+                }
+                Ok(low)
+            }
+            BoundaryType::Upper => {
+                let mut result = cq_min;
+                while low <= high {
+                    let middle = low.saturating_add((high - low) / 2);
+                    let Some(store_time) = self.read_message_store_timestamp(middle).await? else {
+                        return Ok(result);
+                    };
+                    if store_time <= timestamp_millis {
+                        result = middle;
+                        low = middle.saturating_add(1);
+                    } else if middle == 0 {
+                        break;
+                    } else {
+                        high = middle.saturating_sub(1);
+                    }
+                }
+                Ok(result)
             }
         }
-        Ok(low)
     }
 
     pub fn min_store_timestamp(&self) -> i64 {
