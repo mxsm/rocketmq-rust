@@ -64,6 +64,7 @@ const DELAY_FOR_A_WHILE: u64 = 100;
 const DELAY_FOR_A_PERIOD: u64 = 10000;
 const WAIT_FOR_SHUTDOWN: u64 = 5000;
 const DELAY_FOR_A_SLEEP: u64 = 10;
+const PERSIST_TASK_SHUTDOWN_POLL_INTERVAL: u64 = 100;
 
 // Performance optimization constants
 /// Maximum number of messages to process in a single batch
@@ -282,19 +283,39 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                         .message_store_config()
                         .flush_delay_offset_interval,
                 ));
-                tokio::time::sleep(Duration::from_millis(10000)).await;
+                let initial_delay = tokio::time::sleep(Duration::from_millis(10000));
+                tokio::pin!(initial_delay);
+                let mut shutdown_poll =
+                    tokio::time::interval(Duration::from_millis(PERSIST_TASK_SHUTDOWN_POLL_INTERVAL));
 
                 loop {
-                    interval.tick().await;
-
-                    // Check shutdown flag
-                    if shutdown_flag.load(Ordering::Relaxed) {
-                        info!("Persist task received shutdown signal");
-                        service.persist();
-                        break;
+                    tokio::select! {
+                        _ = &mut initial_delay => break,
+                        _ = shutdown_poll.tick() => {
+                            if shutdown_flag.load(Ordering::Relaxed) {
+                                info!("Persist task received shutdown signal before initial delay elapsed");
+                                return;
+                            }
+                        }
                     }
+                }
 
-                    service.persist();
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            if shutdown_flag.load(Ordering::Relaxed) {
+                                info!("Persist task received shutdown signal");
+                                return;
+                            }
+                            service.persist();
+                        }
+                        _ = shutdown_poll.tick() => {
+                            if shutdown_flag.load(Ordering::Relaxed) {
+                                info!("Persist task received shutdown signal");
+                                return;
+                            }
+                        }
+                    }
                 }
             });
             task_handles.push(persist_handle);
@@ -332,7 +353,8 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         info!("Waiting for {} tasks to complete...", task_count);
 
         for (idx, handle) in handles.drain(..).enumerate() {
-            match tokio::time::timeout(Duration::from_millis(WAIT_FOR_SHUTDOWN), handle).await {
+            let mut handle = handle;
+            match tokio::time::timeout(Duration::from_millis(WAIT_FOR_SHUTDOWN), &mut handle).await {
                 Ok(Ok(())) => {
                     info!("Task {}/{} completed successfully", idx + 1, task_count);
                 }
@@ -346,6 +368,8 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                         task_count,
                         WAIT_FOR_SHUTDOWN
                     );
+                    handle.abort();
+                    let _ = handle.await;
                 }
             }
         }

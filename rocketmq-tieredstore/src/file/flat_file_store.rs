@@ -153,7 +153,7 @@ where
         Ok(())
     }
 
-    pub fn query_index(&self, topic: &str, key: &str, max_num: usize, begin: i64, end: i64) -> Vec<TieredIndexEntry> {
+    fn query_index(&self, topic: &str, key: &str, max_num: usize, begin: i64, end: i64) -> Vec<TieredIndexEntry> {
         if max_num == 0 || key.is_empty() || end < begin {
             return Vec::new();
         }
@@ -174,6 +174,30 @@ where
         result.sort_by_key(|entry| (entry.store_timestamp, entry.queue_id, entry.queue_offset));
         result.truncate(max_num);
         result
+    }
+
+    pub(crate) async fn query_index_entries(
+        &self,
+        topic: &str,
+        key: &str,
+        max_num: usize,
+        begin: i64,
+        end: i64,
+    ) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+        if max_num == 0 || topic.is_empty() || key.is_empty() || end < begin {
+            return Ok(Vec::new());
+        }
+
+        let entries = self.index_file.query_entries(topic, key, max_num, begin, end).await?;
+        if !entries.is_empty() {
+            return Ok(entries);
+        }
+
+        if self.index_file.segment_count().await? == 0 {
+            return Ok(self.query_index(topic, key, max_num, begin, end));
+        }
+
+        Ok(Vec::new())
     }
 
     fn remove_expired_index_entries(&self, expire_before_millis: i64) {
@@ -364,6 +388,8 @@ mod tests {
         let entries = reloaded_store.query_index("TopicA", "keyA", 10, 0, 500);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].store_timestamp, 100);
+        let async_entries = reloaded_store.query_index_entries("TopicA", "keyA", 10, 0, 500).await?;
+        assert_eq!(async_entries, entries);
         Ok(())
     }
 
@@ -394,11 +420,44 @@ mod tests {
         let reloaded_metadata_store = Arc::new(JsonMetadataStore::new(reloaded_config.clone()));
         reloaded_metadata_store.load().await?;
         let reloaded_store = TieredFlatFileStore::new(reloaded_config, reloaded_metadata_store, provider);
-        reloaded_store.load().await?;
 
-        let entries = reloaded_store.query_index("TopicA", "keyA", 10, 0, 500);
+        assert!(reloaded_store.query_index("TopicA", "keyA", 10, 0, 500).is_empty());
+        let entries = reloaded_store.query_index_entries("TopicA", "keyA", 10, 0, 500).await?;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].store_timestamp, 100);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_index_entries_falls_back_to_metadata_when_index_file_is_absent() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            index_file_max_hash_slot_num: 8,
+            index_file_max_index_num: 16,
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let entry = TieredIndexEntry {
+            topic: "TopicA".to_owned(),
+            key: "keyA".to_owned(),
+            queue_id: 0,
+            queue_offset: 1,
+            commit_log_offset: 0,
+            message_size: 4,
+            store_timestamp: 100,
+        };
+        metadata_store.upsert_index_entry(entry.clone()).await?;
+
+        let reloaded_metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        reloaded_metadata_store.load().await?;
+        let store = TieredFlatFileStore::new(config, reloaded_metadata_store, MemoryProvider::default());
+        store.load().await?;
+
+        let entries = store.query_index_entries("TopicA", "keyA", 10, 0, 500).await?;
+
+        assert_eq!(entries, vec![entry]);
         Ok(())
     }
 }
