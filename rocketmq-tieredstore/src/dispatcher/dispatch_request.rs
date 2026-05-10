@@ -32,6 +32,45 @@ pub struct TieredDispatchRequest {
 
 impl TieredDispatchRequest {
     pub fn is_valid(&self) -> bool {
-        !self.topic.is_empty() && self.queue_id >= 0 && self.queue_offset >= 0 && self.message_size > 0
+        let Some(body) = self.body.as_ref() else {
+            return false;
+        };
+        !self.topic.is_empty()
+            && self.queue_id >= 0
+            && self.queue_offset >= 0
+            && self.message_size > 0
+            && body.len() == self.message_size as usize
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use super::TieredDispatchRequest;
+
+    fn request(body: Option<Bytes>, message_size: i32) -> TieredDispatchRequest {
+        TieredDispatchRequest {
+            topic: "TopicA".to_owned(),
+            queue_id: 0,
+            queue_offset: 0,
+            commit_log_offset: 0,
+            message_size,
+            tags_code: 0,
+            store_timestamp: 100,
+            keys: None,
+            uniq_key: None,
+            offset_id: None,
+            sys_flag: 0,
+            body,
+        }
+    }
+
+    #[test]
+    fn valid_dispatch_requires_body_matching_message_size() {
+        assert!(request(Some(Bytes::from_static(b"body")), 4).is_valid());
+        assert!(!request(None, 4).is_valid());
+        assert!(!request(Some(Bytes::from_static(b"body")), 5).is_valid());
+        assert!(!request(Some(Bytes::new()), 0).is_valid());
     }
 }

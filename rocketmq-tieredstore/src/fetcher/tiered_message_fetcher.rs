@@ -169,13 +169,41 @@ where
 
         let max_msg_nums = (max_msg_nums.max(1) as usize).min(self.config.read_ahead_message_count.max(1));
         let mut messages = Vec::with_capacity(max_msg_nums.min(16));
+        let max_total_msg_size = self.config.read_ahead_message_size.max(1);
+        let mut total_msg_size = 0_usize;
         let mut next_begin_offset = queue_offset;
         for offset in queue_offset..max_offset {
             if messages.len() >= max_msg_nums {
                 break;
             }
-            match flat_file.read_message_by_queue_offset(offset).await? {
+            let Some(unit) = flat_file.read_consume_queue_unit(offset).await? else {
+                return Ok(TieredGetMessageResult {
+                    status: TieredGetMessageStatus::OffsetFoundNull,
+                    messages,
+                    min_offset,
+                    max_offset,
+                    next_begin_offset: offset,
+                });
+            };
+            if unit.commit_log_offset < 0 || unit.size <= 0 {
+                return Ok(TieredGetMessageResult {
+                    status: TieredGetMessageStatus::OffsetFoundNull,
+                    messages,
+                    min_offset,
+                    max_offset,
+                    next_begin_offset: offset,
+                });
+            }
+            let message_size = unit.size as usize;
+            if !messages.is_empty() && total_msg_size.saturating_add(message_size) > max_total_msg_size {
+                break;
+            }
+            match flat_file
+                .read_commit_log(unit.commit_log_offset as u64, message_size)
+                .await?
+            {
                 Some(message) => {
+                    total_msg_size = total_msg_size.saturating_add(message.len());
                     messages.push(message);
                     next_begin_offset = offset.saturating_add(1);
                 }
@@ -458,6 +486,46 @@ mod tests {
             result.messages,
             vec![Bytes::from_static(b"msg-a"), Bytes::from_static(b"msg-b")]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_respects_read_ahead_message_size_after_first_message() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            read_ahead_message_count: 10,
+            read_ahead_message_size: 6,
+            ..TieredStoreConfig::default()
+        });
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let provider = MemoryProvider::default();
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(config.clone(), metadata_store, provider));
+        let flat_file = flat_file_store.get_or_create("TopicA".to_owned(), 0)?;
+
+        for (queue_offset, body) in [(0, Bytes::from_static(b"first")), (1, Bytes::from_static(b"second"))] {
+            let commit_log_offset = flat_file.append_commit_log(body.clone(), 100 + queue_offset).await?;
+            flat_file
+                .append_consume_queue(
+                    queue_offset,
+                    ConsumeQueueUnit {
+                        commit_log_offset: commit_log_offset as i64,
+                        size: body.len() as i32,
+                        tags_code: 1,
+                    },
+                    100 + queue_offset,
+                )
+                .await?;
+        }
+        flat_file.commit().await?;
+        let fetcher = DefaultTieredMessageFetcher::new(config, flat_file_store);
+
+        let result = fetcher.get_message("TopicA".to_owned(), 0, 0, 10).await?;
+
+        assert_eq!(result.status, TieredGetMessageStatus::Found);
+        assert_eq!(result.messages, vec![Bytes::from_static(b"first")]);
+        assert_eq!(result.next_begin_offset, 1);
         Ok(())
     }
 

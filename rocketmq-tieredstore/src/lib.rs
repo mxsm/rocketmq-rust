@@ -51,4 +51,6 @@ pub use provider::MemoryProvider;
 pub use provider::PosixProvider;
 pub use provider::ProviderKind;
 pub use provider::TieredStoreProvider;
+pub use service::CommitLogRecoverService;
+pub use service::TieredRecoverResult;
 pub use store::TieredStore;

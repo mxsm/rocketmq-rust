@@ -182,3 +182,71 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use rocketmq_error::RocketMQError;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::config::TieredStoreConfig;
+    use crate::file::TieredFlatFileStore;
+    use crate::metadata::JsonMetadataStore;
+    use crate::provider::MemoryProvider;
+
+    #[tokio::test]
+    async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), RocketMQError> {
+        let temp_dir = tempfile::tempdir().map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let config = Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            backend_provider: "memory".to_owned(),
+            max_pending_tasks: 4,
+            ..TieredStoreConfig::default()
+        });
+        let flat_file_store = Arc::new(TieredFlatFileStore::new(
+            config.clone(),
+            Arc::new(JsonMetadataStore::new(config.clone())),
+            MemoryProvider::default(),
+        ));
+        let dispatcher = DefaultTieredDispatcher::new(config, flat_file_store.clone(), CancellationToken::new());
+
+        dispatcher.start().await?;
+        dispatcher
+            .dispatch(TieredDispatchRequest {
+                topic: "TopicA".to_owned(),
+                queue_id: 0,
+                queue_offset: 3,
+                commit_log_offset: 1024,
+                message_size: 4,
+                tags_code: 7,
+                store_timestamp: 100,
+                keys: None,
+                uniq_key: None,
+                offset_id: None,
+                sys_flag: 0,
+                body: Some(Bytes::from_static(b"body")),
+            })
+            .await?;
+        dispatcher.shutdown().await?;
+
+        let flat_file = flat_file_store
+            .get("TopicA", 0)
+            .ok_or_else(|| RocketMQError::Internal("missing dispatched flat file".to_owned()))?;
+        let cq_unit = flat_file
+            .read_consume_queue_unit(3)
+            .await?
+            .ok_or_else(|| RocketMQError::Internal("missing dispatched consume queue unit".to_owned()))?;
+
+        assert_eq!(cq_unit.commit_log_offset, 0);
+        assert_eq!(cq_unit.size, 4);
+        assert_eq!(cq_unit.tags_code, 7);
+        assert_eq!(
+            flat_file.read_message_by_queue_offset(3).await?,
+            Some(Bytes::from_static(b"body"))
+        );
+        Ok(())
+    }
+}
