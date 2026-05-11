@@ -96,4 +96,11 @@ mod tests {
         let result = cal_signature(content, secret_key);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_cal_signature_matches_java_hmac_sha1_base64() {
+        let signature = cal_signature(b"alicetopic-a", "secret").unwrap();
+
+        assert_eq!(signature, "3yomro7y0WqWcbV+9tQa4av5w3Q=");
+    }
 }

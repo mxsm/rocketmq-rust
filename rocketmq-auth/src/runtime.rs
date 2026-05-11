@@ -374,7 +374,7 @@ mod tests {
         );
         authz_provider.create_acl(acl).await.unwrap();
 
-        let signature = acl_signer::cal_signature("AccessKeyalicetopictopic-a".as_bytes(), "secret").unwrap();
+        let signature = acl_signer::cal_signature("alicetopic-a".as_bytes(), "secret").unwrap();
         let command = send_message_command("topic-a", "alice", &signature);
 
         runtime.check_remoting(&(), &command).await.unwrap();

@@ -21,10 +21,12 @@ use serde::Serialize;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PlainAccessData {
+    #[serde(alias = "global_white_remote_addresses")]
     pub global_white_remote_addresses: Vec<CheetahString>,
     pub accounts: Vec<PlainAccessConfig>,
+    #[serde(alias = "data_version")]
     pub data_version: Vec<DataVersion>,
 }
 
@@ -143,5 +145,75 @@ mod tests {
         let json = serde_json::to_string(&data).unwrap();
         let deserialized: PlainAccessData = serde_json::from_str(&json).unwrap();
         assert_eq!(data, deserialized);
+    }
+
+    #[test]
+    fn plain_access_data_deserializes_java_camel_case_yaml() {
+        let yaml = r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: RocketMQ
+    secretKey: 12345678
+    whiteRemoteAddress: 192.168.0.*
+    admin: true
+    defaultTopicPerm: PUB|SUB
+    defaultGroupPerm: SUB
+    topicPerms:
+      - TopicA=PUB
+    groupPerms:
+      - GroupA=SUB
+dataVersion:
+  - timestamp: 1
+    counter: 2
+"#;
+
+        let data: PlainAccessData = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(data.global_white_remote_addresses()[0].as_str(), "10.10.*.*");
+        assert_eq!(data.accounts().len(), 1);
+        let account = &data.accounts()[0];
+        assert_eq!(account.access_key().unwrap().as_str(), "RocketMQ");
+        assert_eq!(account.secret_key().unwrap().as_str(), "12345678");
+        assert_eq!(account.white_remote_address().unwrap().as_str(), "192.168.0.*");
+        assert!(account.is_admin());
+        assert_eq!(account.default_topic_perm().unwrap().as_str(), "PUB|SUB");
+        assert_eq!(account.default_group_perm().unwrap().as_str(), "SUB");
+        assert_eq!(account.topic_perms().unwrap()[0].as_str(), "TopicA=PUB");
+        assert_eq!(account.group_perms().unwrap()[0].as_str(), "GroupA=SUB");
+        assert_eq!(
+            data.data_version(),
+            &[DataVersion {
+                timestamp: 1,
+                counter: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn plain_access_data_keeps_snake_case_yaml_compatibility() {
+        let yaml = r#"
+global_white_remote_addresses:
+  - 127.0.0.1
+accounts:
+  - access_key: ak
+    secret_key: sk
+data_version:
+  - timestamp: 3
+    counter: 4
+"#;
+
+        let data: PlainAccessData = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(data.global_white_remote_addresses()[0].as_str(), "127.0.0.1");
+        assert_eq!(data.accounts()[0].access_key().unwrap().as_str(), "ak");
+        assert_eq!(data.accounts()[0].secret_key().unwrap().as_str(), "sk");
+        assert_eq!(
+            data.data_version(),
+            &[DataVersion {
+                timestamp: 3,
+                counter: 4
+            }]
+        );
     }
 }

@@ -19,15 +19,23 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PlainAccessConfig {
+    #[serde(alias = "access_key")]
     pub access_key: Option<CheetahString>,
+    #[serde(alias = "secret_key")]
     pub secret_key: Option<CheetahString>,
+    #[serde(alias = "white_remote_address")]
     pub white_remote_address: Option<CheetahString>,
     pub admin: bool,
+    #[serde(alias = "default_topic_perm")]
     pub default_topic_perm: Option<CheetahString>,
+    #[serde(alias = "default_group_perm")]
     pub default_group_perm: Option<CheetahString>,
+    #[serde(alias = "topic_perms")]
     pub topic_perms: Option<Vec<CheetahString>>,
+    #[serde(alias = "group_perms")]
     pub group_perms: Option<Vec<CheetahString>>,
 }
 
@@ -123,5 +131,53 @@ impl fmt::Display for PlainAccessConfig {
             self.topic_perms,
             self.group_perms,
         )
+    }
+}
+
+impl fmt::Debug for PlainAccessConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainAccessConfig")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &self.secret_key.as_ref().map(|_| "<redacted>"))
+            .field("white_remote_address", &self.white_remote_address)
+            .field("admin", &self.admin)
+            .field("default_topic_perm", &self.default_topic_perm)
+            .field("default_group_perm", &self.default_group_perm)
+            .field("topic_perms", &self.topic_perms)
+            .field("group_perms", &self.group_perms)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_access_config_debug_redacts_secret_key() {
+        let mut config = PlainAccessConfig::new();
+        config.set_access_key(CheetahString::from("ak"));
+        config.set_secret_key(CheetahString::from("top-secret-value"));
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("ak"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("top-secret-value"));
+    }
+
+    #[test]
+    fn plain_access_config_deserializes_missing_optional_java_fields() {
+        let yaml = r#"
+accessKey: ak
+secretKey: sk
+"#;
+
+        let config: PlainAccessConfig = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(config.access_key().unwrap().as_str(), "ak");
+        assert_eq!(config.secret_key().unwrap().as_str(), "sk");
+        assert!(!config.is_admin());
+        assert!(config.topic_perms().is_none());
     }
 }

@@ -292,4 +292,52 @@ accounts:
             other => panic!("expected serialization error, got {other:?}"),
         }
     }
+
+    #[test]
+    fn test_get_all_acl_config_accepts_java_camel_case_yaml() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let conf_acl = root.join("conf").join("acl");
+        fs::create_dir_all(&conf_acl).unwrap();
+
+        let acl_file = conf_acl.join("java.yml");
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - "10.10.*.*"
+accounts:
+  - accessKey: "ak"
+    secretKey: "sk"
+    whiteRemoteAddress: "192.168.0.*"
+    admin: true
+    defaultTopicPerm: "PUB|SUB"
+    defaultGroupPerm: "SUB"
+    topicPerms: ["TopicA=PUB"]
+    groupPerms: ["GroupA=SUB"]
+"#,
+        )
+        .unwrap();
+
+        let mut mgr = PlainPermissionManager::new();
+        mgr.file_home = root.to_string_lossy().to_string();
+        mgr.default_acl_dir = conf_acl.to_string_lossy().to_string();
+        mgr.file_list = mgr.get_all_acl_files(&mgr.default_acl_dir);
+
+        let acl = mgr.get_all_acl_config().unwrap();
+        let plain = acl.plain_access_configs().unwrap();
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].access_key().unwrap().as_str(), "ak");
+        assert_eq!(plain[0].secret_key().unwrap().as_str(), "sk");
+        assert_eq!(plain[0].white_remote_address().unwrap().as_str(), "192.168.0.*");
+        assert_eq!(plain[0].default_topic_perm().unwrap().as_str(), "PUB|SUB");
+        assert_eq!(plain[0].default_group_perm().unwrap().as_str(), "SUB");
+        assert_eq!(plain[0].topic_perms().unwrap()[0].as_str(), "TopicA=PUB");
+        assert_eq!(plain[0].group_perms().unwrap()[0].as_str(), "GroupA=SUB");
+
+        let whites = acl.global_white_addrs().unwrap();
+        assert_eq!(whites.len(), 1);
+        assert_eq!(whites[0].as_str(), "10.10.*.*");
+    }
 }
