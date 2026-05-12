@@ -121,4 +121,4 @@ strum    = { version = "0.28.0", features = ["derive"] }
 smallvec = "1.13"
 
 opentelemetry     = { version = "0.31", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
+opentelemetry_sdk = { version = "0.32", features = ["metrics", "rt-tokio"] }
