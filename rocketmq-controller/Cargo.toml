@@ -83,7 +83,7 @@ tracing = { workspace = true }
 # Metrics and observability
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
-opentelemetry-otlp = { version = "0.31", features = [
+opentelemetry-otlp = { version = "0.32", features = [
   "grpc-tonic",
   "metrics",
 ], optional = true }
