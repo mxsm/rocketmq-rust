@@ -14,10 +14,12 @@
 
 #![allow(dead_code)]
 
+pub mod acl;
 pub mod authentication;
 pub mod authorization;
 pub mod config;
 pub mod migration;
+pub mod permission;
 pub mod runtime;
 
 // Re-export commonly used authentication types
