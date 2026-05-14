@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Default, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PlainAccessConfig {
     pub access_key: Option<CheetahString>,
@@ -38,7 +39,7 @@ impl Display for PlainAccessConfig {
             "PlainAccessConfig {{ access_key: {:?}, secret_key: {:?}, white_remote_address: {:?}, admin: {}, \
              default_topic_perm: {:?}, default_group_perm: {:?}, topic_perms: {:?}, group_perms: {:?} }}",
             self.access_key,
-            self.secret_key,
+            self.secret_key.as_ref().map(|_| "<redacted>"),
             self.white_remote_address,
             self.admin,
             self.default_topic_perm,
@@ -46,6 +47,21 @@ impl Display for PlainAccessConfig {
             self.topic_perms,
             self.group_perms
         )
+    }
+}
+
+impl fmt::Debug for PlainAccessConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainAccessConfig")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &self.secret_key.as_ref().map(|_| "<redacted>"))
+            .field("white_remote_address", &self.white_remote_address)
+            .field("admin", &self.admin)
+            .field("default_topic_perm", &self.default_topic_perm)
+            .field("default_group_perm", &self.default_group_perm)
+            .field("topic_perms", &self.topic_perms)
+            .field("group_perms", &self.group_perms)
+            .finish()
     }
 }
 
@@ -176,5 +192,27 @@ mod tests {
         assert!(deserialized.default_group_perm.is_none());
         assert!(deserialized.topic_perms.is_empty());
         assert!(deserialized.group_perms.is_empty());
+    }
+
+    #[test]
+    fn debug_and_display_redact_secret_key() {
+        let config = PlainAccessConfig {
+            access_key: Some(CheetahString::from("key1")),
+            secret_key: Some(CheetahString::from("top-secret-value")),
+            white_remote_address: None,
+            admin: false,
+            default_topic_perm: None,
+            default_group_perm: None,
+            topic_perms: Vec::new(),
+            group_perms: Vec::new(),
+        };
+
+        let debug = format!("{config:?}");
+        let display = format!("{config}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(display.contains("<redacted>"));
+        assert!(!debug.contains("top-secret-value"));
+        assert!(!display.contains("top-secret-value"));
     }
 }

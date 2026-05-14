@@ -45,8 +45,12 @@ impl Resource {
 
     pub fn of_group(mut group_name: String) -> Self {
         if NamespaceUtil::is_retry_topic(&group_name) {
-            // strip retry prefix
             let prefix = mix_all::RETRY_GROUP_TOPIC_PREFIX;
+            if group_name.starts_with(prefix) {
+                group_name = group_name[prefix.len()..].to_string();
+            }
+        } else if NamespaceUtil::is_dlq_topic(&group_name) {
+            let prefix = mix_all::DLQ_GROUP_TOPIC_PREFIX;
             if group_name.starts_with(prefix) {
                 group_name = group_name[prefix.len()..].to_string();
             }
@@ -213,6 +217,13 @@ mod tests {
     #[test]
     fn test_group_retry_strip() {
         let g = format!("{}{}", mix_all::RETRY_GROUP_TOPIC_PREFIX, "mygroup");
+        let r = Resource::of_group(g);
+        assert_eq!(r.resource_name(), Some("mygroup"));
+    }
+
+    #[test]
+    fn test_group_dlq_strip() {
+        let g = format!("{}{}", mix_all::DLQ_GROUP_TOPIC_PREFIX, "mygroup");
         let r = Resource::of_group(g);
         assert_eq!(r.resource_name(), Some("mygroup"));
     }
