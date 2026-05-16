@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::str::FromStr;
 
 use ipnetwork::IpNetwork;
@@ -62,7 +63,7 @@ impl Environment {
         }
         let target = &other.source_ips[0];
         for pattern in &self.source_ips {
-            if is_ip_in_range(target, pattern) {
+            if source_ip_matches(pattern, target) {
                 return true;
             }
         }
@@ -82,14 +83,25 @@ impl Environment {
     }
 }
 
-fn is_ip_in_range(target: &str, pattern: &str) -> bool {
-    if target.trim().is_empty() || pattern.trim().is_empty() {
+pub fn source_ip_matches(pattern: &str, target: &str) -> bool {
+    let pattern = pattern.trim();
+    let target = normalize_ip_text(target);
+
+    if target.is_empty() || pattern.is_empty() {
         return false;
+    }
+
+    if pattern == "*" {
+        return true;
+    }
+
+    if pattern.contains('*') {
+        return wildcard_match(pattern, target.as_str());
     }
 
     // CIDR
     if pattern.contains('/') {
-        if let (Ok(net), Ok(ip)) = (IpNetwork::from_str(pattern), IpAddr::from_str(target)) {
+        if let (Ok(net), Ok(ip)) = (IpNetwork::from_str(pattern), IpAddr::from_str(target.as_str())) {
             return net.contains(ip);
         }
         return false;
@@ -102,7 +114,7 @@ fn is_ip_in_range(target: &str, pattern: &str) -> bool {
             if let (Ok(start), Ok(end), Ok(ip)) = (
                 IpAddr::from_str(parts[0].trim()),
                 IpAddr::from_str(parts[1].trim()),
-                IpAddr::from_str(target),
+                IpAddr::from_str(target.as_str()),
             ) {
                 return ip_in_range(ip, start, end);
             }
@@ -112,6 +124,27 @@ fn is_ip_in_range(target: &str, pattern: &str) -> bool {
 
     // exact match
     target == pattern
+}
+
+fn normalize_ip_text(value: &str) -> String {
+    let value = value.trim();
+    if let Ok(socket_addr) = SocketAddr::from_str(value) {
+        return socket_addr.ip().to_string();
+    }
+    value.to_owned()
+}
+
+fn wildcard_match(pattern: &str, target: &str) -> bool {
+    let pattern_parts: Vec<&str> = pattern.split('.').collect();
+    let target_parts: Vec<&str> = target.split('.').collect();
+    if pattern_parts.len() != target_parts.len() {
+        return false;
+    }
+
+    pattern_parts
+        .iter()
+        .zip(target_parts.iter())
+        .all(|(pattern_part, target_part)| *pattern_part == "*" || pattern_part == target_part)
 }
 
 fn ip_to_u128(ip: IpAddr) -> u128 {
@@ -181,6 +214,21 @@ mod tests {
         let a = Environment::of_list(vec!["192.168.0.1-192.168.0.10"]).unwrap();
         assert!(a.is_match(&Environment::of("192.168.0.5").unwrap()));
         assert!(!a.is_match(&Environment::of("192.168.0.11").unwrap()));
+    }
+
+    #[test]
+    fn test_java_plain_acl_wildcard_match() {
+        let a = Environment::of_list(vec!["192.168.0.*", "10.10.*.*"]).unwrap();
+        assert!(a.is_match(&Environment::of("192.168.0.5").unwrap()));
+        assert!(a.is_match(&Environment::of("10.10.1.2").unwrap()));
+        assert!(!a.is_match(&Environment::of("10.11.1.2").unwrap()));
+    }
+
+    #[test]
+    fn test_source_ip_match_normalizes_socket_address() {
+        assert!(source_ip_matches("127.0.0.1", "127.0.0.1:10911"));
+        assert!(source_ip_matches("*", "127.0.0.1:10911"));
+        assert!(!source_ip_matches("127.0.0.2", "127.0.0.1:10911"));
     }
 
     #[test]

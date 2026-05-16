@@ -20,9 +20,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::AuthError;
 
 use crate::authentication::chain::acl_signer;
+use crate::authentication::chain::acl_signer::SignatureAlgorithm;
 use crate::authentication::chain::handler::AuthenticationHandler;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::enums::user_status::UserStatus;
@@ -37,6 +39,8 @@ use crate::authentication::provider::AuthenticationMetadataProvider;
 /// 3. Calculate signature and verify against provided signature
 pub struct DefaultAuthenticationHandler<P: AuthenticationMetadataProvider> {
     authentication_metadata_provider: Arc<P>,
+    signature_algorithm: SignatureAlgorithm,
+    request_timestamp_expired_millis: u64,
 }
 
 impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
@@ -46,8 +50,22 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
     ///
     /// * `metadata_provider` - Provider for retrieving user metadata
     pub fn new(metadata_provider: Arc<P>) -> Self {
+        Self::with_signature_algorithm(metadata_provider, SignatureAlgorithm::default())
+    }
+
+    pub fn with_signature_algorithm(metadata_provider: Arc<P>, signature_algorithm: SignatureAlgorithm) -> Self {
+        Self::with_options(metadata_provider, signature_algorithm, 0)
+    }
+
+    pub fn with_options(
+        metadata_provider: Arc<P>,
+        signature_algorithm: SignatureAlgorithm,
+        request_timestamp_expired_millis: u64,
+    ) -> Self {
         Self {
             authentication_metadata_provider: metadata_provider,
+            signature_algorithm,
+            request_timestamp_expired_millis,
         }
     }
 
@@ -81,6 +99,8 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
     /// - User is disabled
     /// - Signature verification fails
     fn do_authenticate(&self, context: &DefaultAuthenticationContext, user: &User) -> Result<(), AuthError> {
+        self.validate_request_timestamp(context)?;
+
         // Check user status
         if let Some(UserStatus::Disable) = user.user_status() {
             return Err(AuthError::AuthenticationFailed(format!(
@@ -100,7 +120,8 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
             .ok_or_else(|| AuthError::AuthenticationFailed("Authentication content cannot be null".to_string()))?;
 
         // Calculate expected signature
-        let expected_signature = acl_signer::cal_signature(content, password.as_str())?;
+        let expected_signature =
+            acl_signer::cal_signature_with_algorithm(content, password.as_str(), self.signature_algorithm)?;
 
         // Get provided signature
         let provided_signature = context
@@ -110,6 +131,39 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
         // Constant-time comparison to prevent timing attacks
         if !constant_time_eq(expected_signature.as_bytes(), provided_signature.as_bytes()) {
             return Err(AuthError::AuthenticationFailed("check signature failed".to_string()));
+        }
+
+        Ok(())
+    }
+
+    fn validate_request_timestamp(&self, context: &DefaultAuthenticationContext) -> Result<(), AuthError> {
+        if self.request_timestamp_expired_millis == 0 {
+            return Ok(());
+        }
+
+        let Some(request_timestamp_millis) = context.request_timestamp_millis() else {
+            if context.request_timestamp().is_some() {
+                return Err(AuthError::AuthenticationFailed(
+                    "request timestamp is invalid".to_owned(),
+                ));
+            }
+            return Ok(());
+        };
+
+        if request_timestamp_millis < 0 {
+            return Err(AuthError::AuthenticationFailed(
+                "request timestamp is invalid".to_owned(),
+            ));
+        }
+
+        let now_millis = current_millis() as i64;
+        let skew_millis = now_millis.abs_diff(request_timestamp_millis);
+        if skew_millis > self.request_timestamp_expired_millis {
+            return Err(AuthError::RequestTimestampExpired {
+                request_timestamp_millis,
+                now_millis,
+                allowed_skew_millis: self.request_timestamp_expired_millis,
+            });
         }
 
         Ok(())
@@ -281,6 +335,46 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_request_timestamp_expired() {
+        let password = "test_password";
+        let user = create_test_user("test_user", password, UserStatus::Enable);
+        let provider = Arc::new(MockMetadataProvider { users: vec![user] });
+        let handler = DefaultAuthenticationHandler::with_options(provider, SignatureAlgorithm::HmacSha1, 1);
+
+        let content = b"test content";
+        let expected_signature = acl_signer::cal_signature(content, password).unwrap();
+
+        let mut context = DefaultAuthenticationContext::new();
+        context.set_username(CheetahString::from("test_user"));
+        context.set_content(content.to_vec());
+        context.set_signature(CheetahString::from(expected_signature));
+        context.set_request_timestamp(CheetahString::from("1"));
+        context.set_request_timestamp_millis(1);
+
+        let result = handler.handle(&context).await;
+
+        assert!(matches!(result, Err(AuthError::RequestTimestampExpired { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_absent_request_timestamp_is_compatible_when_window_enabled() {
+        let password = "test_password";
+        let user = create_test_user("test_user", password, UserStatus::Enable);
+        let provider = Arc::new(MockMetadataProvider { users: vec![user] });
+        let handler = DefaultAuthenticationHandler::with_options(provider, SignatureAlgorithm::HmacSha1, 1);
+
+        let content = b"test content";
+        let expected_signature = acl_signer::cal_signature(content, password).unwrap();
+
+        let mut context = DefaultAuthenticationContext::new();
+        context.set_username(CheetahString::from("test_user"));
+        context.set_content(content.to_vec());
+        context.set_signature(CheetahString::from(expected_signature));
+
+        assert!(handler.handle(&context).await.is_ok());
     }
 
     #[tokio::test]

@@ -17,6 +17,56 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use rocketmq_error::AuthError;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SignatureAlgorithm {
+    #[default]
+    #[serde(
+        rename = "HmacSHA1",
+        alias = "hmacSHA1",
+        alias = "HMAC_SHA1",
+        alias = "HmacSha1",
+        alias = "sha1"
+    )]
+    HmacSha1,
+    #[serde(
+        rename = "HmacSHA256",
+        alias = "hmacSHA256",
+        alias = "HMAC_SHA256",
+        alias = "HmacSha256",
+        alias = "sha256"
+    )]
+    HmacSha256,
+    #[serde(
+        rename = "HmacMD5",
+        alias = "hmacMD5",
+        alias = "HMAC_MD5",
+        alias = "HmacMd5",
+        alias = "md5"
+    )]
+    HmacMd5,
+}
+
+impl SignatureAlgorithm {
+    pub const fn java_name(self) -> &'static str {
+        match self {
+            Self::HmacSha1 => "HmacSHA1",
+            Self::HmacSha256 => "HmacSHA256",
+            Self::HmacMd5 => "HmacMD5",
+        }
+    }
+
+    pub fn from_java_name(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_uppercase().replace(['-', '_'], "").as_str() {
+            "HMACSHA1" | "SHA1" => Some(Self::HmacSha1),
+            "HMACSHA256" | "SHA256" => Some(Self::HmacSha256),
+            "HMACMD5" | "MD5" => Some(Self::HmacMd5),
+            _ => None,
+        }
+    }
+}
 
 /// Calculate ACL signature using HMAC-SHA1.
 ///
@@ -29,21 +79,44 @@ use rocketmq_error::AuthError;
 ///
 /// Base64-encoded signature
 pub fn cal_signature(content: &[u8], secret_key: &str) -> Result<String, AuthError> {
+    cal_signature_with_algorithm(content, secret_key, SignatureAlgorithm::default())
+}
+
+pub fn cal_signature_with_algorithm(
+    content: &[u8],
+    secret_key: &str,
+    algorithm: SignatureAlgorithm,
+) -> Result<String, AuthError> {
     use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
-    use sha1::Sha1;
 
-    type HmacSha1 = Hmac<Sha1>;
-
-    let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes())
-        .map_err(|e| AuthError::AuthenticationFailed(format!("Invalid key: {}", e)))?;
-
-    mac.update(content);
-    let result = mac.finalize();
-    let code_bytes = result.into_bytes();
-
-    Ok(STANDARD.encode(code_bytes.as_slice()))
+    match algorithm {
+        SignatureAlgorithm::HmacSha1 => {
+            type HmacSha1 = Hmac<sha1::Sha1>;
+            let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes()).map_err(|error| {
+                AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
+            })?;
+            mac.update(content);
+            Ok(STANDARD.encode(mac.finalize().into_bytes().as_slice()))
+        }
+        SignatureAlgorithm::HmacSha256 => {
+            type HmacSha256 = Hmac<sha2::Sha256>;
+            let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|error| {
+                AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
+            })?;
+            mac.update(content);
+            Ok(STANDARD.encode(mac.finalize().into_bytes().as_slice()))
+        }
+        SignatureAlgorithm::HmacMd5 => {
+            type HmacMd5 = Hmac<md5::Md5>;
+            let mut mac = HmacMd5::new_from_slice(secret_key.as_bytes()).map_err(|error| {
+                AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
+            })?;
+            mac.update(content);
+            Ok(STANDARD.encode(mac.finalize().into_bytes().as_slice()))
+        }
+    }
 }
 
 /// Default charset for ACL signing.
@@ -102,5 +175,54 @@ mod tests {
         let signature = cal_signature(b"alicetopic-a", "secret").unwrap();
 
         assert_eq!(signature, "3yomro7y0WqWcbV+9tQa4av5w3Q=");
+    }
+
+    #[test]
+    fn test_cal_signature_supports_java_signing_algorithm_enum() {
+        assert_eq!(
+            cal_signature_with_algorithm(b"alicetopic-a", "secret", SignatureAlgorithm::HmacSha1).unwrap(),
+            "3yomro7y0WqWcbV+9tQa4av5w3Q="
+        );
+        assert_eq!(
+            cal_signature_with_algorithm(b"alicetopic-a", "secret", SignatureAlgorithm::HmacSha256).unwrap(),
+            "+VoSl/q1CHGyZYyeI+H1C8SK6N+inDouZi6grscuA/Q="
+        );
+        assert_eq!(
+            cal_signature_with_algorithm(b"alicetopic-a", "secret", SignatureAlgorithm::HmacMd5).unwrap(),
+            "8NLZd12a3GBoWPkyeUsOJQ=="
+        );
+    }
+
+    #[test]
+    fn test_signature_algorithm_deserializes_java_names() {
+        assert_eq!(
+            serde_yaml::from_str::<SignatureAlgorithm>("HmacSHA1").unwrap(),
+            SignatureAlgorithm::HmacSha1
+        );
+        assert_eq!(
+            serde_yaml::from_str::<SignatureAlgorithm>("HmacSHA256").unwrap(),
+            SignatureAlgorithm::HmacSha256
+        );
+        assert_eq!(
+            serde_yaml::from_str::<SignatureAlgorithm>("HmacMD5").unwrap(),
+            SignatureAlgorithm::HmacMd5
+        );
+    }
+
+    #[test]
+    fn test_signature_algorithm_from_java_name_accepts_common_aliases() {
+        assert_eq!(
+            SignatureAlgorithm::from_java_name("HmacSHA1"),
+            Some(SignatureAlgorithm::HmacSha1)
+        );
+        assert_eq!(
+            SignatureAlgorithm::from_java_name("HMAC_SHA256"),
+            Some(SignatureAlgorithm::HmacSha256)
+        );
+        assert_eq!(
+            SignatureAlgorithm::from_java_name("md5"),
+            Some(SignatureAlgorithm::HmacMd5)
+        );
+        assert_eq!(SignatureAlgorithm::from_java_name("unknown"), None);
     }
 }

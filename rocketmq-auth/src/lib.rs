@@ -23,6 +23,7 @@ pub mod permission;
 pub mod runtime;
 
 // Re-export commonly used authentication types
+pub use authentication::acl_signer::SignatureAlgorithm;
 pub use authentication::context::default_authentication_context::DefaultAuthenticationContext;
 pub use authentication::evaluator::AuthenticationEvaluator;
 pub use authentication::factory::AuthenticationFactory;

@@ -161,7 +161,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut context = ProxyContext::from_remoting_request(remoting_rpc_name(request.code()), &channel, request);
         if let Some(auth_runtime) = &self.auth_runtime {
-            let source_ip = channel.remote_address().to_string();
+            let source_ip = channel.remote_address().ip().to_string();
             match auth_runtime
                 .authenticate_remoting(request, Some(channel.channel_id()), Some(source_ip.as_str()))
                 .await

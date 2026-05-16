@@ -1,12 +1,18 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
 use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -28,6 +34,7 @@ use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::authorization::model::acl::Acl;
+use crate::authorization::model::environment::source_ip_matches;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
@@ -39,10 +46,13 @@ use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::permission::Permission;
 
+const ACCESS_KEY: &str = "AccessKey";
+
 #[derive(Clone)]
 pub struct ProviderRegistry {
     authentication_metadata_provider: Arc<LocalAuthenticationMetadataProvider>,
     authorization_metadata_provider: Arc<LocalAuthorizationMetadataProvider>,
+    acl_white_list_snapshot: Arc<RwLock<AclWhiteListSnapshot>>,
 }
 
 impl ProviderRegistry {
@@ -56,6 +66,7 @@ impl ProviderRegistry {
         Ok(Self {
             authentication_metadata_provider,
             authorization_metadata_provider: Arc::new(authorization_metadata_provider),
+            acl_white_list_snapshot: Arc::new(RwLock::new(AclWhiteListSnapshot::default())),
         })
     }
 
@@ -65,6 +76,87 @@ impl ProviderRegistry {
 
     pub fn authorization_metadata_provider(&self) -> Arc<LocalAuthorizationMetadataProvider> {
         self.authorization_metadata_provider.clone()
+    }
+
+    fn set_acl_white_list_snapshot(&self, snapshot: AclWhiteListSnapshot) -> RocketMQResult<()> {
+        let mut guard = self
+            .acl_white_list_snapshot
+            .write()
+            .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
+        *guard = snapshot;
+        Ok(())
+    }
+
+    pub fn is_acl_white_remote_address(
+        &self,
+        access_key: Option<&str>,
+        source_ip: Option<&str>,
+    ) -> RocketMQResult<bool> {
+        let guard = self
+            .acl_white_list_snapshot
+            .read()
+            .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
+        Ok(guard.matches(access_key, source_ip))
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct AclWhiteListSnapshot {
+    global_white_remote_addresses: Vec<String>,
+    account_white_remote_addresses: HashMap<String, String>,
+}
+
+impl AclWhiteListSnapshot {
+    fn from_acl_config(acl_config: &AclConfig) -> Self {
+        let global_white_remote_addresses = acl_config
+            .global_white_addrs()
+            .unwrap_or_default()
+            .iter()
+            .map(|value| value.as_str().trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+
+        let account_white_remote_addresses = acl_config
+            .plain_access_configs()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|account| {
+                let access_key = account.access_key()?.as_str().trim();
+                let white_remote_address = account.white_remote_address()?.as_str().trim();
+                if access_key.is_empty() || white_remote_address.is_empty() {
+                    return None;
+                }
+                Some((access_key.to_owned(), white_remote_address.to_owned()))
+            })
+            .collect();
+
+        Self {
+            global_white_remote_addresses,
+            account_white_remote_addresses,
+        }
+    }
+
+    fn matches(&self, access_key: Option<&str>, source_ip: Option<&str>) -> bool {
+        let Some(source_ip) = valid_source_ip(source_ip) else {
+            return false;
+        };
+
+        if self
+            .global_white_remote_addresses
+            .iter()
+            .any(|pattern| source_ip_matches(pattern, source_ip))
+        {
+            return true;
+        }
+
+        let Some(access_key) = access_key.map(str::trim).filter(|value| !value.is_empty()) else {
+            return false;
+        };
+
+        self.account_white_remote_addresses
+            .get(access_key)
+            .is_some_and(|pattern| source_ip_matches(pattern, source_ip))
     }
 }
 
@@ -150,6 +242,15 @@ impl AuthRuntime {
         load_configured_acl_file(&self.provider_registry, &self.config).await
     }
 
+    pub fn is_acl_white_remote_address(
+        &self,
+        access_key: Option<&str>,
+        source_ip: Option<&str>,
+    ) -> RocketMQResult<bool> {
+        self.provider_registry
+            .is_acl_white_remote_address(access_key, source_ip)
+    }
+
     pub async fn shutdown(&self) -> RocketMQResult<()> {
         if let Some(handle) = &self.acl_file_watch_handle {
             handle.shutdown().await?;
@@ -162,7 +263,26 @@ impl AuthRuntime {
         channel_context: &(dyn std::any::Any + Send + Sync),
         command: &RemotingCommand,
     ) -> RocketMQResult<()> {
-        self.authentication_service.authenticate_remoting(command, None).await?;
+        let source_ip = source_ip_from_channel_context(channel_context);
+        let channel_id = channel_id_from_channel_context(channel_context);
+        self.check_remoting_with_source_ip(channel_context, command, source_ip.as_deref(), channel_id.as_deref())
+            .await
+    }
+
+    pub async fn check_remoting_with_source_ip(
+        &self,
+        channel_context: &(dyn std::any::Any + Send + Sync),
+        command: &RemotingCommand,
+        source_ip: Option<&str>,
+        channel_id: Option<&str>,
+    ) -> RocketMQResult<()> {
+        if self.is_acl_white_remote_address(access_key_from_command(command), source_ip)? {
+            return Ok(());
+        }
+
+        self.authentication_service
+            .authenticate_remoting(command, channel_id)
+            .await?;
         self.authorization_service
             .authorize_remoting(channel_context, command)
             .await
@@ -328,6 +448,7 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
 }
 
 async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> RocketMQResult<usize> {
+    provider_registry.set_acl_white_list_snapshot(AclWhiteListSnapshot::from_acl_config(acl_config))?;
     let Some(accounts) = acl_config.plain_access_configs() else {
         return Ok(0);
     };
@@ -348,12 +469,6 @@ async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &Acl
                 .map_err(map_authorization_error)?,
         }
         applied += 1;
-    }
-
-    if acl_config.global_white_addrs().is_some() {
-        debug!(
-            "Loaded globalWhiteRemoteAddresses from ACL file; runtime IP whitelist enforcement is handled separately"
-        );
     }
 
     Ok(applied)
@@ -557,6 +672,47 @@ fn map_authorization_error(error: AuthorizationError) -> RocketMQError {
     }
 }
 
+fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
+    command.ext_fields().and_then(|fields| {
+        fields
+            .get(&CheetahString::from_static_str(ACCESS_KEY))
+            .map(|value| value.as_str().trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
+    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
+        return Some(ctx.remote_address().ip().to_string());
+    }
+    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
+        return Some(ctx.remote_address().ip().to_string());
+    }
+    if let Some(channel) = channel_context.downcast_ref::<Channel>() {
+        return Some(channel.remote_address().ip().to_string());
+    }
+    None
+}
+
+fn channel_id_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
+    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
+        return Some(ctx.channel().channel_id().to_owned());
+    }
+    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
+        return Some(ctx.channel().channel_id().to_owned());
+    }
+    if let Some(channel) = channel_context.downcast_ref::<Channel>() {
+        return Some(channel.channel_id().to_owned());
+    }
+    None
+}
+
+fn valid_source_ip(source_ip: Option<&str>) -> Option<&str> {
+    source_ip
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -590,6 +746,12 @@ mod tests {
             CheetahString::from_static_str("Signature"),
             CheetahString::from(signature),
         );
+        RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(ext_fields)
+    }
+
+    fn send_message_command_without_credentials(topic: &str) -> RemotingCommand {
+        let mut ext_fields = HashMap::new();
+        ext_fields.insert(CheetahString::from_static_str("topic"), CheetahString::from(topic));
         RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(ext_fields)
     }
 
@@ -690,6 +852,60 @@ accounts:
     }
 
     #[tokio::test]
+    async fn acl_white_remote_address_short_circuits_remoting_auth_and_authorization() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    whiteRemoteAddress: 192.168.0.*
+    defaultTopicPerm: DENY
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        assert!(runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+        assert!(runtime
+            .is_acl_white_remote_address(Some("alice"), Some("192.168.0.7"))
+            .unwrap());
+        assert!(!runtime
+            .is_acl_white_remote_address(Some("alice"), Some("192.168.1.7"))
+            .unwrap());
+
+        let global_command = send_message_command_without_credentials("TopicA");
+        runtime
+            .check_remoting_with_source_ip(&(), &global_command, Some("10.10.1.2"), None)
+            .await
+            .unwrap();
+
+        let account_command = send_message_command("TopicA", "alice", "");
+        runtime
+            .check_remoting_with_source_ip(&(), &account_command, Some("192.168.0.7"), None)
+            .await
+            .unwrap();
+
+        runtime
+            .check_remoting_with_source_ip(&(), &account_command, Some("192.168.1.7"), None)
+            .await
+            .expect_err("non-whitelisted source should still require a valid signature");
+    }
+
+    #[tokio::test]
     async fn acl_file_watcher_reloads_changed_user_secret() {
         let temp = TempDir::new().unwrap();
         let acl_file = temp.path().join("plain_acl.yml");
@@ -736,6 +952,59 @@ accounts:
             assert!(
                 Instant::now() < deadline,
                 "ACL file watcher did not reload the updated user secret"
+            );
+            sleep(Duration::from_millis(25)).await;
+        }
+
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acl_file_watcher_reloads_white_remote_address_snapshot() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 25,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        assert!(!runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ACL file watcher did not reload the updated white remote address"
             );
             sleep(Duration::from_millis(25)).await;
         }

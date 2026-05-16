@@ -87,17 +87,11 @@ impl DefaultAuthenticationProvider {
 
             if let Some(err) = error {
                 info!(
-                    "[AUTHENTICATION] User:{} is authenticated failed with Signature = {}. Error: {}",
-                    username,
-                    context.signature().map(|s| s.as_str()).unwrap_or(""),
-                    err
+                    "[AUTHENTICATION] User:{} is authenticated failed. Error: {}",
+                    username, err
                 );
             } else {
-                debug!(
-                    "[AUTHENTICATION] User:{} is authenticated success with Signature = {}.",
-                    username,
-                    context.signature().map(|s| s.as_str()).unwrap_or("")
-                );
+                debug!("[AUTHENTICATION] User:{} is authenticated success.", username);
             }
         }
     }
@@ -107,7 +101,21 @@ impl DefaultAuthenticationProvider {
         let metadata_provider = self.metadata_provider.as_ref().ok_or_else(|| {
             rocketmq_error::RocketMQError::authentication_failed("authentication metadata provider is not configured")
         })?;
-        let handler = DefaultAuthenticationHandler::new(metadata_provider.clone());
+        let signature_algorithm = self
+            .auth_config
+            .as_ref()
+            .map(|config| config.signature_algorithm)
+            .unwrap_or_default();
+        let request_timestamp_expired_millis = self
+            .auth_config
+            .as_ref()
+            .map(|config| config.request_timestamp_expired_millis)
+            .unwrap_or_default();
+        let handler = DefaultAuthenticationHandler::with_options(
+            metadata_provider.clone(),
+            signature_algorithm,
+            request_timestamp_expired_millis,
+        );
         handler.handle(context).await.map_err(map_auth_error)
     }
 }
@@ -127,18 +135,11 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
         config: AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> RocketMQResult<()> {
-        self.auth_config = Some(config);
+        self.auth_config = Some(config.clone());
         self.metadata_service = metadata_service;
         self.authentication_context_builder = DefaultAuthenticationContextBuilder::new();
         let mut provider = LocalAuthenticationMetadataProvider::new();
-        provider
-            .initialize(
-                self.auth_config
-                    .clone()
-                    .expect("auth_config was just set in initialize"),
-                None,
-            )
-            .await?;
+        provider.initialize(config, None).await?;
         self.metadata_provider = Some(Arc::new(provider));
         Ok(())
     }
@@ -234,5 +235,79 @@ mod tests {
         context.set_signature(signature.into());
 
         assert!(provider.authenticate(&context).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_uses_configured_signature_algorithm() {
+        use crate::authentication::chain::acl_signer;
+        use crate::authentication::chain::acl_signer::SignatureAlgorithm;
+        use crate::authentication::enums::user_status::UserStatus;
+        use crate::authentication::enums::user_type::UserType;
+
+        let mut provider = DefaultAuthenticationProvider::new();
+        provider
+            .initialize(
+                AuthConfig {
+                    signature_algorithm: SignatureAlgorithm::HmacSha256,
+                    ..AuthConfig::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let metadata_provider = provider.metadata_provider().unwrap();
+        let mut user = crate::authentication::model::user::User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        metadata_provider.create_user(user).await.unwrap();
+
+        let content = b"test-content".to_vec();
+        let signature =
+            acl_signer::cal_signature_with_algorithm(&content, "secret", SignatureAlgorithm::HmacSha256).unwrap();
+
+        let mut context = DefaultAuthenticationContext::new();
+        context.set_username("alice".into());
+        context.set_content(content);
+        context.set_signature(signature.into());
+
+        assert!(provider.authenticate(&context).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_rejects_expired_request_timestamp() {
+        use crate::authentication::chain::acl_signer;
+        use crate::authentication::enums::user_status::UserStatus;
+        use crate::authentication::enums::user_type::UserType;
+
+        let mut provider = DefaultAuthenticationProvider::new();
+        provider
+            .initialize(
+                AuthConfig {
+                    request_timestamp_expired_millis: 1,
+                    ..AuthConfig::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let metadata_provider = provider.metadata_provider().unwrap();
+        let mut user = crate::authentication::model::user::User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        metadata_provider.create_user(user).await.unwrap();
+
+        let content = b"test-content".to_vec();
+        let signature = acl_signer::cal_signature(&content, "secret").unwrap();
+
+        let mut context = DefaultAuthenticationContext::new();
+        context.set_username("alice".into());
+        context.set_content(content);
+        context.set_signature(signature.into());
+        context.set_request_timestamp("1".into());
+        context.set_request_timestamp_millis(1);
+
+        let result = provider.authenticate(&context).await;
+
+        assert!(result.unwrap_err().to_string().contains("Request timestamp expired"));
     }
 }

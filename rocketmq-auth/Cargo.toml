@@ -40,6 +40,7 @@ cheetah-string = { workspace = true }
 serde          = { workspace = true }
 serde_json     = { workspace = true }
 serde_yaml     = { workspace = true }
+chrono         = { version = "0.4.44", default-features = false, features = ["std"] }
 
 
 tracing = { workspace = true }
@@ -52,8 +53,10 @@ hex    = "0.4"
 base64 = "0.22.1"
 
 # Cryptographic operations
-hmac = "0.13.0"
-sha1 = "0.11"
+hmac  = "0.13.0"
+md-5  = "0.11"
+sha1  = "0.11"
+sha2  = "0.11"
 
 # Optional: gRPC support
 tonic = { version = "0.14.6", optional = true }

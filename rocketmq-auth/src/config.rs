@@ -16,6 +16,8 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::authentication::acl_signer::SignatureAlgorithm;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AuthConfig {
@@ -33,6 +35,11 @@ pub struct AuthConfig {
     pub authentication_whitelist: CheetahString,
     pub init_authentication_user: CheetahString,
     pub inner_client_authentication_credentials: CheetahString,
+    pub signature_algorithm: SignatureAlgorithm,
+    /// Request replay-protection window in milliseconds.
+    ///
+    /// `0` keeps Java-compatible behavior and disables timestamp expiry checks.
+    pub request_timestamp_expired_millis: u64,
 
     pub authorization_enabled: bool,
     pub authorization_provider: CheetahString,
@@ -73,6 +80,8 @@ impl Default for AuthConfig {
             authentication_whitelist: CheetahString::new(),
             init_authentication_user: CheetahString::new(),
             inner_client_authentication_credentials: CheetahString::new(),
+            signature_algorithm: SignatureAlgorithm::default(),
+            request_timestamp_expired_millis: 0,
 
             authorization_enabled: false,
             authorization_provider: CheetahString::new(),
@@ -118,6 +127,8 @@ mod tests {
         assert!(config.authentication_whitelist.is_empty());
         assert!(config.init_authentication_user.is_empty());
         assert!(config.inner_client_authentication_credentials.is_empty());
+        assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacSha1);
+        assert_eq!(config.request_timestamp_expired_millis, 0);
 
         assert!(config.authorization_provider.is_empty());
         assert!(config.authorization_metadata_provider.is_empty());
@@ -153,6 +164,8 @@ mod tests {
 aclFile: conf/plain_acl.yml
 aclFileWatchEnabled: true
 aclFileWatchIntervalMillis: 250
+signatureAlgorithm: HmacSHA256
+requestTimestampExpiredMillis: 300000
 "#,
         )
         .unwrap();
@@ -160,5 +173,7 @@ aclFileWatchIntervalMillis: 250
         assert_eq!(config.acl_file.as_str(), "conf/plain_acl.yml");
         assert!(config.acl_file_watch_enabled);
         assert_eq!(config.acl_file_watch_interval_millis, 250);
+        assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacSha256);
+        assert_eq!(config.request_timestamp_expired_millis, 300_000);
     }
 }

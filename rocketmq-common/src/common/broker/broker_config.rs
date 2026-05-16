@@ -453,6 +453,14 @@ mod defaults {
         CheetahString::new()
     }
 
+    pub fn signature_algorithm() -> CheetahString {
+        CheetahString::from_static_str("HmacSHA1")
+    }
+
+    pub fn request_timestamp_expired_millis() -> u64 {
+        0
+    }
+
     pub fn transaction_check_interval() -> u64 {
         30_000
     }
@@ -1051,6 +1059,12 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::inner_client_authentication_credentials")]
     pub inner_client_authentication_credentials: CheetahString,
+
+    #[serde(default = "defaults::signature_algorithm")]
+    pub signature_algorithm: CheetahString,
+
+    #[serde(default = "defaults::request_timestamp_expired_millis")]
+    pub request_timestamp_expired_millis: u64,
 }
 
 impl Default for BrokerConfig {
@@ -1210,6 +1224,8 @@ impl Default for BrokerConfig {
             authorization_whitelist: defaults::authorization_whitelist(),
             init_authentication_user: defaults::init_authentication_user(),
             inner_client_authentication_credentials: defaults::inner_client_authentication_credentials(),
+            signature_algorithm: defaults::signature_algorithm(),
+            request_timestamp_expired_millis: defaults::request_timestamp_expired_millis(),
         }
     }
 }
@@ -1564,6 +1580,11 @@ impl BrokerConfig {
         );
         properties.insert("authenticationWhitelist".into(), self.authentication_whitelist.clone());
         properties.insert("authorizationWhitelist".into(), self.authorization_whitelist.clone());
+        properties.insert("signatureAlgorithm".into(), self.signature_algorithm.clone());
+        properties.insert(
+            "requestTimestampExpiredMillis".into(),
+            self.request_timestamp_expired_millis.to_string().into(),
+        );
         properties
     }
 }
@@ -1759,6 +1780,8 @@ mod tests {
         assert!(config.acl_file.is_empty());
         assert!(!config.acl_file_watch_enabled);
         assert_eq!(config.acl_file_watch_interval_millis, 5_000);
+        assert_eq!(config.signature_algorithm.as_str(), "HmacSHA1");
+        assert_eq!(config.request_timestamp_expired_millis, 0);
     }
 
     #[test]
@@ -1767,7 +1790,9 @@ mod tests {
             r#"{
                 "aclFile": "conf/plain_acl.yml",
                 "aclFileWatchEnabled": true,
-                "aclFileWatchIntervalMillis": 250
+                "aclFileWatchIntervalMillis": 250,
+                "signatureAlgorithm": "HmacSHA256",
+                "requestTimestampExpiredMillis": 300000
             }"#,
         )
         .expect("broker config should deserialize auth ACL file keys");
@@ -1775,6 +1800,8 @@ mod tests {
         assert_eq!(config.acl_file.as_str(), "conf/plain_acl.yml");
         assert!(config.acl_file_watch_enabled);
         assert_eq!(config.acl_file_watch_interval_millis, 250);
+        assert_eq!(config.signature_algorithm.as_str(), "HmacSHA256");
+        assert_eq!(config.request_timestamp_expired_millis, 300_000);
     }
 
     #[test]

@@ -26,6 +26,7 @@ use dashmap::DashMap;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
+use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
@@ -155,6 +156,9 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         authentication_whitelist: broker_config.authentication_whitelist.clone(),
         init_authentication_user: broker_config.init_authentication_user.clone(),
         inner_client_authentication_credentials: broker_config.inner_client_authentication_credentials.clone(),
+        signature_algorithm: SignatureAlgorithm::from_java_name(broker_config.signature_algorithm.as_str())
+            .unwrap_or_default(),
+        request_timestamp_expired_millis: broker_config.request_timestamp_expired_millis,
         authorization_enabled: broker_config.authorization_enabled,
         authorization_whitelist: broker_config.authorization_whitelist.clone(),
         ..AuthConfig::default()
@@ -3488,6 +3492,20 @@ mod tests {
 
     const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
     static NEXT_CONTROLLER_TEST_BASE_PORT: AtomicU16 = AtomicU16::new(20_000);
+
+    #[test]
+    fn build_auth_config_maps_signature_algorithm() {
+        let broker_config = BrokerConfig {
+            signature_algorithm: CheetahString::from_static_str("HmacSHA256"),
+            request_timestamp_expired_millis: 300_000,
+            ..BrokerConfig::default()
+        };
+
+        let auth_config = build_auth_config(&broker_config);
+
+        assert_eq!(auth_config.signature_algorithm, SignatureAlgorithm::HmacSha256);
+        assert_eq!(auth_config.request_timestamp_expired_millis, 300_000);
+    }
 
     struct TestNameServer {
         addr: CheetahString,
