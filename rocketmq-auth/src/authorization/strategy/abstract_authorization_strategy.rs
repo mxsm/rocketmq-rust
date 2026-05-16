@@ -248,6 +248,8 @@ mod tests {
             authentication_whitelist: CheetahString::new(),
             init_authentication_user: CheetahString::new(),
             inner_client_authentication_credentials: CheetahString::new(),
+            signature_algorithm: Default::default(),
+            request_timestamp_expired_millis: 0,
             authorization_enabled: enabled,
             authorization_provider: CheetahString::new(),
             authorization_metadata_provider: CheetahString::new(),

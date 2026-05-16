@@ -21,6 +21,8 @@ use std::collections::BTreeMap;
 
 use base64::Engine;
 use cheetah_string::CheetahString;
+use chrono::DateTime;
+use chrono::NaiveDateTime;
 use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::AuthError;
@@ -36,6 +38,10 @@ const CREDENTIAL: &str = "Credential";
 const SIGNATURE: &str = "Signature";
 const ACCESS_KEY: &str = "AccessKey";
 const SIGNATURE_FIELD: &str = "Signature";
+const X_MQ_DATE_TIME: &str = "x-mq-date-time";
+const DATE_TIME: &str = "DateTime";
+const TIMESTAMP: &str = "Timestamp";
+const TIMESTAMP_LOWERCASE: &str = "timestamp";
 
 /// Separator constants
 const SPACE: char = ' ';
@@ -134,6 +140,46 @@ impl DefaultAuthenticationContextBuilder {
 
         content
     }
+
+    fn parse_request_timestamp_millis(input: &str) -> Option<i64> {
+        let value = input.trim();
+        if value.is_empty() {
+            return None;
+        }
+
+        if value.bytes().all(|byte| byte.is_ascii_digit()) {
+            let timestamp = value.parse::<i64>().ok()?;
+            return if value.len() == 10 {
+                timestamp.checked_mul(1000)
+            } else {
+                Some(timestamp)
+            };
+        }
+
+        if let Ok(datetime) = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ") {
+            return Some(datetime.and_utc().timestamp_millis());
+        }
+
+        DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|datetime| datetime.timestamp_millis())
+    }
+
+    fn set_request_timestamp(context: &mut DefaultAuthenticationContext, value: &str) {
+        context.set_request_timestamp(CheetahString::from(value));
+        if let Some(timestamp_millis) = Self::parse_request_timestamp_millis(value) {
+            context.set_request_timestamp_millis(timestamp_millis);
+        }
+    }
+
+    fn remoting_request_timestamp(fields: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<&str> {
+        fields
+            .get(&CheetahString::from(TIMESTAMP))
+            .or_else(|| fields.get(&CheetahString::from(TIMESTAMP_LOWERCASE)))
+            .or_else(|| fields.get(&CheetahString::from(DATE_TIME)))
+            .or_else(|| fields.get(&CheetahString::from(X_MQ_DATE_TIME)))
+            .map(CheetahString::as_str)
+    }
 }
 
 impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthenticationContextBuilder {
@@ -171,6 +217,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
             .get("x-mq-date-time")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AuthError::MissingDateTime("datetime header is required".into()))?;
+        Self::set_request_timestamp(&mut context, datetime);
 
         // Parse authorization header: "MQv2-HMAC-SHA1 Credential=xxx, Signature=yyy"
         let parts: Vec<&str> = authorization.splitn(2, SPACE).collect();
@@ -256,6 +303,10 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
             context.set_signature(signature.clone());
         }
 
+        if let Some(request_timestamp) = Self::remoting_request_timestamp(fields) {
+            Self::set_request_timestamp(&mut context, request_timestamp);
+        }
+
         // Build sorted content map for signature verification
         let mut sorted_map = BTreeMap::new();
 
@@ -311,6 +362,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_request_timestamp_millis_supports_java_grpc_format() {
+        let timestamp = DefaultAuthenticationContextBuilder::parse_request_timestamp_millis("20231227T194619Z");
+
+        assert_eq!(timestamp, Some(1_703_706_379_000));
+    }
+
+    #[test]
+    fn parse_request_timestamp_millis_supports_epoch_seconds_and_millis() {
+        assert_eq!(
+            DefaultAuthenticationContextBuilder::parse_request_timestamp_millis("1703706379"),
+            Some(1_703_706_379_000)
+        );
+        assert_eq!(
+            DefaultAuthenticationContextBuilder::parse_request_timestamp_millis("1703706379000"),
+            Some(1_703_706_379_000)
+        );
+    }
+
+    #[test]
+    fn parse_request_timestamp_millis_supports_rfc3339() {
+        let timestamp = DefaultAuthenticationContextBuilder::parse_request_timestamp_millis("2023-12-27T19:46:19Z");
+
+        assert_eq!(timestamp, Some(1_703_706_379_000));
+    }
+
+    #[test]
     fn test_build_from_remoting_no_ext_fields() {
         use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
 
@@ -350,5 +427,21 @@ mod tests {
         assert_eq!(context.username(), Some(&CheetahString::from("alice")));
         assert_eq!(context.signature(), Some(&CheetahString::from("sig")));
         assert_eq!(context.content(), Some(b"alicetopic-abody".as_slice()));
+    }
+
+    #[test]
+    fn test_build_from_remoting_extracts_request_timestamp() {
+        let mut ext_fields = HashMap::new();
+        ext_fields.insert(CheetahString::from("AccessKey"), CheetahString::from("alice"));
+        ext_fields.insert(CheetahString::from("Signature"), CheetahString::from("sig"));
+        ext_fields.insert(CheetahString::from("Timestamp"), CheetahString::from("1703706379000"));
+
+        let request = RemotingCommand::create_remoting_command(10).set_ext_fields(ext_fields);
+        let builder = DefaultAuthenticationContextBuilder::new();
+
+        let context = builder.build_from_remoting(&request, Some("test-channel")).unwrap();
+
+        assert_eq!(context.request_timestamp(), Some(&CheetahString::from("1703706379000")));
+        assert_eq!(context.request_timestamp_millis(), Some(1_703_706_379_000));
     }
 }

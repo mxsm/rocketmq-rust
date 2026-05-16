@@ -19,6 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::action::Action;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
@@ -96,6 +97,10 @@ impl DefaultAuthorizationContextBuilder {
 
         if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
             return ctx.remote_address().ip().to_string();
+        }
+
+        if let Some(channel) = channel_context.downcast_ref::<Channel>() {
+            return channel.remote_address().ip().to_string();
         }
 
         String::from("unknown")

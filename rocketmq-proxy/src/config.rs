@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_auth::config::AuthConfig as RocketmqAuthConfig;
+use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 use serde::Serialize;
@@ -240,6 +241,8 @@ pub struct ProxyAuthConfig {
     pub authentication_whitelist: Vec<String>,
     pub init_authentication_user: String,
     pub inner_client_authentication_credentials: String,
+    pub signature_algorithm: SignatureAlgorithm,
+    pub request_timestamp_expired_millis: u64,
     pub authorization_enabled: bool,
     pub authorization_provider: String,
     pub authorization_metadata_provider: String,
@@ -263,6 +266,8 @@ impl Default for ProxyAuthConfig {
             authentication_whitelist: Vec::new(),
             init_authentication_user: String::new(),
             inner_client_authentication_credentials: String::new(),
+            signature_algorithm: SignatureAlgorithm::default(),
+            request_timestamp_expired_millis: 0,
             authorization_enabled: false,
             authorization_provider: String::new(),
             authorization_metadata_provider: String::new(),
@@ -294,6 +299,8 @@ impl ProxyAuthConfig {
             inner_client_authentication_credentials: CheetahString::from(
                 self.inner_client_authentication_credentials.as_str(),
             ),
+            signature_algorithm: self.signature_algorithm,
+            request_timestamp_expired_millis: self.request_timestamp_expired_millis,
             authorization_enabled: self.authorization_enabled,
             authorization_provider: CheetahString::from(self.authorization_provider.as_str()),
             authorization_metadata_provider: CheetahString::from(self.authorization_metadata_provider.as_str()),
@@ -345,6 +352,8 @@ mod tests {
             acl_file: "conf/plain_acl.yml".to_owned(),
             acl_file_watch_enabled: true,
             acl_file_watch_interval_millis: 250,
+            signature_algorithm: SignatureAlgorithm::HmacSha256,
+            request_timestamp_expired_millis: 300_000,
             ..ProxyAuthConfig::default()
         };
 
@@ -353,6 +362,8 @@ mod tests {
         assert_eq!(auth_config.acl_file.as_str(), "conf/plain_acl.yml");
         assert!(auth_config.acl_file_watch_enabled);
         assert_eq!(auth_config.acl_file_watch_interval_millis, 250);
+        assert_eq!(auth_config.signature_algorithm, SignatureAlgorithm::HmacSha256);
+        assert_eq!(auth_config.request_timestamp_expired_millis, 300_000);
     }
 
     #[test]
@@ -363,6 +374,8 @@ mod tests {
 aclFile: conf/plain_acl.yml
 aclFileWatchEnabled: true
 aclFileWatchIntervalMillis: 250
+signatureAlgorithm: HmacMD5
+requestTimestampExpiredMillis: 300000
 "#,
                 config::FileFormat::Yaml,
             ))
@@ -374,5 +387,7 @@ aclFileWatchIntervalMillis: 250
         assert_eq!(config.acl_file, "conf/plain_acl.yml");
         assert!(config.acl_file_watch_enabled);
         assert_eq!(config.acl_file_watch_interval_millis, 250);
+        assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacMd5);
+        assert_eq!(config.request_timestamp_expired_millis, 300_000);
     }
 }

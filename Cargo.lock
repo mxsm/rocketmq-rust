@@ -2299,6 +2299,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2810,7 +2820,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89815c69d36021a140146f26659a81d6c2afa33d216d736dd4be5381a7362220"
 dependencies = [
  "pest",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -3645,9 +3655,11 @@ version = "0.9.0"
 dependencies = [
  "base64",
  "cheetah-string",
+ "chrono",
  "hex",
  "hmac",
  "ipnetwork",
+ "md-5 0.11.0",
  "moka",
  "rocketmq-common",
  "rocketmq-error",
@@ -3656,6 +3668,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha1",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3755,7 +3768,7 @@ dependencies = [
  "iana-time-zone",
  "local-ip-address",
  "lz4_flex",
- "md-5",
+ "md-5 0.10.6",
  "mockall",
  "num_cpus",
  "opentelemetry",
@@ -4407,6 +4420,17 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
 ]
 
 [[package]]

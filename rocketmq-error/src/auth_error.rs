@@ -55,6 +55,17 @@ pub enum AuthError {
     #[error("Invalid signature: {0}")]
     InvalidSignature(String),
 
+    /// Request timestamp is outside the configured replay-protection window
+    #[error(
+        "Request timestamp expired: request={request_timestamp_millis}, now={now_millis}, \
+         allowedSkewMillis={allowed_skew_millis}"
+    )]
+    RequestTimestampExpired {
+        request_timestamp_millis: i64,
+        now_millis: i64,
+        allowed_skew_millis: u64,
+    },
+
     /// User status is not valid (disabled, deleted, etc.)
     #[error("Invalid user status: {0}")]
     InvalidUserStatus(String),
@@ -89,6 +100,11 @@ mod tests {
             AuthError::InvalidCredential("invalid credential".to_string()),
             AuthError::InvalidHexSignature("invalid hex signature".to_string()),
             AuthError::InvalidSignature("invalid signature".to_string()),
+            AuthError::RequestTimestampExpired {
+                request_timestamp_millis: 1,
+                now_millis: 2,
+                allowed_skew_millis: 3,
+            },
             AuthError::InvalidUserStatus("invalid user status".to_string()),
             AuthError::MissingDateTime("missing date time".to_string()),
             AuthError::Other("other error".to_string()),

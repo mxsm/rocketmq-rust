@@ -41,8 +41,11 @@ use rocketmq_auth::ProviderRegistry;
 use rocketmq_common::common::action::Action;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use tonic::Request;
 
 use crate::config::ProxyAuthConfig;
@@ -69,9 +72,28 @@ pub struct AuthenticatedPrincipal {
     username: String,
     source_ip: String,
     channel_id: Option<String>,
+    white_listed: bool,
 }
 
 impl AuthenticatedPrincipal {
+    fn new(username: String, source_ip: String, channel_id: Option<String>) -> Self {
+        Self {
+            username,
+            source_ip,
+            channel_id,
+            white_listed: false,
+        }
+    }
+
+    fn white_listed(username: Option<String>, source_ip: String, channel_id: Option<String>) -> Self {
+        Self {
+            username: username.unwrap_or_default(),
+            source_ip,
+            channel_id,
+            white_listed: true,
+        }
+    }
+
     pub fn username(&self) -> &str {
         &self.username
     }
@@ -82,6 +104,10 @@ impl AuthenticatedPrincipal {
 
     pub fn channel_id(&self) -> Option<&str> {
         self.channel_id.as_deref()
+    }
+
+    pub fn is_white_listed(&self) -> bool {
+        self.white_listed
     }
 }
 
@@ -203,22 +229,6 @@ impl ProxyAuthRuntime {
         }
 
         let authentication_context = self.build_authentication_context(rpc_name, request)?;
-        if requires_authentication {
-            self.authentication_provider
-                .authenticate(&authentication_context)
-                .await
-                .map_err(ProxyError::from)?;
-        }
-
-        let username = authentication_context
-            .username()
-            .map(ToString::to_string)
-            .ok_or_else(|| {
-                ProxyError::from(RocketMQError::authentication_failed(format!(
-                    "gRPC request {rpc_name} is missing credential information",
-                )))
-            })?;
-
         let source_ip = request
             .remote_addr()
             .map(|addr| addr.ip().to_string())
@@ -228,12 +238,32 @@ impl ProxyAuthRuntime {
             .channel_id()
             .map(ToString::to_string)
             .or_else(|| metadata_string(request, "x-mq-channel-id"));
+        let username = authentication_context.username().map(ToString::to_string);
 
-        Ok(Some(AuthenticatedPrincipal {
-            username,
-            source_ip,
-            channel_id,
-        }))
+        if self
+            .auth_runtime
+            .is_acl_white_remote_address(username.as_deref(), Some(source_ip.as_str()))
+            .map_err(ProxyError::from)?
+        {
+            return Ok(Some(AuthenticatedPrincipal::white_listed(
+                username, source_ip, channel_id,
+            )));
+        }
+
+        if requires_authentication {
+            self.authentication_provider
+                .authenticate(&authentication_context)
+                .await
+                .map_err(ProxyError::from)?;
+        }
+
+        let username = username.ok_or_else(|| {
+            ProxyError::from(RocketMQError::authentication_failed(format!(
+                "gRPC request {rpc_name} is missing credential information",
+            )))
+        })?;
+
+        Ok(Some(AuthenticatedPrincipal::new(username, source_ip, channel_id)))
     }
 
     pub async fn authorize_request(
@@ -251,6 +281,10 @@ impl ProxyAuthRuntime {
                 "gRPC request {rpc_name} does not carry an authenticated principal",
             )))
         })?;
+
+        if principal.is_white_listed() {
+            return Ok(());
+        }
 
         for context in contexts {
             let mut builder = DefaultAuthorizationContext::builder()
@@ -290,6 +324,23 @@ impl ProxyAuthRuntime {
             .authentication_builder
             .build_from_remoting(command, channel_id)
             .map_err(|error| ProxyError::from(RocketMQError::authentication_failed(error.to_string())))?;
+        let username = authentication_context.username().map(ToString::to_string);
+        let source_ip = source_ip.unwrap_or("unknown").to_owned();
+        let channel_id = authentication_context
+            .base
+            .channel_id()
+            .map(ToString::to_string)
+            .or_else(|| channel_id.map(ToOwned::to_owned));
+
+        if self
+            .auth_runtime
+            .is_acl_white_remote_address(username.as_deref(), Some(source_ip.as_str()))
+            .map_err(ProxyError::from)?
+        {
+            return Ok(Some(AuthenticatedPrincipal::white_listed(
+                username, source_ip, channel_id,
+            )));
+        }
 
         if requires_authentication {
             self.authentication_provider
@@ -298,21 +349,14 @@ impl ProxyAuthRuntime {
                 .map_err(ProxyError::from)?;
         }
 
-        let username = authentication_context
-            .username()
-            .map(ToString::to_string)
-            .ok_or_else(|| {
-                ProxyError::from(RocketMQError::authentication_failed(format!(
-                    "remoting request {} is missing credential information",
-                    command.code()
-                )))
-            })?;
+        let username = username.ok_or_else(|| {
+            ProxyError::from(RocketMQError::authentication_failed(format!(
+                "remoting request {} is missing credential information",
+                command.code()
+            )))
+        })?;
 
-        Ok(Some(AuthenticatedPrincipal {
-            username,
-            source_ip: source_ip.unwrap_or("unknown").to_owned(),
-            channel_id: authentication_context.base.channel_id().map(ToString::to_string),
-        }))
+        Ok(Some(AuthenticatedPrincipal::new(username, source_ip, channel_id)))
     }
 
     pub async fn authorize_remoting(
@@ -322,6 +366,15 @@ impl ProxyAuthRuntime {
     ) -> ProxyResult<()> {
         let code = command.code().to_string();
         if !self.authorization_required(code.as_str()) {
+            return Ok(());
+        }
+
+        let source_ip = source_ip_from_channel_context(channel_context);
+        if self
+            .auth_runtime
+            .is_acl_white_remote_address(access_key_from_command(command), source_ip.as_deref())
+            .map_err(ProxyError::from)?
+        {
             return Ok(());
         }
 
@@ -583,4 +636,111 @@ fn parse_whitelist(entries: &[String]) -> HashSet<String> {
         .filter(|entry| !entry.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
+    command.ext_fields().and_then(|fields| {
+        fields
+            .get(&CheetahString::from_static_str("AccessKey"))
+            .map(|value| value.as_str().trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + Sync)) -> Option<String> {
+    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContext>() {
+        return Some(ctx.remote_address().ip().to_string());
+    }
+    if let Some(ctx) = channel_context.downcast_ref::<ConnectionHandlerContextWrapper>() {
+        return Some(ctx.remote_address().ip().to_string());
+    }
+    if let Some(channel) = channel_context.downcast_ref::<Channel>() {
+        return Some(channel.remote_address().ip().to_string());
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use rocketmq_auth::authorization::model::resource::Resource;
+    use rocketmq_remoting::code::request_code::RequestCode;
+    use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+
+    use super::*;
+
+    fn unique_target_file(prefix: &str) -> String {
+        format!("target/{}-{}.yml", prefix, uuid::Uuid::new_v4())
+    }
+
+    #[tokio::test]
+    async fn authenticate_remoting_accepts_acl_account_white_remote_address() {
+        let acl_file = unique_target_file("proxy-auth-white-remote-address");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    whiteRemoteAddress: 192.168.0.*
+    defaultTopicPerm: DENY
+"#,
+        )
+        .expect("acl file should be written");
+
+        let runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+            acl_file,
+            authentication_enabled: true,
+            authorization_enabled: true,
+            auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
+            ..ProxyAuthConfig::default()
+        })
+        .await
+        .expect("runtime should build")
+        .expect("runtime should be enabled");
+
+        let mut command = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new("TopicA", None),
+        );
+        command.make_custom_header_to_net();
+        command.add_ext_field("AccessKey", "alice");
+
+        let principal = runtime
+            .authenticate_remoting(&command, Some("channel-a"), Some("192.168.0.7"))
+            .await
+            .expect("white remote address should bypass signature")
+            .expect("principal should be returned");
+
+        assert_eq!(principal.username(), "alice");
+        assert!(principal.is_white_listed());
+
+        runtime.shutdown().await.expect("runtime should shut down");
+    }
+
+    #[tokio::test]
+    async fn authorize_request_skips_white_listed_principal() {
+        let runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+            authorization_enabled: true,
+            auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
+            ..ProxyAuthConfig::default()
+        })
+        .await
+        .expect("runtime should build")
+        .expect("runtime should be enabled");
+
+        let principal = AuthenticatedPrincipal::white_listed(None, "10.10.1.2".to_owned(), None);
+        let contexts = vec![AuthorizationContextSpec {
+            resource: Resource::of_topic("TopicA"),
+            actions: vec![Action::Pub],
+        }];
+
+        runtime
+            .authorize_request("QueryRoute", Some(&principal), &contexts)
+            .await
+            .expect("white listed principal should bypass authorization metadata lookup");
+
+        runtime.shutdown().await.expect("runtime should shut down");
+    }
 }

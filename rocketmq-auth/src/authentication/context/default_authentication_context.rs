@@ -27,6 +27,8 @@ pub struct DefaultAuthenticationContext {
     username: Option<CheetahString>,
     content: Option<Vec<u8>>,
     signature: Option<CheetahString>,
+    request_timestamp: Option<CheetahString>,
+    request_timestamp_millis: Option<i64>,
 }
 
 impl DefaultAuthenticationContext {
@@ -57,6 +59,22 @@ impl DefaultAuthenticationContext {
     pub fn set_signature(&mut self, signature: CheetahString) {
         self.signature = Some(signature);
     }
+
+    pub fn request_timestamp(&self) -> Option<&CheetahString> {
+        self.request_timestamp.as_ref()
+    }
+
+    pub fn set_request_timestamp(&mut self, request_timestamp: CheetahString) {
+        self.request_timestamp = Some(request_timestamp);
+    }
+
+    pub fn request_timestamp_millis(&self) -> Option<i64> {
+        self.request_timestamp_millis
+    }
+
+    pub fn set_request_timestamp_millis(&mut self, request_timestamp_millis: i64) {
+        self.request_timestamp_millis = Some(request_timestamp_millis);
+    }
 }
 
 impl AsAny for DefaultAuthenticationContext {
@@ -81,11 +99,15 @@ mod tests {
         assert!(context.username().is_none());
         assert!(context.content().is_none());
         assert!(context.signature().is_none());
+        assert!(context.request_timestamp().is_none());
+        assert!(context.request_timestamp_millis().is_none());
 
         let context = DefaultAuthenticationContext::new();
         assert!(context.username().is_none());
         assert!(context.content().is_none());
         assert!(context.signature().is_none());
+        assert!(context.request_timestamp().is_none());
+        assert!(context.request_timestamp_millis().is_none());
     }
 
     #[test]
@@ -94,14 +116,19 @@ mod tests {
         let username = CheetahString::from("test_user");
         let content = vec![1, 2, 3];
         let signature = CheetahString::from("test_signature");
+        let request_timestamp = CheetahString::from("20231227T194619Z");
 
         context.set_username(username.clone());
         context.set_content(content.clone());
         context.set_signature(signature.clone());
+        context.set_request_timestamp(request_timestamp.clone());
+        context.set_request_timestamp_millis(1_703_706_379_000);
 
         assert_eq!(context.username(), Some(&username));
         assert_eq!(context.content(), Some(content.as_slice()));
         assert_eq!(context.signature(), Some(&signature));
+        assert_eq!(context.request_timestamp(), Some(&request_timestamp));
+        assert_eq!(context.request_timestamp_millis(), Some(1_703_706_379_000));
     }
 
     #[test]
