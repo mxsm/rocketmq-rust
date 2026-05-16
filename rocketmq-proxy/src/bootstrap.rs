@@ -200,9 +200,19 @@ where
             Some(auth_runtime) => Some(auth_runtime),
             None => ProxyAuthRuntime::from_proxy_config(&config.auth).await?,
         };
+        let auth_runtime_for_shutdown = auth_runtime.clone();
         let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
         if !config.remoting.enabled {
-            return server::serve(config, grpc_service, shutdown).await;
+            let result = server::serve(config, grpc_service, shutdown).await;
+            let shutdown_result = match auth_runtime_for_shutdown {
+                Some(auth_runtime) => Some(auth_runtime.shutdown().await),
+                None => None,
+            };
+            result?;
+            if let Some(shutdown_result) = shutdown_result {
+                shutdown_result?;
+            }
+            return Ok(());
         }
 
         let shared_shutdown = shutdown.boxed().shared();
@@ -225,8 +235,16 @@ where
             remoting_shutdown,
         );
         let (grpc_result, remoting_result) = tokio::join!(grpc_future, remoting_future);
+        let shutdown_result = match auth_runtime_for_shutdown {
+            Some(auth_runtime) => Some(auth_runtime.shutdown().await),
+            None => None,
+        };
         grpc_result?;
-        remoting_result
+        remoting_result?;
+        if let Some(shutdown_result) = shutdown_result {
+            shutdown_result?;
+        }
+        Ok(())
     }
 }
 

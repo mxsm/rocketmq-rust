@@ -13,12 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
+use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AuthConfig {
     pub config_name: CheetahString,
     pub cluster_name: CheetahString,
     pub auth_config_path: CheetahString,
+    pub acl_file: CheetahString,
+    pub acl_file_watch_enabled: bool,
+    pub acl_file_watch_interval_millis: u64,
 
     pub authentication_enabled: bool,
     pub authentication_provider: CheetahString,
@@ -56,6 +62,9 @@ impl Default for AuthConfig {
             config_name: CheetahString::new(),
             cluster_name: CheetahString::new(),
             auth_config_path: CheetahString::new(),
+            acl_file: CheetahString::new(),
+            acl_file_watch_enabled: false,
+            acl_file_watch_interval_millis: 5_000,
 
             authentication_enabled: false,
             authentication_provider: CheetahString::new(),
@@ -101,6 +110,7 @@ mod tests {
         assert!(config.config_name.is_empty());
         assert!(config.cluster_name.is_empty());
         assert!(config.auth_config_path.is_empty());
+        assert!(config.acl_file.is_empty());
 
         assert!(config.authentication_provider.is_empty());
         assert!(config.authentication_metadata_provider.is_empty());
@@ -117,7 +127,9 @@ mod tests {
         // Boolean fields
         assert!(!config.authentication_enabled);
         assert!(!config.authorization_enabled);
+        assert!(!config.acl_file_watch_enabled);
         assert!(!config.migrate_auth_from_v1_enabled);
+        assert_eq!(config.acl_file_watch_interval_millis, 5_000);
 
         // Cache defaults
         assert_eq!(config.user_cache_max_num, 1000);
@@ -132,5 +144,21 @@ mod tests {
         assert_eq!(config.stateful_authentication_cache_expired_second, 60);
         assert_eq!(config.stateful_authorization_cache_max_num, 10000);
         assert_eq!(config.stateful_authorization_cache_expired_second, 60);
+    }
+
+    #[test]
+    fn auth_config_deserializes_acl_file_fields_from_camel_case() {
+        let config: AuthConfig = serde_yaml::from_str(
+            r#"
+aclFile: conf/plain_acl.yml
+aclFileWatchEnabled: true
+aclFileWatchIntervalMillis: 250
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.acl_file.as_str(), "conf/plain_acl.yml");
+        assert!(config.acl_file_watch_enabled);
+        assert_eq!(config.acl_file_watch_interval_millis, 250);
     }
 }
