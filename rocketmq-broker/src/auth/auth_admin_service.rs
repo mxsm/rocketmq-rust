@@ -10,6 +10,7 @@ use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvid
 use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use rocketmq_auth::authorization::model::acl::Acl;
 use rocketmq_auth::authorization::model::resource::Resource;
+use rocketmq_auth::authorization::provider::AuthorizationError;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::ProviderRegistry;
 use rocketmq_common::common::action::Action;
@@ -241,8 +242,8 @@ impl AuthAdminService {
     }
 }
 
-fn map_authz_error(error: rocketmq_auth::authorization::provider::AuthorizationError) -> RocketMQError {
-    RocketMQError::Internal(error.to_string())
+fn map_authz_error(error: AuthorizationError) -> RocketMQError {
+    RocketMQError::from(error)
 }
 
 #[derive(Clone)]
@@ -443,6 +444,31 @@ mod tests {
             .unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].subject, Some(CheetahString::from_static_str("User:alice")));
+    }
+
+    #[test]
+    fn map_authz_error_preserves_admin_error_category() {
+        let denied = map_authz_error(AuthorizationError::PermissionDenied {
+            subject: "User:alice".to_string(),
+            resource: "Topic:test".to_string(),
+            reason: "denied".to_string(),
+        });
+        assert!(matches!(denied, RocketMQError::BrokerPermissionDenied { .. }));
+
+        let invalid = map_authz_error(AuthorizationError::InvalidContext("missing resource".to_string()));
+        assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
+
+        let config = map_authz_error(AuthorizationError::NotInitialized("provider not ready".to_string()));
+        assert!(matches!(
+            config,
+            RocketMQError::ConfigInvalidValue {
+                key: "auth.authorization",
+                ..
+            }
+        ));
+
+        let internal = map_authz_error(AuthorizationError::MetadataServiceError("storage failed".to_string()));
+        assert!(matches!(internal, RocketMQError::Internal(_)));
     }
 
     #[tokio::test]

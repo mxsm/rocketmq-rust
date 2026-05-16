@@ -610,9 +610,7 @@ fn metadata_string<T>(request: &Request<T>, key: &'static str) -> Option<String>
 }
 
 fn map_authorization_error(error: AuthorizationError) -> ProxyError {
-    ProxyError::from(RocketMQError::BrokerPermissionDenied {
-        operation: error.to_string(),
-    })
+    ProxyError::from(RocketMQError::from(error))
 }
 
 pub fn is_auth_error(error: &RocketMQError) -> bool {
@@ -663,6 +661,7 @@ fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_remoting::code::request_code::RequestCode;
@@ -670,13 +669,48 @@ mod tests {
 
     use super::*;
 
-    fn unique_target_file(prefix: &str) -> String {
-        format!("target/{}-{}.yml", prefix, uuid::Uuid::new_v4())
+    fn unique_test_dir(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("test temp directory should be created");
+        dir
+    }
+
+    #[test]
+    fn map_authorization_error_preserves_proxy_error_category() {
+        let denied = map_authorization_error(AuthorizationError::PermissionDenied {
+            subject: "User:alice".to_string(),
+            resource: "Topic:test".to_string(),
+            reason: "denied".to_string(),
+        });
+        assert!(matches!(
+            denied,
+            ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
+        ));
+
+        let invalid = map_authorization_error(AuthorizationError::InvalidContext("missing resource".to_string()));
+        assert!(matches!(
+            invalid,
+            ProxyError::RocketMQ(RocketMQError::IllegalArgument(_))
+        ));
+
+        let config = map_authorization_error(AuthorizationError::ConfigurationError("missing provider".to_string()));
+        assert!(matches!(
+            config,
+            ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
+                key: "auth.authorization",
+                ..
+            })
+        ));
+
+        let internal =
+            map_authorization_error(AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()));
+        assert!(matches!(internal, ProxyError::RocketMQ(RocketMQError::Internal(_))));
     }
 
     #[tokio::test]
     async fn authenticate_remoting_accepts_acl_account_white_remote_address() {
-        let acl_file = unique_target_file("proxy-auth-white-remote-address");
+        let test_dir = unique_test_dir("proxy-auth-white-remote-address");
+        let acl_file = test_dir.join("plain_acl.yml");
         fs::write(
             &acl_file,
             r#"
@@ -690,10 +724,10 @@ accounts:
         .expect("acl file should be written");
 
         let runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
-            acl_file,
+            acl_file: acl_file.to_string_lossy().into_owned(),
             authentication_enabled: true,
             authorization_enabled: true,
-            auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
             ..ProxyAuthConfig::default()
         })
         .await
@@ -717,13 +751,15 @@ accounts:
         assert!(principal.is_white_listed());
 
         runtime.shutdown().await.expect("runtime should shut down");
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[tokio::test]
     async fn authorize_request_skips_white_listed_principal() {
+        let test_dir = unique_test_dir("proxy-auth-authorize-white-listed-principal");
         let runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
             authorization_enabled: true,
-            auth_config_path: format!("target/proxy-auth-tests-{}", uuid::Uuid::new_v4()),
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
             ..ProxyAuthConfig::default()
         })
         .await
@@ -742,5 +778,6 @@ accounts:
             .expect("white listed principal should bypass authorization metadata lookup");
 
         runtime.shutdown().await.expect("runtime should shut down");
+        let _ = fs::remove_dir_all(test_dir);
     }
 }

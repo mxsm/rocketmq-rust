@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
@@ -85,6 +86,28 @@ pub enum AuthorizationError {
     /// Authorization context is invalid or incomplete.
     #[error("Invalid authorization context: {0}")]
     InvalidContext(String),
+}
+
+impl From<AuthorizationError> for RocketMQError {
+    fn from(error: AuthorizationError) -> Self {
+        let message = error.to_string();
+        match error {
+            AuthorizationError::PermissionDenied { .. } => RocketMQError::BrokerPermissionDenied { operation: message },
+            AuthorizationError::SubjectNotFound(_)
+            | AuthorizationError::ResourceNotFound(_)
+            | AuthorizationError::InvalidContext(_) => RocketMQError::illegal_argument(message),
+            AuthorizationError::ConfigurationError(_) | AuthorizationError::NotInitialized(_) => {
+                RocketMQError::ConfigInvalidValue {
+                    key: "auth.authorization",
+                    value: "<redacted>".to_string(),
+                    reason: message,
+                }
+            }
+            AuthorizationError::PolicyEvaluationFailed(_)
+            | AuthorizationError::InternalError(_)
+            | AuthorizationError::MetadataServiceError(_) => RocketMQError::Internal(message),
+        }
+    }
 }
 
 /// Authorization provider trait.
@@ -603,6 +626,31 @@ mod tests {
             let _msg = format!("{}", error);
             let _debug = format!("{:?}", error);
         }
+    }
+
+    #[test]
+    fn test_authorization_error_rocketmq_mapping_categories() {
+        let denied = RocketMQError::from(AuthorizationError::PermissionDenied {
+            subject: "user:alice".to_string(),
+            resource: "topic:test".to_string(),
+            reason: "insufficient permissions".to_string(),
+        });
+        assert!(matches!(denied, RocketMQError::BrokerPermissionDenied { .. }));
+
+        let invalid = RocketMQError::from(AuthorizationError::InvalidContext("missing subject".to_string()));
+        assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
+
+        let config = RocketMQError::from(AuthorizationError::ConfigurationError("missing config".to_string()));
+        assert!(matches!(
+            config,
+            RocketMQError::ConfigInvalidValue {
+                key: "auth.authorization",
+                ..
+            }
+        ));
+
+        let internal = RocketMQError::from(AuthorizationError::InternalError("unexpected error".to_string()));
+        assert!(matches!(internal, RocketMQError::Internal(_)));
     }
 
     #[tokio::test]
