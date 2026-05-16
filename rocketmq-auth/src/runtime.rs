@@ -667,9 +667,7 @@ async fn create_user_if_absent(provider: Arc<LocalAuthenticationMetadataProvider
 }
 
 fn map_authorization_error(error: AuthorizationError) -> RocketMQError {
-    RocketMQError::BrokerPermissionDenied {
-        operation: error.to_string(),
-    }
+    RocketMQError::from(error)
 }
 
 fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
