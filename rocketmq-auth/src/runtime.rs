@@ -1,12 +1,22 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
+use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
+use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
+use crate::acl::FileAclConfigLoader;
 use crate::authentication::builder::default_authentication_context_builder::DefaultAuthenticationContextBuilder;
 use crate::authentication::builder::AuthenticationContextBuilder;
+use crate::authentication::enums::subject_type::SubjectType;
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::user::User;
@@ -14,12 +24,20 @@ use crate::authentication::provider::authentication_metadata_provider::Authentic
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::provider::DefaultAuthenticationProvider;
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
+use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
+use crate::authorization::model::acl::Acl;
+use crate::authorization::model::policy::Policy;
+use crate::authorization::model::policy_entry::PolicyEntry;
+use crate::authorization::model::resource::Resource;
 use crate::authorization::provider::AuthorizationError;
 use crate::authorization::provider::AuthorizationProvider;
 use crate::authorization::provider::DefaultAuthorizationProvider;
 use crate::config::AuthConfig;
+use crate::migration::alc::acl_config::AclConfig;
+use crate::migration::alc::plain_access_config::PlainAccessConfig;
+use crate::permission::Permission;
 
 #[derive(Clone)]
 pub struct ProviderRegistry {
@@ -75,6 +93,10 @@ impl AuthRuntimeBuilder {
         };
 
         seed_initial_users(&provider_registry, &self.config).await?;
+        let loaded_acl_entries = load_configured_acl_file(&provider_registry, &self.config).await?;
+        if loaded_acl_entries > 0 {
+            info!("Loaded {} ACL account(s) from configured ACL file", loaded_acl_entries);
+        }
 
         let mut authentication_provider = DefaultAuthenticationProvider::new();
         authentication_provider.initialize_with_registry(self.config.clone(), provider_registry.clone())?;
@@ -86,12 +108,14 @@ impl AuthRuntimeBuilder {
 
         let authentication_service = AuthenticationService::new(self.config.clone(), Arc::new(authentication_provider));
         let authorization_service = AuthorizationService::new(self.config.clone(), Arc::new(authorization_provider));
+        let acl_file_watch_handle = start_acl_file_watcher(&self.config, provider_registry.clone());
 
         Ok(AuthRuntime {
             config: self.config,
             provider_registry,
             authentication_service,
             authorization_service,
+            acl_file_watch_handle,
         })
     }
 }
@@ -102,6 +126,7 @@ pub struct AuthRuntime {
     provider_registry: ProviderRegistry,
     authentication_service: AuthenticationService,
     authorization_service: AuthorizationService,
+    acl_file_watch_handle: Option<AclFileWatchHandle>,
 }
 
 impl AuthRuntime {
@@ -121,6 +146,17 @@ impl AuthRuntime {
         self.config.authentication_enabled || self.config.authorization_enabled
     }
 
+    pub async fn reload_acl_file(&self) -> RocketMQResult<usize> {
+        load_configured_acl_file(&self.provider_registry, &self.config).await
+    }
+
+    pub async fn shutdown(&self) -> RocketMQResult<()> {
+        if let Some(handle) = &self.acl_file_watch_handle {
+            handle.shutdown().await?;
+        }
+        Ok(())
+    }
+
     pub async fn check_remoting(
         &self,
         channel_context: &(dyn std::any::Any + Send + Sync),
@@ -130,6 +166,28 @@ impl AuthRuntime {
         self.authorization_service
             .authorize_remoting(channel_context, command)
             .await
+    }
+}
+
+#[derive(Clone)]
+struct AclFileWatchHandle {
+    shutdown_tx: watch::Sender<bool>,
+    join_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+}
+
+impl AclFileWatchHandle {
+    async fn shutdown(&self) -> RocketMQResult<()> {
+        let _ = self.shutdown_tx.send(true);
+        let join_handle = {
+            let mut guard = self.join_handle.lock().await;
+            guard.take()
+        };
+        if let Some(join_handle) = join_handle {
+            join_handle
+                .await
+                .map_err(|error| RocketMQError::Internal(format!("ACL file watcher task failed: {error}")))?;
+        }
+        Ok(())
     }
 }
 
@@ -218,6 +276,210 @@ fn parse_whitelist(value: &str) -> HashSet<String> {
         .collect()
 }
 
+async fn load_configured_acl_file(provider_registry: &ProviderRegistry, config: &AuthConfig) -> RocketMQResult<usize> {
+    let acl_file = config.acl_file.as_str().trim();
+    if acl_file.is_empty() {
+        return Ok(0);
+    }
+
+    let loader = FileAclConfigLoader::new(acl_file.to_owned());
+    let acl_config = loader.load().await?;
+    apply_acl_config(provider_registry, &acl_config).await
+}
+
+fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegistry) -> Option<AclFileWatchHandle> {
+    let acl_file = config.acl_file.as_str().trim();
+    if acl_file.is_empty() || !config.acl_file_watch_enabled {
+        return None;
+    }
+
+    let loader = FileAclConfigLoader::new(acl_file.to_owned());
+    let interval = Duration::from_millis(config.acl_file_watch_interval_millis.max(1));
+    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let join_handle = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        debug!("ACL file watcher stopped");
+                        break;
+                    }
+                }
+                _ = ticker.tick() => {
+                    match loader.load().await {
+                        Ok(acl_config) => match apply_acl_config(&provider_registry, &acl_config).await {
+                            Ok(count) => debug!("Reloaded {} ACL account(s) from configured ACL file", count),
+                            Err(error) => warn!("Failed to apply reloaded ACL file: {error}"),
+                        },
+                        Err(error) => warn!("Failed to reload ACL file: {error}"),
+                    }
+                }
+            }
+        }
+    });
+
+    Some(AclFileWatchHandle {
+        shutdown_tx,
+        join_handle: Arc::new(tokio::sync::Mutex::new(Some(join_handle))),
+    })
+}
+
+async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> RocketMQResult<usize> {
+    let Some(accounts) = acl_config.plain_access_configs() else {
+        return Ok(0);
+    };
+
+    let authn_provider = provider_registry.authentication_metadata_provider();
+    let authz_provider = provider_registry.authorization_metadata_provider();
+    let mut applied = 0;
+
+    for account in accounts {
+        let user = user_from_plain_account(account)?;
+        upsert_user(authn_provider.clone(), user.clone()).await?;
+
+        match acl_from_plain_account(account)? {
+            Some(acl) => upsert_acl(authz_provider.clone(), &user, acl).await?,
+            None => authz_provider
+                .delete_acl(&user)
+                .await
+                .map_err(map_authorization_error)?,
+        }
+        applied += 1;
+    }
+
+    if acl_config.global_white_addrs().is_some() {
+        debug!(
+            "Loaded globalWhiteRemoteAddresses from ACL file; runtime IP whitelist enforcement is handled separately"
+        );
+    }
+
+    Ok(applied)
+}
+
+async fn upsert_user(provider: Arc<LocalAuthenticationMetadataProvider>, user: User) -> RocketMQResult<()> {
+    let username = user.username().to_string();
+    if provider.get_user(username.as_str()).await.is_ok() {
+        provider.update_user(user).await
+    } else {
+        provider.create_user(user).await
+    }
+}
+
+async fn upsert_acl(provider: Arc<LocalAuthorizationMetadataProvider>, user: &User, acl: Acl) -> RocketMQResult<()> {
+    match provider.get_acl(user).await.map_err(map_authorization_error)? {
+        Some(_) => provider.update_acl(acl).await.map_err(map_authorization_error),
+        None => provider.create_acl(acl).await.map_err(map_authorization_error),
+    }
+}
+
+fn user_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<User> {
+    let access_key = required_plain_field(account.access_key(), "accessKey", "<missing>")?;
+    let secret_key = required_plain_field(account.secret_key(), "secretKey", access_key)?;
+    let user_type = if account.is_admin() {
+        UserType::Super
+    } else {
+        UserType::Normal
+    };
+    let mut user = User::of_with_type(access_key, secret_key, user_type);
+    user.set_user_status(UserStatus::Enable);
+    Ok(user)
+}
+
+fn acl_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<Option<Acl>> {
+    let access_key = required_plain_field(account.access_key(), "accessKey", "<missing>")?;
+    let mut policies = Vec::new();
+    let mut default_entries = Vec::new();
+    let mut custom_entries = Vec::new();
+
+    if let Some(permission) = account.default_topic_perm() {
+        push_default_entry(&mut default_entries, ResourceType::Topic, permission.as_str());
+    }
+    if let Some(permission) = account.default_group_perm() {
+        push_default_entry(&mut default_entries, ResourceType::Group, permission.as_str());
+    }
+    if let Some(topic_perms) = account.topic_perms() {
+        push_named_entries(&mut custom_entries, ResourceType::Topic, topic_perms);
+    }
+    if let Some(group_perms) = account.group_perms() {
+        push_named_entries(&mut custom_entries, ResourceType::Group, group_perms);
+    }
+
+    if !custom_entries.is_empty() {
+        policies.push(Policy::of_entries(PolicyType::Custom, custom_entries));
+    }
+    if !default_entries.is_empty() {
+        policies.push(Policy::of_entries(PolicyType::Default, default_entries));
+    }
+
+    if policies.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(Acl::of_with_policies(
+        access_key.to_owned(),
+        SubjectType::User,
+        policies,
+    )))
+}
+
+fn push_default_entry(entries: &mut Vec<PolicyEntry>, resource_type: ResourceType, permission: &str) {
+    let (actions, decision) = Permission::migration_actions_and_decision(Some(permission));
+    entries.push(PolicyEntry::of(
+        Resource::of(resource_type, None, ResourcePattern::Any),
+        actions,
+        None,
+        decision,
+    ));
+}
+
+fn push_named_entries(
+    entries: &mut Vec<PolicyEntry>,
+    resource_type: ResourceType,
+    permissions: &[cheetah_string::CheetahString],
+) {
+    for permission_entry in permissions {
+        let raw = permission_entry.as_str().trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let Some((resource_name, permission)) = raw.split_once('=') else {
+            warn!("Skipping ACL policy entry without permission assignment: {raw}");
+            continue;
+        };
+        let resource_name = resource_name.trim();
+        if resource_name.is_empty() {
+            warn!("Skipping ACL policy entry with blank resource name");
+            continue;
+        }
+
+        let resource = match resource_type {
+            ResourceType::Topic => Resource::of_topic(resource_name),
+            ResourceType::Group => Resource::of_group(resource_name.to_owned()),
+            _ => Resource::of(resource_type, Some(resource_name.to_owned()), ResourcePattern::Literal),
+        };
+        let (actions, decision) = Permission::migration_actions_and_decision(Some(permission));
+        entries.push(PolicyEntry::of(resource, actions, None, decision));
+    }
+}
+
+fn required_plain_field<'a>(
+    value: Option<&'a cheetah_string::CheetahString>,
+    field_name: &'static str,
+    access_key: &str,
+) -> RocketMQResult<&'a str> {
+    value
+        .map(|value| value.as_str().trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RocketMQError::ConfigInvalidValue {
+            key: "aclConfig",
+            value: format!("account={access_key}"),
+            reason: format!("{field_name} must not be blank"),
+        })
+}
+
 async fn seed_initial_users(provider_registry: &ProviderRegistry, config: &AuthConfig) -> RocketMQResult<()> {
     seed_init_authentication_user(provider_registry.authentication_metadata_provider(), config).await?;
     seed_inner_client_user(provider_registry.authentication_metadata_provider(), config).await
@@ -298,15 +560,21 @@ fn map_authorization_error(error: AuthorizationError) -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fs;
+    use std::time::Duration;
+    use std::time::Instant;
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::action::Action;
     use rocketmq_remoting::code::request_code::RequestCode;
+    use tempfile::TempDir;
+    use tokio::time::sleep;
 
     use super::*;
     use crate::authentication::acl_signer;
     use crate::authentication::enums::subject_type::SubjectType;
     use crate::authorization::enums::decision::Decision;
+    use crate::authorization::enums::policy_type::PolicyType;
     use crate::authorization::model::acl::Acl;
     use crate::authorization::model::policy::Policy;
     use crate::authorization::model::resource::Resource;
@@ -378,5 +646,100 @@ mod tests {
         let command = send_message_command("topic-a", "alice", &signature);
 
         runtime.check_remoting(&(), &command).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn build_runtime_loads_configured_acl_file() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    admin: false
+    defaultTopicPerm: DENY
+    defaultGroupPerm: SUB
+    topicPerms:
+      - TopicA=PUB
+    groupPerms:
+      - GroupA=SUB
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        let user = authn_provider.get_user("alice").await.unwrap();
+        assert_eq!(user.password().map(|value| value.as_str()), Some("secret"));
+        assert_eq!(user.user_type(), Some(UserType::Normal));
+        assert_eq!(user.user_status(), Some(UserStatus::Enable));
+
+        let authz_provider = runtime.provider_registry().authorization_metadata_provider();
+        let acl = authz_provider.get_acl(&User::of("alice")).await.unwrap().unwrap();
+        assert!(acl.get_policy(PolicyType::Custom).is_some());
+        assert!(acl.get_policy(PolicyType::Default).is_some());
+    }
+
+    #[tokio::test]
+    async fn acl_file_watcher_reloads_changed_user_secret() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 25,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        let user = authn_provider.get_user("alice").await.unwrap();
+        assert_eq!(user.password().map(|value| value.as_str()), Some("first"));
+
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: second
+"#,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let user = authn_provider.get_user("alice").await.unwrap();
+            if user.password().map(|value| value.as_str()) == Some("second") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ACL file watcher did not reload the updated user secret"
+            );
+            sleep(Duration::from_millis(25)).await;
+        }
+
+        runtime.shutdown().await.unwrap();
     }
 }

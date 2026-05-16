@@ -148,6 +148,9 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         config_name: broker_config.broker_identity.broker_name.clone(),
         cluster_name: broker_config.broker_identity.broker_cluster_name.clone(),
         auth_config_path: broker_config.auth_config_path.clone(),
+        acl_file: broker_config.acl_file.clone(),
+        acl_file_watch_enabled: broker_config.acl_file_watch_enabled,
+        acl_file_watch_interval_millis: broker_config.acl_file_watch_interval_millis,
         authentication_enabled: broker_config.authentication_enabled,
         authentication_whitelist: broker_config.authentication_whitelist.clone(),
         init_authentication_user: broker_config.init_authentication_user.clone(),
@@ -373,6 +376,12 @@ impl BrokerRuntime {
 
         if let Some(hook) = self.shutdown_hook.as_ref() {
             hook.before_shutdown();
+        }
+
+        if let Some(auth_runtime) = self.inner.auth_runtime.take() {
+            if let Err(error) = auth_runtime.shutdown().await {
+                warn!("Failed to shutdown auth runtime: {error}");
+            }
         }
 
         if let Some(broker_stats_manager) = self.inner.broker_stats_manager.as_ref() {

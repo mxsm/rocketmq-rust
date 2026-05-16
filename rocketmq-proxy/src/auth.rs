@@ -34,6 +34,7 @@ use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::authorization::provider::AuthorizationError;
 use rocketmq_auth::authorization::provider::AuthorizationProvider;
 use rocketmq_auth::authorization::provider::DefaultAuthorizationProvider;
+use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::DefaultAuthenticationProvider;
 use rocketmq_auth::ProviderRegistry;
@@ -129,6 +130,8 @@ impl AuthorizationContextSpec {
 pub struct ProxyAuthRuntime {
     config: ProxyAuthConfig,
     #[cfg_attr(not(test), allow(dead_code))]
+    auth_runtime: AuthRuntime,
+    #[cfg_attr(not(test), allow(dead_code))]
     provider_registry: ProviderRegistry,
     authentication_provider: Arc<DefaultAuthenticationProvider>,
     authorization_provider: Arc<DefaultAuthorizationProvider>,
@@ -162,6 +165,7 @@ impl ProxyAuthRuntime {
 
         Ok(Some(Self {
             config: config.clone(),
+            auth_runtime,
             provider_registry,
             authentication_provider: Arc::new(authentication_provider),
             authorization_provider: Arc::new(authorization_provider),
@@ -173,6 +177,10 @@ impl ProxyAuthRuntime {
 
     pub fn enabled(&self) -> bool {
         self.config.enabled()
+    }
+
+    pub async fn shutdown(&self) -> ProxyResult<()> {
+        self.auth_runtime.shutdown().await.map_err(ProxyError::from)
     }
 
     pub fn authentication_required(&self, rpc_name: &str) -> bool {

@@ -230,6 +230,9 @@ pub struct ProxyAuthConfig {
     pub config_name: String,
     pub cluster_name: String,
     pub auth_config_path: String,
+    pub acl_file: String,
+    pub acl_file_watch_enabled: bool,
+    pub acl_file_watch_interval_millis: u64,
     pub authentication_enabled: bool,
     pub authentication_provider: String,
     pub authentication_metadata_provider: String,
@@ -250,6 +253,9 @@ impl Default for ProxyAuthConfig {
             config_name: "rocketmq-proxy".to_owned(),
             cluster_name: "DefaultCluster".to_owned(),
             auth_config_path: "store/proxy/auth".to_owned(),
+            acl_file: String::new(),
+            acl_file_watch_enabled: false,
+            acl_file_watch_interval_millis: 5_000,
             authentication_enabled: false,
             authentication_provider: String::new(),
             authentication_metadata_provider: String::new(),
@@ -276,6 +282,9 @@ impl ProxyAuthConfig {
             config_name: CheetahString::from(self.config_name.as_str()),
             cluster_name: CheetahString::from(self.cluster_name.as_str()),
             auth_config_path: CheetahString::from(self.auth_config_path.as_str()),
+            acl_file: CheetahString::from(self.acl_file.as_str()),
+            acl_file_watch_enabled: self.acl_file_watch_enabled,
+            acl_file_watch_interval_millis: self.acl_file_watch_interval_millis,
             authentication_enabled: self.authentication_enabled,
             authentication_provider: CheetahString::from(self.authentication_provider.as_str()),
             authentication_metadata_provider: CheetahString::from(self.authentication_metadata_provider.as_str()),
@@ -323,5 +332,47 @@ impl ProxyConfig {
             ))
             .into()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_auth_config_maps_acl_file_fields_to_auth_config() {
+        let config = ProxyAuthConfig {
+            acl_file: "conf/plain_acl.yml".to_owned(),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 250,
+            ..ProxyAuthConfig::default()
+        };
+
+        let auth_config = config.to_auth_config();
+
+        assert_eq!(auth_config.acl_file.as_str(), "conf/plain_acl.yml");
+        assert!(auth_config.acl_file_watch_enabled);
+        assert_eq!(auth_config.acl_file_watch_interval_millis, 250);
+    }
+
+    #[test]
+    fn proxy_auth_config_deserializes_acl_file_camel_case_keys() {
+        let config: ProxyAuthConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+aclFile: conf/plain_acl.yml
+aclFileWatchEnabled: true
+aclFileWatchIntervalMillis: 250
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert_eq!(config.acl_file, "conf/plain_acl.yml");
+        assert!(config.acl_file_watch_enabled);
+        assert_eq!(config.acl_file_watch_interval_millis, 250);
     }
 }

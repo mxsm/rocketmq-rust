@@ -417,6 +417,18 @@ mod defaults {
             .into()
     }
 
+    pub fn acl_file() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn acl_file_watch_enabled() -> bool {
+        false
+    }
+
+    pub fn acl_file_watch_interval_millis() -> u64 {
+        5_000
+    }
+
     pub fn authentication_enabled() -> bool {
         false
     }
@@ -1013,6 +1025,15 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::auth_config_path")]
     pub auth_config_path: CheetahString,
 
+    #[serde(default = "defaults::acl_file")]
+    pub acl_file: CheetahString,
+
+    #[serde(default = "defaults::acl_file_watch_enabled")]
+    pub acl_file_watch_enabled: bool,
+
+    #[serde(default = "defaults::acl_file_watch_interval_millis")]
+    pub acl_file_watch_interval_millis: u64,
+
     #[serde(default = "defaults::authentication_enabled")]
     pub authentication_enabled: bool,
 
@@ -1180,6 +1201,9 @@ impl Default for BrokerConfig {
             allow_recall_when_broker_not_writeable: false,
             enable_fast_channel_event_process: false,
             auth_config_path: defaults::auth_config_path(),
+            acl_file: defaults::acl_file(),
+            acl_file_watch_enabled: defaults::acl_file_watch_enabled(),
+            acl_file_watch_interval_millis: defaults::acl_file_watch_interval_millis(),
             authentication_enabled: defaults::authentication_enabled(),
             authorization_enabled: defaults::authorization_enabled(),
             authentication_whitelist: defaults::authentication_whitelist(),
@@ -1520,6 +1544,26 @@ impl BrokerConfig {
             self.auto_delete_unused_stats.to_string().into(),
         );
         properties.insert("forwardTimeout".into(), self.forward_timeout.to_string().into());
+        properties.insert("authConfigPath".into(), self.auth_config_path.clone());
+        properties.insert("aclFile".into(), self.acl_file.clone());
+        properties.insert(
+            "aclFileWatchEnabled".into(),
+            self.acl_file_watch_enabled.to_string().into(),
+        );
+        properties.insert(
+            "aclFileWatchIntervalMillis".into(),
+            self.acl_file_watch_interval_millis.to_string().into(),
+        );
+        properties.insert(
+            "authenticationEnabled".into(),
+            self.authentication_enabled.to_string().into(),
+        );
+        properties.insert(
+            "authorizationEnabled".into(),
+            self.authorization_enabled.to_string().into(),
+        );
+        properties.insert("authenticationWhitelist".into(), self.authentication_whitelist.clone());
+        properties.insert("authorizationWhitelist".into(), self.authorization_whitelist.clone());
         properties
     }
 }
@@ -1706,6 +1750,31 @@ mod tests {
                 .map(|value| value.as_str()),
             Some("5000")
         );
+    }
+
+    #[test]
+    fn default_broker_config_uses_auth_acl_file_defaults() {
+        let config = BrokerConfig::default();
+
+        assert!(config.acl_file.is_empty());
+        assert!(!config.acl_file_watch_enabled);
+        assert_eq!(config.acl_file_watch_interval_millis, 5_000);
+    }
+
+    #[test]
+    fn serde_accepts_auth_acl_file_camel_case_keys() {
+        let config: BrokerConfig = serde_json::from_str(
+            r#"{
+                "aclFile": "conf/plain_acl.yml",
+                "aclFileWatchEnabled": true,
+                "aclFileWatchIntervalMillis": 250
+            }"#,
+        )
+        .expect("broker config should deserialize auth ACL file keys");
+
+        assert_eq!(config.acl_file.as_str(), "conf/plain_acl.yml");
+        assert!(config.acl_file_watch_enabled);
+        assert_eq!(config.acl_file_watch_interval_millis, 250);
     }
 
     #[test]
