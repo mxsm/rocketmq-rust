@@ -889,7 +889,10 @@ impl BrokerRuntime {
             ))),
         );
         let auth_admin_service = Arc::new(match &self.inner.auth_runtime {
-            Some(auth_runtime) => AuthAdminService::with_provider_registry(auth_runtime.provider_registry().clone()),
+            Some(auth_runtime) => AuthAdminService::with_provider_registry_and_config(
+                auth_runtime.provider_registry().clone(),
+                auth_runtime.config().clone(),
+            ),
             None => AuthAdminService::new(build_auth_config(self.inner.broker_config()))
                 .expect("broker auth admin service initialization must succeed"),
         });

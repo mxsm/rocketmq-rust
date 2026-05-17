@@ -234,6 +234,10 @@ pub struct AuthRuntime {
 }
 
 impl AuthRuntime {
+    pub fn config(&self) -> &AuthConfig {
+        &self.config
+    }
+
     pub fn provider_registry(&self) -> &ProviderRegistry {
         &self.provider_registry
     }

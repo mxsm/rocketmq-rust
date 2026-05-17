@@ -19,6 +19,7 @@ use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 
+use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use tokio::fs;
@@ -31,6 +32,11 @@ use crate::migration::alc::plain_access_data::PlainAccessData;
 #[derive(Clone, Debug)]
 pub struct FileAclConfigLoader {
     roots: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileAclConfigStore {
+    file: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +78,93 @@ impl FileAclConfigLoader {
         tokio::task::spawn_blocking(move || discover_acl_files(&roots))
             .await
             .map_err(|error| RocketMQError::Internal(format!("acl file discovery task failed: {error}")))?
+    }
+}
+
+impl FileAclConfigStore {
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        Self { file: file.into() }
+    }
+
+    pub async fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let addresses: Vec<_> = addresses
+            .into_iter()
+            .map(|address| address.as_ref().trim().to_owned())
+            .filter(|address| !address.is_empty())
+            .map(CheetahString::from)
+            .collect();
+        if addresses.is_empty() {
+            return Err(RocketMQError::illegal_argument("The globalWhiteAddrs is blank"));
+        }
+
+        let mut data = self.load_plain_access_data().await?;
+        data.set_global_white_remote_addresses(addresses);
+        self.write_plain_access_data(&data).await
+    }
+
+    async fn load_plain_access_data(&self) -> RocketMQResult<PlainAccessData> {
+        let bytes = match fs::read(&self.file).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(PlainAccessData::default()),
+            Err(error) => {
+                return Err(RocketMQError::StorageReadFailed {
+                    path: self.file.display().to_string(),
+                    reason: error.to_string(),
+                });
+            }
+        };
+
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(PlainAccessData::default());
+        }
+
+        serde_yaml::from_slice(&bytes)
+            .map_err(|error| RocketMQError::deserialization_failed("YAML", format!("{}: {error}", self.file.display())))
+    }
+
+    async fn write_plain_access_data(&self, data: &PlainAccessData) -> RocketMQResult<()> {
+        let content = serde_yaml::to_string(data).map_err(|error| {
+            RocketMQError::Serialization(rocketmq_error::SerializationError::encode_failed(
+                "YAML",
+                error.to_string(),
+            ))
+        })?;
+
+        if let Some(parent) = self.file.parent() {
+            fs::create_dir_all(parent).await.map_err(|error| {
+                RocketMQError::storage_write_failed(parent.display().to_string(), error.to_string())
+            })?;
+        }
+
+        if fs::metadata(&self.file).await.is_ok() {
+            let backup = backup_file_path(&self.file);
+            fs::copy(&self.file, &backup).await.map_err(|error| {
+                RocketMQError::storage_write_failed(backup.display().to_string(), error.to_string())
+            })?;
+        }
+
+        let temp_file = temp_file_path(&self.file);
+        fs::write(&temp_file, content)
+            .await
+            .map_err(|error| RocketMQError::storage_write_failed(temp_file.display().to_string(), error.to_string()))?;
+
+        match fs::rename(&temp_file, &self.file).await {
+            Ok(()) => Ok(()),
+            Err(rename_error) => {
+                fs::copy(&temp_file, &self.file).await.map_err(|error| {
+                    RocketMQError::storage_write_failed(
+                        self.file.display().to_string(),
+                        format!("{error}; rename failed first: {rename_error}"),
+                    )
+                })?;
+                let _ = fs::remove_file(&temp_file).await;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -178,6 +271,24 @@ fn is_acl_yaml(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
         .is_none_or(|file_name| !file_name.eq_ignore_ascii_case("tools.yml"))
+}
+
+fn backup_file_path(path: &Path) -> PathBuf {
+    let mut backup = path.as_os_str().to_os_string();
+    backup.push(".bak");
+    PathBuf::from(backup)
+}
+
+fn temp_file_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("plain_acl.yml");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    path.with_file_name(format!(".{file_name}.{}.tmp", nanos))
 }
 
 #[cfg(test)]
@@ -316,5 +427,61 @@ accounts:
 
         assert!(error.to_string().contains("secretKey must not be blank"));
         assert!(!error.to_string().contains("secret="));
+    }
+
+    #[tokio::test]
+    async fn store_updates_global_white_remote_addresses_and_preserves_accounts() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: ak
+    secretKey: sk
+    defaultTopicPerm: PUB
+"#,
+        )
+        .unwrap();
+
+        FileAclConfigStore::new(&file)
+            .update_global_white_remote_addresses(["172.16.*.*", "192.168.0.*"])
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&file).unwrap();
+        let data: PlainAccessData = serde_yaml::from_str(&content).unwrap();
+        assert_eq!(
+            data.global_white_remote_addresses(),
+            &[
+                CheetahString::from_static_str("172.16.*.*"),
+                CheetahString::from_static_str("192.168.0.*")
+            ]
+        );
+        assert_eq!(data.accounts().len(), 1);
+        assert_eq!(data.accounts()[0].access_key().unwrap().as_str(), "ak");
+        assert_eq!(data.accounts()[0].secret_key().unwrap().as_str(), "sk");
+        assert!(content.contains("globalWhiteRemoteAddresses"));
+        assert!(content.contains("accessKey"));
+    }
+
+    #[tokio::test]
+    async fn store_creates_missing_acl_file_for_global_white_remote_addresses() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("conf").join("plain_acl.yml");
+
+        FileAclConfigStore::new(&file)
+            .update_global_white_remote_addresses(["10.10.*.*"])
+            .await
+            .unwrap();
+
+        let data: PlainAccessData = serde_yaml::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            data.global_white_remote_addresses(),
+            &[CheetahString::from_static_str("10.10.*.*")]
+        );
+        assert!(data.accounts().is_empty());
     }
 }

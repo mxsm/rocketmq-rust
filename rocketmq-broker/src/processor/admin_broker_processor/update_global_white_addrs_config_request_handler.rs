@@ -73,6 +73,7 @@ impl<MS: MessageStore> UpdateGlobalWhiteAddrsConfigRequestHandler<MS> {
         match self
             .auth_admin_service
             .update_global_white_remote_addresses(global_white_addrs)
+            .await
         {
             Ok(_) => Ok(Some(response.set_code(ResponseCode::Success))),
             Err(error) => Ok(Some(map_error_response(response, error))),

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rocketmq_auth::acl::FileAclConfigStore;
 use rocketmq_auth::authentication::enums::subject_type::SubjectType;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_auth::authentication::model::subject::Subject;
@@ -24,6 +25,7 @@ use crate::auth::user_converter::UserConverter;
 
 #[derive(Clone)]
 pub struct AuthAdminService {
+    auth_config: AuthConfig,
     provider_registry: ProviderRegistry,
     authentication_provider: Arc<LocalAuthenticationMetadataProvider>,
     authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
@@ -32,11 +34,16 @@ pub struct AuthAdminService {
 impl AuthAdminService {
     pub fn new(auth_config: AuthConfig) -> Result<Self, RocketMQError> {
         let provider_registry = ProviderRegistry::local(&auth_config)?;
-        Ok(Self::with_provider_registry(provider_registry))
+        Ok(Self::with_provider_registry_and_config(provider_registry, auth_config))
     }
 
     pub fn with_provider_registry(provider_registry: ProviderRegistry) -> Self {
+        Self::with_provider_registry_and_config(provider_registry, AuthConfig::default())
+    }
+
+    pub fn with_provider_registry_and_config(provider_registry: ProviderRegistry, auth_config: AuthConfig) -> Self {
         Self {
+            auth_config,
             provider_registry: provider_registry.clone(),
             authentication_provider: provider_registry.authentication_metadata_provider(),
             authorization_provider: provider_registry.authorization_metadata_provider(),
@@ -191,7 +198,7 @@ impl AuthAdminService {
             .is_some_and(|user_type| user_type == UserType::Super))
     }
 
-    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    pub async fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -203,6 +210,13 @@ impl AuthAdminService {
             .collect();
         if addresses.is_empty() {
             return Err(RocketMQError::illegal_argument("The globalWhiteAddrs is blank"));
+        }
+
+        let acl_file = self.auth_config.acl_file.as_str().trim();
+        if !acl_file.is_empty() {
+            FileAclConfigStore::new(acl_file)
+                .update_global_white_remote_addresses(&addresses)
+                .await?;
         }
 
         self.provider_registry.update_global_white_remote_addresses(addresses)
@@ -375,6 +389,14 @@ mod tests {
         }
     }
 
+    fn temp_test_root(label: &str) -> std::path::PathBuf {
+        let millis = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_millis();
+        std::env::temp_dir().join(format!("rocketmq-rust-auth-admin-service-{label}-{millis}"))
+    }
+
     #[tokio::test]
     async fn create_get_list_update_delete_user_round_trip() {
         let service = AuthAdminService::new(test_auth_config()).unwrap();
@@ -540,6 +562,7 @@ mod tests {
 
         service
             .update_global_white_remote_addresses(["10.10.*.*", "192.168.0.*"])
+            .await
             .unwrap();
 
         assert!(registry.acl_generation() > generation);
@@ -548,12 +571,75 @@ mod tests {
         assert!(!registry.is_acl_white_remote_address(None, Some("172.16.0.7")).unwrap());
     }
 
-    #[test]
-    fn update_global_white_remote_addresses_rejects_empty_values() {
+    #[tokio::test]
+    async fn update_global_white_remote_addresses_rejects_empty_values() {
         let service = AuthAdminService::new(test_auth_config()).unwrap();
 
-        let error = service.update_global_white_remote_addresses([" ", ""]).unwrap_err();
+        let error = service
+            .update_global_white_remote_addresses([" ", ""])
+            .await
+            .unwrap_err();
 
         assert!(matches!(error, RocketMQError::IllegalArgument(_)));
+    }
+
+    #[tokio::test]
+    async fn update_global_white_remote_addresses_persists_configured_acl_file_before_snapshot() {
+        let temp_root = temp_test_root("global-white-persist");
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let acl_file = temp_root.join("plain_acl.yml");
+        std::fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: secret
+"#,
+        )
+        .unwrap();
+        let auth_config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp_root.join("auth.json").to_string_lossy().into_owned()),
+            acl_file: CheetahString::from_string(acl_file.to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+        let registry = ProviderRegistry::local(&auth_config).unwrap();
+        let service = AuthAdminService::with_provider_registry_and_config(registry.clone(), auth_config);
+
+        service
+            .update_global_white_remote_addresses(["172.16.*.*"])
+            .await
+            .unwrap();
+
+        let content = std::fs::read_to_string(&acl_file).unwrap();
+        assert!(content.contains("globalWhiteRemoteAddresses"));
+        assert!(content.contains("172.16.*.*"));
+        assert!(content.contains("accessKey"));
+        assert!(registry.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap());
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn update_global_white_remote_addresses_keeps_snapshot_when_acl_file_persist_fails() {
+        let temp_root = temp_test_root("global-white-persist-fails");
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let auth_config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp_root.join("auth.json").to_string_lossy().into_owned()),
+            acl_file: CheetahString::from_string(temp_root.to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+        let registry = ProviderRegistry::local(&auth_config).unwrap();
+        let service = AuthAdminService::with_provider_registry_and_config(registry.clone(), auth_config);
+        let generation = registry.acl_generation();
+
+        service
+            .update_global_white_remote_addresses(["172.16.*.*"])
+            .await
+            .expect_err("directory acl_file path should fail persistence");
+
+        assert_eq!(registry.acl_generation(), generation);
+        assert!(!registry.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap());
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 }
