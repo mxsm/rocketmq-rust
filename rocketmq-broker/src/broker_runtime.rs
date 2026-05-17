@@ -1284,7 +1284,7 @@ impl BrokerRuntime {
     pub(crate) fn schedule_send_heartbeat(&mut self) {
         let broker_heartbeat_interval = self.inner.broker_config.broker_heartbeat_interval;
         let inner_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
+        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_millis(1000),
             Duration::from_millis(broker_heartbeat_interval),
             async move |_ctx| {
@@ -1307,7 +1307,7 @@ impl BrokerRuntime {
     pub(crate) fn schedule_sync_controller_metadata(&mut self) {
         let period = self.inner.broker_config.sync_controller_metadata_period;
         let inner_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
+        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_millis(1000),
             Duration::from_millis(period),
             async move |_ctx| {
@@ -1320,7 +1320,7 @@ impl BrokerRuntime {
     pub(crate) fn schedule_sync_controller_replica_info(&mut self) {
         let period = self.inner.broker_config.sync_broker_metadata_period;
         let inner_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
+        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_millis(3000),
             Duration::from_millis(period),
             async move |_ctx| {
@@ -3490,8 +3490,10 @@ mod tests {
 
     use super::*;
 
+    const CONTROLLER_TEST_MIN_BASE_PORT: u16 = 20_000;
+    const CONTROLLER_TEST_MAX_BASE_PORT: u16 = 60_000;
     const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
-    static NEXT_CONTROLLER_TEST_BASE_PORT: AtomicU16 = AtomicU16::new(20_000);
+    static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
 
     #[test]
     fn build_auth_config_maps_signature_algorithm() {
@@ -3566,9 +3568,18 @@ mod tests {
     }
 
     fn allocate_controller_test_base_port() -> u16 {
-        loop {
-            let base_port =
-                NEXT_CONTROLLER_TEST_BASE_PORT.fetch_add(CONTROLLER_TEST_PORT_BLOCK_SIZE, Ordering::Relaxed);
+        let block_count = (u32::from(CONTROLLER_TEST_MAX_BASE_PORT - CONTROLLER_TEST_MIN_BASE_PORT)
+            / u32::from(CONTROLLER_TEST_PORT_BLOCK_SIZE)) as u16;
+        let seed = ((u64::from(std::process::id()) ^ current_millis()) % u64::from(block_count)) as u16;
+
+        for _ in 0..block_count {
+            let block = NEXT_CONTROLLER_TEST_PORT_BLOCK
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(seed)
+                % block_count;
+            let base_port = u32::from(CONTROLLER_TEST_MIN_BASE_PORT)
+                + u32::from(block) * u32::from(CONTROLLER_TEST_PORT_BLOCK_SIZE);
+            let base_port = u16::try_from(base_port).expect("controller test base port should fit u16");
             let required_ports = [
                 base_port + 1,
                 base_port + 2,
@@ -3580,15 +3591,29 @@ mod tests {
                 base_port + 22,
                 base_port + 31,
                 base_port + 32,
+                base_port + 41,
+                base_port + 42,
                 base_port + 90,
             ];
-            if required_ports
-                .into_iter()
-                .all(|port| TcpListener::bind(("127.0.0.1", port)).is_ok())
-            {
+            if controller_test_ports_available(&required_ports) {
                 return base_port;
             }
         }
+
+        panic!(
+            "failed to allocate a free controller-mode test port block after checking {block_count} candidate blocks"
+        );
+    }
+
+    fn controller_test_ports_available(required_ports: &[u16]) -> bool {
+        let mut listeners = Vec::with_capacity(required_ports.len());
+        for port in required_ports {
+            match TcpListener::bind(("127.0.0.1", *port)) {
+                Ok(listener) => listeners.push(listener),
+                Err(_) => return false,
+            }
+        }
+        true
     }
 
     async fn create_test_channel() -> Channel {
@@ -7563,9 +7588,9 @@ mod tests {
             .find(|manager| manager.controller_config().listen_addr.to_string() == old_controller_leader.as_str())
             .expect("find old controller leader manager")
             .clone();
-        old_controller_leader_manager
-            .shutdown()
+        tokio::time::timeout(Duration::from_secs(25), old_controller_leader_manager.shutdown())
             .await
+            .expect("old controller leader shutdown should be bounded")
             .expect("shutdown old controller leader");
 
         wait_until(
@@ -7589,42 +7614,15 @@ mod tests {
         broker_a.inner.send_heartbeat().await;
         broker_b.inner.send_heartbeat().await;
 
-        wait_until(
-            Duration::from_secs(15),
-            || {
-                let manager_a = broker_a.inner.replicas_manager();
-                let manager_b = broker_b.inner.replicas_manager();
-                match (manager_a, manager_b) {
-                    (Some(manager_a), Some(manager_b)) => {
-                        let leader_a = manager_a.controller_leader_address().cloned();
-                        let leader_b = manager_b.controller_leader_address().cloned();
-                        let master_a = manager_a.master_broker_id();
-                        let master_b = manager_b.master_broker_id();
-                        leader_a.is_some()
-                            && leader_a == leader_b
-                            && leader_a
-                                .as_ref()
-                                .is_some_and(|leader| leader.as_str() != old_controller_leader.as_str())
-                            && master_a.is_some()
-                            && master_a == master_b
-                    }
-                    _ => false,
-                }
-            },
-            "brokers to refresh controller leader and converge broker master view",
-        )
-        .await;
-        let converged_master_broker_id = broker_a
-            .inner
-            .replicas_manager()
-            .and_then(|manager| manager.master_broker_id())
-            .expect("broker A should converge on a broker master after controller leader failover");
-
-        let refreshed_controller_leader = broker_a
-            .inner
-            .replicas_manager()
-            .and_then(|manager| manager.controller_leader_address().cloned())
-            .expect("broker A should refresh controller leader");
+        let refreshed_controller_leader = controllers
+            .iter()
+            .find(|manager| {
+                manager.is_running()
+                    && manager.is_leader()
+                    && manager.controller_config().listen_addr.to_string() != old_controller_leader.as_str()
+            })
+            .map(|manager| CheetahString::from_string(manager.controller_config().listen_addr.to_string()))
+            .expect("remaining controller nodes should have a new leader");
         let replica_info_wait_start = std::time::Instant::now();
         let (replica_header, replica_body) = loop {
             let replica_info_result = tokio::time::timeout(
@@ -7638,10 +7636,10 @@ mod tests {
             let last_replica_info_state = match replica_info_result {
                 Ok(Ok((header, body))) => {
                     let sync_state_set = body.get_sync_state_set().cloned().unwrap_or_default();
-                    if header.master_broker_id == Some(converged_master_broker_id as i64)
-                        && sync_state_set.contains(&(converged_master_broker_id as i64))
-                    {
-                        break (header, body);
+                    if let Some(master_broker_id) = header.master_broker_id {
+                        if sync_state_set.contains(&master_broker_id) {
+                            break (header, body);
+                        }
                     }
                     format!(
                         "master_broker_id={:?}, sync_state_set={:?}",
@@ -7659,19 +7657,41 @@ mod tests {
             );
             sleep(Duration::from_millis(200)).await;
         };
+        let converged_master_broker_id = replica_header
+            .master_broker_id
+            .and_then(|id| u64::try_from(id).ok())
+            .expect("new controller leader should expose broker master id");
+        let expected_sync_state_set = replica_body.get_sync_state_set().cloned().unwrap_or_default();
         assert_eq!(
             replica_header.master_broker_id,
             Some(converged_master_broker_id as i64),
-            "new controller leader should expose the same broker master as brokers"
+            "new controller leader should expose the expected broker master"
         );
         assert!(
-            replica_body
-                .get_sync_state_set()
-                .cloned()
-                .unwrap_or_default()
-                .contains(&(converged_master_broker_id as i64)),
-            "new controller leader should expose a sync state set containing the broker master seen by brokers"
+            expected_sync_state_set.contains(&(converged_master_broker_id as i64)),
+            "new controller leader should expose a sync state set containing the broker master"
         );
+
+        wait_until(
+            Duration::from_secs(25),
+            || {
+                let manager_a = broker_a.inner.replicas_manager();
+                let manager_b = broker_b.inner.replicas_manager();
+                match (manager_a, manager_b) {
+                    (Some(manager_a), Some(manager_b)) => {
+                        manager_a.controller_leader_address() == Some(&refreshed_controller_leader)
+                            && manager_b.controller_leader_address() == Some(&refreshed_controller_leader)
+                            && manager_a.master_broker_id() == Some(converged_master_broker_id)
+                            && manager_b.master_broker_id() == Some(converged_master_broker_id)
+                            && manager_a.sync_state_set() == &expected_sync_state_set
+                            && manager_b.sync_state_set() == &expected_sync_state_set
+                    }
+                    _ => false,
+                }
+            },
+            "brokers to refresh controller leader and converge broker master view",
+        )
+        .await;
 
         let broker_a_manager = broker_a
             .inner

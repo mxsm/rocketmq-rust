@@ -19,6 +19,8 @@
 
 use std::any::Any;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -79,6 +81,10 @@ where
     authentication_provider: Option<Arc<P>>,
     /// Cache for authentication results
     auth_cache: Cache<String, AuthCacheEntry>,
+    /// Shared ACL snapshot generation. A successful ACL reload advances this value.
+    acl_generation: Arc<AtomicU64>,
+    /// Last generation observed by this strategy, used to drop old entries promptly.
+    last_seen_acl_generation: AtomicU64,
 }
 
 impl<P> StatefulAuthenticationStrategy<P>
@@ -87,6 +93,15 @@ where
 {
     /// Create a new stateful authentication strategy.
     pub fn new(auth_config: AuthConfig, provider: Option<Arc<P>>) -> Self {
+        Self::new_with_acl_generation(auth_config, provider, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Create a new stateful authentication strategy bound to a shared ACL generation counter.
+    pub fn new_with_acl_generation(
+        auth_config: AuthConfig,
+        provider: Option<Arc<P>>,
+        acl_generation: Arc<AtomicU64>,
+    ) -> Self {
         let mut authentication_white_set = HashSet::new();
 
         let whitelist = auth_config.authentication_whitelist.to_string();
@@ -105,31 +120,49 @@ where
             ))
             .max_capacity(auth_config.stateful_authentication_cache_max_num as u64)
             .build();
+        let initial_generation = acl_generation.load(Ordering::Acquire);
 
         Self {
             auth_config,
             authentication_white_set,
             authentication_provider: provider,
             auth_cache,
+            acl_generation,
+            last_seen_acl_generation: AtomicU64::new(initial_generation),
         }
     }
 
     /// Build cache key from authentication context.
     ///
     /// Key format:
-    /// - `{channel_id}` if username is not available
-    /// - `{channel_id}#{username}` if username is available
+    /// - `{generation}#{channel_id}` if username is not available
+    /// - `{generation}#{channel_id}#{username}` if username is available
     fn build_cache_key(&self, context: &DefaultAuthenticationContext) -> Result<String, AuthError> {
         let channel_id = context
             .base
             .channel_id()
             .ok_or_else(|| AuthError::AuthenticationFailed("Channel ID is required for stateful auth".to_string()))?;
+        let generation = self.refresh_acl_generation();
 
         if let Some(username) = context.username() {
-            Ok(format!("{}{}{}", channel_id, POUND, username))
+            Ok(format!("{}{}{}{}{}", generation, POUND, channel_id, POUND, username))
         } else {
-            Ok(channel_id.to_string())
+            Ok(format!("{}{}{}", generation, POUND, channel_id))
         }
+    }
+
+    fn refresh_acl_generation(&self) -> u64 {
+        let current = self.acl_generation.load(Ordering::Acquire);
+        let previous = self.last_seen_acl_generation.load(Ordering::Acquire);
+        if previous != current
+            && self
+                .last_seen_acl_generation
+                .compare_exchange(previous, current, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            self.auth_cache.invalidate_all();
+        }
+        current
     }
 
     /// Perform actual authentication without caching.
@@ -243,9 +276,52 @@ where
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQError;
 
     use super::*;
+    use crate::authentication::provider::AuthenticationProvider;
     use crate::authentication::provider::DefaultAuthenticationProvider;
+
+    struct CountingAuthenticationProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        should_succeed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AuthenticationProvider for CountingAuthenticationProvider {
+        type Context = DefaultAuthenticationContext;
+
+        async fn initialize(
+            &mut self,
+            _config: AuthConfig,
+            _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
+        ) -> RocketMQResult<()> {
+            Ok(())
+        }
+
+        async fn authenticate(&self, _context: &Self::Context) -> RocketMQResult<()> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.should_succeed.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(RocketMQError::authentication_failed("denied by test provider"))
+            }
+        }
+
+        fn new_context_from_metadata(
+            &self,
+            _metadata: &std::collections::HashMap<String, String>,
+            _request: Box<dyn Any + Send>,
+        ) -> Self::Context {
+            DefaultAuthenticationContext::new()
+        }
+
+        fn new_context_from_command(
+            &self,
+            _command: &rocketmq_remoting::protocol::remoting_command::RemotingCommand,
+        ) -> Self::Context {
+            DefaultAuthenticationContext::new()
+        }
+    }
 
     #[test]
     fn test_stateful_strategy_creation() {
@@ -269,7 +345,7 @@ mod tests {
         context.set_username(CheetahString::from("user-456"));
 
         let key = strategy.build_cache_key(&context).unwrap();
-        assert_eq!(key, "channel-123#user-456");
+        assert_eq!(key, "0#channel-123#user-456");
     }
 
     #[test]
@@ -282,7 +358,25 @@ mod tests {
         context.base.set_channel_id(Some(CheetahString::from("channel-789")));
 
         let key = strategy.build_cache_key(&context).unwrap();
-        assert_eq!(key, "channel-789");
+        assert_eq!(key, "0#channel-789");
+    }
+
+    #[test]
+    fn test_build_cache_key_includes_acl_generation() {
+        let config = AuthConfig::default();
+        let acl_generation = Arc::new(AtomicU64::new(7));
+        let strategy: StatefulAuthenticationStrategy<DefaultAuthenticationProvider> =
+            StatefulAuthenticationStrategy::new_with_acl_generation(config, None, acl_generation.clone());
+
+        let mut context = DefaultAuthenticationContext::new();
+        context.base.set_channel_id(Some(CheetahString::from("channel-789")));
+
+        let key = strategy.build_cache_key(&context).unwrap();
+        assert_eq!(key, "7#channel-789");
+
+        acl_generation.store(8, Ordering::Release);
+        let key = strategy.build_cache_key(&context).unwrap();
+        assert_eq!(key, "8#channel-789");
     }
 
     #[test]
@@ -343,5 +437,40 @@ mod tests {
 
         let result = strategy.authenticate(&context);
         assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_acl_generation_change_invalidates_cached_authentication_result() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let should_succeed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let provider = Arc::new(CountingAuthenticationProvider {
+            calls: calls.clone(),
+            should_succeed: should_succeed.clone(),
+        });
+        let acl_generation = Arc::new(AtomicU64::new(0));
+        let strategy = StatefulAuthenticationStrategy::new_with_acl_generation(
+            AuthConfig {
+                authentication_enabled: true,
+                ..AuthConfig::default()
+            },
+            Some(provider),
+            acl_generation.clone(),
+        );
+        let mut context = DefaultAuthenticationContext::new();
+        context.base.set_channel_id(Some(CheetahString::from("channel-1")));
+        context.set_username(CheetahString::from("alice"));
+
+        assert!(strategy.authenticate(&context).is_ok());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        should_succeed.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(strategy.authenticate(&context).is_ok());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        acl_generation.fetch_add(1, Ordering::AcqRel);
+        let result = strategy.authenticate(&context);
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

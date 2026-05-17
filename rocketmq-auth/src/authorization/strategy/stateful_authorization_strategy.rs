@@ -19,6 +19,7 @@
 //! channel/connection.
 
 use std::any::Any;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -141,6 +142,12 @@ pub struct StatefulAuthorizationStrategy {
 
     /// Request counter for periodic cleanup
     request_counter: AtomicUsize,
+
+    /// Shared ACL snapshot generation. A successful ACL reload advances this value.
+    acl_generation: Arc<AtomicU64>,
+
+    /// Last generation observed by this strategy, used to drop old entries promptly.
+    last_seen_acl_generation: AtomicU64,
 }
 
 impl StatefulAuthorizationStrategy {
@@ -162,10 +169,20 @@ impl StatefulAuthorizationStrategy {
     /// let strategy = StatefulAuthorizationStrategy::new(config, None)?;
     /// ```
     pub fn new(auth_config: AuthConfig, metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
+        Self::new_with_acl_generation(auth_config, metadata_service, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Creates a new stateful authorization strategy bound to a shared ACL generation counter.
+    pub fn new_with_acl_generation(
+        auth_config: AuthConfig,
+        metadata_service: Option<Box<dyn Any + Send + Sync>>,
+        acl_generation: Arc<AtomicU64>,
+    ) -> StrategyResult<Self> {
         let cache_ttl = Duration::from_secs(auth_config.stateful_authorization_cache_expired_second as u64);
         let cache_max_size = auth_config.stateful_authorization_cache_max_num as usize;
 
         let base = AbstractAuthorizationStrategy::new(auth_config, metadata_service)?;
+        let initial_generation = acl_generation.load(Ordering::Acquire);
 
         debug!(
             "StatefulAuthorizationStrategy initialized with TTL: {:?}, max size: {}",
@@ -178,13 +195,16 @@ impl StatefulAuthorizationStrategy {
             cache_ttl,
             cache_max_size,
             request_counter: AtomicUsize::new(0),
+            acl_generation,
+            last_seen_acl_generation: AtomicU64::new(initial_generation),
         })
     }
 
     /// Builds a cache key from the authorization context.
     ///
-    /// Format: `{channel_id}#{subject_key}#{resource_key}#{actions}#{source_ip}`
+    /// Format: `{generation}#{channel_id}#{subject_key}#{resource_key}#{actions}#{source_ip}`
     fn build_key(&self, context: &DefaultAuthorizationContext) -> String {
+        let generation = self.refresh_acl_generation();
         let channel_id = context.channel_id().unwrap_or("");
         let subject_key = context.subject().map(|s| s.subject_key()).unwrap_or_default();
         let resource_key = context.resource().map(|r| format!("{:?}", r)).unwrap_or_default();
@@ -197,9 +217,23 @@ impl StatefulAuthorizationStrategy {
         let source_ip = context.source_ip().unwrap_or("");
 
         format!(
-            "{}#{}#{}#{}#{}",
-            channel_id, subject_key, resource_key, actions, source_ip
+            "{}#{}#{}#{}#{}#{}",
+            generation, channel_id, subject_key, resource_key, actions, source_ip
         )
+    }
+
+    fn refresh_acl_generation(&self) -> u64 {
+        let current = self.acl_generation.load(Ordering::Acquire);
+        let previous = self.last_seen_acl_generation.load(Ordering::Acquire);
+        if previous != current
+            && self
+                .last_seen_acl_generation
+                .compare_exchange(previous, current, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            self.clear_cache();
+        }
+        current
     }
 
     /// Evicts expired entries from the cache.
@@ -392,8 +426,28 @@ mod tests {
         context.set_source_ip("192.168.0.1".to_string());
 
         let key = strategy.build_key(&context);
+        assert!(key.starts_with("0#"));
         assert!(key.contains("ch-123"));
         assert!(key.contains("192.168.0.1"));
+    }
+
+    #[test]
+    fn test_cache_key_includes_acl_generation() {
+        let config = create_test_config();
+        let acl_generation = Arc::new(AtomicU64::new(11));
+        let strategy =
+            StatefulAuthorizationStrategy::new_with_acl_generation(config, None, acl_generation.clone()).unwrap();
+
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_channel_id("ch-123".to_string());
+        context.set_source_ip("192.168.0.1".to_string());
+
+        let key = strategy.build_key(&context);
+        assert!(key.starts_with("11#ch-123#"));
+
+        acl_generation.store(12, Ordering::Release);
+        let key = strategy.build_key(&context);
+        assert!(key.starts_with("12#ch-123#"));
     }
 
     #[test]
@@ -419,5 +473,29 @@ mod tests {
 
         strategy.clear_cache();
         assert_eq!(strategy.cache_size(), 0);
+    }
+
+    #[test]
+    fn test_acl_generation_change_invalidates_cached_authorization_result() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let config = create_test_config();
+        let acl_generation = Arc::new(AtomicU64::new(0));
+        let strategy =
+            StatefulAuthorizationStrategy::new_with_acl_generation(config, None, acl_generation.clone()).unwrap();
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_channel_id("ch-123".to_string());
+        context.set_source_ip("192.168.0.1".to_string());
+
+        assert!(strategy.evaluate(&context).is_ok());
+        assert_eq!(strategy.cache_size(), 1);
+
+        acl_generation.fetch_add(1, Ordering::AcqRel);
+        assert!(strategy.evaluate(&context).is_ok());
+        assert_eq!(strategy.cache_size(), 1);
+
+        let cache = strategy.auth_cache.read().unwrap();
+        assert!(cache.keys().all(|key| key.starts_with("1#")));
     }
 }

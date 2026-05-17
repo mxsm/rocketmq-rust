@@ -20,5 +20,6 @@ pub mod validator;
 pub use crate::migration::alc::acl_config::AclConfig;
 pub use crate::migration::alc::plain_access_config::PlainAccessConfig;
 pub use crate::migration::alc::plain_access_data::PlainAccessData;
+pub use loader::AclConfigFingerprint;
 pub use loader::FileAclConfigLoader;
 pub use validator::validate_acl_config;

@@ -352,20 +352,25 @@ impl Controller for OpenRaftController {
 
         // Shutdown Raft node
         if let Some(node) = self.node.take() {
-            if let Err(e) = node.shutdown().await {
-                eprintln!("Error shutting down Raft node: {}", e);
-            } else {
-                info!("Raft node shutdown successfully");
+            match tokio::time::timeout(tokio::time::Duration::from_secs(10), node.shutdown()).await {
+                Ok(Ok(())) => info!("Raft node shutdown successfully"),
+                Ok(Err(e)) => eprintln!("Error shutting down Raft node: {}", e),
+                Err(_) => eprintln!("Timeout waiting for Raft node shutdown"),
             }
         }
 
         // Wait for server task to complete (with timeout)
         if let Some(handle) = self.handle.take() {
             let timeout = tokio::time::Duration::from_secs(10);
-            match tokio::time::timeout(timeout, handle).await {
+            let mut handle = handle;
+            match tokio::time::timeout(timeout, &mut handle).await {
                 Ok(Ok(_)) => info!("Server task completed successfully"),
                 Ok(Err(e)) => eprintln!("Server task panicked: {}", e),
-                Err(_) => eprintln!("Timeout waiting for server task to complete"),
+                Err(_) => {
+                    eprintln!("Timeout waiting for server task to complete");
+                    handle.abort();
+                    let _ = handle.await;
+                }
             }
         }
 

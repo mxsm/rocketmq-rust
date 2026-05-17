@@ -91,8 +91,14 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
     async fn match_policy_entries(&self, context: &DefaultAuthorizationContext, acl: &Acl) -> Option<PolicyEntry> {
         let mut matched_entries = Vec::new();
 
-        // Step 1: Try CUSTOM policies first
-        if let Some(policy) = acl.get_policy(PolicyType::Custom) {
+        // Step 1: Try CUSTOM policies first. ACLs normally contain one policy
+        // per type, but admin or provider inputs may contain duplicates; all
+        // matching entries must be considered before DENY/ALLOW priority sorting.
+        for policy in acl
+            .policies()
+            .iter()
+            .filter(|policy| policy.policy_type() == PolicyType::Custom)
+        {
             if let Some(mut entries) = self.match_policy_entries_from_policy(context, policy) {
                 matched_entries.append(&mut entries);
             }
@@ -100,7 +106,11 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
 
         // Step 2: If no CUSTOM matches, try DEFAULT policies
         if matched_entries.is_empty() {
-            if let Some(policy) = acl.get_policy(PolicyType::Default) {
+            for policy in acl
+                .policies()
+                .iter()
+                .filter(|policy| policy.policy_type() == PolicyType::Default)
+            {
                 if let Some(mut entries) = self.match_policy_entries_from_policy(context, policy) {
                     matched_entries.append(&mut entries);
                 }
