@@ -616,6 +616,8 @@ accounts:
         assert!(content.contains("globalWhiteRemoteAddresses"));
         assert!(content.contains("172.16.*.*"));
         assert!(content.contains("accessKey"));
+        assert!(content.contains("dataVersion"));
+        assert!(content.contains("counter: 1"));
         assert!(registry.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap());
         let _ = std::fs::remove_dir_all(temp_root);
     }

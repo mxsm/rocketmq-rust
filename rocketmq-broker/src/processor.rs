@@ -451,6 +451,15 @@ fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingComm
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_auth::config::AuthConfig;
+    use rocketmq_auth::AuthRuntimeBuilder;
+    use rocketmq_remoting::local::LocalRequestHarness;
+    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+
+    use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
+
+    type TestBrokerRequestProcessor =
+        BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
 
     #[test]
     fn fast_failure_queue_kind_maps_java_fast_failure_families() {
@@ -505,6 +514,39 @@ mod tests {
         assert_eq!(
             fast_failure_queue_kind(RequestCode::UpdateBrokerConfig as i32, false),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_request_processor_checks_auth_before_dispatch() {
+        let auth_runtime = AuthRuntimeBuilder::new(AuthConfig {
+            authentication_enabled: true,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .expect("auth runtime should initialize");
+        let mut processor = TestBrokerRequestProcessor::new();
+        processor.set_auth_runtime(Arc::new(auth_runtime));
+
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_opaque(7);
+        let harness = LocalRequestHarness::new()
+            .await
+            .expect("local remoting harness should start");
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("broker processor should return auth response")
+            .expect("auth failure should be encoded as a response command");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(response.opaque(), 7);
+        assert!(
+            response
+                .remark()
+                .is_some_and(|remark| remark.as_str().contains("username cannot be null")),
+            "missing AccessKey should be reported as an authentication failure"
         );
     }
 }

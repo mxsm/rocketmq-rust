@@ -660,9 +660,15 @@ fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
 
+    use rocketmq_auth::authentication::acl_signer;
+    use rocketmq_auth::authentication::enums::user_status::UserStatus;
+    use rocketmq_auth::authentication::enums::user_type::UserType;
+    use rocketmq_auth::authorization::enums::decision::Decision;
+    use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_remoting::code::request_code::RequestCode;
     use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -673,6 +679,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("test temp directory should be created");
         dir
+    }
+
+    fn send_message_command(topic: &str, access_key: &str, secret_key: &str) -> RemotingCommand {
+        let signature = acl_signer::cal_signature(format!("{access_key}{topic}").as_bytes(), secret_key)
+            .expect("signature should be calculated");
+        let mut ext_fields = HashMap::new();
+        ext_fields.insert(
+            CheetahString::from_static_str("AccessKey"),
+            CheetahString::from(access_key),
+        );
+        ext_fields.insert(
+            CheetahString::from_static_str("Signature"),
+            CheetahString::from(signature),
+        );
+        ext_fields.insert(CheetahString::from_static_str("topic"), CheetahString::from(topic));
+        RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(ext_fields)
+    }
+
+    fn normal_user(username: &str, password: &str) -> User {
+        let mut user = User::of_with_type(username, password, UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        user
     }
 
     #[test]
@@ -776,6 +804,102 @@ accounts:
             .authorize_request("QueryRoute", Some(&principal), &contexts)
             .await
             .expect("white listed principal should bypass authorization metadata lookup");
+
+        runtime.shutdown().await.expect("runtime should shut down");
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[tokio::test]
+    async fn remoting_auth_restores_persisted_metadata_after_restart() {
+        let test_dir = unique_test_dir("proxy-auth-persisted-remoting");
+        let config = ProxyAuthConfig {
+            authentication_enabled: true,
+            authorization_enabled: true,
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+            ..ProxyAuthConfig::default()
+        };
+
+        let runtime = ProxyAuthRuntime::from_proxy_config(&config)
+            .await
+            .expect("runtime should build")
+            .expect("runtime should be enabled");
+        runtime.create_user(normal_user("alice", "secret")).await.unwrap();
+        runtime
+            .create_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("TopicA")],
+                    vec![Action::Pub],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .unwrap();
+        runtime.shutdown().await.expect("runtime should shut down");
+
+        let restarted = ProxyAuthRuntime::from_proxy_config(&config)
+            .await
+            .expect("runtime should rebuild")
+            .expect("runtime should be enabled");
+        let command = send_message_command("TopicA", "alice", "secret");
+        let principal = restarted
+            .authenticate_remoting(&command, Some("channel-a"), Some("127.0.0.1"))
+            .await
+            .expect("authentication should use persisted user")
+            .expect("principal should exist");
+        assert_eq!(principal.username(), "alice");
+
+        restarted
+            .authorize_remoting(&(), &command)
+            .await
+            .expect("authorization should use persisted ACL");
+
+        restarted.shutdown().await.expect("runtime should shut down");
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[tokio::test]
+    async fn remoting_authorization_denies_insufficient_permission() {
+        let test_dir = unique_test_dir("proxy-auth-remoting-deny");
+        let runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+            authentication_enabled: true,
+            authorization_enabled: true,
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+            ..ProxyAuthConfig::default()
+        })
+        .await
+        .expect("runtime should build")
+        .expect("runtime should be enabled");
+        runtime.create_user(normal_user("alice", "secret")).await.unwrap();
+        runtime
+            .create_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("TopicA")],
+                    vec![Action::Pub],
+                    None,
+                    Decision::Deny,
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let command = send_message_command("TopicA", "alice", "secret");
+        runtime
+            .authenticate_remoting(&command, Some("channel-a"), Some("127.0.0.1"))
+            .await
+            .expect("authentication should pass");
+        let error = runtime
+            .authorize_remoting(&(), &command)
+            .await
+            .expect_err("authorization should deny");
+        assert!(matches!(
+            error,
+            ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
+        ));
 
         runtime.shutdown().await.expect("runtime should shut down");
         let _ = fs::remove_dir_all(test_dir);

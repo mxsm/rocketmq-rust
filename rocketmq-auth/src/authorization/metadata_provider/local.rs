@@ -14,30 +14,44 @@
 
 //! Local authorization metadata provider implementation.
 //!
-//! This module provides a RocksDB-based implementation of the `AuthorizationMetadataProvider`
-//! trait for storing and retrieving ACL (Access Control List) metadata locally.
+//! This module provides a local implementation of the `AuthorizationMetadataProvider`
+//! trait for storing and retrieving ACL (Access Control List) metadata.
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 
+use rocketmq_common::common::action::Action;
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::debug;
 use tracing::warn;
 
+use crate::authentication::enums::subject_type::SubjectType;
 use crate::authentication::model::subject::Subject;
+use crate::authorization::enums::decision::Decision;
+use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::MetadataResult;
 use crate::authorization::model::acl::Acl;
+use crate::authorization::model::environment::Environment;
+use crate::authorization::model::policy::Policy;
+use crate::authorization::model::policy_entry::PolicyEntry;
+use crate::authorization::model::resource::Resource;
 use crate::authorization::provider::AuthorizationError;
 use crate::config::AuthConfig;
 
-/// Local authorization metadata provider using RocksDB for persistent storage.
+/// Local authorization metadata provider backed by an in-memory snapshot and an optional JSON
+/// snapshot file.
 ///
 /// This provider implements ACL metadata storage with the following features:
-/// - Persistent storage using RocksDB
+/// - Persistent local snapshot storage when `auth_config_path` is configured
 /// - In-memory caching for performance
 /// - Thread-safe operations
 /// - Automatic cache invalidation on updates
@@ -46,16 +60,15 @@ use crate::config::AuthConfig;
 ///
 /// ```text
 /// LocalAuthorizationMetadataProvider
-/// ├── RocksDB Storage (persistent)
-/// │   └── Column Family: acls
-/// │       └── Key: subject_key → Value: ACL (JSON)
-/// └── Cache (in-memory)
-///     └── LRU cache with TTL
+/// |- JSON snapshot file (persistent, optional)
+/// |  `- acls.json
+/// `- Cache (in-memory)
+///    `- subject_key -> ACL
 /// ```
 ///
 /// # Storage Format
 ///
-/// ACLs are stored in RocksDB with the following layout:
+/// ACLs are stored in a JSON snapshot with the following layout:
 /// - **Key**: Subject key (e.g., "User:alice", "Role:admin")
 /// - **Value**: JSON-serialized ACL object
 ///
@@ -79,8 +92,9 @@ use crate::config::AuthConfig;
 /// provider.initialize(config, None)?;
 /// ```
 pub struct LocalAuthorizationMetadataProvider {
-    /// Path to RocksDB storage directory
+    /// Path to the JSON snapshot file.
     storage_path: Option<PathBuf>,
+    storage: Arc<RwLock<HashMap<String, Acl>>>,
 
     /// In-memory ACL cache (subject_key -> ACL)
     /// Using RwLock for thread-safe access
@@ -91,6 +105,7 @@ pub struct LocalAuthorizationMetadataProvider {
 
     /// Initialization state
     initialized: Arc<RwLock<bool>>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Cached ACL entry with expiration
@@ -143,130 +158,65 @@ impl Default for CacheConfig {
     }
 }
 
+impl CacheConfig {
+    fn from_auth_config(config: &AuthConfig) -> Self {
+        Self {
+            max_size: config.acl_cache_max_num as usize,
+            ttl: Duration::from_secs(config.acl_cache_expired_second as u64),
+            refresh_interval: Duration::from_secs(config.acl_cache_refresh_second as u64),
+        }
+    }
+}
+
 impl LocalAuthorizationMetadataProvider {
     /// Create a new local authorization metadata provider.
     pub fn new() -> Self {
         Self {
             storage_path: None,
+            storage: Arc::new(RwLock::new(HashMap::new())),
             cache: Arc::new(RwLock::new(HashMap::new())),
             cache_config: CacheConfig::default(),
             initialized: Arc::new(RwLock::new(false)),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
-    /// Load ACL from RocksDB storage.
-    ///
-    /// This is a placeholder for actual RocksDB integration.
-    /// In production, this would use `rust-rocksdb` crate.
     fn load_from_storage(&self, subject_key: &str) -> MetadataResult<Option<Acl>> {
-        // Placeholder implementation
-        // TODO: Integrate with RocksDB
-        // let db_path = self.storage_path.as_ref().ok_or_else(|| {
-        //     AuthorizationError::NotInitialized("Storage not initialized".to_string())
-        // })?;
-        //
-        // let db = rocksdb::DB::open_default(db_path)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // let key_bytes = subject_key.as_bytes();
-        // let value_bytes = db.get(key_bytes)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // match value_bytes {
-        //     Some(bytes) => {
-        //         let acl: Acl = serde_json::from_slice(&bytes)
-        //             .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //         Ok(Some(acl))
-        //     }
-        //     None => Ok(None),
-        // }
-
-        debug!("load_from_storage called for subject: {}", subject_key);
-        Ok(None)
+        let storage = self.storage_read()?;
+        Ok(storage.get(subject_key).cloned())
     }
 
-    /// Save ACL to RocksDB storage.
-    fn save_to_storage(&self, acl: &Acl) -> MetadataResult<()> {
-        // Placeholder implementation
-        // TODO: Integrate with RocksDB
-        // let db_path = self.storage_path.as_ref().ok_or_else(|| {
-        //     AuthorizationError::NotInitialized("Storage not initialized".to_string())
-        // })?;
-        //
-        // let db = rocksdb::DB::open_default(db_path)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // let key_bytes = acl.subject_key().as_bytes();
-        // let value_bytes = serde_json::to_vec(acl)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // db.put(key_bytes, value_bytes)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // db.flush()
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
+    async fn persist_storage_snapshot(&self, snapshot: &HashMap<String, Acl>) -> MetadataResult<()> {
+        let Some(path) = &self.storage_path else {
+            return Ok(());
+        };
+        let path = path.clone();
+        let snapshot = snapshot.clone();
+        tokio::task::spawn_blocking(move || write_acl_snapshot(&path, &snapshot))
+            .await
+            .map_err(|error| AuthorizationError::MetadataServiceError(format!("ACL snapshot task failed: {error}")))?
+    }
 
-        debug!("save_to_storage called for subject: {}", acl.subject_key());
+    fn replace_storage(&self, snapshot: HashMap<String, Acl>) -> MetadataResult<()> {
+        let mut storage = self.storage_write()?;
+        *storage = snapshot;
         Ok(())
     }
 
-    /// Delete ACL from RocksDB storage.
-    fn delete_from_storage(&self, subject_key: &str) -> MetadataResult<()> {
-        // Placeholder implementation
-        // TODO: Integrate with RocksDB
-        // let db_path = self.storage_path.as_ref().ok_or_else(|| {
-        //     AuthorizationError::NotInitialized("Storage not initialized".to_string())
-        // })?;
-        //
-        // let db = rocksdb::DB::open_default(db_path)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // let key_bytes = subject_key.as_bytes();
-        // db.delete(key_bytes)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // db.flush()
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-
-        debug!("delete_from_storage called for subject: {}", subject_key);
-        Ok(())
-    }
-
-    /// List all ACLs from RocksDB storage.
     fn list_from_storage(&self) -> MetadataResult<Vec<Acl>> {
-        // Placeholder implementation
-        // TODO: Integrate with RocksDB
-        // let db_path = self.storage_path.as_ref().ok_or_else(|| {
-        //     AuthorizationError::NotInitialized("Storage not initialized".to_string())
-        // })?;
-        //
-        // let db = rocksdb::DB::open_default(db_path)
-        //     .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        // let mut acls = Vec::new();
-        // let iter = db.iterator(rocksdb::IteratorMode::Start);
-        //
-        // for item in iter {
-        //     let (_, value) = item
-        //         .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        //     let acl: Acl = serde_json::from_slice(&value)
-        //         .map_err(|e| AuthorizationError::MetadataServiceError(e.to_string()))?;
-        //
-        //     acls.push(acl);
-        // }
-        //
-        // Ok(acls)
-
-        debug!("list_from_storage called");
-        Ok(Vec::new())
+        let storage = self.storage_read()?;
+        Ok(storage.values().cloned().collect())
     }
 
     /// Get ACL from cache, loading from storage if necessary.
     async fn get_cached(&self, subject_key: &str) -> MetadataResult<Option<Acl>> {
+        if self.cache_config.max_size == 0 {
+            return self.load_from_storage(subject_key);
+        }
+
         // Check cache first
         {
-            let mut cache = self.cache.write().unwrap();
+            let mut cache = self.cache_write()?;
             if let Some(cached) = cache.get_mut(subject_key) {
                 // Check if expired
                 if !cached.is_expired(self.cache_config.ttl) {
@@ -287,7 +237,7 @@ impl LocalAuthorizationMetadataProvider {
 
         // Update cache
         {
-            let mut cache = self.cache.write().unwrap();
+            let mut cache = self.cache_write()?;
 
             // Evict oldest entry if cache is full
             if cache.len() >= self.cache_config.max_size {
@@ -313,11 +263,71 @@ impl LocalAuthorizationMetadataProvider {
     }
 
     /// Invalidate cache entry for a subject.
-    fn invalidate_cache(&self, subject_key: &str) {
-        let mut cache = self.cache.write().unwrap();
+    fn invalidate_cache(&self, subject_key: &str) -> MetadataResult<()> {
+        let mut cache = self.cache_write()?;
         if cache.remove(subject_key).is_some() {
             debug!("Invalidated cache for subject: {}", subject_key);
         }
+        Ok(())
+    }
+
+    fn store_cache_entry(&self, subject_key: &str, acl: Option<Acl>) -> MetadataResult<()> {
+        if self.cache_config.max_size == 0 {
+            return Ok(());
+        }
+
+        let mut cache = self.cache_write()?;
+        if !cache.contains_key(subject_key) && cache.len() >= self.cache_config.max_size {
+            self.evict_oldest(&mut cache);
+        }
+        cache.insert(subject_key.to_string(), CachedAcl::new(acl));
+        Ok(())
+    }
+
+    fn ensure_initialized(&self) -> MetadataResult<()> {
+        if *self.initialized_read()? {
+            Ok(())
+        } else {
+            Err(AuthorizationError::NotInitialized(
+                "Provider not initialized".to_string(),
+            ))
+        }
+    }
+
+    fn initialized_read(&self) -> MetadataResult<RwLockReadGuard<'_, bool>> {
+        self.initialized
+            .read()
+            .map_err(|_| AuthorizationError::MetadataServiceError("ACL initialized lock is poisoned".to_string()))
+    }
+
+    fn initialized_write(&self) -> MetadataResult<RwLockWriteGuard<'_, bool>> {
+        self.initialized
+            .write()
+            .map_err(|_| AuthorizationError::MetadataServiceError("ACL initialized lock is poisoned".to_string()))
+    }
+
+    fn storage_read(&self) -> MetadataResult<RwLockReadGuard<'_, HashMap<String, Acl>>> {
+        self.storage
+            .read()
+            .map_err(|_| AuthorizationError::MetadataServiceError("ACL storage lock is poisoned".to_string()))
+    }
+
+    fn storage_write(&self) -> MetadataResult<RwLockWriteGuard<'_, HashMap<String, Acl>>> {
+        self.storage
+            .write()
+            .map_err(|_| AuthorizationError::MetadataServiceError("ACL storage lock is poisoned".to_string()))
+    }
+
+    fn cache_write(&self) -> MetadataResult<RwLockWriteGuard<'_, HashMap<String, CachedAcl>>> {
+        self.cache
+            .write()
+            .map_err(|_| AuthorizationError::MetadataServiceError("ACL cache lock is poisoned".to_string()))
+    }
+
+    fn cache_read(&self) -> MetadataResult<RwLockReadGuard<'_, HashMap<String, CachedAcl>>> {
+        self.cache
+            .read()
+            .map_err(|_| AuthorizationError::MetadataServiceError("ACL cache lock is poisoned".to_string()))
     }
 
     /// Filter ACLs by subject and resource patterns.
@@ -357,6 +367,182 @@ impl LocalAuthorizationMetadataProvider {
     }
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredAclSnapshot {
+    acls: Vec<StoredAclRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredAclRecord {
+    subject: String,
+    policies: Vec<StoredPolicyRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredPolicyRecord {
+    policy_type: String,
+    entries: Vec<StoredPolicyEntryRecord>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredPolicyEntryRecord {
+    resource: String,
+    actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    source_ips: Vec<String>,
+    decision: String,
+}
+
+fn auth_metadata_snapshot_path(config: &AuthConfig, file_name: &str) -> Option<PathBuf> {
+    let raw_path = config.auth_config_path.as_str().trim();
+    if raw_path.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw_path);
+    let root = if path.extension().is_some() {
+        path.with_extension("")
+    } else {
+        path
+    };
+    Some(root.join(file_name))
+}
+
+fn read_acl_snapshot(path: &Path) -> MetadataResult<HashMap<String, Acl>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(error) => return Err(storage_error(path, error)),
+    };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(HashMap::new());
+    }
+    let snapshot: StoredAclSnapshot = serde_json::from_slice(&bytes)
+        .map_err(|error| AuthorizationError::MetadataServiceError(format!("{}: {error}", path.display())))?;
+    let mut acls = HashMap::new();
+    for record in snapshot.acls {
+        let acl = acl_from_record(record)?;
+        acls.insert(acl.subject_key().to_string(), acl);
+    }
+    Ok(acls)
+}
+
+fn write_acl_snapshot(path: &Path, acls: &HashMap<String, Acl>) -> MetadataResult<()> {
+    let mut records = acls.values().map(acl_to_record).collect::<Vec<_>>();
+    records.sort_by(|left, right| left.subject.cmp(&right.subject));
+    let snapshot = StoredAclSnapshot { acls: records };
+    let content = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|error| AuthorizationError::MetadataServiceError(error.to_string()))?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| storage_error(parent, error))?;
+    }
+
+    let temp_file = temp_snapshot_path(path);
+    std::fs::write(&temp_file, content).map_err(|error| storage_error(&temp_file, error))?;
+    match std::fs::rename(&temp_file, path) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            std::fs::copy(&temp_file, path).map_err(|error| {
+                AuthorizationError::MetadataServiceError(format!(
+                    "{}: {error}; rename failed first: {rename_error}",
+                    path.display()
+                ))
+            })?;
+            let _ = std::fs::remove_file(&temp_file);
+            Ok(())
+        }
+    }
+}
+
+fn acl_to_record(acl: &Acl) -> StoredAclRecord {
+    StoredAclRecord {
+        subject: acl.subject_key().to_string(),
+        policies: acl
+            .policies()
+            .iter()
+            .map(|policy| StoredPolicyRecord {
+                policy_type: policy.policy_type().name().to_string(),
+                entries: policy.entries().iter().filter_map(policy_entry_to_record).collect(),
+            })
+            .collect(),
+    }
+}
+
+fn policy_entry_to_record(entry: &PolicyEntry) -> Option<StoredPolicyEntryRecord> {
+    Some(StoredPolicyEntryRecord {
+        resource: entry.resource().resource_key()?,
+        actions: entry.actions().iter().map(|action| action.name().to_string()).collect(),
+        source_ips: entry
+            .environment()
+            .map(|environment| environment.source_ips().clone())
+            .unwrap_or_default(),
+        decision: entry.decision().name().to_string(),
+    })
+}
+
+fn acl_from_record(record: StoredAclRecord) -> MetadataResult<Acl> {
+    let subject_type = subject_type_from_key(&record.subject)?;
+    let policies = record
+        .policies
+        .into_iter()
+        .map(policy_from_record)
+        .collect::<MetadataResult<Vec<_>>>()?;
+    Ok(Acl::of_with_policies(record.subject, subject_type, policies))
+}
+
+fn policy_from_record(record: StoredPolicyRecord) -> MetadataResult<Policy> {
+    let policy_type = PolicyType::get_by_name(&record.policy_type).ok_or_else(|| {
+        AuthorizationError::MetadataServiceError(format!("Invalid policy type '{}'", record.policy_type))
+    })?;
+    let entries = record
+        .entries
+        .into_iter()
+        .map(policy_entry_from_record)
+        .collect::<MetadataResult<Vec<_>>>()?;
+    Ok(Policy::of_entries(policy_type, entries))
+}
+
+fn policy_entry_from_record(record: StoredPolicyEntryRecord) -> MetadataResult<PolicyEntry> {
+    let resource = Resource::of_str(&record.resource)
+        .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid resource '{}'", record.resource)))?;
+    let actions = record
+        .actions
+        .iter()
+        .map(|action| {
+            Action::get_by_name(action)
+                .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid action '{action}'")))
+        })
+        .collect::<MetadataResult<Vec<_>>>()?;
+    let decision = Decision::get_by_name(&record.decision)
+        .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid decision '{}'", record.decision)))?;
+    let environment = Environment::of_list(record.source_ips);
+    Ok(PolicyEntry::of(resource, actions, environment, decision))
+}
+
+fn subject_type_from_key(subject_key: &str) -> MetadataResult<SubjectType> {
+    let Some((subject_type, _)) = subject_key.split_once(':') else {
+        return Ok(SubjectType::User);
+    };
+    SubjectType::get_by_name(subject_type)
+        .ok_or_else(|| AuthorizationError::MetadataServiceError(format!("Invalid subject type '{subject_type}'")))
+}
+
+fn storage_error(path: &Path, error: std::io::Error) -> AuthorizationError {
+    AuthorizationError::MetadataServiceError(format!("{}: {error}", path.display()))
+}
+
+fn temp_snapshot_path(path: &Path) -> PathBuf {
+    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("acls.json");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    path.with_file_name(format!(".{file_name}.{nanos}.tmp"))
+}
+
 impl Default for LocalAuthorizationMetadataProvider {
     fn default() -> Self {
         Self::new()
@@ -370,125 +556,117 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         config: AuthConfig,
         _metadata_service: Option<Box<dyn Any + Send + Sync>>,
     ) -> MetadataResult<()> {
-        let mut initialized = self.initialized.write().unwrap();
-        if *initialized {
-            warn!("LocalAuthorizationMetadataProvider already initialized");
-            return Ok(());
+        {
+            let initialized = self.initialized_read()?;
+            if *initialized {
+                warn!("LocalAuthorizationMetadataProvider already initialized");
+                return Ok(());
+            }
         }
 
-        // Set up storage path
-        let base_path = config.auth_config_path.to_string();
-        let storage_path = PathBuf::from(base_path).join("acls");
-        self.storage_path = Some(storage_path.clone());
+        self.cache_config = CacheConfig::from_auth_config(&config);
+        let storage_path = auth_metadata_snapshot_path(&config, "acls.json");
+        self.storage_path = storage_path.clone();
 
         debug!("Initializing LocalAuthorizationMetadataProvider at: {:?}", storage_path);
 
-        // Create storage directory if it doesn't exist
-        if let Some(parent) = storage_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| AuthorizationError::ConfigurationError(e.to_string()))?;
+        if let Some(path) = storage_path {
+            let snapshot = read_acl_snapshot(&path)?;
+            self.replace_storage(snapshot)?;
         }
 
-        // TODO: Initialize RocksDB
-        // let db = rocksdb::DB::open_default(&storage_path)
-        //     .map_err(|e| AuthorizationError::ConfigurationError(e.to_string()))?;
-
+        let mut initialized = self.initialized_write()?;
         *initialized = true;
         debug!("LocalAuthorizationMetadataProvider initialized successfully");
         Ok(())
     }
 
     fn shutdown(&mut self) {
-        let mut initialized = self.initialized.write().unwrap();
+        let Ok(mut initialized) = self.initialized.write() else {
+            warn!("LocalAuthorizationMetadataProvider initialized lock is poisoned during shutdown");
+            return;
+        };
         if !*initialized {
             return;
         }
 
         debug!("Shutting down LocalAuthorizationMetadataProvider");
 
-        // Clear cache
-        self.cache.write().unwrap().clear();
-
-        // TODO: Close RocksDB
-        // if let Some(db) = self.db.take() {
-        //     drop(db);
-        // }
+        match self.cache.write() {
+            Ok(mut cache) => cache.clear(),
+            Err(_) => warn!("LocalAuthorizationMetadataProvider cache lock is poisoned during shutdown"),
+        }
+        match self.storage.write() {
+            Ok(mut storage) => storage.clear(),
+            Err(_) => warn!("LocalAuthorizationMetadataProvider storage lock is poisoned during shutdown"),
+        }
 
         *initialized = false;
         debug!("LocalAuthorizationMetadataProvider shut down");
     }
 
     async fn create_acl(&self, acl: Acl) -> MetadataResult<()> {
-        if !*self.initialized.read().unwrap() {
-            return Err(AuthorizationError::NotInitialized(
-                "Provider not initialized".to_string(),
-            ));
-        }
+        self.ensure_initialized()?;
 
         let subject_key = acl.subject_key().to_string();
         debug!("Creating ACL for subject: {}", subject_key);
 
-        // Check if ACL already exists (check cache first for testing)
-        {
-            let cache = self.cache.read().unwrap();
-            if cache.contains_key(&subject_key) {
-                return Err(AuthorizationError::InternalError(format!(
-                    "ACL already exists for subject: {}",
-                    subject_key
-                )));
-            }
+        let _write_guard = self.write_lock.lock().await;
+        let mut snapshot = {
+            let storage = self.storage_read()?;
+            storage.clone()
+        };
+        if snapshot.contains_key(&subject_key) {
+            return Err(AuthorizationError::InternalError(format!(
+                "ACL already exists for subject: {}",
+                subject_key
+            )));
         }
+        snapshot.insert(subject_key.clone(), acl.clone());
 
-        // Save to storage (TODO: actual RocksDB implementation)
-        self.save_to_storage(&acl)?;
-
-        // Update cache directly (for testing since storage is TODO)
-        {
-            let mut cache = self.cache.write().unwrap();
-            cache.insert(subject_key.to_string(), CachedAcl::new(Some(acl)));
-        }
+        self.persist_storage_snapshot(&snapshot).await?;
+        self.replace_storage(snapshot)?;
+        self.store_cache_entry(&subject_key, Some(acl))?;
 
         debug!("ACL created successfully for subject: {}", subject_key);
         Ok(())
     }
 
     async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> MetadataResult<()> {
-        if !*self.initialized.read().unwrap() {
-            return Err(AuthorizationError::NotInitialized(
-                "Provider not initialized".to_string(),
-            ));
-        }
+        self.ensure_initialized()?;
 
         let subject_key = subject.subject_key();
         debug!("Deleting ACL for subject: {}", subject_key);
 
-        // Delete from storage
-        self.delete_from_storage(subject_key)?;
-
-        // Invalidate cache
-        self.invalidate_cache(subject_key);
+        let _write_guard = self.write_lock.lock().await;
+        let mut snapshot = {
+            let storage = self.storage_read()?;
+            storage.clone()
+        };
+        snapshot.remove(subject_key);
+        self.persist_storage_snapshot(&snapshot).await?;
+        self.replace_storage(snapshot)?;
+        self.invalidate_cache(subject_key)?;
 
         debug!("ACL deleted successfully for subject: {}", subject_key);
         Ok(())
     }
 
     async fn update_acl(&self, acl: Acl) -> MetadataResult<()> {
-        if !*self.initialized.read().unwrap() {
-            return Err(AuthorizationError::NotInitialized(
-                "Provider not initialized".to_string(),
-            ));
-        }
+        self.ensure_initialized()?;
 
         let subject_key = acl.subject_key().to_string();
         debug!("Updating ACL for subject: {}", subject_key);
 
-        // Save to storage (overwrite existing - TODO: actual RocksDB implementation)
-        self.save_to_storage(&acl)?;
-
-        // Update cache directly (for testing since storage is TODO)
-        {
-            let mut cache = self.cache.write().unwrap();
-            cache.insert(subject_key.to_string(), CachedAcl::new(Some(acl)));
-        }
+        let _write_guard = self.write_lock.lock().await;
+        let mut snapshot = {
+            let storage = self.storage_read()?;
+            storage.clone()
+        };
+        snapshot.insert(subject_key.clone(), acl.clone());
+        self.persist_storage_snapshot(&snapshot).await?;
+        self.replace_storage(snapshot)?;
+        self.store_cache_entry(&subject_key, Some(acl))?;
 
         debug!("ACL updated successfully for subject: {}", subject_key);
         Ok(())
@@ -498,31 +676,20 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         &self,
         subject: &S,
     ) -> impl std::future::Future<Output = MetadataResult<Option<Acl>>> + Send {
-        let initialized = *self.initialized.read().unwrap();
+        let initialized = self.ensure_initialized();
         let subject_key = subject.subject_key().to_string();
-        let cache = self.cache.clone();
+        let provider = self;
 
         async move {
-            if !initialized {
-                return Err(AuthorizationError::NotInitialized(
-                    "Provider not initialized".to_string(),
-                ));
-            }
+            initialized?;
 
             debug!("Getting ACL for subject: {}", subject_key);
-
-            // Get from cache
-            let cache_read = cache.read().unwrap();
-            Ok(cache_read.get(&subject_key).and_then(|cached| cached.acl.clone()))
+            provider.get_cached(&subject_key).await
         }
     }
 
     async fn list_acl(&self, subject_filter: Option<&str>, resource_filter: Option<&str>) -> MetadataResult<Vec<Acl>> {
-        if !*self.initialized.read().unwrap() {
-            return Err(AuthorizationError::NotInitialized(
-                "Provider not initialized".to_string(),
-            ));
-        }
+        self.ensure_initialized()?;
 
         debug!(
             "Listing ACLs with subject_filter={:?}, resource_filter={:?}",
@@ -532,9 +699,7 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         // Load all ACLs from storage, then overlay live cache entries.
         let mut acls = self.list_from_storage()?;
         let cache_snapshot: Vec<Acl> = self
-            .cache
-            .read()
-            .unwrap()
+            .cache_read()?
             .values()
             .filter_map(|cached| cached.acl.clone())
             .collect();
@@ -559,7 +724,11 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use cheetah_string::CheetahString;
     use rocketmq_common::common::action::Action;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::authentication::enums::subject_type::SubjectType;
@@ -601,7 +770,6 @@ mod tests {
         let acl = Acl::of("user:test", SubjectType::User, policy);
 
         let result = provider.create_acl(acl).await;
-        // Result will be Ok() in placeholder implementation
         assert!(result.is_ok());
     }
 
@@ -614,7 +782,6 @@ mod tests {
         let result = provider.get_acl(&user).await;
 
         assert!(result.is_ok());
-        // In placeholder implementation, should return None
         assert!(result.unwrap().is_none());
     }
 
@@ -679,6 +846,56 @@ mod tests {
     }
 
     #[test]
+    fn initialize_applies_acl_cache_config() {
+        let mut provider = LocalAuthorizationMetadataProvider::new();
+        provider
+            .initialize(
+                AuthConfig {
+                    acl_cache_max_num: 2,
+                    acl_cache_expired_second: 3,
+                    acl_cache_refresh_second: 4,
+                    ..AuthConfig::default()
+                },
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(provider.cache_config.max_size, 2);
+        assert_eq!(provider.cache_config.ttl, Duration::from_secs(3));
+        assert_eq!(provider.cache_config.refresh_interval, Duration::from_secs(4));
+    }
+
+    #[tokio::test]
+    async fn zero_acl_cache_max_num_disables_cache_entries() {
+        let mut provider = LocalAuthorizationMetadataProvider::new();
+        provider
+            .initialize(
+                AuthConfig {
+                    acl_cache_max_num: 0,
+                    ..AuthConfig::default()
+                },
+                None,
+            )
+            .unwrap();
+
+        let acl = Acl::of(
+            "cache-disabled",
+            SubjectType::User,
+            Policy::of(
+                vec![Resource::of_topic("topic-a")],
+                vec![Action::Pub],
+                None,
+                Decision::Allow,
+            ),
+        );
+        provider.create_acl(acl).await.unwrap();
+
+        let user = User::of("cache-disabled");
+        assert!(provider.get_acl(&user).await.unwrap().is_some());
+        assert!(provider.cache.read().unwrap().is_empty());
+    }
+
+    #[test]
     fn test_cached_acl_expiration() {
         let cached = CachedAcl::new(None);
         // Check that it's not expired with a 1 second TTL
@@ -687,5 +904,111 @@ mod tests {
         // Wait for 100ms and check with 50ms TTL - should be expired
         std::thread::sleep(Duration::from_millis(100));
         assert!(cached.is_expired(Duration::from_millis(50)));
+    }
+
+    #[tokio::test]
+    async fn local_provider_persists_acls_across_reinitialization() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp.path().join("auth.json").to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+
+        let mut provider = LocalAuthorizationMetadataProvider::new();
+        provider.initialize(config.clone(), None).unwrap();
+        let acl = Acl::of(
+            "alice",
+            SubjectType::User,
+            Policy::of(
+                vec![Resource::of_topic("topic-a")],
+                vec![Action::Pub],
+                Environment::of("192.168.0.1"),
+                Decision::Allow,
+            ),
+        );
+        provider.create_acl(acl).await.unwrap();
+
+        let mut restarted = LocalAuthorizationMetadataProvider::new();
+        restarted.initialize(config, None).unwrap();
+        let user = User::of("alice");
+        let restored = restarted.get_acl(&user).await.unwrap().unwrap();
+
+        assert_eq!(restored.subject_key(), "User:alice");
+        assert_eq!(restored.policies().len(), 1);
+        assert_eq!(restored.policies()[0].entries().len(), 1);
+        assert_eq!(
+            restored.policies()[0].entries()[0].resource().resource_key().as_deref(),
+            Some("Topic:topic-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn local_provider_persists_acl_update_and_delete_across_reinitialization() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp.path().join("auth.json").to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+
+        let mut provider = LocalAuthorizationMetadataProvider::new();
+        provider.initialize(config.clone(), None).unwrap();
+        provider
+            .create_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("topic-a")],
+                    vec![Action::Pub],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .unwrap();
+        provider
+            .update_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("topic-b")],
+                    vec![Action::Sub],
+                    None,
+                    Decision::Deny,
+                ),
+            ))
+            .await
+            .unwrap();
+
+        let mut restarted = LocalAuthorizationMetadataProvider::new();
+        restarted.initialize(config.clone(), None).unwrap();
+        let user = User::of("alice");
+        let restored = restarted.get_acl(&user).await.unwrap().unwrap();
+        let entry = &restored.policies()[0].entries()[0];
+        assert_eq!(entry.resource().resource_key().as_deref(), Some("Topic:topic-b"));
+        assert_eq!(entry.actions(), &vec![Action::Sub]);
+        assert_eq!(entry.decision(), Decision::Deny);
+
+        restarted.delete_acl(&user).await.unwrap();
+
+        let mut deleted_restart = LocalAuthorizationMetadataProvider::new();
+        deleted_restart.initialize(config, None).unwrap();
+        assert!(deleted_restart.get_acl(&user).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn local_provider_rejects_corrupted_acl_snapshot() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp.path().join("auth.json").to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+        let snapshot = temp.path().join("auth").join("acls.json");
+        fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        fs::write(&snapshot, b"{not valid json").unwrap();
+
+        let mut provider = LocalAuthorizationMetadataProvider::new();
+        let error = provider.initialize(config, None).unwrap_err();
+
+        assert!(error.to_string().contains("acls.json"));
     }
 }

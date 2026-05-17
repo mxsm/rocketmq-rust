@@ -41,6 +41,8 @@ use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBr
 use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_global_white_addrs_config_request_handler::UpdateGlobalWhiteAddrsConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
+use rocketmq_error::AuthError;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -629,8 +631,28 @@ fn get_legacy_acl_cmd_response(request_code: RequestCode, remark: &str) -> Optio
     ))
 }
 
+fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
+    let (code, remark) = match &error {
+        RocketMQError::IllegalArgument(message) | RocketMQError::RequestHeaderError(message) => {
+            (ResponseCode::InvalidParameter, message.clone())
+        }
+        RocketMQError::RequestBodyInvalid { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
+        RocketMQError::ConfigParseFailed { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
+        RocketMQError::ConfigMissing { key } => (ResponseCode::InvalidParameter, (*key).to_owned()),
+        RocketMQError::ConfigInvalidValue { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
+        RocketMQError::Authentication(AuthError::UserNotFound(_)) => (ResponseCode::UserNotExist, error.to_string()),
+        RocketMQError::Authentication(_) => (ResponseCode::NoPermission, error.to_string()),
+        RocketMQError::BrokerPermissionDenied { operation } => (ResponseCode::NoPermission, operation.clone()),
+        other => (ResponseCode::SystemError, other.to_string()),
+    };
+
+    response.set_code(code).set_remark(remark)
+}
+
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::RocketMQError;
+
     use super::*;
 
     #[test]
@@ -649,5 +671,30 @@ mod tests {
             .remark()
             .expect("legacy acl response should carry remark")
             .contains("deprecated"));
+    }
+
+    #[test]
+    fn auth_admin_error_response_maps_auth_and_config_errors_consistently() {
+        let response = map_auth_admin_error_response(
+            RemotingCommand::create_response_command(),
+            RocketMQError::user_not_found("alice"),
+        );
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::UserNotExist);
+
+        let response = map_auth_admin_error_response(
+            RemotingCommand::create_response_command(),
+            RocketMQError::authentication_failed("bad credentials"),
+        );
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+
+        let response = map_auth_admin_error_response(
+            RemotingCommand::create_response_command(),
+            RocketMQError::ConfigInvalidValue {
+                key: "auth.authorization",
+                value: "local".to_owned(),
+                reason: "provider not ready".to_owned(),
+            },
+        );
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
     }
 }

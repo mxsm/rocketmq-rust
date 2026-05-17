@@ -62,7 +62,7 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn local(config: &AuthConfig) -> RocketMQResult<Self> {
-        let authentication_metadata_provider = Arc::new(LocalAuthenticationMetadataProvider::new());
+        let authentication_metadata_provider = Arc::new(LocalAuthenticationMetadataProvider::with_config(config)?);
         let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
         authorization_metadata_provider
             .initialize(config.clone(), None)
@@ -1036,6 +1036,111 @@ accounts:
     }
 
     #[tokio::test]
+    async fn provider_registry_local_loads_persisted_authentication_users() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from(temp.path().join("auth.json").to_string_lossy().as_ref()),
+            ..AuthConfig::default()
+        };
+
+        let mut provider = LocalAuthenticationMetadataProvider::new();
+        provider.initialize(config.clone(), None).await.unwrap();
+        provider
+            .create_user(User::of_with_password("persisted", "secret"))
+            .await
+            .unwrap();
+
+        let registry = ProviderRegistry::local(&config).unwrap();
+        let restored = registry
+            .authentication_metadata_provider()
+            .get_user("persisted")
+            .await
+            .unwrap();
+
+        assert_eq!(restored.password().map(|value| value.as_str()), Some("secret"));
+    }
+
+    #[tokio::test]
+    async fn auth_runtime_restores_persisted_metadata_after_restart() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from(temp.path().join("auth.json").to_string_lossy().as_ref()),
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..AuthConfig::default()
+        };
+
+        let runtime = AuthRuntimeBuilder::new(config.clone()).build().await.unwrap();
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        authn_provider.create_user(user).await.unwrap();
+
+        let authz_provider = runtime.provider_registry().authorization_metadata_provider();
+        authz_provider
+            .create_acl(Acl::of(
+                "alice",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_topic("topic-a")],
+                    vec![Action::Pub],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .unwrap();
+        runtime.shutdown().await.unwrap();
+
+        let restarted = AuthRuntimeBuilder::new(config).build().await.unwrap();
+        let signature = acl_signer::cal_signature("alicetopic-a".as_bytes(), "secret").unwrap();
+        let command = send_message_command("topic-a", "alice", &signature);
+
+        restarted.check_remoting(&(), &command).await.unwrap();
+        restarted.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_runtime_rejects_corrupted_persisted_users_snapshot() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from(temp.path().join("auth.json").to_string_lossy().as_ref()),
+            authentication_enabled: true,
+            ..AuthConfig::default()
+        };
+        let snapshot = temp.path().join("auth").join("users.json");
+        fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        fs::write(&snapshot, b"{not valid json").unwrap();
+
+        let error = match AuthRuntimeBuilder::new(config).build().await {
+            Ok(_) => panic!("runtime must reject corrupted users snapshot"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("users.json"));
+    }
+
+    #[tokio::test]
+    async fn auth_runtime_rejects_corrupted_persisted_acls_snapshot() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from(temp.path().join("auth.json").to_string_lossy().as_ref()),
+            authorization_enabled: true,
+            ..AuthConfig::default()
+        };
+        let snapshot = temp.path().join("auth").join("acls.json");
+        fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        fs::write(&snapshot, b"{not valid json").unwrap();
+
+        let error = match AuthRuntimeBuilder::new(config).build().await {
+            Ok(_) => panic!("runtime must reject corrupted ACL snapshot"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("acls.json"));
+    }
+
+    #[tokio::test]
     async fn acl_file_watcher_reloads_changed_user_secret() {
         let temp = TempDir::new().unwrap();
         let acl_file = temp.path().join("plain_acl.yml");
@@ -1122,6 +1227,134 @@ accounts:
             "watcher must not advance generation when ACL file content is unchanged"
         );
 
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_acl_reload_failure_preserves_previous_snapshot_and_generation() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        let generation = runtime.acl_generation();
+        assert!(runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+        let user = authn_provider.get_user("alice").await.unwrap();
+        assert_eq!(user.password().map(|value| value.as_str()), Some("first"));
+
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 172.16.*.*
+accounts:
+  - accessKey: alice
+"#,
+        )
+        .unwrap();
+
+        let error = runtime.reload_acl_file().await.unwrap_err();
+        assert!(error.to_string().contains("secretKey must not be blank"));
+        assert_eq!(runtime.acl_generation(), generation);
+
+        let user = authn_provider.get_user("alice").await.unwrap();
+        assert_eq!(user.password().map(|value| value.as_str()), Some("first"));
+        assert!(runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+        assert!(!runtime.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap());
+    }
+
+    #[tokio::test]
+    async fn acl_file_watcher_failure_preserves_snapshot_and_recovers_after_fix() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 25,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        let generation = runtime.acl_generation();
+
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 172.16.*.*
+accounts:
+  - accessKey: alice
+"#,
+        )
+        .unwrap();
+
+        sleep(Duration::from_millis(150)).await;
+
+        assert_eq!(runtime.acl_generation(), generation);
+        let user = authn_provider.get_user("alice").await.unwrap();
+        assert_eq!(user.password().map(|value| value.as_str()), Some("first"));
+        assert!(runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+        assert!(!runtime.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap());
+
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 172.16.*.*
+accounts:
+  - accessKey: alice
+    secretKey: second
+"#,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let user = authn_provider.get_user("alice").await.unwrap();
+            if user.password().map(|value| value.as_str()) == Some("second")
+                && runtime.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap()
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "ACL file watcher did not recover after a failed reload"
+            );
+            sleep(Duration::from_millis(25)).await;
+        }
+
+        assert!(runtime.acl_generation() > generation);
         runtime.shutdown().await.unwrap();
     }
 

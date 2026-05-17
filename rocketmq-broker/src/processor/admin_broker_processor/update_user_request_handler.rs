@@ -67,7 +67,7 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         user_info.username = Option::from(request_header.username);
         let user = UserConverter::convert_user(&user_info);
 
-        if user.user_type() == Option::from(UserType::Super) && self.is_not_super_user_login(request).await {
+        if user.user_type() == Option::from(UserType::Super) && self.is_not_super_user_login(request).await? {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
@@ -81,32 +81,18 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         }
     }
 
-    async fn is_not_super_user_login(&self, _request: &RemotingCommand) -> bool {
-        let Some(access_key) = _request
+    async fn is_not_super_user_login(&self, request: &RemotingCommand) -> rocketmq_error::RocketMQResult<bool> {
+        let Some(access_key) = request
             .ext_fields()
             .and_then(|fields| fields.get(&CheetahString::from_static_str("AccessKey")))
         else {
-            return false;
+            return Ok(false);
         };
 
-        !self
-            .auth_admin_service
-            .is_super_user(access_key.as_str())
-            .await
-            .unwrap_or(false)
+        Ok(!self.auth_admin_service.is_super_user(access_key.as_str()).await?)
     }
 }
 
 fn map_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
-    match error {
-        RocketMQError::IllegalArgument(message) => {
-            response.set_code(ResponseCode::InvalidParameter).set_remark(message)
-        }
-        RocketMQError::BrokerPermissionDenied { operation } => {
-            response.set_code(ResponseCode::NoPermission).set_remark(operation)
-        }
-        other => response
-            .set_code(ResponseCode::SystemError)
-            .set_remark(other.to_string()),
-    }
+    super::map_auth_admin_error_response(response, error)
 }
