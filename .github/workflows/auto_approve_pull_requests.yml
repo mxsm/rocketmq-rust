@@ -1,9 +1,8 @@
 name: Auto Approve Pull Requests
 
-# Triggered only when a check suite finishes — no polling, no sleep.
-# Each time any CI suite completes, we immediately inspect all required
-# status checks and approve the PR if every one has passed.
 on:
+  pull_request_target:
+    types: [ opened, synchronize, reopened ]
   check_suite:
     types: [ completed ]
 
@@ -16,7 +15,7 @@ jobs:
   auto-approve:
     runs-on: ubuntu-latest
     # Skip suites that already failed outright (saves an API round-trip)
-    if: github.event.check_suite.conclusion != 'failure' && github.event.check_suite.conclusion != 'cancelled'
+    if: github.event_name == 'pull_request_target' || (github.event_name == 'check_suite' && github.event.check_suite.conclusion != 'failure' && github.event.check_suite.conclusion != 'cancelled')
 
     steps:
       - name: Verify required status checks and auto-approve PR
@@ -25,11 +24,20 @@ jobs:
           github-token: ${{ secrets.BOT_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
-            const headSha = context.payload.check_suite.head_sha;
+
+            let headSha;
+            let pr = context.payload.pull_request;
+            if (pr) {
+              headSha = pr.head.sha;
+            } else {
+              headSha = context.payload.check_suite?.head_sha;
+            }
 
             // check_suite.pull_requests is empty for fork PRs; fall back to a list search.
-            let pr = context.payload.check_suite.pull_requests?.[0];
-            if (!pr) {
+            if (!pr && context.payload.check_suite) {
+              pr = context.payload.check_suite.pull_requests?.[0];
+            }
+            if (!pr && headSha) {
               const { data: openPRs } = await github.rest.pulls.list({
                 owner, repo, state: 'open', per_page: 100,
               });
@@ -39,6 +47,7 @@ jobs:
               console.log('No open PR associated with this check suite — skipping.');
               return;
             }
+            headSha = pr.head.sha;
             console.log(`Processing PR #${pr.number}, HEAD SHA: ${headSha}`);
 
             // Fetch branch-protection required checks.
