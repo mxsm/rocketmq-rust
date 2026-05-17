@@ -23,5 +23,6 @@ pub use crate::migration::alc::plain_access_config::PlainAccessConfig;
 pub use crate::migration::alc::plain_access_data::PlainAccessData;
 pub use loader::AclConfigFingerprint;
 pub use loader::FileAclConfigLoader;
+pub use loader::FileAclConfigStore;
 pub use validator::validate_acl_config;
 pub use white_list::WhiteList;
