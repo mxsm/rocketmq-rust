@@ -24,6 +24,7 @@ use crate::auth::user_converter::UserConverter;
 
 #[derive(Clone)]
 pub struct AuthAdminService {
+    provider_registry: ProviderRegistry,
     authentication_provider: Arc<LocalAuthenticationMetadataProvider>,
     authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
 }
@@ -36,6 +37,7 @@ impl AuthAdminService {
 
     pub fn with_provider_registry(provider_registry: ProviderRegistry) -> Self {
         Self {
+            provider_registry: provider_registry.clone(),
             authentication_provider: provider_registry.authentication_metadata_provider(),
             authorization_provider: provider_registry.authorization_metadata_provider(),
         }
@@ -187,6 +189,23 @@ impl AuthAdminService {
             .as_deref()
             .and_then(UserType::get_by_name)
             .is_some_and(|user_type| user_type == UserType::Super))
+    }
+
+    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let addresses: Vec<String> = addresses
+            .into_iter()
+            .map(|address| address.as_ref().trim().to_owned())
+            .filter(|address| !address.is_empty())
+            .collect();
+        if addresses.is_empty() {
+            return Err(RocketMQError::illegal_argument("The globalWhiteAddrs is blank"));
+        }
+
+        self.provider_registry.update_global_white_remote_addresses(addresses)
     }
 
     async fn get_existing_user(&self, username: &str) -> RocketMQResult<User> {
@@ -511,5 +530,30 @@ mod tests {
         assert_eq!(policies.len(), 1);
         let entries = policies[0].entries.as_ref().expect("entries should exist");
         assert_eq!(entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn update_global_white_remote_addresses_updates_shared_provider_registry() {
+        let registry = ProviderRegistry::local(&test_auth_config()).unwrap();
+        let service = AuthAdminService::with_provider_registry(registry.clone());
+        let generation = registry.acl_generation();
+
+        service
+            .update_global_white_remote_addresses(["10.10.*.*", "192.168.0.*"])
+            .unwrap();
+
+        assert!(registry.acl_generation() > generation);
+        assert!(registry.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+        assert!(registry.is_acl_white_remote_address(None, Some("192.168.0.7")).unwrap());
+        assert!(!registry.is_acl_white_remote_address(None, Some("172.16.0.7")).unwrap());
+    }
+
+    #[test]
+    fn update_global_white_remote_addresses_rejects_empty_values() {
+        let service = AuthAdminService::new(test_auth_config()).unwrap();
+
+        let error = service.update_global_white_remote_addresses([" ", ""]).unwrap_err();
+
+        assert!(matches!(error, RocketMQError::IllegalArgument(_)));
     }
 }

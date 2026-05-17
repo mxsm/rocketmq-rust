@@ -108,6 +108,7 @@ pub mod unlock_batch_mq_request_header;
 pub mod unregister_client_request_header;
 pub mod update_acl_request_header;
 pub mod update_consumer_offset_header;
+pub mod update_global_white_addrs_config_request_header;
 pub mod update_group_forbidden_request_header;
 pub mod update_user_request_header;
 pub mod view_broker_stats_data_request_header;

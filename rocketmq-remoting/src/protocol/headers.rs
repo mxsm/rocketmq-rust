@@ -147,6 +147,7 @@ pub mod admin {
     pub use super::super::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
     pub use super::super::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
     pub use super::super::header::remove_broker_request_header::RemoveBrokerRequestHeader;
+    pub use super::super::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
 }
 
 pub mod transaction {
