@@ -704,18 +704,23 @@ impl ControllerManager {
         }
 
         // Shutdown Raft controller last (it coordinates distributed operations)
-        if let Err(e) = self.raft_controller.mut_from_ref().shutdown().await {
-            error!("Failed to shutdown Raft: {}", e);
-        } else {
-            info!("Raft controller shut down");
+        match tokio::time::timeout(Duration::from_secs(10), self.raft_controller.mut_from_ref().shutdown()).await {
+            Ok(Ok(())) => info!("Raft controller shut down"),
+            Ok(Err(e)) => error!("Failed to shutdown Raft: {}", e),
+            Err(_) => warn!("Timed out waiting for Raft controller shutdown"),
         }
 
         let remoting_server_handle = { self.remoting_server_handle.lock().take() };
         if let Some(handle) = remoting_server_handle {
-            match tokio::time::timeout(Duration::from_secs(10), handle).await {
+            let mut handle = handle;
+            match tokio::time::timeout(Duration::from_secs(10), &mut handle).await {
                 Ok(Ok(_)) => info!("Remoting server shut down"),
                 Ok(Err(error)) => warn!("Remoting server task exited with error: {}", error),
-                Err(_) => warn!("Timed out waiting for remoting server shutdown"),
+                Err(_) => {
+                    warn!("Timed out waiting for remoting server shutdown");
+                    handle.abort();
+                    let _ = handle.await;
+                }
             }
         }
 

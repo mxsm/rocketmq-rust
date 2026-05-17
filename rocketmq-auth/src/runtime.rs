@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -19,6 +21,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::acl::AclConfigFingerprint;
 use crate::acl::FileAclConfigLoader;
 use crate::authentication::builder::default_authentication_context_builder::DefaultAuthenticationContextBuilder;
 use crate::authentication::builder::AuthenticationContextBuilder;
@@ -53,6 +56,9 @@ pub struct ProviderRegistry {
     authentication_metadata_provider: Arc<LocalAuthenticationMetadataProvider>,
     authorization_metadata_provider: Arc<LocalAuthorizationMetadataProvider>,
     acl_white_list_snapshot: Arc<RwLock<AclWhiteListSnapshot>>,
+    acl_managed_access_keys: Arc<RwLock<HashSet<String>>>,
+    acl_generation: Arc<AtomicU64>,
+    acl_fingerprint: Arc<RwLock<Option<AclConfigFingerprint>>>,
 }
 
 impl ProviderRegistry {
@@ -67,6 +73,9 @@ impl ProviderRegistry {
             authentication_metadata_provider,
             authorization_metadata_provider: Arc::new(authorization_metadata_provider),
             acl_white_list_snapshot: Arc::new(RwLock::new(AclWhiteListSnapshot::default())),
+            acl_managed_access_keys: Arc::new(RwLock::new(HashSet::new())),
+            acl_generation: Arc::new(AtomicU64::new(0)),
+            acl_fingerprint: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -84,6 +93,52 @@ impl ProviderRegistry {
             .write()
             .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
         *guard = snapshot;
+        Ok(())
+    }
+
+    fn acl_managed_access_keys(&self) -> RocketMQResult<HashSet<String>> {
+        let guard = self
+            .acl_managed_access_keys
+            .read()
+            .map_err(|_| RocketMQError::Internal("ACL managed access key lock is poisoned".to_owned()))?;
+        Ok(guard.clone())
+    }
+
+    fn set_acl_managed_access_keys(&self, access_keys: HashSet<String>) -> RocketMQResult<()> {
+        let mut guard = self
+            .acl_managed_access_keys
+            .write()
+            .map_err(|_| RocketMQError::Internal("ACL managed access key lock is poisoned".to_owned()))?;
+        *guard = access_keys;
+        Ok(())
+    }
+
+    fn advance_acl_generation(&self) -> u64 {
+        self.acl_generation.fetch_add(1, AtomicOrdering::AcqRel) + 1
+    }
+
+    pub fn acl_generation(&self) -> u64 {
+        self.acl_generation.load(AtomicOrdering::Acquire)
+    }
+
+    pub fn acl_generation_counter(&self) -> Arc<AtomicU64> {
+        self.acl_generation.clone()
+    }
+
+    fn acl_fingerprint(&self) -> RocketMQResult<Option<AclConfigFingerprint>> {
+        let guard = self
+            .acl_fingerprint
+            .read()
+            .map_err(|_| RocketMQError::Internal("ACL fingerprint lock is poisoned".to_owned()))?;
+        Ok(*guard)
+    }
+
+    fn set_acl_fingerprint(&self, fingerprint: Option<AclConfigFingerprint>) -> RocketMQResult<()> {
+        let mut guard = self
+            .acl_fingerprint
+            .write()
+            .map_err(|_| RocketMQError::Internal("ACL fingerprint lock is poisoned".to_owned()))?;
+        *guard = fingerprint;
         Ok(())
     }
 
@@ -185,7 +240,9 @@ impl AuthRuntimeBuilder {
         };
 
         seed_initial_users(&provider_registry, &self.config).await?;
-        let loaded_acl_entries = load_configured_acl_file(&provider_registry, &self.config).await?;
+        let loaded_acl_entries = load_configured_acl_file(&provider_registry, &self.config, true)
+            .await?
+            .account_count;
         if loaded_acl_entries > 0 {
             info!("Loaded {} ACL account(s) from configured ACL file", loaded_acl_entries);
         }
@@ -239,7 +296,9 @@ impl AuthRuntime {
     }
 
     pub async fn reload_acl_file(&self) -> RocketMQResult<usize> {
-        load_configured_acl_file(&self.provider_registry, &self.config).await
+        Ok(load_configured_acl_file(&self.provider_registry, &self.config, true)
+            .await?
+            .account_count)
     }
 
     pub fn is_acl_white_remote_address(
@@ -249,6 +308,14 @@ impl AuthRuntime {
     ) -> RocketMQResult<bool> {
         self.provider_registry
             .is_acl_white_remote_address(access_key, source_ip)
+    }
+
+    pub fn acl_generation(&self) -> u64 {
+        self.provider_registry.acl_generation()
+    }
+
+    pub fn acl_generation_counter(&self) -> Arc<AtomicU64> {
+        self.provider_registry.acl_generation_counter()
     }
 
     pub async fn shutdown(&self) -> RocketMQResult<()> {
@@ -396,15 +463,40 @@ fn parse_whitelist(value: &str) -> HashSet<String> {
         .collect()
 }
 
-async fn load_configured_acl_file(provider_registry: &ProviderRegistry, config: &AuthConfig) -> RocketMQResult<usize> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AclReloadResult {
+    account_count: usize,
+    changed: bool,
+}
+
+async fn load_configured_acl_file(
+    provider_registry: &ProviderRegistry,
+    config: &AuthConfig,
+    force: bool,
+) -> RocketMQResult<AclReloadResult> {
     let acl_file = config.acl_file.as_str().trim();
     if acl_file.is_empty() {
-        return Ok(0);
+        return Ok(AclReloadResult {
+            account_count: 0,
+            changed: false,
+        });
     }
 
     let loader = FileAclConfigLoader::new(acl_file.to_owned());
-    let acl_config = loader.load().await?;
-    apply_acl_config(provider_registry, &acl_config).await
+    let (acl_config, fingerprint) = loader.load_with_fingerprint().await?;
+    if !force && provider_registry.acl_fingerprint()? == Some(fingerprint) {
+        return Ok(AclReloadResult {
+            account_count: 0,
+            changed: false,
+        });
+    }
+
+    let count = apply_acl_config(provider_registry, &acl_config).await?;
+    provider_registry.set_acl_fingerprint(Some(fingerprint))?;
+    Ok(AclReloadResult {
+        account_count: count,
+        changed: true,
+    })
 }
 
 fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegistry) -> Option<AclFileWatchHandle> {
@@ -413,7 +505,7 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
         return None;
     }
 
-    let loader = FileAclConfigLoader::new(acl_file.to_owned());
+    let watch_config = config.clone();
     let interval = Duration::from_millis(config.acl_file_watch_interval_millis.max(1));
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let join_handle = tokio::spawn(async move {
@@ -429,11 +521,11 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
                     }
                 }
                 _ = ticker.tick() => {
-                    match loader.load().await {
-                        Ok(acl_config) => match apply_acl_config(&provider_registry, &acl_config).await {
-                            Ok(count) => debug!("Reloaded {} ACL account(s) from configured ACL file", count),
-                            Err(error) => warn!("Failed to apply reloaded ACL file: {error}"),
-                        },
+                    match load_configured_acl_file(&provider_registry, &watch_config, false).await {
+                        Ok(result) if result.changed => {
+                            debug!("Reloaded {} ACL account(s) from configured ACL file", result.account_count)
+                        }
+                        Ok(_) => debug!("ACL file unchanged; skipped reload"),
                         Err(error) => warn!("Failed to reload ACL file: {error}"),
                     }
                 }
@@ -448,30 +540,71 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
 }
 
 async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> RocketMQResult<usize> {
-    provider_registry.set_acl_white_list_snapshot(AclWhiteListSnapshot::from_acl_config(acl_config))?;
-    let Some(accounts) = acl_config.plain_access_configs() else {
-        return Ok(0);
-    };
-
+    let prepared_config = prepare_acl_config(acl_config)?;
+    let previous_access_keys = provider_registry.acl_managed_access_keys()?;
     let authn_provider = provider_registry.authentication_metadata_provider();
     let authz_provider = provider_registry.authorization_metadata_provider();
-    let mut applied = 0;
 
-    for account in accounts {
-        let user = user_from_plain_account(account)?;
-        upsert_user(authn_provider.clone(), user.clone()).await?;
-
-        match acl_from_plain_account(account)? {
-            Some(acl) => upsert_acl(authz_provider.clone(), &user, acl).await?,
+    for prepared_account in &prepared_config.accounts {
+        upsert_user(authn_provider.clone(), prepared_account.user.clone()).await?;
+        match &prepared_account.acl {
+            Some(acl) => upsert_acl(authz_provider.clone(), &prepared_account.user, acl.clone()).await?,
             None => authz_provider
-                .delete_acl(&user)
+                .delete_acl(&prepared_account.user)
                 .await
                 .map_err(map_authorization_error)?,
         }
-        applied += 1;
     }
 
-    Ok(applied)
+    for stale_access_key in previous_access_keys.difference(&prepared_config.access_keys) {
+        let user = User::of(stale_access_key.as_str());
+        authz_provider
+            .delete_acl(&user)
+            .await
+            .map_err(map_authorization_error)?;
+        authn_provider.delete_user(stale_access_key).await?;
+    }
+
+    provider_registry.set_acl_white_list_snapshot(prepared_config.white_list_snapshot)?;
+    provider_registry.set_acl_managed_access_keys(prepared_config.access_keys)?;
+    provider_registry.advance_acl_generation();
+
+    Ok(prepared_config.accounts_len)
+}
+
+struct PreparedAclConfig {
+    white_list_snapshot: AclWhiteListSnapshot,
+    access_keys: HashSet<String>,
+    accounts: Vec<PreparedAclAccount>,
+    accounts_len: usize,
+}
+
+struct PreparedAclAccount {
+    user: User,
+    acl: Option<Acl>,
+}
+
+fn prepare_acl_config(acl_config: &AclConfig) -> RocketMQResult<PreparedAclConfig> {
+    let mut access_keys = HashSet::new();
+    let mut accounts = Vec::new();
+
+    if let Some(plain_accounts) = acl_config.plain_access_configs() {
+        for account in plain_accounts {
+            let access_key = required_plain_field(account.access_key(), "accessKey", "<missing>")?.to_owned();
+            let user = user_from_plain_account(account)?;
+            let acl = acl_from_plain_account(account)?;
+            access_keys.insert(access_key);
+            accounts.push(PreparedAclAccount { user, acl });
+        }
+    }
+
+    let accounts_len = accounts.len();
+    Ok(PreparedAclConfig {
+        white_list_snapshot: AclWhiteListSnapshot::from_acl_config(acl_config),
+        access_keys,
+        accounts,
+        accounts_len,
+    })
 }
 
 async fn upsert_user(provider: Arc<LocalAuthenticationMetadataProvider>, user: User) -> RocketMQResult<()> {
@@ -953,6 +1086,90 @@ accounts:
             );
             sleep(Duration::from_millis(25)).await;
         }
+
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acl_file_watcher_skips_unchanged_file_without_advancing_generation() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 20,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+        let generation = runtime.acl_generation();
+
+        sleep(Duration::from_millis(120)).await;
+
+        assert_eq!(
+            runtime.acl_generation(),
+            generation,
+            "watcher must not advance generation when ACL file content is unchanged"
+        );
+
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_acl_reload_updates_watcher_fingerprint() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 20,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: second
+"#,
+        )
+        .unwrap();
+
+        runtime.reload_acl_file().await.unwrap();
+        let generation = runtime.acl_generation();
+
+        sleep(Duration::from_millis(120)).await;
+
+        assert_eq!(
+            runtime.acl_generation(),
+            generation,
+            "watcher must not re-apply a file that was already manually reloaded"
+        );
 
         runtime.shutdown().await.unwrap();
     }

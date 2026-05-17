@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -29,6 +32,9 @@ use crate::migration::alc::plain_access_data::PlainAccessData;
 pub struct FileAclConfigLoader {
     roots: Vec<PathBuf>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AclConfigFingerprint(u64);
 
 impl FileAclConfigLoader {
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -49,9 +55,16 @@ impl FileAclConfigLoader {
 
     pub async fn load(&self) -> RocketMQResult<AclConfig> {
         let files = self.discover_files().await?;
-        let config = load_files(files).await?;
+        let (config, _) = load_files(files).await?;
         validate_acl_config(&config)?;
         Ok(config)
+    }
+
+    pub async fn load_with_fingerprint(&self) -> RocketMQResult<(AclConfig, AclConfigFingerprint)> {
+        let files = self.discover_files().await?;
+        let (config, fingerprint) = load_files(files).await?;
+        validate_acl_config(&config)?;
+        Ok((config, fingerprint))
     }
 
     pub async fn discover_files(&self) -> RocketMQResult<Vec<PathBuf>> {
@@ -62,18 +75,21 @@ impl FileAclConfigLoader {
     }
 }
 
-async fn load_files(files: Vec<PathBuf>) -> RocketMQResult<AclConfig> {
+async fn load_files(files: Vec<PathBuf>) -> RocketMQResult<(AclConfig, AclConfigFingerprint)> {
     let mut accounts = Vec::new();
     let mut global_white_addrs = Vec::new();
     let mut seen_access_keys = HashSet::new();
+    let mut hasher = DefaultHasher::new();
 
     for file in files {
+        file.hash(&mut hasher);
         let bytes = fs::read(&file)
             .await
             .map_err(|error| RocketMQError::StorageReadFailed {
                 path: file.display().to_string(),
                 reason: error.to_string(),
             })?;
+        bytes.hash(&mut hasher);
         if bytes.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
@@ -92,7 +108,7 @@ async fn load_files(files: Vec<PathBuf>) -> RocketMQResult<AclConfig> {
     if !accounts.is_empty() {
         config.set_plain_access_configs(accounts);
     }
-    Ok(config)
+    Ok((config, AclConfigFingerprint(hasher.finish())))
 }
 
 fn extend_accounts(
@@ -248,6 +264,39 @@ accounts:
 
         assert!(config.global_white_addrs().is_none());
         assert!(config.plain_access_configs().is_none());
+    }
+
+    #[tokio::test]
+    async fn fingerprint_changes_when_acl_file_content_changes() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &file,
+            r#"
+accounts:
+  - accessKey: ak
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let loader = FileAclConfigLoader::new(&file);
+        let (_, first_fingerprint) = loader.load_with_fingerprint().await.unwrap();
+        let (_, same_fingerprint) = loader.load_with_fingerprint().await.unwrap();
+        assert_eq!(first_fingerprint, same_fingerprint);
+
+        fs::write(
+            &file,
+            r#"
+accounts:
+  - accessKey: ak
+    secretKey: second
+"#,
+        )
+        .unwrap();
+
+        let (_, updated_fingerprint) = loader.load_with_fingerprint().await.unwrap();
+        assert_ne!(first_fingerprint, updated_fingerprint);
     }
 
     #[tokio::test]
