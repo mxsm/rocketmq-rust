@@ -39,6 +39,7 @@ use crate::processor::admin_broker_processor::topic_request_handler::TopicReques
 use crate::processor::admin_broker_processor::update_acl_request_handler::UpdateAclRequestHandler;
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
+use crate::processor::admin_broker_processor::update_global_white_addrs_config_request_handler::UpdateGlobalWhiteAddrsConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -76,6 +77,7 @@ mod topic_request_handler;
 mod update_acl_request_handler;
 mod update_broker_ha_handler;
 mod update_cold_data_flow_ctr_group_config;
+mod update_global_white_addrs_config_request_handler;
 mod update_user_request_handler;
 
 pub struct AdminBrokerProcessor<MS: MessageStore> {
@@ -105,6 +107,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     get_user_request_handler: GetUserRequestHandler<MS>,
     delete_acl_request_handler: DeleteAclRequestHandler<MS>,
     list_acl_request_handler: ListAclRequestHandler<MS>,
+    update_global_white_addrs_config_request_handler: UpdateGlobalWhiteAddrsConfigRequestHandler<MS>,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
     get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
     broker_stats_handler: BrokerStatsHandler<MS>,
@@ -167,7 +170,10 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             GetUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
         let delete_acl_request_handler =
             DeleteAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let list_acl_request_handler = ListAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service);
+        let list_acl_request_handler =
+            ListAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let update_global_white_addrs_config_request_handler =
+            UpdateGlobalWhiteAddrsConfigRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service);
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
         let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
@@ -198,6 +204,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             get_user_request_handler,
             delete_acl_request_handler,
             list_acl_request_handler,
+            update_global_white_addrs_config_request_handler,
             update_cold_data_flow_ctr_group_config_request_handler,
             get_broker_ha_status_handler,
             broker_stats_handler,
@@ -482,10 +489,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                 request_code,
                 "legacy broker ACL cluster info API is deprecated; use AuthListAcl instead",
             )),
-            RequestCode::UpdateGlobalWhiteAddrsConfig => Ok(get_legacy_acl_cmd_response(
-                request_code,
-                "global white address config API is not supported in the current auth runtime",
-            )),
+            RequestCode::UpdateGlobalWhiteAddrsConfig => {
+                self.update_global_white_addrs_config_request_handler
+                    .update_global_white_addrs_config(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::ResumeCheckHalfMessage => {
                 self.message_related_handler
                     .resume_check_half_message(channel, ctx, request_code, request)

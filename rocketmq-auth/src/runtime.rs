@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering as AtomicOrdering;
@@ -23,6 +22,7 @@ use tracing::warn;
 
 use crate::acl::AclConfigFingerprint;
 use crate::acl::FileAclConfigLoader;
+use crate::acl::WhiteList;
 use crate::authentication::builder::default_authentication_context_builder::DefaultAuthenticationContextBuilder;
 use crate::authentication::builder::AuthenticationContextBuilder;
 use crate::authentication::enums::subject_type::SubjectType;
@@ -37,7 +37,6 @@ use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::authorization::model::acl::Acl;
-use crate::authorization::model::environment::source_ip_matches;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
@@ -55,7 +54,7 @@ const ACCESS_KEY: &str = "AccessKey";
 pub struct ProviderRegistry {
     authentication_metadata_provider: Arc<LocalAuthenticationMetadataProvider>,
     authorization_metadata_provider: Arc<LocalAuthorizationMetadataProvider>,
-    acl_white_list_snapshot: Arc<RwLock<AclWhiteListSnapshot>>,
+    acl_white_list_snapshot: Arc<RwLock<WhiteList>>,
     acl_managed_access_keys: Arc<RwLock<HashSet<String>>>,
     acl_generation: Arc<AtomicU64>,
     acl_fingerprint: Arc<RwLock<Option<AclConfigFingerprint>>>,
@@ -72,7 +71,7 @@ impl ProviderRegistry {
         Ok(Self {
             authentication_metadata_provider,
             authorization_metadata_provider: Arc::new(authorization_metadata_provider),
-            acl_white_list_snapshot: Arc::new(RwLock::new(AclWhiteListSnapshot::default())),
+            acl_white_list_snapshot: Arc::new(RwLock::new(WhiteList::default())),
             acl_managed_access_keys: Arc::new(RwLock::new(HashSet::new())),
             acl_generation: Arc::new(AtomicU64::new(0)),
             acl_fingerprint: Arc::new(RwLock::new(None)),
@@ -87,7 +86,7 @@ impl ProviderRegistry {
         self.authorization_metadata_provider.clone()
     }
 
-    fn set_acl_white_list_snapshot(&self, snapshot: AclWhiteListSnapshot) -> RocketMQResult<()> {
+    fn set_acl_white_list_snapshot(&self, snapshot: WhiteList) -> RocketMQResult<()> {
         let mut guard = self
             .acl_white_list_snapshot
             .write()
@@ -153,65 +152,21 @@ impl ProviderRegistry {
             .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
         Ok(guard.matches(access_key, source_ip))
     }
-}
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct AclWhiteListSnapshot {
-    global_white_remote_addresses: Vec<String>,
-    account_white_remote_addresses: HashMap<String, String>,
-}
-
-impl AclWhiteListSnapshot {
-    fn from_acl_config(acl_config: &AclConfig) -> Self {
-        let global_white_remote_addresses = acl_config
-            .global_white_addrs()
-            .unwrap_or_default()
-            .iter()
-            .map(|value| value.as_str().trim())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-
-        let account_white_remote_addresses = acl_config
-            .plain_access_configs()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|account| {
-                let access_key = account.access_key()?.as_str().trim();
-                let white_remote_address = account.white_remote_address()?.as_str().trim();
-                if access_key.is_empty() || white_remote_address.is_empty() {
-                    return None;
-                }
-                Some((access_key.to_owned(), white_remote_address.to_owned()))
-            })
-            .collect();
-
-        Self {
-            global_white_remote_addresses,
-            account_white_remote_addresses,
-        }
-    }
-
-    fn matches(&self, access_key: Option<&str>, source_ip: Option<&str>) -> bool {
-        let Some(source_ip) = valid_source_ip(source_ip) else {
-            return false;
+    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let updated_snapshot = {
+            let guard = self
+                .acl_white_list_snapshot
+                .read()
+                .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
+            guard.with_global_patterns(addresses)
         };
-
-        if self
-            .global_white_remote_addresses
-            .iter()
-            .any(|pattern| source_ip_matches(pattern, source_ip))
-        {
-            return true;
-        }
-
-        let Some(access_key) = access_key.map(str::trim).filter(|value| !value.is_empty()) else {
-            return false;
-        };
-
-        self.account_white_remote_addresses
-            .get(access_key)
-            .is_some_and(|pattern| source_ip_matches(pattern, source_ip))
+        self.set_acl_white_list_snapshot(updated_snapshot)?;
+        Ok(self.advance_acl_generation())
     }
 }
 
@@ -316,6 +271,14 @@ impl AuthRuntime {
 
     pub fn acl_generation_counter(&self) -> Arc<AtomicU64> {
         self.provider_registry.acl_generation_counter()
+    }
+
+    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.provider_registry.update_global_white_remote_addresses(addresses)
     }
 
     pub async fn shutdown(&self) -> RocketMQResult<()> {
@@ -573,7 +536,7 @@ async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &Acl
 }
 
 struct PreparedAclConfig {
-    white_list_snapshot: AclWhiteListSnapshot,
+    white_list_snapshot: WhiteList,
     access_keys: HashSet<String>,
     accounts: Vec<PreparedAclAccount>,
     accounts_len: usize,
@@ -600,7 +563,7 @@ fn prepare_acl_config(acl_config: &AclConfig) -> RocketMQResult<PreparedAclConfi
 
     let accounts_len = accounts.len();
     Ok(PreparedAclConfig {
-        white_list_snapshot: AclWhiteListSnapshot::from_acl_config(acl_config),
+        white_list_snapshot: WhiteList::from_acl_config(acl_config),
         access_keys,
         accounts,
         accounts_len,
@@ -838,12 +801,6 @@ fn channel_id_from_channel_context(channel_context: &(dyn std::any::Any + Send +
     None
 }
 
-fn valid_source_ip(source_ip: Option<&str>) -> Option<&str> {
-    source_ip
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("unknown"))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1034,6 +991,44 @@ accounts:
             .check_remoting_with_source_ip(&(), &account_command, Some("192.168.1.7"), None)
             .await
             .expect_err("non-whitelisted source should still require a valid signature");
+    }
+
+    #[tokio::test]
+    async fn runtime_global_white_remote_address_update_preserves_account_whitelist_and_advances_generation() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    whiteRemoteAddress: 192.168.0.*
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+        let generation = runtime.acl_generation();
+
+        runtime
+            .update_global_white_remote_addresses(vec!["172.16.*.*"])
+            .unwrap();
+
+        assert!(runtime.acl_generation() > generation);
+        assert!(!runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+        assert!(runtime.is_acl_white_remote_address(None, Some("172.16.1.2")).unwrap());
+        assert!(runtime
+            .is_acl_white_remote_address(Some("alice"), Some("192.168.0.7"))
+            .unwrap());
     }
 
     #[tokio::test]
