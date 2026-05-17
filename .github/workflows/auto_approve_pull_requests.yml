@@ -1,103 +1,94 @@
 name: Auto Approve Pull Requests
 
+# Triggered only when a check suite finishes — no polling, no sleep.
+# Each time any CI suite completes, we immediately inspect all required
+# status checks and approve the PR if every one has passed.
 on:
-  pull_request_target:
-    types: [ opened, synchronize, reopened ]
   check_suite:
     types: [ completed ]
 
 permissions:
+  contents: read
   pull-requests: write
   checks: read
 
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request_target' || (github.event_name == 'check_suite' && github.event.check_suite.pull_requests[0])
+    # Skip suites that already failed outright (saves an API round-trip)
+    if: github.event.check_suite.conclusion != 'failure' && github.event.check_suite.conclusion != 'cancelled'
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Verify required status checks
-        id: check-status
+      - name: Verify required status checks and auto-approve PR
         uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.BOT_TOKEN }}
           script: |
-
-            const retryInterval1 = 540 * 1000; // 7 minutes
-            await new Promise(resolve => setTimeout(resolve, retryInterval1));
             const { owner, repo } = context.repo;
-            const pr = context.payload.pull_request || context.payload.check_suite.pull_requests[0];
-            const sha = pr.head.sha;
-            
-            console.log(`Processing PR #${pr.number}, HEAD SHA: ${sha}`);
-            
-            // Get required status checks for the base branch
-            const { data: branch } = await github.rest.repos.getBranch({
-              owner,
-              repo,
-              branch: pr.base.ref,
-            });
+            const headSha = context.payload.check_suite.head_sha;
 
-            const requiredChecks = branch.protection?.required_status_checks?.contexts || [];
-            console.log('Required status checks:', requiredChecks);
-
-            // Function to check the status of required checks
-            async function checkRequiredStatusChecks() {
-              const { data: checks } = await github.rest.checks.listForRef({
-                owner,
-                repo,
-                ref: sha,
-                per_page: 100,
+            // check_suite.pull_requests is empty for fork PRs; fall back to a list search.
+            let pr = context.payload.check_suite.pull_requests?.[0];
+            if (!pr) {
+              const { data: openPRs } = await github.rest.pulls.list({
+                owner, repo, state: 'open', per_page: 100,
               });
-
-              console.log('Found status checks:', checks.check_runs.length);
-
-              // Filter out non-required checks
-              const requiredCheckRuns = checks.check_runs.filter(check => requiredChecks.includes(check.name));
-              console.log('Required status checks found:', requiredCheckRuns.length);
-
-              // Check for any failed or pending required checks
-              const failedChecks = requiredCheckRuns.filter(check => check.status === 'completed' && check.conclusion !== 'success');
-              const pendingChecks = requiredCheckRuns.filter(check => check.status !== 'completed');
-
-              if (failedChecks.length > 0) {
-                const failedNames = failedChecks.map(f => f.name).join(', ');
-                console.log(`Failed checks: ${failedNames}`);
-                throw new Error('Some required status checks have failed');
-              }
-
-              if (pendingChecks.length > 0) {
-                const pendingNames = pendingChecks.map(p => p.name).join(', ');
-                console.log(`Pending checks: ${pendingNames}`);
-                return false; // Still pending
-              }
-
-              console.log('All required status checks have passed successfully');
-              return true; // All checks passed
+              pr = openPRs.find(p => p.head.sha === headSha);
             }
-            // Poll for status checks until they complete
-            const maxRetries = 15;
-            const retryInterval = 60 * 1000; // 30 seconds
-            for (let i = 0; i < maxRetries; i++) {
-              const allChecksPassed = await checkRequiredStatusChecks();
-              if (allChecksPassed) {
-                return true;
-              }
-              console.log(`Retrying in ${retryInterval / 1000} seconds... (${i + 1}/${maxRetries})`);
-              await new Promise(resolve => setTimeout(resolve, retryInterval));
+            if (!pr) {
+              console.log('No open PR associated with this check suite — skipping.');
+              return;
+            }
+            console.log(`Processing PR #${pr.number}, HEAD SHA: ${headSha}`);
+
+            // Fetch branch-protection required checks.
+            const { data: branch } = await github.rest.repos.getBranch({
+              owner, repo, branch: pr.base.ref,
+            });
+            const requiredChecks = branch.protection?.required_status_checks?.contexts ?? [];
+            console.log('Required status checks:', requiredChecks);
+            if (requiredChecks.length === 0) {
+              console.log('No required status checks configured — skipping.');
+              return;
             }
 
-            throw new Error('Timeout waiting for required status checks to complete');
+            // Fetch all check runs for the head commit.
+            const { data: { check_runs } } = await github.rest.checks.listForRef({
+              owner, repo, ref: headSha, per_page: 100,
+            });
+            console.log(`Found ${check_runs.length} check run(s).`);
 
-      - name: Auto approve PR
-        if: steps.check-status.outputs.result == 'true'
-        uses: hmarr/auto-approve-action@v4
-        with:
-          github-token: ${{ secrets.BOT_TOKEN }}
-          pull-request-number: ${{ github.event.pull_request.number }}
-          review-message: "LGTM - All CI checks passed ✅"
+            const requiredRuns = check_runs.filter(c => requiredChecks.includes(c.name));
+            const failed  = requiredRuns.filter(c => c.status === 'completed' && c.conclusion !== 'success' && c.conclusion !== 'skipped');
+            const pending = requiredRuns.filter(c => c.status !== 'completed');
+
+            if (failed.length > 0) {
+              console.log(`Required checks failed: ${failed.map(c => c.name).join(', ')} — not approving.`);
+              return;
+            }
+            if (pending.length > 0) {
+              console.log(`Required checks still pending: ${pending.map(c => c.name).join(', ')} — waiting for next event.`);
+              return;
+            }
+            if (requiredRuns.length === 0) {
+              console.log('None of the required checks were found on this commit — skipping.');
+              return;
+            }
+
+            // Avoid duplicate approvals for the same commit.
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner, repo, pull_number: pr.number,
+            });
+            const alreadyApproved = reviews.some(r => r.state === 'APPROVED' && r.commit_id === headSha);
+            if (alreadyApproved) {
+              console.log('PR already approved for this commit — skipping.');
+              return;
+            }
+
+            console.log('All required checks passed — approving PR.');
+            await github.rest.pulls.createReview({
+              owner, repo,
+              pull_number: pr.number,
+              event: 'APPROVE',
+              body: 'LGTM - All CI checks passed ✅',
+            });
