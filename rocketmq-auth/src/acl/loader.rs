@@ -27,6 +27,7 @@ use tokio::fs;
 use crate::acl::validator::validate_acl_config;
 use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
+use crate::migration::alc::plain_access_data::DataVersion;
 use crate::migration::alc::plain_access_data::PlainAccessData;
 
 #[derive(Clone, Debug)]
@@ -103,6 +104,7 @@ impl FileAclConfigStore {
 
         let mut data = self.load_plain_access_data().await?;
         data.set_global_white_remote_addresses(addresses);
+        bump_data_version(&mut data);
         self.write_plain_access_data(&data).await
     }
 
@@ -289,6 +291,22 @@ fn temp_file_path(path: &Path) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     path.with_file_name(format!(".{file_name}.{}.tmp", nanos))
+}
+
+fn bump_data_version(data: &mut PlainAccessData) {
+    let counter = data
+        .latest_version()
+        .map_or(1, |version| version.counter.saturating_add(1));
+    data.set_data_version(vec![DataVersion {
+        timestamp: current_time_millis(),
+        counter,
+    }]);
+}
+
+fn current_time_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
 }
 
 #[cfg(test)]
@@ -483,5 +501,51 @@ accounts:
             &[CheetahString::from_static_str("10.10.*.*")]
         );
         assert!(data.accounts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn store_bumps_data_version_when_global_white_remote_addresses_change() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+dataVersion:
+  - timestamp: 100
+    counter: 7
+accounts:
+  - accessKey: ak
+    secretKey: sk
+"#,
+        )
+        .unwrap();
+
+        FileAclConfigStore::new(&file)
+            .update_global_white_remote_addresses(["172.16.*.*"])
+            .await
+            .unwrap();
+
+        let data: PlainAccessData = serde_yaml::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        let version = data.latest_version().unwrap();
+        assert_eq!(version.counter, 8);
+        assert!(version.timestamp > 100);
+    }
+
+    #[tokio::test]
+    async fn store_creates_data_version_when_missing() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("plain_acl.yml");
+
+        FileAclConfigStore::new(&file)
+            .update_global_white_remote_addresses(["10.10.*.*"])
+            .await
+            .unwrap();
+
+        let data: PlainAccessData = serde_yaml::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        let version = data.latest_version().unwrap();
+        assert_eq!(version.counter, 1);
+        assert!(version.timestamp > 0);
     }
 }

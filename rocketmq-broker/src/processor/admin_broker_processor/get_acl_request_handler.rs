@@ -73,17 +73,7 @@ impl<MS: MessageStore> GetAclRequestHandler<MS> {
 }
 
 fn map_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
-    match error {
-        RocketMQError::IllegalArgument(message) => {
-            response.set_code(ResponseCode::InvalidParameter).set_remark(message)
-        }
-        RocketMQError::BrokerPermissionDenied { operation } => {
-            response.set_code(ResponseCode::NoPermission).set_remark(operation)
-        }
-        other => response
-            .set_code(ResponseCode::SystemError)
-            .set_remark(other.to_string()),
-    }
+    super::map_auth_admin_error_response(response, error)
 }
 
 #[cfg(test)]
