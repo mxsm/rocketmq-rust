@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use std::fmt;
 use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
@@ -22,7 +23,7 @@ use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::subject::Subject;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct User {
     username: CheetahString,
     password: Option<CheetahString>,
@@ -32,6 +33,17 @@ pub struct User {
     user_status: Option<UserStatus>,
     #[serde(skip)]
     subject_key_cache: OnceLock<String>,
+}
+
+impl fmt::Debug for User {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("User")
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("user_type", &self.user_type)
+            .field("user_status", &self.user_status)
+            .finish_non_exhaustive()
+    }
 }
 
 impl User {
@@ -169,5 +181,16 @@ mod tests {
         let user = User::of(username);
         assert_eq!(user.subject_key(), "User:test_user");
         assert_eq!(user.subject_type(), SubjectType::User);
+    }
+
+    #[test]
+    fn user_debug_redacts_password() {
+        let user = User::of_with_password("alice", "top-secret-password");
+
+        let debug = format!("{user:?}");
+
+        assert!(debug.contains("alice"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("top-secret-password"));
     }
 }

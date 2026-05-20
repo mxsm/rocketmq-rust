@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
@@ -225,7 +226,7 @@ impl SessionConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyAuthConfig {
     pub config_name: String,
@@ -248,6 +249,53 @@ pub struct ProxyAuthConfig {
     pub authorization_metadata_provider: String,
     pub authorization_strategy: String,
     pub authorization_whitelist: Vec<String>,
+}
+
+impl fmt::Debug for ProxyAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyAuthConfig")
+            .field("config_name", &self.config_name)
+            .field("cluster_name", &self.cluster_name)
+            .field("auth_config_path", &self.auth_config_path)
+            .field("acl_file", &self.acl_file)
+            .field("acl_file_watch_enabled", &self.acl_file_watch_enabled)
+            .field("acl_file_watch_interval_millis", &self.acl_file_watch_interval_millis)
+            .field("authentication_enabled", &self.authentication_enabled)
+            .field("authentication_provider", &self.authentication_provider)
+            .field(
+                "authentication_metadata_provider",
+                &self.authentication_metadata_provider,
+            )
+            .field("authentication_strategy", &self.authentication_strategy)
+            .field("authentication_whitelist", &self.authentication_whitelist)
+            .field(
+                "init_authentication_user",
+                &redacted_config_value(&self.init_authentication_user),
+            )
+            .field(
+                "inner_client_authentication_credentials",
+                &redacted_config_value(&self.inner_client_authentication_credentials),
+            )
+            .field("signature_algorithm", &self.signature_algorithm)
+            .field(
+                "request_timestamp_expired_millis",
+                &self.request_timestamp_expired_millis,
+            )
+            .field("authorization_enabled", &self.authorization_enabled)
+            .field("authorization_provider", &self.authorization_provider)
+            .field("authorization_metadata_provider", &self.authorization_metadata_provider)
+            .field("authorization_strategy", &self.authorization_strategy)
+            .field("authorization_whitelist", &self.authorization_whitelist)
+            .finish()
+    }
+}
+
+fn redacted_config_value(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        None
+    } else {
+        Some("<redacted>")
+    }
 }
 
 impl Default for ProxyAuthConfig {
@@ -389,5 +437,20 @@ requestTimestampExpiredMillis: 300000
         assert_eq!(config.acl_file_watch_interval_millis, 250);
         assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacMd5);
         assert_eq!(config.request_timestamp_expired_millis, 300_000);
+    }
+
+    #[test]
+    fn proxy_auth_config_debug_redacts_embedded_credentials() {
+        let config = ProxyAuthConfig {
+            init_authentication_user: "admin:init-secret".to_owned(),
+            inner_client_authentication_credentials: r#"{"accessKey":"inner","secretKey":"inner-secret"}"#.to_owned(),
+            ..ProxyAuthConfig::default()
+        };
+
+        let output = format!("{config:?}");
+
+        assert!(!output.contains("init-secret"));
+        assert!(!output.contains("inner-secret"));
+        assert!(output.contains("<redacted>"));
     }
 }

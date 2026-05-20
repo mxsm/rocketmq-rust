@@ -96,7 +96,9 @@ mod tests {
     use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
     use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
     use rocketmq_remoting::protocol::header::create_acl_request_header::CreateAclRequestHeader;
+    use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
     use rocketmq_remoting::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
+    use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
     use rocketmq_remoting::protocol::RemotingDeserializable;
     use rocketmq_remoting::protocol::RemotingSerializable;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
@@ -107,7 +109,9 @@ mod tests {
     use crate::auth::auth_admin_service::AuthAdminService;
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::admin_broker_processor::create_acl_request_handler::CreateAclRequestHandler;
+    use crate::processor::admin_broker_processor::create_user_request_handler::CreateUserRequestHandler;
     use crate::processor::admin_broker_processor::update_acl_request_handler::UpdateAclRequestHandler;
+    use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -272,6 +276,119 @@ mod tests {
             .and_then(|policy| policy.entries.as_ref())
             .expect("entries should exist");
         assert_eq!(entries.len(), 2);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn auth_admin_handlers_return_invalid_parameter_for_malformed_body() {
+        let mut runtime = new_test_runtime("malformed-body").await;
+        let inner = runtime.inner_for_test().clone();
+        let auth_admin_service = Arc::new(
+            AuthAdminService::new(AuthConfig {
+                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                ..AuthConfig::default()
+            })
+            .expect("create auth admin service"),
+        );
+        let mut create_user_handler = CreateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut update_user_handler = UpdateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut create_acl_handler = CreateAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut update_acl_handler = UpdateAclRequestHandler::new(inner.clone(), auth_admin_service);
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+
+        let mut create_user_request = RemotingCommand::create_request_command(
+            RequestCode::AuthCreateUser,
+            CreateUserRequestHeader {
+                username: CheetahString::from_static_str("alice"),
+            },
+        )
+        .set_body(b"{not-json".to_vec());
+        create_user_request.make_custom_header_to_net();
+        let create_user_response = create_user_handler
+            .create_user(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::AuthCreateUser,
+                &mut create_user_request,
+            )
+            .await
+            .expect("malformed user body should return a response")
+            .expect("malformed user body should return a response");
+        assert_eq!(
+            ResponseCode::from(create_user_response.code()),
+            ResponseCode::InvalidParameter
+        );
+
+        let mut update_user_request = RemotingCommand::create_request_command(
+            RequestCode::AuthUpdateUser,
+            UpdateUserRequestHeader {
+                username: CheetahString::from_static_str("alice"),
+            },
+        )
+        .set_body(b"{not-json".to_vec());
+        update_user_request.make_custom_header_to_net();
+        let update_user_response = update_user_handler
+            .update_user(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::AuthUpdateUser,
+                &mut update_user_request,
+            )
+            .await
+            .expect("malformed update user body should return a response")
+            .expect("malformed update user body should return a response");
+        assert_eq!(
+            ResponseCode::from(update_user_response.code()),
+            ResponseCode::InvalidParameter
+        );
+
+        let mut create_acl_request = RemotingCommand::create_request_command(
+            RequestCode::AuthCreateAcl,
+            CreateAclRequestHeader {
+                subject: CheetahString::from_static_str("User:alice"),
+            },
+        )
+        .set_body(b"{not-json".to_vec());
+        create_acl_request.make_custom_header_to_net();
+        let create_acl_response = create_acl_handler
+            .create_acl(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::AuthCreateAcl,
+                &mut create_acl_request,
+            )
+            .await
+            .expect("malformed acl body should return a response")
+            .expect("malformed acl body should return a response");
+        assert_eq!(
+            ResponseCode::from(create_acl_response.code()),
+            ResponseCode::InvalidParameter
+        );
+
+        let mut update_acl_request = RemotingCommand::create_request_command(
+            RequestCode::AuthUpdateAcl,
+            UpdateAclRequestHeader {
+                subject: CheetahString::from_static_str("User:alice"),
+            },
+        )
+        .set_body(b"{not-json".to_vec());
+        update_acl_request.make_custom_header_to_net();
+        let update_acl_response = update_acl_handler
+            .update_acl(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::AuthUpdateAcl,
+                &mut update_acl_request,
+            )
+            .await
+            .expect("malformed update acl body should return a response")
+            .expect("malformed update acl body should return a response");
+        assert_eq!(
+            ResponseCode::from(update_acl_response.code()),
+            ResponseCode::InvalidParameter
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

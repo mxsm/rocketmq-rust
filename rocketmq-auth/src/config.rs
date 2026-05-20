@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+
 use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::authentication::acl_signer::SignatureAlgorithm;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AuthConfig {
     pub config_name: CheetahString,
@@ -61,6 +63,76 @@ pub struct AuthConfig {
     pub stateful_authentication_cache_expired_second: u32,
     pub stateful_authorization_cache_max_num: u32,
     pub stateful_authorization_cache_expired_second: u32,
+}
+
+impl fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("config_name", &self.config_name)
+            .field("cluster_name", &self.cluster_name)
+            .field("auth_config_path", &self.auth_config_path)
+            .field("acl_file", &self.acl_file)
+            .field("acl_file_watch_enabled", &self.acl_file_watch_enabled)
+            .field("acl_file_watch_interval_millis", &self.acl_file_watch_interval_millis)
+            .field("authentication_enabled", &self.authentication_enabled)
+            .field("authentication_provider", &self.authentication_provider)
+            .field(
+                "authentication_metadata_provider",
+                &self.authentication_metadata_provider,
+            )
+            .field("authentication_strategy", &self.authentication_strategy)
+            .field("authentication_whitelist", &self.authentication_whitelist)
+            .field(
+                "init_authentication_user",
+                &redacted_if_present(&self.init_authentication_user),
+            )
+            .field(
+                "inner_client_authentication_credentials",
+                &redacted_if_present(&self.inner_client_authentication_credentials),
+            )
+            .field("signature_algorithm", &self.signature_algorithm)
+            .field(
+                "request_timestamp_expired_millis",
+                &self.request_timestamp_expired_millis,
+            )
+            .field("authorization_enabled", &self.authorization_enabled)
+            .field("authorization_provider", &self.authorization_provider)
+            .field("authorization_metadata_provider", &self.authorization_metadata_provider)
+            .field("authorization_strategy", &self.authorization_strategy)
+            .field("authorization_whitelist", &self.authorization_whitelist)
+            .field("migrate_auth_from_v1_enabled", &self.migrate_auth_from_v1_enabled)
+            .field("user_cache_max_num", &self.user_cache_max_num)
+            .field("user_cache_expired_second", &self.user_cache_expired_second)
+            .field("user_cache_refresh_second", &self.user_cache_refresh_second)
+            .field("acl_cache_max_num", &self.acl_cache_max_num)
+            .field("acl_cache_expired_second", &self.acl_cache_expired_second)
+            .field("acl_cache_refresh_second", &self.acl_cache_refresh_second)
+            .field(
+                "stateful_authentication_cache_max_num",
+                &self.stateful_authentication_cache_max_num,
+            )
+            .field(
+                "stateful_authentication_cache_expired_second",
+                &self.stateful_authentication_cache_expired_second,
+            )
+            .field(
+                "stateful_authorization_cache_max_num",
+                &self.stateful_authorization_cache_max_num,
+            )
+            .field(
+                "stateful_authorization_cache_expired_second",
+                &self.stateful_authorization_cache_expired_second,
+            )
+            .finish()
+    }
+}
+
+fn redacted_if_present(value: &CheetahString) -> Option<&'static str> {
+    if value.is_empty() {
+        None
+    } else {
+        Some("<redacted>")
+    }
 }
 
 impl Default for AuthConfig {
@@ -175,5 +247,22 @@ requestTimestampExpiredMillis: 300000
         assert_eq!(config.acl_file_watch_interval_millis, 250);
         assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacSha256);
         assert_eq!(config.request_timestamp_expired_millis, 300_000);
+    }
+
+    #[test]
+    fn auth_config_debug_redacts_embedded_credentials() {
+        let config = AuthConfig {
+            init_authentication_user: CheetahString::from("admin:init-secret"),
+            inner_client_authentication_credentials: CheetahString::from(
+                r#"{"accessKey":"inner","secretKey":"inner-secret"}"#,
+            ),
+            ..AuthConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("init-secret"));
+        assert!(!debug.contains("inner-secret"));
     }
 }
