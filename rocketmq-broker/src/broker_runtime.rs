@@ -177,6 +177,10 @@ pub(crate) struct BrokerRuntime {
 
 impl Drop for BrokerRuntime {
     fn drop(&mut self) {
+        // Abort all scheduled tasks spawned on the current tokio runtime so that their
+        // ticker loops cannot spin at full speed and block the runtime from completing
+        // shutdown when the broker is dropped (e.g. during test panic unwind).
+        self.scheduled_task_manager.abort_all();
         if let Some(broker_runtime) = self.broker_runtime.take() {
             broker_runtime.shutdown();
         }
