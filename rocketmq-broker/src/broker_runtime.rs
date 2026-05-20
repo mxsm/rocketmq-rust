@@ -177,6 +177,10 @@ pub(crate) struct BrokerRuntime {
 
 impl Drop for BrokerRuntime {
     fn drop(&mut self) {
+        // Abort all scheduled tasks spawned on the current tokio runtime so that their
+        // ticker loops cannot spin at full speed and block the runtime from completing
+        // shutdown when the broker is dropped (e.g. during test panic unwind).
+        self.scheduled_task_manager.abort_all();
         if let Some(broker_runtime) = self.broker_runtime.take() {
             broker_runtime.shutdown();
         }
@@ -3583,21 +3587,7 @@ mod tests {
             let base_port = u32::from(CONTROLLER_TEST_MIN_BASE_PORT)
                 + u32::from(block) * u32::from(CONTROLLER_TEST_PORT_BLOCK_SIZE);
             let base_port = u16::try_from(base_port).expect("controller test base port should fit u16");
-            let required_ports = [
-                base_port + 1,
-                base_port + 2,
-                base_port + 3,
-                base_port + 11,
-                base_port + 12,
-                base_port + 13,
-                base_port + 21,
-                base_port + 22,
-                base_port + 31,
-                base_port + 32,
-                base_port + 41,
-                base_port + 42,
-                base_port + 90,
-            ];
+            let required_ports = controller_test_required_ports(base_port);
             if controller_test_ports_available(&required_ports) {
                 return base_port;
             }
@@ -3608,15 +3598,64 @@ mod tests {
         );
     }
 
+    fn controller_test_required_ports(base_port: u16) -> [u16; 16] {
+        [
+            base_port + 1,
+            base_port + 2,
+            base_port + 3,
+            base_port + 11,
+            base_port + 12,
+            base_port + 13,
+            base_port + 19,
+            base_port + 21,
+            base_port + 22,
+            base_port + 29,
+            base_port + 31,
+            base_port + 32,
+            base_port + 39,
+            base_port + 41,
+            base_port + 42,
+            base_port + 90,
+        ]
+    }
+
     fn controller_test_ports_available(required_ports: &[u16]) -> bool {
         let mut listeners = Vec::with_capacity(required_ports.len());
         for port in required_ports {
-            match TcpListener::bind(("127.0.0.1", *port)) {
+            match TcpListener::bind(("0.0.0.0", *port)) {
                 Ok(listener) => listeners.push(listener),
                 Err(_) => return false,
             }
         }
         true
+    }
+
+    #[test]
+    fn controller_test_required_ports_include_broker_fast_remoting_ports() {
+        let base_port = 20_000;
+        let required_ports = controller_test_required_ports(base_port);
+
+        assert!(required_ports.contains(&(base_port + 19)));
+        assert!(required_ports.contains(&(base_port + 29)));
+        assert!(required_ports.contains(&(base_port + 39)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn controller_test_ports_available_rejects_non_primary_loopback_conflict() {
+        let Ok(other_loopback_listener) = TcpListener::bind(("127.0.0.2", 0)) else {
+            return;
+        };
+        let port = other_loopback_listener
+            .local_addr()
+            .expect("read non-primary loopback listener address")
+            .port();
+        let Ok(primary_loopback_listener) = TcpListener::bind(("127.0.0.1", port)) else {
+            return;
+        };
+        drop(primary_loopback_listener);
+
+        assert!(!controller_test_ports_available(&[port]));
     }
 
     async fn create_test_channel() -> Channel {
@@ -4107,6 +4146,15 @@ mod tests {
         }
     }
 
+    async fn wait_for_tcp_listener(addr: std::net::SocketAddr, context: &str) {
+        wait_until(
+            Duration::from_secs(5),
+            || std::net::TcpStream::connect(addr).is_ok(),
+            context,
+        )
+        .await;
+    }
+
     async fn new_test_controller_manager(
         controller_peer: RaftPeer,
         controller_peers: Vec<RaftPeer>,
@@ -4114,6 +4162,11 @@ mod tests {
         root: &Path,
     ) -> ArcMut<TestControllerManager> {
         let node_id = controller_peer.id;
+        let raft_addr = raft_peers
+            .iter()
+            .find(|peer| peer.id == node_id)
+            .map(|peer| peer.addr)
+            .unwrap_or(controller_peer.addr);
         let config = TestControllerConfig::default()
             .with_node_info(node_id, controller_peer.addr)
             .with_controller_peers(controller_peers)
@@ -4144,6 +4197,8 @@ mod tests {
             "controller manager should initialize exactly once"
         );
         manager.clone().start().await.expect("start controller manager");
+        wait_for_tcp_listener(controller_peer.addr, "controller remoting server to listen").await;
+        wait_for_tcp_listener(raft_addr, "controller raft server to listen").await;
         manager
     }
 
@@ -4188,8 +4243,6 @@ mod tests {
         )
         .await;
         let mut managers = vec![bootstrap_manager.clone()];
-
-        sleep(Duration::from_secs(1)).await;
 
         let mut initial_cluster = BTreeMap::new();
         initial_cluster.insert(
@@ -4251,7 +4304,6 @@ mod tests {
             learner_manager
                 .set_raft_runtime_tick_enabled(false)
                 .expect("disable learner tick during bootstrap");
-            sleep(Duration::from_millis(300)).await;
             bootstrap_manager
                 .raft()
                 .add_learner(
@@ -4309,8 +4361,6 @@ mod tests {
                 .expect("re-enable learner election after bootstrap");
         }
 
-        sleep(Duration::from_secs(1)).await;
-
         wait_until(
             Duration::from_secs(15),
             || managers.iter().filter(|manager| manager.is_leader()).count() == 1,
@@ -4318,7 +4368,6 @@ mod tests {
         )
         .await;
 
-        sleep(Duration::from_secs(1)).await;
         (managers, controller_peers)
     }
 
@@ -4521,6 +4570,13 @@ mod tests {
         )
         .await
         .expect("apply controller elect result");
+    }
+
+    async fn shutdown_controller_cluster(controllers: &[ArcMut<TestControllerManager>]) {
+        let results = futures::future::join_all(controllers.iter().map(|controller| controller.shutdown())).await;
+        for result in results {
+            result.expect("shutdown controller manager");
+        }
     }
 
     async fn initialize_controller_mode_broker(runtime: &mut BrokerRuntime, broker_label: &str) {
@@ -6957,11 +7013,11 @@ mod tests {
             assert_eq!(broker_b.inner.message_store_config.broker_role, BrokerRole::SyncMaster);
         }
 
-        broker_a.shutdown().await;
-        broker_b.shutdown().await;
-        for controller in &controllers {
-            controller.shutdown().await.expect("shutdown controller manager");
-        }
+        let ((), (), ()) = tokio::join!(
+            broker_a.shutdown(),
+            broker_b.shutdown(),
+            shutdown_controller_cluster(&controllers)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
