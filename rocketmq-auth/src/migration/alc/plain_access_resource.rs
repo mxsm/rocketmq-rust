@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use std::collections::HashMap;
+use std::fmt;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::mix_all;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct PlainAccessResource {
     /// Identify the user
     pub access_key: Option<CheetahString>,
@@ -41,6 +42,25 @@ pub struct PlainAccessResource {
     pub signature: Option<CheetahString>,
     pub secret_token: Option<CheetahString>,
     pub recognition: Option<CheetahString>,
+}
+
+impl fmt::Debug for PlainAccessResource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainAccessResource")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &self.secret_key.as_ref().map(|_| "<redacted>"))
+            .field("white_remote_address", &self.white_remote_address)
+            .field("admin", &self.admin)
+            .field("default_topic_perm", &self.default_topic_perm)
+            .field("default_group_perm", &self.default_group_perm)
+            .field("resource_perm_map", &self.resource_perm_map)
+            .field("request_code", &self.request_code)
+            .field("content_len", &self.content.as_ref().map(Vec::len))
+            .field("signature", &self.signature)
+            .field("secret_token", &self.secret_token.as_ref().map(|_| "<redacted>"))
+            .field("recognition", &self.recognition)
+            .finish()
+    }
 }
 
 impl PlainAccessResource {
@@ -175,5 +195,20 @@ mod tests {
         assert_eq!(retry_topic, Some(CheetahString::from("%RETRY%group1")));
 
         assert_eq!(PlainAccessResource::get_retry_topic(None), None);
+    }
+
+    #[test]
+    fn plain_access_resource_debug_redacts_secrets() {
+        let mut resource = PlainAccessResource::new();
+        resource.set_access_key(CheetahString::from("ak"));
+        resource.set_secret_key(CheetahString::from("secret-key-value"));
+        resource.set_secret_token(CheetahString::from("secret-token-value"));
+
+        let debug = format!("{resource:?}");
+
+        assert!(debug.contains("ak"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret-key-value"));
+        assert!(!debug.contains("secret-token-value"));
     }
 }

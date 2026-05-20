@@ -640,6 +640,7 @@ fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError
         RocketMQError::ConfigParseFailed { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
         RocketMQError::ConfigMissing { key } => (ResponseCode::InvalidParameter, (*key).to_owned()),
         RocketMQError::ConfigInvalidValue { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
+        RocketMQError::Serialization(_) => (ResponseCode::InvalidParameter, error.to_string()),
         RocketMQError::Authentication(AuthError::UserNotFound(_)) => (ResponseCode::UserNotExist, error.to_string()),
         RocketMQError::Authentication(_) => (ResponseCode::NoPermission, error.to_string()),
         RocketMQError::BrokerPermissionDenied { operation } => (ResponseCode::NoPermission, operation.clone()),
@@ -694,6 +695,12 @@ mod tests {
                 value: "local".to_owned(),
                 reason: "provider not ready".to_owned(),
             },
+        );
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+
+        let response = map_auth_admin_error_response(
+            RemotingCommand::create_response_command(),
+            RocketMQError::deserialization_failed("JSON", "malformed auth admin body"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
     }

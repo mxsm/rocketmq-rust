@@ -71,8 +71,14 @@ impl<MS: MessageStore> CreateAclRequestHandler<MS> {
                     .set_remark("Request body is empty"),
             ));
         };
-        let acl_info = AclInfo::decode(body)?;
-        let acl = AclConverter::convert_acl_info(&acl_info, request_header.subject.as_str())?;
+        let acl_info = match AclInfo::decode(body) {
+            Ok(acl_info) => acl_info,
+            Err(error) => return Ok(Some(map_error_response(response, error))),
+        };
+        let acl = match AclConverter::convert_acl_info(&acl_info, request_header.subject.as_str()) {
+            Ok(acl) => acl,
+            Err(error) => return Ok(Some(map_error_response(response, error))),
+        };
 
         if self.is_not_super_user_login(request).await? {
             return Ok(Some(
