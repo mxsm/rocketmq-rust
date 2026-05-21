@@ -193,6 +193,7 @@ impl ProxyStatusMapper {
             | RocketMQError::ConfigParseFailed { .. }
             | RocketMQError::ConfigMissing { .. }
             | RocketMQError::ConfigInvalidValue { .. }
+            | RocketMQError::AuthConfigInvalid { .. }
             | RocketMQError::RequestBodyInvalid { .. }
             | RocketMQError::RequestHeaderError(_)
             | RocketMQError::ResponseProcessFailed { .. }
@@ -299,17 +300,23 @@ mod tests {
 
     #[test]
     fn auth_config_errors_map_to_bad_request_payload_and_transport_status() {
-        let error = ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
-            key: "auth.authorization",
-            value: "local".to_owned(),
-            reason: "provider not ready".to_owned(),
-        });
-
-        let payload_status = ProxyStatusMapper::from_error(&error);
-        assert_eq!(payload_status.code, v2::Code::BadRequest as i32);
-        assert_eq!(
-            ProxyStatusMapper::to_tonic_status(&error).code(),
-            tonic::Code::InvalidArgument
-        );
+        for error in [
+            ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
+                key: "auth.authorization",
+                value: "local".to_owned(),
+                reason: "provider not ready".to_owned(),
+            }),
+            ProxyError::RocketMQ(RocketMQError::auth_config_invalid(
+                "auth.authorization",
+                "provider not ready",
+            )),
+        ] {
+            let payload_status = ProxyStatusMapper::from_error(&error);
+            assert_eq!(payload_status.code, v2::Code::BadRequest as i32);
+            assert_eq!(
+                ProxyStatusMapper::to_tonic_status(&error).code(),
+                tonic::Code::InvalidArgument
+            );
+        }
     }
 }

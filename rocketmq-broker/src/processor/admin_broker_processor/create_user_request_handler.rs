@@ -70,8 +70,8 @@ impl<MS: MessageStore> CreateUserRequestHandler<MS> {
         if user.user_type() == Some(UserType::Super) && self.is_not_super_user_login(request).await? {
             return Ok(Some(
                 response
-                    .set_code(ResponseCode::NoPermission)
-                    .set_remark("The super user can only be created by super user"),
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("The super user can only be create by super user"),
             ));
         }
 

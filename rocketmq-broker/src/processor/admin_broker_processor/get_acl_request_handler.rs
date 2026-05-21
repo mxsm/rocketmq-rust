@@ -86,7 +86,12 @@ mod tests {
     use rocketmq_auth::authentication::enums::user_status::UserStatus;
     use rocketmq_auth::authentication::enums::user_type::UserType;
     use rocketmq_auth::authentication::model::user::User;
+    use rocketmq_auth::authorization::enums::decision::Decision;
+    use rocketmq_auth::authorization::model::acl::Acl;
+    use rocketmq_auth::authorization::model::policy::Policy;
+    use rocketmq_auth::authorization::model::resource::Resource;
     use rocketmq_auth::config::AuthConfig;
+    use rocketmq_common::common::action::Action;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_remoting::base::response_future::ResponseFuture;
     use rocketmq_remoting::connection::Connection;
@@ -98,6 +103,7 @@ mod tests {
     use rocketmq_remoting::protocol::body::user_info::UserInfo;
     use rocketmq_remoting::protocol::header::create_acl_request_header::CreateAclRequestHeader;
     use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
+    use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
     use rocketmq_remoting::protocol::header::list_acl_request_header::ListAclRequestHeader;
     use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
     use rocketmq_remoting::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
@@ -113,6 +119,7 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use crate::processor::admin_broker_processor::create_acl_request_handler::CreateAclRequestHandler;
     use crate::processor::admin_broker_processor::create_user_request_handler::CreateUserRequestHandler;
+    use crate::processor::admin_broker_processor::delete_acl_request_handler::DeleteAclRequestHandler;
     use crate::processor::admin_broker_processor::list_acl_request_handler::ListAclRequestHandler;
     use crate::processor::admin_broker_processor::list_users_request_handler::ListUsersRequestHandler;
     use crate::processor::admin_broker_processor::update_acl_request_handler::UpdateAclRequestHandler;
@@ -513,6 +520,183 @@ mod tests {
             .expect("admin should still exist");
         assert_eq!(admin.user_type.as_deref(), Some(UserType::Super.name()));
         assert_eq!(admin.password.as_deref(), Some("admin-secret"));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn auth_create_and_update_super_user_direct_checks_match_java_system_error() {
+        let mut runtime = new_test_runtime("direct-super-check").await;
+        let inner = runtime.inner_for_test().clone();
+        let auth_admin_service = Arc::new(
+            AuthAdminService::new(AuthConfig {
+                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                ..AuthConfig::default()
+            })
+            .expect("create auth admin service"),
+        );
+        let mut alice = User::of_with_type("alice", "alice-secret", UserType::Normal);
+        alice.set_user_status(UserStatus::Enable);
+        auth_admin_service.create_user(alice).await.expect("create alice user");
+
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+
+        let mut create_handler = CreateUserRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut create_request = RemotingCommand::create_request_command(
+            RequestCode::AuthCreateUser,
+            CreateUserRequestHeader {
+                username: CheetahString::from_static_str("new-super"),
+            },
+        )
+        .set_body(
+            UserInfo {
+                username: None,
+                password: Some(CheetahString::from_static_str("secret")),
+                user_type: Some(CheetahString::from_static_str("Super")),
+                user_status: Some(CheetahString::from_static_str("enable")),
+            }
+            .encode()
+            .expect("encode user info"),
+        );
+        create_request.ensure_ext_fields_initialized();
+        create_request.add_ext_field("AccessKey", "alice");
+        create_request.make_custom_header_to_net();
+        let create_response = create_handler
+            .create_user(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::AuthCreateUser,
+                &mut create_request,
+            )
+            .await
+            .expect("create super response")
+            .expect("create super response");
+        assert_eq!(ResponseCode::from(create_response.code()), ResponseCode::SystemError);
+        assert_eq!(
+            create_response.remark().map(CheetahString::as_str),
+            Some("The super user can only be create by super user")
+        );
+
+        let mut update_handler = UpdateUserRequestHandler::new(inner.clone(), auth_admin_service);
+        let mut update_request = RemotingCommand::create_request_command(
+            RequestCode::AuthUpdateUser,
+            UpdateUserRequestHeader {
+                username: CheetahString::from_static_str("alice"),
+            },
+        )
+        .set_body(
+            UserInfo {
+                username: None,
+                password: None,
+                user_type: Some(CheetahString::from_static_str("Super")),
+                user_status: None,
+            }
+            .encode()
+            .expect("encode user info"),
+        );
+        update_request.ensure_ext_fields_initialized();
+        update_request.add_ext_field("AccessKey", "alice");
+        update_request.make_custom_header_to_net();
+        let update_response = update_handler
+            .update_user(channel, ctx, RequestCode::AuthUpdateUser, &mut update_request)
+            .await
+            .expect("update super response")
+            .expect("update super response");
+        assert_eq!(ResponseCode::from(update_response.code()), ResponseCode::SystemError);
+        assert_eq!(
+            update_response.remark().map(CheetahString::as_str),
+            Some("The super user can only be update by super user")
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn auth_delete_acl_honors_policy_type_like_java() {
+        let mut runtime = new_test_runtime("delete-acl-policy-type").await;
+        let inner = runtime.inner_for_test().clone();
+        let auth_admin_service = Arc::new(
+            AuthAdminService::new(AuthConfig {
+                auth_config_path: inner.broker_config().auth_config_path.clone(),
+                ..AuthConfig::default()
+            })
+            .expect("create auth admin service"),
+        );
+        let mut alice = User::of_with_type("alice", "secret", UserType::Normal);
+        alice.set_user_status(UserStatus::Enable);
+        auth_admin_service.create_user(alice).await.expect("create alice user");
+        auth_admin_service
+            .create_acl(Acl::of_with_policies(
+                "alice",
+                rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+                vec![
+                    Policy::of(
+                        vec![Resource::of_topic("topic-a")],
+                        vec![Action::Pub],
+                        None,
+                        Decision::Allow,
+                    ),
+                    Policy::of_type(
+                        rocketmq_auth::authorization::enums::policy_type::PolicyType::Default,
+                        vec![Resource::of_topic("topic-a")],
+                        vec![Action::Sub],
+                        None,
+                        Decision::Allow,
+                    ),
+                ],
+            ))
+            .await
+            .expect("create acl");
+
+        let mut delete_handler = DeleteAclRequestHandler::new(inner.clone(), auth_admin_service.clone());
+        let mut get_handler = GetAclRequestHandler::new(inner.clone(), auth_admin_service);
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut delete_request = RemotingCommand::create_request_command(
+            RequestCode::AuthDeleteAcl,
+            DeleteAclRequestHeader::with_policy_type(
+                CheetahString::from_static_str("User:alice"),
+                Some(CheetahString::from_static_str("Default")),
+                Some(CheetahString::from_static_str("Topic:topic-a")),
+            ),
+        );
+        delete_request.make_custom_header_to_net();
+        let delete_response = delete_handler
+            .delete_acl(
+                channel.clone(),
+                ctx.clone(),
+                RequestCode::AuthDeleteAcl,
+                &mut delete_request,
+            )
+            .await
+            .expect("delete acl response")
+            .expect("delete acl response");
+        assert_eq!(ResponseCode::from(delete_response.code()), ResponseCode::Success);
+
+        let mut get_request = RemotingCommand::create_request_command(
+            RequestCode::AuthGetAcl,
+            GetAclRequestHeader {
+                subject: CheetahString::from_static_str("User:alice"),
+            },
+        );
+        get_request.make_custom_header_to_net();
+        let mut get_response = get_handler
+            .get_acl(channel, ctx, RequestCode::AuthGetAcl, &mut get_request)
+            .await
+            .expect("get acl response")
+            .expect("get acl response");
+        assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
+        let body = AclInfo::decode(
+            get_response
+                .take_body()
+                .expect("get acl response should contain body")
+                .as_ref(),
+        )
+        .expect("decode acl body");
+        let policies = body.policies.expect("policies should remain");
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].policy_type, Some(CheetahString::from_static_str("Custom")));
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

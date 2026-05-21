@@ -640,6 +640,8 @@ fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError
         RocketMQError::ConfigParseFailed { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
         RocketMQError::ConfigMissing { key } => (ResponseCode::InvalidParameter, (*key).to_owned()),
         RocketMQError::ConfigInvalidValue { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
+        RocketMQError::AuthConfigInvalid { reason, .. } => (ResponseCode::InvalidParameter, reason.clone()),
+        RocketMQError::AuthHotReloadFailed { reason, .. } => (ResponseCode::SystemError, reason.clone()),
         RocketMQError::Serialization(_) => (ResponseCode::InvalidParameter, error.to_string()),
         RocketMQError::Authentication(AuthError::UserNotFound(_)) => (ResponseCode::UserNotExist, error.to_string()),
         RocketMQError::Authentication(_) => (ResponseCode::NoPermission, error.to_string()),
@@ -697,6 +699,18 @@ mod tests {
             },
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+
+        let response = map_auth_admin_error_response(
+            RemotingCommand::create_response_command(),
+            RocketMQError::auth_config_invalid("auth.authorization", "provider not ready"),
+        );
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+
+        let response = map_auth_admin_error_response(
+            RemotingCommand::create_response_command(),
+            RocketMQError::auth_hot_reload_failed("conf/plain_acl.yml", "watcher task failed"),
+        );
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_response_command(),

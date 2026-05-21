@@ -55,10 +55,10 @@
 use std::sync::Arc;
 
 use tracing::debug;
-use tracing::warn;
 
 use crate::authentication::enums::subject_type::SubjectType;
 use crate::authentication::model::subject::Subject;
+use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
@@ -69,6 +69,9 @@ use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
 use crate::authorization::provider::AuthorizationError;
 use crate::config::AuthConfig;
+use crate::ProviderRegistry;
+use rocketmq_error::AuthError;
+use rocketmq_error::RocketMQError;
 
 /// Result type for metadata manager operations.
 pub type ManagerResult<T> = Result<T, AuthorizationError>;
@@ -82,7 +85,7 @@ pub type ManagerResult<T> = Result<T, AuthorizationError>;
 /// # Provider Coordination
 ///
 /// - **AuthorizationMetadataProvider**: Handles ACL persistence (create, update, delete, query)
-/// - **AuthenticationMetadataProvider**: Validates subject existence (currently placeholder)
+/// - **AuthenticationMetadataProvider**: Validates subject existence for USER subjects
 ///
 /// # Examples
 ///
@@ -122,16 +125,8 @@ pub struct AuthorizationMetadataManagerImpl {
     /// generics).
     authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
 
-    /// Authentication metadata provider for subject validation.
-    ///
-    /// Currently a placeholder using `dyn Any`. Will be replaced with proper
-    /// `AuthenticationMetadataProvider` trait once available.
-    ///
-    /// When integrated, this provider will:
-    /// - Validate USER subjects exist before ACL creation
-    /// - Support group/role membership queries
-    /// - Enable fine-grained permission checks
-    authentication_provider: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// Authentication metadata provider used to validate USER subjects before ACL mutations.
+    authentication_provider: Option<Arc<dyn AuthenticationMetadataProvider>>,
 }
 
 impl AuthorizationMetadataManagerImpl {
@@ -150,7 +145,7 @@ impl AuthorizationMetadataManagerImpl {
     /// ```
     pub fn new(
         authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
-        authentication_provider: Option<Arc<dyn std::any::Any + Send + Sync>>,
+        authentication_provider: Option<Arc<dyn AuthenticationMetadataProvider>>,
     ) -> Self {
         Self {
             authorization_provider,
@@ -172,22 +167,14 @@ impl AuthorizationMetadataManagerImpl {
     /// - Provider initialization fails
     /// - Required configuration is missing
     /// - Configuration contains invalid values
-    ///
-    /// # Note
-    ///
-    /// Currently requires AuthorizationFactory implementation. Use `new()` constructor
-    /// with explicit providers as a workaround.
-    pub fn from_config(_config: &AuthConfig) -> ManagerResult<Self> {
-        // TODO: Implement AuthorizationFactory to create providers from config
-        // Example:
-        // let auth_provider = AuthorizationFactory::create_metadata_provider(config)?;
-        // let authn_provider = AuthenticationFactory::create_metadata_provider(config)?;
-        // Ok(Self::new(Arc::new(auth_provider), Some(Arc::new(authn_provider))))
-
-        Err(AuthorizationError::ConfigurationError(
-            "AuthorizationMetadataManagerImpl::from_config requires factory implementation. Use new() constructor \
-             with explicit providers instead."
-                .to_string(),
+    pub fn from_config(config: &AuthConfig) -> ManagerResult<Self> {
+        let registry = ProviderRegistry::local(config)
+            .map_err(|error| AuthorizationError::ConfigurationError(error.to_string()))?;
+        let authentication_provider: Arc<dyn AuthenticationMetadataProvider> =
+            registry.authentication_metadata_provider();
+        Ok(Self::new(
+            registry.authorization_metadata_provider(),
+            Some(authentication_provider),
         ))
     }
 
@@ -209,15 +196,8 @@ impl AuthorizationMetadataManagerImpl {
     pub async fn shutdown(&mut self) {
         debug!("Shutting down AuthorizationMetadataManagerImpl");
 
-        // Shutdown authentication provider if available
         if self.authentication_provider.is_some() {
-            debug!("Shutting down authentication provider");
-            // TODO: When AuthenticationMetadataProvider trait is available:
-            // if let Some(provider) = &self.authentication_provider {
-            //     if let Some(auth_provider) = provider.downcast_ref::<dyn
-            // AuthenticationMetadataProvider>() {         auth_provider.shutdown();
-            //     }
-            // }
+            debug!("Authentication provider is shared; owner is responsible for provider shutdown");
         }
 
         // Shutdown authorization provider
@@ -527,19 +507,10 @@ impl AuthorizationMetadataManagerImpl {
 
     // ========== Private Validation Methods ==========
 
-    /// Initialize ACL by setting default policy types.
+    /// Initialize ACL defaults.
     ///
-    /// Sets PolicyType to CUSTOM for any policy without an explicit type.
-    fn init_acl(acl: &mut Acl) {
-        let mut policies = acl.policies().clone();
-        for policy in policies.iter_mut() {
-            // Ensure policy type is set (defaults to Custom in Rust impl)
-            if policy.policy_type() == PolicyType::Custom {
-                // Already set to Custom, this is fine
-            }
-        }
-        acl.set_policies(policies);
-    }
+    /// Rust policies always carry an explicit `PolicyType`; no mutation is needed here.
+    fn init_acl(_acl: &mut Acl) {}
 
     /// Validate ACL structure.
     ///
@@ -704,28 +675,7 @@ impl AuthorizationMetadataManagerImpl {
     /// For other subject types, assumes existence.
     async fn verify_subject_exists(&self, acl: &Acl) -> ManagerResult<()> {
         if acl.subject_type() == SubjectType::User {
-            // TODO: When AuthenticationMetadataProvider is available:
-            // let username = extract_username_from_key(acl.subject_key());
-            // let user = self.authentication_provider
-            //     .as_ref()
-            //     .ok_or_else(|| AuthorizationError::NotInitialized(
-            //         "Authentication provider not configured".to_string()
-            //     ))?
-            //     .get_user(username)
-            //     .await?;
-            //
-            // if user.is_none() {
-            //     return Err(AuthorizationError::SubjectNotFound(format!(
-            //         "The subject of {} is not exist.",
-            //         acl.subject_key()
-            //     )));
-            // }
-
-            // For now, we'll just log a warning
-            warn!(
-                "Subject validation for USER type is not yet implemented (subject: {})",
-                acl.subject_key()
-            );
+            self.verify_user_subject_key(acl.subject_key()).await?;
         }
 
         Ok(())
@@ -736,16 +686,32 @@ impl AuthorizationMetadataManagerImpl {
     /// Similar to `verify_subject_exists` but works with Subject trait references.
     async fn verify_subject_by_ref<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<()> {
         if subject.subject_type() == SubjectType::User {
-            // TODO: When AuthenticationMetadataProvider is available:
-            // Extract username from subject_key and validate
-
-            warn!(
-                "Subject validation for USER type is not yet implemented (subject: {})",
-                subject.subject_key()
-            );
+            self.verify_user_subject_key(subject.subject_key()).await?;
         }
 
         Ok(())
+    }
+
+    async fn verify_user_subject_key(&self, subject_key: &str) -> ManagerResult<()> {
+        let provider = self.authentication_provider.as_ref().ok_or_else(|| {
+            AuthorizationError::NotInitialized("The authenticationMetadataProvider is not configured.".to_string())
+        })?;
+        let username = subject_key
+            .split_once(':')
+            .map(|(_, username)| username)
+            .unwrap_or(subject_key)
+            .trim();
+        if username.is_empty() {
+            return Err(AuthorizationError::SubjectNotFound(subject_key.to_string()));
+        }
+
+        match provider.get_user(username).await {
+            Ok(_) => Ok(()),
+            Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => Err(AuthorizationError::SubjectNotFound(
+                format!("The subject of {subject_key} is not exist."),
+            )),
+            Err(error) => Err(AuthorizationError::MetadataServiceError(error.to_string())),
+        }
     }
 
     /// Get the authorization provider reference.
@@ -756,7 +722,7 @@ impl AuthorizationMetadataManagerImpl {
 
     /// Get the authentication provider reference.
     #[allow(dead_code)]
-    fn get_authentication_provider(&self) -> ManagerResult<&Arc<dyn std::any::Any + Send + Sync>> {
+    fn get_authentication_provider(&self) -> ManagerResult<&Arc<dyn AuthenticationMetadataProvider>> {
         self.authentication_provider.as_ref().ok_or_else(|| {
             AuthorizationError::NotInitialized("The authenticationMetadataProvider is not configured.".to_string())
         })
@@ -788,6 +754,14 @@ impl Subject for SubjectWrapper {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_common::common::action::Action;
+
+    use crate::authentication::enums::user_status::UserStatus;
+    use crate::authentication::enums::user_type::UserType;
+    use crate::authentication::model::user::User;
+    use crate::authentication::provider::LocalAuthenticationMetadataProvider;
+    use crate::authorization::enums::decision::Decision;
+
     use super::*;
 
     #[test]
@@ -813,5 +787,46 @@ mod tests {
             "256.256.256.256"
         ));
         assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("192.168.0.0/33")); // Invalid prefix
+    }
+
+    #[tokio::test]
+    async fn create_acl_validates_user_subject_with_authentication_provider() {
+        let mut authorization_provider = LocalAuthorizationMetadataProvider::new();
+        authorization_provider
+            .initialize(AuthConfig::default(), None)
+            .expect("authorization provider should initialize");
+        let authentication_provider = Arc::new(LocalAuthenticationMetadataProvider::new());
+        let manager = AuthorizationMetadataManagerImpl::new(
+            Arc::new(authorization_provider),
+            Some(authentication_provider.clone() as Arc<dyn AuthenticationMetadataProvider>),
+        );
+        let acl = Acl::of(
+            "alice",
+            SubjectType::User,
+            Policy::of(
+                vec![Resource::of_topic("topic-a")],
+                vec![Action::Pub],
+                None,
+                Decision::Allow,
+            ),
+        );
+
+        let missing_error = manager
+            .create_acl(acl.clone())
+            .await
+            .expect_err("missing user subject should be rejected");
+        assert!(matches!(missing_error, AuthorizationError::SubjectNotFound(_)));
+
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        authentication_provider
+            .create_user(user)
+            .await
+            .expect("user should be created");
+
+        manager
+            .create_acl(acl)
+            .await
+            .expect("existing user subject should be accepted");
     }
 }

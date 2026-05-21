@@ -63,7 +63,7 @@ impl<MS: MessageStore> DeleteUserRequestHandler<MS> {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
-                    .set_remark("The super user can only be deleted by super user"),
+                    .set_remark("The super user can only be update by super user"),
             ));
         }
 
