@@ -49,7 +49,9 @@ impl<MS: MessageStore> ListAclRequestHandler<MS> {
             .await
         {
             Ok(acls) => {
-                response.set_body_mut_ref(acls.encode()?);
+                if !acls.is_empty() {
+                    response.set_body_mut_ref(acls.encode()?);
+                }
                 Ok(Some(response.set_code(ResponseCode::Success)))
             }
             Err(error) => Ok(Some(map_error_response(response, error))),
