@@ -263,6 +263,22 @@ where
             RequestCode::GetParentTopicInfo => self.dispatch_get_parent_topic_info(request).await,
             RequestCode::GetLiteTopicInfo => self.dispatch_get_lite_topic_info(request).await,
             RequestCode::GetLiteGroupInfo => self.dispatch_get_lite_group_info(request).await,
+            RequestCode::AuthCreateUser
+            | RequestCode::AuthUpdateUser
+            | RequestCode::AuthDeleteUser
+            | RequestCode::AuthGetUser
+            | RequestCode::AuthListUsers
+            | RequestCode::AuthCreateAcl
+            | RequestCode::AuthUpdateAcl
+            | RequestCode::AuthDeleteAcl
+            | RequestCode::AuthGetAcl
+            | RequestCode::AuthListAcl => unsupported_response(
+                request.opaque(),
+                format!(
+                    "proxy remoting ingress does not support auth admin request code {}; send it to broker admin",
+                    request.code()
+                ),
+            ),
             _ => unsupported_response(
                 request.opaque(),
                 format!(
@@ -1821,6 +1837,36 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         assert!(response.body().is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_auth_admin_request_codes_are_explicitly_unsupported() {
+        let dispatcher = test_dispatcher();
+        for request_code in [
+            RequestCode::AuthCreateUser,
+            RequestCode::AuthUpdateUser,
+            RequestCode::AuthDeleteUser,
+            RequestCode::AuthGetUser,
+            RequestCode::AuthListUsers,
+            RequestCode::AuthCreateAcl,
+            RequestCode::AuthUpdateAcl,
+            RequestCode::AuthDeleteAcl,
+            RequestCode::AuthGetAcl,
+            RequestCode::AuthListAcl,
+        ] {
+            let request = RemotingCommand::create_remoting_command(request_code);
+
+            let response = dispatcher.dispatch(&test_context(), &request).await;
+
+            assert_eq!(
+                ResponseCode::from(response.code()),
+                ResponseCode::RequestCodeNotSupported
+            );
+            assert!(response
+                .remark()
+                .expect("unsupported auth admin response should carry remark")
+                .contains("send it to broker admin"));
+        }
     }
 
     #[tokio::test]

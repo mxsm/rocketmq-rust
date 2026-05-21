@@ -97,11 +97,7 @@ impl From<AuthorizationError> for RocketMQError {
             | AuthorizationError::ResourceNotFound(_)
             | AuthorizationError::InvalidContext(_) => RocketMQError::illegal_argument(message),
             AuthorizationError::ConfigurationError(_) | AuthorizationError::NotInitialized(_) => {
-                RocketMQError::ConfigInvalidValue {
-                    key: "auth.authorization",
-                    value: "<redacted>".to_string(),
-                    reason: message,
-                }
+                RocketMQError::auth_config_invalid("auth.authorization", message)
             }
             AuthorizationError::PolicyEvaluationFailed(_)
             | AuthorizationError::InternalError(_)
@@ -643,7 +639,7 @@ mod tests {
         let config = RocketMQError::from(AuthorizationError::ConfigurationError("missing config".to_string()));
         assert!(matches!(
             config,
-            RocketMQError::ConfigInvalidValue {
+            RocketMQError::AuthConfigInvalid {
                 key: "auth.authorization",
                 ..
             }

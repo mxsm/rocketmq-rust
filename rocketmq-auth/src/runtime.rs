@@ -339,7 +339,7 @@ impl AclFileWatchHandle {
         if let Some(join_handle) = join_handle {
             join_handle
                 .await
-                .map_err(|error| RocketMQError::Internal(format!("ACL file watcher task failed: {error}")))?;
+                .map_err(|error| RocketMQError::auth_hot_reload_failed("aclFile", error.to_string()))?;
         }
         Ok(())
     }

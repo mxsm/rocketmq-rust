@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use rocketmq_auth::acl::FileAclConfigStore;
 use rocketmq_auth::authentication::enums::subject_type::SubjectType;
+use rocketmq_auth::authentication::enums::user_status::UserStatus;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_auth::authentication::model::subject::Subject;
 use rocketmq_auth::authentication::model::user::User;
 use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
 use rocketmq_auth::authentication::provider::LocalAuthenticationMetadataProvider;
+use rocketmq_auth::authorization::enums::policy_type::PolicyType;
 use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
 use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use rocketmq_auth::authorization::model::acl::Acl;
@@ -60,6 +62,9 @@ impl AuthAdminService {
 
     pub async fn create_user(&self, user: User) -> RocketMQResult<()> {
         self.validate_username(user.username().as_str())?;
+        if user.password().is_none_or(|password| password.trim().is_empty()) {
+            return Err(RocketMQError::authentication_failed("password can not be blank"));
+        }
 
         if self
             .authentication_provider
@@ -67,19 +72,38 @@ impl AuthAdminService {
             .await
             .is_ok()
         {
-            return Err(RocketMQError::IllegalArgument(format!(
-                "User '{}' already exists",
-                user.username()
-            )));
+            return Err(RocketMQError::authentication_failed("The user is existed"));
         }
 
+        let mut user = user;
+        if user.user_type().is_none() {
+            user.set_user_type(UserType::Normal);
+        }
+        if user.user_status().is_none() {
+            user.set_user_status(UserStatus::Enable);
+        }
         self.authentication_provider.create_user(user).await
     }
 
     pub async fn update_user(&self, user: User) -> RocketMQResult<()> {
         self.validate_username(user.username().as_str())?;
-        self.get_existing_user(user.username().as_str()).await?;
-        self.authentication_provider.update_user(user).await
+        let mut existing = match self.get_existing_user(user.username().as_str()).await {
+            Ok(existing) => existing,
+            Err(RocketMQError::Authentication(rocketmq_error::AuthError::UserNotFound(_))) => {
+                return Err(RocketMQError::authentication_failed("The user is not exist"))
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(password) = user.password().filter(|password| !password.trim().is_empty()) {
+            existing.set_password(password.clone());
+        }
+        if let Some(user_type) = user.user_type() {
+            existing.set_user_type(user_type);
+        }
+        if let Some(user_status) = user.user_status() {
+            existing.set_user_status(user_status);
+        }
+        self.authentication_provider.update_user(existing).await
     }
 
     pub async fn delete_user(&self, username: &str) -> RocketMQResult<()> {
@@ -141,9 +165,17 @@ impl AuthAdminService {
         Ok(acl.as_ref().map(AclConverter::convert_acl))
     }
 
-    pub async fn delete_acl(&self, subject: &str, resource: Option<&str>) -> RocketMQResult<()> {
+    pub async fn delete_acl(
+        &self,
+        subject: &str,
+        policy_type: Option<&str>,
+        resource: Option<&str>,
+    ) -> RocketMQResult<()> {
         let subject = SubjectRef::parse(subject)?;
+        self.ensure_subject_exists(&subject).await?;
+
         let Some(resource_key) = resource.filter(|resource| !resource.trim().is_empty()) else {
+            self.ensure_acl_exists(&subject).await?;
             return self
                 .authorization_provider
                 .delete_acl(&subject)
@@ -151,6 +183,14 @@ impl AuthAdminService {
                 .map_err(map_authz_error);
         };
 
+        let policy_type = policy_type
+            .filter(|policy_type| !policy_type.trim().is_empty())
+            .map(|policy_type| {
+                PolicyType::get_by_name(policy_type)
+                    .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid policy type '{policy_type}'")))
+            })
+            .transpose()?
+            .unwrap_or(PolicyType::Custom);
         let resource = Resource::of_str(resource_key)
             .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid resource '{resource_key}'")))?;
 
@@ -160,24 +200,17 @@ impl AuthAdminService {
             .await
             .map_err(map_authz_error)?
         else {
-            return Ok(());
+            return Err(permission_denied("The acl is not exist."));
         };
 
-        let mut retained_policies = Vec::new();
-        for mut policy in acl.policies().clone() {
-            policy.delete_entry(&resource);
-            if !policy.entries().is_empty() {
-                retained_policies.push(policy);
-            }
-        }
+        acl.delete_policy(policy_type, &resource);
 
-        if retained_policies.is_empty() {
+        if acl.policies().is_empty() {
             self.authorization_provider
                 .delete_acl(&subject)
                 .await
                 .map_err(map_authz_error)?;
         } else {
-            acl.set_policies(retained_policies);
             self.authorization_provider
                 .update_acl(acl)
                 .await
@@ -264,7 +297,7 @@ impl AuthAdminService {
             SubjectType::User => {
                 let username = subject.name();
                 if self.authentication_provider.get_user(username).await.is_err() {
-                    return Err(RocketMQError::illegal_argument(format!(
+                    return Err(permission_denied(format!(
                         "The subject of {} is not exist.",
                         subject.subject_key()
                     )));
@@ -273,10 +306,29 @@ impl AuthAdminService {
             }
         }
     }
+
+    async fn ensure_acl_exists(&self, subject: &SubjectRef) -> RocketMQResult<()> {
+        if self
+            .authorization_provider
+            .get_acl(subject)
+            .await
+            .map_err(map_authz_error)?
+            .is_none()
+        {
+            return Err(permission_denied("The acl is not exist."));
+        }
+        Ok(())
+    }
 }
 
 fn map_authz_error(error: AuthorizationError) -> RocketMQError {
     RocketMQError::from(error)
+}
+
+fn permission_denied(message: impl Into<String>) -> RocketMQError {
+    RocketMQError::BrokerPermissionDenied {
+        operation: message.into(),
+    }
 }
 
 #[derive(Clone)]
@@ -422,6 +474,9 @@ mod tests {
     #[tokio::test]
     async fn delete_acl_can_remove_single_resource() {
         let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        service.create_user(user).await.unwrap();
         let subject = SubjectRef::parse("alice").unwrap();
         let first = Resource::of_topic("topic-a");
         let second = Resource::of_topic("topic-b");
@@ -443,7 +498,10 @@ mod tests {
             .map_err(map_authz_error)
             .unwrap();
 
-        service.delete_acl("User:alice", Some("Topic:topic-a")).await.unwrap();
+        service
+            .delete_acl("User:alice", None, Some("Topic:topic-a"))
+            .await
+            .unwrap();
 
         let acl = service
             .authorization_provider()
@@ -457,6 +515,64 @@ mod tests {
             acl.policies()[0].entries()[0].resource().resource_key().as_deref(),
             Some("Topic:topic-b")
         );
+    }
+
+    #[tokio::test]
+    async fn update_user_preserves_unset_fields_like_java() {
+        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        service.create_user(user).await.unwrap();
+
+        let mut patch = User::of("alice");
+        patch.set_user_status(UserStatus::Disable);
+        service.update_user(patch).await.unwrap();
+
+        let fetched = service.authentication_provider().get_user("alice").await.unwrap();
+        assert_eq!(fetched.password().map(CheetahString::as_str), Some("secret"));
+        assert_eq!(fetched.user_type(), Some(UserType::Normal));
+        assert_eq!(fetched.user_status(), Some(UserStatus::Disable));
+    }
+
+    #[tokio::test]
+    async fn delete_acl_uses_requested_policy_type_only() {
+        let service = AuthAdminService::new(test_auth_config()).unwrap();
+        let mut user = User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        service.create_user(user).await.unwrap();
+
+        service
+            .create_acl(Acl::of_with_policies(
+                "alice",
+                SubjectType::User,
+                vec![
+                    Policy::of(
+                        vec![Resource::of_topic("topic-a")],
+                        vec![Action::Pub],
+                        None,
+                        Decision::Allow,
+                    ),
+                    Policy::of_type(
+                        PolicyType::Default,
+                        vec![Resource::of_topic("topic-a")],
+                        vec![Action::Sub],
+                        None,
+                        Decision::Allow,
+                    ),
+                ],
+            ))
+            .await
+            .unwrap();
+
+        service
+            .delete_acl("User:alice", Some("Default"), Some("Topic:topic-a"))
+            .await
+            .unwrap();
+
+        let acl = service.get_acl("User:alice").await.unwrap().unwrap();
+        let policies = acl.policies.expect("custom policy should remain");
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].policy_type.as_deref(), Some("Custom"));
     }
 
     #[tokio::test]
@@ -502,7 +618,7 @@ mod tests {
         let config = map_authz_error(AuthorizationError::NotInitialized("provider not ready".to_string()));
         assert!(matches!(
             config,
-            RocketMQError::ConfigInvalidValue {
+            RocketMQError::AuthConfigInvalid {
                 key: "auth.authorization",
                 ..
             }

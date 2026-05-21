@@ -74,7 +74,7 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         if user.user_type() == Option::from(UserType::Super) && is_not_super_user_login {
             return Ok(Some(
                 response
-                    .set_code(ResponseCode::NoPermission)
+                    .set_code(ResponseCode::SystemError)
                     .set_remark("The super user can only be update by super user"),
             ));
         }

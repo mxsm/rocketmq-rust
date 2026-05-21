@@ -724,7 +724,7 @@ mod tests {
         let config = map_authorization_error(AuthorizationError::ConfigurationError("missing provider".to_string()));
         assert!(matches!(
             config,
-            ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
+            ProxyError::RocketMQ(RocketMQError::AuthConfigInvalid {
                 key: "auth.authorization",
                 ..
             })

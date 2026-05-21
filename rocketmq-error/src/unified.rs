@@ -331,6 +331,14 @@ pub enum RocketMQError {
         reason: String,
     },
 
+    /// Invalid authentication or authorization configuration.
+    #[error("Invalid auth configuration for '{key}': {reason}")]
+    AuthConfigInvalid { key: &'static str, reason: String },
+
+    /// Authentication or authorization hot reload failed.
+    #[error("Auth hot reload failed for '{path}': {reason}")]
+    AuthHotReloadFailed { path: String, reason: String },
+
     // ============================================================================
     // Controller/Raft Errors
     // ============================================================================
@@ -594,6 +602,24 @@ impl RocketMQError {
         Self::Authentication(AuthError::InvalidSignature(reason.into()))
     }
 
+    /// Create an auth configuration error.
+    #[inline]
+    pub fn auth_config_invalid(key: &'static str, reason: impl Into<String>) -> Self {
+        Self::AuthConfigInvalid {
+            key,
+            reason: reason.into(),
+        }
+    }
+
+    /// Create an auth hot-reload error.
+    #[inline]
+    pub fn auth_hot_reload_failed(path: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::AuthHotReloadFailed {
+            path: path.into(),
+            reason: reason.into(),
+        }
+    }
+
     // ============================================================================
     // Controller Error Constructors
     // ============================================================================
@@ -797,5 +823,28 @@ mod tests {
             topic: "TestTopic".to_string(),
         };
         assert_eq!(err.to_string(), "Topic 'TestTopic' does not exist");
+    }
+
+    #[test]
+    fn auth_config_and_hot_reload_errors_are_distinct() {
+        let config = RocketMQError::auth_config_invalid("auth.authorization", "provider not ready");
+        assert!(matches!(
+            config,
+            RocketMQError::AuthConfigInvalid {
+                key: "auth.authorization",
+                ..
+            }
+        ));
+        assert!(config.to_string().contains("Invalid auth configuration"));
+
+        let reload = RocketMQError::auth_hot_reload_failed("conf/plain_acl.yml", "parse failed");
+        assert!(matches!(
+            reload,
+            RocketMQError::AuthHotReloadFailed {
+                ref path,
+                ref reason
+            } if path == "conf/plain_acl.yml" && reason == "parse failed"
+        ));
+        assert!(reload.to_string().contains("Auth hot reload failed"));
     }
 }
