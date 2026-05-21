@@ -59,7 +59,9 @@ impl<MS: MessageStore> ListUsersRequestHandler<MS> {
             .await
         {
             Ok(users) => {
-                response.set_body_mut_ref(users.encode()?);
+                if !users.is_empty() {
+                    response.set_body_mut_ref(users.encode()?);
+                }
                 Ok(Some(response.set_code(ResponseCode::Success)))
             }
             Err(error) => Ok(Some(map_error_response(response, error))),

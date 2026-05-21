@@ -69,13 +69,29 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
 
         user_info.username = Option::from(request_header.username);
         let user = UserConverter::convert_user(&user_info);
+        let is_not_super_user_login = self.is_not_super_user_login(request).await?;
 
-        if user.user_type() == Option::from(UserType::Super) && self.is_not_super_user_login(request).await? {
+        if user.user_type() == Option::from(UserType::Super) && is_not_super_user_login {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_remark("The super user can only be update by super user"),
             ));
+        }
+
+        match self.auth_admin_service.get_user(user.username().as_str()).await {
+            Ok(Some(existing_user))
+                if existing_user.user_type.as_deref().and_then(UserType::get_by_name) == Some(UserType::Super)
+                    && is_not_super_user_login =>
+            {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::NoPermission)
+                        .set_remark("The super user can only be update by super user"),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => return Ok(Some(map_error_response(response, error))),
         }
 
         match self.auth_admin_service.update_user(user).await {
