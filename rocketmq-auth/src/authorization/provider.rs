@@ -33,6 +33,7 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::config::AuthConfig;
+use crate::observability::AuthMetrics;
 use crate::runtime::ProviderRegistry;
 
 /// Result type for authorization operations.
@@ -370,6 +371,7 @@ pub struct DefaultAuthorizationProvider {
     authentication_metadata_provider: Option<Arc<LocalAuthenticationMetadataProvider>>,
     authorization_metadata_provider: Option<Arc<LocalAuthorizationMetadataProvider>>,
     context_builder: Option<DefaultAuthorizationContextBuilder>,
+    metrics: AuthMetrics,
 }
 
 impl DefaultAuthorizationProvider {
@@ -381,6 +383,7 @@ impl DefaultAuthorizationProvider {
             authentication_metadata_provider: None,
             authorization_metadata_provider: None,
             context_builder: None,
+            metrics: AuthMetrics::default(),
         }
     }
 
@@ -402,6 +405,7 @@ impl DefaultAuthorizationProvider {
         self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config));
         self.authentication_metadata_provider = Some(provider_registry.authentication_metadata_provider());
         self.authorization_metadata_provider = Some(provider_registry.authorization_metadata_provider());
+        self.metrics = provider_registry.metrics();
         Ok(())
     }
 
@@ -480,6 +484,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
         authorization_metadata_provider.initialize(config, None)?;
         self.authorization_metadata_provider = Some(Arc::new(authorization_metadata_provider));
+        self.metrics = AuthMetrics::default();
 
         Ok(())
     }
@@ -491,6 +496,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         // Validate context
         if context.subject_key().is_none() {
             warn!("Authorization context missing subject");
+            self.metrics.record_authorization_result(false);
             return Err(AuthorizationError::InvalidContext(
                 "Missing subject in authorization context".to_string(),
             ));
@@ -498,6 +504,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
 
         if context.resource().is_none() {
             warn!("Authorization context missing resource");
+            self.metrics.record_authorization_result(false);
             return Err(AuthorizationError::InvalidContext(
                 "Missing resource in authorization context".to_string(),
             ));
@@ -505,6 +512,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
 
         if context.actions().is_empty() {
             warn!("Authorization context has no actions");
+            self.metrics.record_authorization_result(false);
             return Err(AuthorizationError::InvalidContext(
                 "No actions specified in authorization context".to_string(),
             ));
@@ -544,6 +552,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         .await;
 
         self.audit_log(context, result.as_ref().err());
+        self.metrics.record_authorization_result(result.is_ok());
         result
     }
 

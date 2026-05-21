@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -45,6 +46,8 @@ use rocketmq_proxy::GetOffsetPlan;
 use rocketmq_proxy::GetOffsetRequest;
 use rocketmq_proxy::GrpcConfig;
 use rocketmq_proxy::MetadataService;
+use rocketmq_proxy::ProxyAuthConfig;
+use rocketmq_proxy::ProxyAuthRuntime;
 use rocketmq_proxy::ProxyConfig;
 use rocketmq_proxy::ProxyError;
 use rocketmq_proxy::ProxyPayloadStatus;
@@ -462,6 +465,100 @@ async fn spawn_runtime_retries_when_initial_candidate_port_is_occupied() {
         serve_result.is_ok(),
         "server should shut down cleanly: {serve_result:?}"
     );
+}
+
+#[tokio::test]
+async fn proxy_runtime_shutdown_stops_injected_auth_acl_file_watcher() {
+    let test_dir = std::env::temp_dir().join(format!("rocketmq-rust-proxy-auth-shutdown-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&test_dir).expect("create proxy auth shutdown test dir");
+    let acl_file = test_dir.join("plain_acl.yml");
+    fs::write(
+        &acl_file,
+        r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+    )
+    .expect("write initial proxy acl file");
+
+    let auth_runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+        auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+        acl_file: acl_file.to_string_lossy().into_owned(),
+        acl_file_watch_enabled: true,
+        acl_file_watch_interval_millis: 20,
+        authentication_enabled: true,
+        ..ProxyAuthConfig::default()
+    })
+    .await
+    .expect("proxy auth runtime should build")
+    .expect("proxy auth runtime should be enabled");
+    let observed_auth_runtime = auth_runtime.clone();
+
+    let route_service = Arc::new(RecordingRouteService::default());
+    let service_manager = Arc::new(ClusterServiceManager::with_services(
+        route_service,
+        Arc::new(NormalMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ));
+    let listen_addr = reserve_loopback_addr();
+    let runtime = ProxyRuntime::builder(ProxyConfig {
+        grpc: GrpcConfig {
+            listen_addr: listen_addr.to_string(),
+            ..GrpcConfig::default()
+        },
+        ..ProxyConfig::default()
+    })
+    .with_service_manager(service_manager)
+    .with_auth_runtime(auth_runtime)
+    .build();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let mut server_task = tokio::spawn(async move {
+        runtime
+            .serve_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    wait_for_server_ready(listen_addr, &mut server_task)
+        .await
+        .expect("proxy runtime should become ready");
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "proxy runtime should shut down cleanly: {serve_result:?}"
+    );
+
+    let generation = observed_auth_runtime.acl_generation();
+    let reload_attempts = observed_auth_runtime.auth_metrics_snapshot().acl_reload_attempts;
+    fs::write(
+        &acl_file,
+        r#"
+accounts:
+  - accessKey: alice
+    secretKey: second
+"#,
+    )
+    .expect("write changed proxy acl file after shutdown");
+    tokio::time::sleep(Duration::from_millis(120)).await;
+
+    assert_eq!(observed_auth_runtime.acl_generation(), generation);
+    assert_eq!(
+        observed_auth_runtime.auth_metrics_snapshot().acl_reload_attempts,
+        reload_attempts,
+        "proxy shutdown must stop the injected auth ACL watcher",
+    );
+    observed_auth_runtime
+        .shutdown()
+        .await
+        .expect("auth runtime shutdown should be idempotent");
+    let _ = fs::remove_dir_all(test_dir);
 }
 
 async fn spawn_runtime(

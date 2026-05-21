@@ -34,6 +34,7 @@ use crate::authentication::strategy::abstract_authentication_strategy::AbstractA
 use crate::authentication::strategy::authentication_strategy::AuthenticationStrategy;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
+use crate::observability::AuthMetrics;
 
 const POUND: &str = "#";
 
@@ -85,6 +86,7 @@ where
     acl_generation: Arc<AtomicU64>,
     /// Last generation observed by this strategy, used to drop old entries promptly.
     last_seen_acl_generation: AtomicU64,
+    metrics: AuthMetrics,
 }
 
 impl<P> StatefulAuthenticationStrategy<P>
@@ -101,6 +103,15 @@ where
         auth_config: AuthConfig,
         provider: Option<Arc<P>>,
         acl_generation: Arc<AtomicU64>,
+    ) -> Self {
+        Self::new_with_acl_generation_and_metrics(auth_config, provider, acl_generation, AuthMetrics::default())
+    }
+
+    pub fn new_with_acl_generation_and_metrics(
+        auth_config: AuthConfig,
+        provider: Option<Arc<P>>,
+        acl_generation: Arc<AtomicU64>,
+        metrics: AuthMetrics,
     ) -> Self {
         let mut authentication_white_set = HashSet::new();
 
@@ -129,6 +140,7 @@ where
             auth_cache,
             acl_generation,
             last_seen_acl_generation: AtomicU64::new(initial_generation),
+            metrics,
         }
     }
 
@@ -161,6 +173,7 @@ where
                 .is_ok()
         {
             self.auth_cache.invalidate_all();
+            self.metrics.record_cache_invalidation();
         }
         current
     }
@@ -251,15 +264,20 @@ where
 
         let cache_key = self.build_cache_key(default_context)?;
 
-        let result = self
-            .auth_cache
-            .try_get_with(cache_key, || -> Result<AuthCacheEntry, AuthError> {
-                match self.do_authenticate_internal(context) {
-                    Ok(()) => Ok(AuthCacheEntry::success()),
-                    Err(e) => Ok(AuthCacheEntry::failure(e.to_string())),
-                }
-            })
-            .map_err(|e| AuthError::AuthenticationFailed(format!("Cache operation failed: {}", e)))?;
+        let result = if let Some(result) = self.auth_cache.get(&cache_key) {
+            self.metrics.record_cache_hit();
+            result
+        } else {
+            self.metrics.record_cache_miss();
+            self.auth_cache
+                .try_get_with(cache_key, || -> Result<AuthCacheEntry, AuthError> {
+                    match self.do_authenticate_internal(context) {
+                        Ok(()) => Ok(AuthCacheEntry::success()),
+                        Err(e) => Ok(AuthCacheEntry::failure(e.to_string())),
+                    }
+                })
+                .map_err(|e| AuthError::AuthenticationFailed(format!("Cache operation failed: {}", e)))?
+        };
 
         if !result.success {
             return Err(AuthError::AuthenticationFailed(

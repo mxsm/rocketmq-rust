@@ -34,6 +34,7 @@ use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::authorization::provider::AuthorizationError;
 use rocketmq_auth::authorization::provider::AuthorizationProvider;
 use rocketmq_auth::authorization::provider::DefaultAuthorizationProvider;
+use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::DefaultAuthenticationProvider;
@@ -207,6 +208,14 @@ impl ProxyAuthRuntime {
 
     pub async fn shutdown(&self) -> ProxyResult<()> {
         self.auth_runtime.shutdown().await.map_err(ProxyError::from)
+    }
+
+    pub fn acl_generation(&self) -> u64 {
+        self.auth_runtime.acl_generation()
+    }
+
+    pub fn auth_metrics_snapshot(&self) -> AuthMetricsSnapshot {
+        self.auth_runtime.metrics_snapshot()
     }
 
     pub fn authentication_required(&self, rpc_name: &str) -> bool {
