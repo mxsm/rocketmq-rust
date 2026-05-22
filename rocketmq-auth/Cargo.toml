@@ -72,6 +72,11 @@ moka = { version = "0.12", features = ["sync"] }
 
 
 [dev-dependencies]
+criterion          = { version = "0.8", features = ["html_reports"] }
 tempfile           = "3"
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[[bench]]
+name    = "auth_hot_path_bench"
+harness = false

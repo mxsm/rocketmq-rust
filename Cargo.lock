@@ -3656,6 +3656,7 @@ dependencies = [
  "base64",
  "cheetah-string",
  "chrono",
+ "criterion",
  "hex",
  "hmac",
  "ipnetwork",
