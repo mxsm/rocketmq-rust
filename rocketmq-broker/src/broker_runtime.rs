@@ -3379,6 +3379,7 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU16;
+    use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
@@ -3501,6 +3502,11 @@ mod tests {
     const CONTROLLER_TEST_MAX_BASE_PORT: u16 = 60_000;
     const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
     static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
+    static NEXT_CONTROLLER_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn next_controller_test_temp_id() -> u64 {
+        NEXT_CONTROLLER_TEST_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    }
 
     #[test]
     fn build_auth_config_maps_signature_algorithm() {
@@ -3514,6 +3520,66 @@ mod tests {
 
         assert_eq!(auth_config.signature_algorithm, SignatureAlgorithm::HmacSha256);
         assert_eq!(auth_config.request_timestamp_expired_millis, 300_000);
+    }
+
+    #[tokio::test]
+    async fn shutdown_basic_service_stops_auth_acl_file_watcher() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-auth-shutdown-{}", current_millis()));
+        std::fs::create_dir_all(&temp_root).expect("create broker auth shutdown test root");
+        let acl_file = temp_root.join("plain_acl.yml");
+        std::fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .expect("write initial acl file");
+
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            acl_file: acl_file.to_string_lossy().into_owned().into(),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 20,
+            authentication_enabled: true,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initial_acl().await);
+        let auth_runtime = runtime
+            .inner
+            .auth_runtime
+            .as_ref()
+            .expect("auth runtime should be initialized")
+            .clone();
+
+        tokio::time::timeout(Duration::from_secs(5), runtime.shutdown_basic_service())
+            .await
+            .expect("broker basic service shutdown should be bounded");
+        assert!(runtime.inner.auth_runtime.is_none());
+
+        let generation = auth_runtime.acl_generation();
+        let reload_attempts = auth_runtime.metrics_snapshot().acl_reload_attempts;
+        std::fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: second
+"#,
+        )
+        .expect("write changed acl file after shutdown");
+        sleep(Duration::from_millis(120)).await;
+
+        assert_eq!(auth_runtime.acl_generation(), generation);
+        assert_eq!(auth_runtime.metrics_snapshot().acl_reload_attempts, reload_attempts);
+        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     struct TestNameServer {
@@ -3571,7 +3637,12 @@ mod tests {
     }
 
     fn controller_cluster_root(prefix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("rocketmq-rust-{prefix}-{}", current_millis()))
+        std::env::temp_dir().join(format!(
+            "rocketmq-rust-{prefix}-{}-{}-{}",
+            std::process::id(),
+            current_millis(),
+            next_controller_test_temp_id()
+        ))
     }
 
     fn allocate_controller_test_base_port() -> u16 {

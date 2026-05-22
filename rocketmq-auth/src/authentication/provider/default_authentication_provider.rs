@@ -32,6 +32,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
 use crate::authentication::provider::local_authentication_metadata_provider::LocalAuthenticationMetadataProvider;
 use crate::config::AuthConfig;
+use crate::observability::AuthMetrics;
 use crate::runtime::ProviderRegistry;
 
 use super::authentication_provider::AuthenticationProvider;
@@ -49,6 +50,9 @@ pub struct DefaultAuthenticationProvider {
 
     /// Authentication context builder.
     authentication_context_builder: DefaultAuthenticationContextBuilder,
+
+    /// Authentication counters shared with the owning runtime when available.
+    metrics: AuthMetrics,
 }
 
 impl DefaultAuthenticationProvider {
@@ -59,6 +63,7 @@ impl DefaultAuthenticationProvider {
             metadata_service: None,
             metadata_provider: None,
             authentication_context_builder: DefaultAuthenticationContextBuilder::new(),
+            metrics: AuthMetrics::default(),
         }
     }
 
@@ -75,6 +80,7 @@ impl DefaultAuthenticationProvider {
         self.metadata_service = None;
         self.authentication_context_builder = DefaultAuthenticationContextBuilder::new();
         self.metadata_provider = Some(provider_registry.authentication_metadata_provider());
+        self.metrics = provider_registry.metrics();
         Ok(())
     }
 
@@ -115,6 +121,7 @@ impl DefaultAuthenticationProvider {
             metadata_provider.clone(),
             signature_algorithm,
             request_timestamp_expired_millis,
+            self.metrics.clone(),
         );
         handler.handle(context).await.map_err(map_auth_error)
     }
@@ -141,6 +148,7 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
         let mut provider = LocalAuthenticationMetadataProvider::new();
         provider.initialize(config, None).await?;
         self.metadata_provider = Some(Arc::new(provider));
+        self.metrics = AuthMetrics::default();
         Ok(())
     }
 
@@ -157,6 +165,7 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
             Err(e) => self.do_audit_log(context, Some(&e.to_string())),
         }
 
+        self.metrics.record_authentication_result(result.is_ok());
         result
     }
 

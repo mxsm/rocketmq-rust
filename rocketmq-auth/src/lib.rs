@@ -19,6 +19,7 @@ pub mod authentication;
 pub mod authorization;
 pub mod config;
 pub mod migration;
+pub mod observability;
 pub mod permission;
 pub mod runtime;
 
@@ -38,6 +39,8 @@ pub use authorization::context::default_authorization_context::DefaultAuthorizat
 pub use authorization::evaluator::AuthorizationEvaluator;
 pub use authorization::provider::AuthorizationProvider;
 pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
+pub use observability::AuthMetrics;
+pub use observability::AuthMetricsSnapshot;
 pub use runtime::AuthRuntime;
 pub use runtime::AuthRuntimeBuilder;
 pub use runtime::AuthenticationService;

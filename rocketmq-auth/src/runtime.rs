@@ -46,6 +46,8 @@ use crate::authorization::provider::DefaultAuthorizationProvider;
 use crate::config::AuthConfig;
 use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
+use crate::observability::AuthMetrics;
+use crate::observability::AuthMetricsSnapshot;
 use crate::permission::Permission;
 
 const ACCESS_KEY: &str = "AccessKey";
@@ -58,6 +60,7 @@ pub struct ProviderRegistry {
     acl_managed_access_keys: Arc<RwLock<HashSet<String>>>,
     acl_generation: Arc<AtomicU64>,
     acl_fingerprint: Arc<RwLock<Option<AclConfigFingerprint>>>,
+    metrics: AuthMetrics,
 }
 
 impl ProviderRegistry {
@@ -75,6 +78,7 @@ impl ProviderRegistry {
             acl_managed_access_keys: Arc::new(RwLock::new(HashSet::new())),
             acl_generation: Arc::new(AtomicU64::new(0)),
             acl_fingerprint: Arc::new(RwLock::new(None)),
+            metrics: AuthMetrics::default(),
         })
     }
 
@@ -113,6 +117,7 @@ impl ProviderRegistry {
     }
 
     fn advance_acl_generation(&self) -> u64 {
+        self.metrics.record_cache_invalidation();
         self.acl_generation.fetch_add(1, AtomicOrdering::AcqRel) + 1
     }
 
@@ -122,6 +127,14 @@ impl ProviderRegistry {
 
     pub fn acl_generation_counter(&self) -> Arc<AtomicU64> {
         self.acl_generation.clone()
+    }
+
+    pub fn metrics(&self) -> AuthMetrics {
+        self.metrics.clone()
+    }
+
+    pub fn metrics_snapshot(&self) -> AuthMetricsSnapshot {
+        self.metrics.snapshot()
     }
 
     fn acl_fingerprint(&self) -> RocketMQResult<Option<AclConfigFingerprint>> {
@@ -150,7 +163,9 @@ impl ProviderRegistry {
             .acl_white_list_snapshot
             .read()
             .map_err(|_| RocketMQError::Internal("ACL white list snapshot lock is poisoned".to_owned()))?;
-        Ok(guard.matches(access_key, source_ip))
+        let matched = guard.matches(access_key, source_ip);
+        self.metrics.record_whitelist_check(matched);
+        Ok(matched)
     }
 
     pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
@@ -210,8 +225,16 @@ impl AuthRuntimeBuilder {
             .initialize_with_registry(self.config.clone(), provider_registry.clone())
             .map_err(map_authorization_error)?;
 
-        let authentication_service = AuthenticationService::new(self.config.clone(), Arc::new(authentication_provider));
-        let authorization_service = AuthorizationService::new(self.config.clone(), Arc::new(authorization_provider));
+        let authentication_service = AuthenticationService::new(
+            self.config.clone(),
+            Arc::new(authentication_provider),
+            provider_registry.metrics(),
+        );
+        let authorization_service = AuthorizationService::new(
+            self.config.clone(),
+            Arc::new(authorization_provider),
+            provider_registry.metrics(),
+        );
         let acl_file_watch_handle = start_acl_file_watcher(&self.config, provider_registry.clone());
 
         Ok(AuthRuntime {
@@ -275,6 +298,14 @@ impl AuthRuntime {
 
     pub fn acl_generation_counter(&self) -> Arc<AtomicU64> {
         self.provider_registry.acl_generation_counter()
+    }
+
+    pub fn metrics(&self) -> AuthMetrics {
+        self.provider_registry.metrics()
+    }
+
+    pub fn metrics_snapshot(&self) -> AuthMetricsSnapshot {
+        self.provider_registry.metrics_snapshot()
     }
 
     pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
@@ -351,15 +382,17 @@ pub struct AuthenticationService {
     whitelist: HashSet<String>,
     provider: Arc<DefaultAuthenticationProvider>,
     builder: DefaultAuthenticationContextBuilder,
+    metrics: AuthMetrics,
 }
 
 impl AuthenticationService {
-    fn new(config: AuthConfig, provider: Arc<DefaultAuthenticationProvider>) -> Self {
+    fn new(config: AuthConfig, provider: Arc<DefaultAuthenticationProvider>, metrics: AuthMetrics) -> Self {
         Self {
             whitelist: parse_whitelist(config.authentication_whitelist.as_str()),
             config,
             provider,
             builder: DefaultAuthenticationContextBuilder::new(),
+            metrics,
         }
     }
 
@@ -368,14 +401,18 @@ impl AuthenticationService {
         command: &RemotingCommand,
         channel_id: Option<&str>,
     ) -> RocketMQResult<()> {
-        if !self.config.authentication_enabled || self.whitelist.contains(&command.code().to_string()) {
+        if !self.config.authentication_enabled {
+            return Ok(());
+        }
+        if self.whitelist.contains(&command.code().to_string()) {
+            self.metrics.record_whitelist_check(true);
             return Ok(());
         }
 
-        let context = self
-            .builder
-            .build_from_remoting(command, channel_id)
-            .map_err(|error| RocketMQError::authentication_failed(error.to_string()))?;
+        let context = self.builder.build_from_remoting(command, channel_id).map_err(|error| {
+            self.metrics.record_authentication_result(false);
+            RocketMQError::authentication_failed(error.to_string())
+        })?;
         self.provider.authenticate(&context).await
     }
 }
@@ -385,14 +422,16 @@ pub struct AuthorizationService {
     config: AuthConfig,
     whitelist: HashSet<String>,
     provider: Arc<DefaultAuthorizationProvider>,
+    metrics: AuthMetrics,
 }
 
 impl AuthorizationService {
-    fn new(config: AuthConfig, provider: Arc<DefaultAuthorizationProvider>) -> Self {
+    fn new(config: AuthConfig, provider: Arc<DefaultAuthorizationProvider>, metrics: AuthMetrics) -> Self {
         Self {
             whitelist: parse_whitelist(config.authorization_whitelist.as_str()),
             config,
             provider,
+            metrics,
         }
     }
 
@@ -401,14 +440,21 @@ impl AuthorizationService {
         channel_context: &(dyn std::any::Any + Send + Sync),
         command: &RemotingCommand,
     ) -> RocketMQResult<()> {
-        if !self.config.authorization_enabled || self.whitelist.contains(&command.code().to_string()) {
+        if !self.config.authorization_enabled {
+            return Ok(());
+        }
+        if self.whitelist.contains(&command.code().to_string()) {
+            self.metrics.record_whitelist_check(true);
             return Ok(());
         }
 
         let contexts = self
             .provider
             .new_contexts_from_remoting_command(channel_context, command)
-            .map_err(map_authorization_error)?;
+            .map_err(|error| {
+                self.metrics.record_authorization_result(false);
+                map_authorization_error(error)
+            })?;
 
         for context in contexts {
             self.provider
@@ -449,21 +495,34 @@ async fn load_configured_acl_file(
         });
     }
 
-    let loader = FileAclConfigLoader::new(acl_file.to_owned());
-    let (acl_config, fingerprint) = loader.load_with_fingerprint().await?;
-    if !force && provider_registry.acl_fingerprint()? == Some(fingerprint) {
-        return Ok(AclReloadResult {
-            account_count: 0,
-            changed: false,
-        });
+    let metrics = provider_registry.metrics();
+    metrics.record_acl_reload_attempt();
+    let result = async {
+        let loader = FileAclConfigLoader::new(acl_file.to_owned());
+        let (acl_config, fingerprint) = loader.load_with_fingerprint().await?;
+        if !force && provider_registry.acl_fingerprint()? == Some(fingerprint) {
+            return Ok(AclReloadResult {
+                account_count: 0,
+                changed: false,
+            });
+        }
+
+        let count = apply_acl_config(provider_registry, &acl_config).await?;
+        provider_registry.set_acl_fingerprint(Some(fingerprint))?;
+        Ok(AclReloadResult {
+            account_count: count,
+            changed: true,
+        })
+    }
+    .await;
+
+    match &result {
+        Ok(reload_result) if reload_result.changed => metrics.record_acl_reload_success(),
+        Ok(_) => metrics.record_acl_reload_skipped(),
+        Err(_) => metrics.record_acl_reload_failure(),
     }
 
-    let count = apply_acl_config(provider_registry, &acl_config).await?;
-    provider_registry.set_acl_fingerprint(Some(fingerprint))?;
-    Ok(AclReloadResult {
-        account_count: count,
-        changed: true,
-    })
+    result
 }
 
 fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegistry) -> Option<AclFileWatchHandle> {
@@ -1455,6 +1514,111 @@ accounts:
             );
             sleep(Duration::from_millis(25)).await;
         }
+
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn acl_file_watcher_shutdown_is_idempotent_and_stops_future_reloads() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: first
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 20,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+        runtime.shutdown().await.unwrap();
+        runtime.shutdown().await.unwrap();
+
+        let generation = runtime.acl_generation();
+        let reload_attempts = runtime.metrics_snapshot().acl_reload_attempts;
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: second
+"#,
+        )
+        .unwrap();
+        sleep(Duration::from_millis(120)).await;
+
+        assert_eq!(runtime.acl_generation(), generation);
+        assert_eq!(
+            runtime.metrics_snapshot().acl_reload_attempts,
+            reload_attempts,
+            "shutdown watcher must not poll or reload after shutdown",
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_metrics_track_reload_whitelist_signature_and_auth_outcomes() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.10.*.*
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    topicPerms:
+      - TopicA=PUB
+"#,
+        )
+        .unwrap();
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        assert!(runtime.is_acl_white_remote_address(None, Some("10.10.1.2")).unwrap());
+
+        let signature = acl_signer::cal_signature("aliceTopicA".as_bytes(), "secret").unwrap();
+        let valid_command = send_message_command("TopicA", "alice", &signature);
+        runtime
+            .check_remoting_with_source_ip(&(), &valid_command, Some("127.0.0.1"), Some("channel-a"))
+            .await
+            .unwrap();
+
+        let invalid_command = send_message_command("TopicA", "alice", "bad-signature");
+        runtime
+            .check_remoting_with_source_ip(&(), &invalid_command, Some("127.0.0.1"), Some("channel-b"))
+            .await
+            .expect_err("invalid signature should fail authentication");
+
+        let snapshot = runtime.metrics_snapshot();
+        assert_eq!(snapshot.acl_reload_attempts, 1);
+        assert_eq!(snapshot.acl_reload_successes, 1);
+        assert!(snapshot.cache_invalidations >= 1);
+        assert!(snapshot.whitelist_hits >= 1);
+        assert!(snapshot.whitelist_misses >= 2);
+        assert_eq!(snapshot.signature_successes, 1);
+        assert_eq!(snapshot.signature_failures, 1);
+        assert_eq!(snapshot.authentication_successes, 1);
+        assert_eq!(snapshot.authentication_failures, 1);
+        assert_eq!(snapshot.authorization_successes, 1);
 
         runtime.shutdown().await.unwrap();
     }

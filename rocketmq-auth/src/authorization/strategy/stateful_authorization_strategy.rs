@@ -35,6 +35,7 @@ use crate::authorization::strategy::abstract_authorization_strategy::AbstractAut
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
 use crate::config::AuthConfig;
+use crate::observability::AuthMetrics;
 
 /// Cached authorization result.
 #[derive(Clone, Debug)]
@@ -148,6 +149,7 @@ pub struct StatefulAuthorizationStrategy {
 
     /// Last generation observed by this strategy, used to drop old entries promptly.
     last_seen_acl_generation: AtomicU64,
+    metrics: AuthMetrics,
 }
 
 impl StatefulAuthorizationStrategy {
@@ -178,6 +180,15 @@ impl StatefulAuthorizationStrategy {
         metadata_service: Option<Box<dyn Any + Send + Sync>>,
         acl_generation: Arc<AtomicU64>,
     ) -> StrategyResult<Self> {
+        Self::new_with_acl_generation_and_metrics(auth_config, metadata_service, acl_generation, AuthMetrics::default())
+    }
+
+    pub fn new_with_acl_generation_and_metrics(
+        auth_config: AuthConfig,
+        metadata_service: Option<Box<dyn Any + Send + Sync>>,
+        acl_generation: Arc<AtomicU64>,
+        metrics: AuthMetrics,
+    ) -> StrategyResult<Self> {
         let cache_ttl = Duration::from_secs(auth_config.stateful_authorization_cache_expired_second as u64);
         let cache_max_size = auth_config.stateful_authorization_cache_max_num as usize;
 
@@ -197,6 +208,7 @@ impl StatefulAuthorizationStrategy {
             request_counter: AtomicUsize::new(0),
             acl_generation,
             last_seen_acl_generation: AtomicU64::new(initial_generation),
+            metrics,
         })
     }
 
@@ -232,6 +244,7 @@ impl StatefulAuthorizationStrategy {
                 .is_ok()
         {
             self.clear_cache();
+            self.metrics.record_cache_invalidation();
         }
         current
     }
@@ -323,6 +336,7 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
             if let Some(cached_result) = cache.get(&cache_key) {
                 if !cached_result.is_expired(self.cache_ttl) {
                     debug!("Cache hit for key: {}", cache_key);
+                    self.metrics.record_cache_hit();
                     return if cached_result.granted {
                         Ok(())
                     } else {
@@ -341,6 +355,7 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
 
         // Cache miss - evaluate and cache result
         debug!("Cache miss for key: {}", cache_key);
+        self.metrics.record_cache_miss();
 
         let result = tokio::runtime::Handle::current().block_on(self.base.do_evaluate(context));
 

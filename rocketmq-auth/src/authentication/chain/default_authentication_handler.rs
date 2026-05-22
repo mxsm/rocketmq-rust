@@ -30,6 +30,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::model::user::User;
 use crate::authentication::provider::AuthenticationMetadataProvider;
+use crate::observability::AuthMetrics;
 
 /// Default authentication handler.
 ///
@@ -41,6 +42,7 @@ pub struct DefaultAuthenticationHandler<P: AuthenticationMetadataProvider> {
     authentication_metadata_provider: Arc<P>,
     signature_algorithm: SignatureAlgorithm,
     request_timestamp_expired_millis: u64,
+    metrics: AuthMetrics,
 }
 
 impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
@@ -54,18 +56,20 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
     }
 
     pub fn with_signature_algorithm(metadata_provider: Arc<P>, signature_algorithm: SignatureAlgorithm) -> Self {
-        Self::with_options(metadata_provider, signature_algorithm, 0)
+        Self::with_options(metadata_provider, signature_algorithm, 0, AuthMetrics::default())
     }
 
     pub fn with_options(
         metadata_provider: Arc<P>,
         signature_algorithm: SignatureAlgorithm,
         request_timestamp_expired_millis: u64,
+        metrics: AuthMetrics,
     ) -> Self {
         Self {
             authentication_metadata_provider: metadata_provider,
             signature_algorithm,
             request_timestamp_expired_millis,
+            metrics,
         }
     }
 
@@ -129,7 +133,9 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
             .ok_or_else(|| AuthError::AuthenticationFailed("Signature cannot be null".to_string()))?;
 
         // Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(expected_signature.as_bytes(), provided_signature.as_bytes()) {
+        let signatures_match = constant_time_eq(expected_signature.as_bytes(), provided_signature.as_bytes());
+        self.metrics.record_signature_verification(signatures_match);
+        if !signatures_match {
             return Err(AuthError::AuthenticationFailed("check signature failed".to_string()));
         }
 
@@ -342,7 +348,12 @@ mod tests {
         let password = "test_password";
         let user = create_test_user("test_user", password, UserStatus::Enable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::with_options(provider, SignatureAlgorithm::HmacSha1, 1);
+        let handler = DefaultAuthenticationHandler::with_options(
+            provider,
+            SignatureAlgorithm::HmacSha1,
+            1,
+            AuthMetrics::default(),
+        );
 
         let content = b"test content";
         let expected_signature = acl_signer::cal_signature(content, password).unwrap();
@@ -364,7 +375,12 @@ mod tests {
         let password = "test_password";
         let user = create_test_user("test_user", password, UserStatus::Enable);
         let provider = Arc::new(MockMetadataProvider { users: vec![user] });
-        let handler = DefaultAuthenticationHandler::with_options(provider, SignatureAlgorithm::HmacSha1, 1);
+        let handler = DefaultAuthenticationHandler::with_options(
+            provider,
+            SignatureAlgorithm::HmacSha1,
+            1,
+            AuthMetrics::default(),
+        );
 
         let content = b"test content";
         let expected_signature = acl_signer::cal_signature(content, password).unwrap();
