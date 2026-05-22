@@ -3379,6 +3379,7 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU16;
+    use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
@@ -3501,6 +3502,11 @@ mod tests {
     const CONTROLLER_TEST_MAX_BASE_PORT: u16 = 60_000;
     const CONTROLLER_TEST_PORT_BLOCK_SIZE: u16 = 128;
     static NEXT_CONTROLLER_TEST_PORT_BLOCK: AtomicU16 = AtomicU16::new(0);
+    static NEXT_CONTROLLER_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn next_controller_test_temp_id() -> u64 {
+        NEXT_CONTROLLER_TEST_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    }
 
     #[test]
     fn build_auth_config_maps_signature_algorithm() {
@@ -3631,7 +3637,12 @@ accounts:
     }
 
     fn controller_cluster_root(prefix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("rocketmq-rust-{prefix}-{}", current_millis()))
+        std::env::temp_dir().join(format!(
+            "rocketmq-rust-{prefix}-{}-{}-{}",
+            std::process::id(),
+            current_millis(),
+            next_controller_test_temp_id()
+        ))
     }
 
     fn allocate_controller_test_base_port() -> u16 {

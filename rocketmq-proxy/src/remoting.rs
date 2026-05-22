@@ -275,7 +275,7 @@ where
             | RequestCode::AuthListAcl => unsupported_response(
                 request.opaque(),
                 format!(
-                    "proxy remoting ingress does not support auth admin request code {}; send it to broker admin",
+                    "proxy remoting ingress does not support request code {}; send auth admin requests to broker admin",
                     request.code()
                 ),
             ),

@@ -418,23 +418,29 @@ fn validate_acl(acl: &Acl) -> RocketMQResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use cheetah_string::CheetahString;
     use rocketmq_auth::authentication::enums::user_status::UserStatus;
     use rocketmq_auth::authorization::enums::decision::Decision;
     use rocketmq_auth::authorization::model::acl::Acl;
     use rocketmq_auth::authorization::model::policy::Policy;
     use rocketmq_common::common::action::Action;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
 
     use super::*;
 
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn next_test_id() -> u64 {
+        NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+    }
+
     fn test_auth_config() -> AuthConfig {
-        let millis = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("time should move forward")
-            .as_millis();
-        let path = std::env::temp_dir().join(format!("rocketmq-rust-auth-admin-service-{millis}.json"));
+        let path = std::env::temp_dir().join(format!(
+            "rocketmq-rust-auth-admin-service-{}-{}.json",
+            std::process::id(),
+            next_test_id()
+        ));
         AuthConfig {
             auth_config_path: CheetahString::from_string(path.to_string_lossy().into_owned()),
             ..AuthConfig::default()
@@ -442,11 +448,11 @@ mod tests {
     }
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
-        let millis = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("time should move forward")
-            .as_millis();
-        std::env::temp_dir().join(format!("rocketmq-rust-auth-admin-service-{label}-{millis}"))
+        std::env::temp_dir().join(format!(
+            "rocketmq-rust-auth-admin-service-{label}-{}-{}",
+            std::process::id(),
+            next_test_id()
+        ))
     }
 
     #[tokio::test]
