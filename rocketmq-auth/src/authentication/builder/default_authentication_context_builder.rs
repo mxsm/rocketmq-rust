@@ -18,6 +18,7 @@
 //! from both gRPC and Remoting protocol requests.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use base64::Engine;
 use cheetah_string::CheetahString;
@@ -27,7 +28,6 @@ use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::AuthError;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-#[cfg(feature = "grpc")]
 use tracing::warn;
 
 use crate::authentication::builder::AuthenticationContextBuilder;
@@ -87,6 +87,23 @@ impl DefaultAuthenticationContextBuilder {
     /// Create a new default authentication context builder.
     pub fn new() -> Self {
         Self
+    }
+
+    /// Build a gRPC authentication context from plain metadata values.
+    ///
+    /// This keeps provider-level metadata parsing available without requiring callers
+    /// to construct a tonic `MetadataMap`.
+    pub fn build_from_grpc_metadata_map(
+        &self,
+        metadata: &HashMap<String, String>,
+        request: &dyn std::any::Any,
+    ) -> Result<DefaultAuthenticationContext, AuthError> {
+        Self::build_from_grpc_values(
+            request,
+            Self::metadata_value(metadata, "authorization"),
+            Self::metadata_value(metadata, X_MQ_DATE_TIME),
+            Self::metadata_value(metadata, "channel-id"),
+        )
     }
 
     /// Convert hex-encoded string to base64-encoded string.
@@ -172,6 +189,76 @@ impl DefaultAuthenticationContextBuilder {
         }
     }
 
+    fn metadata_value<'a>(metadata: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+        metadata.get(key).map(String::as_str).or_else(|| {
+            metadata
+                .iter()
+                .find_map(|(candidate, value)| candidate.eq_ignore_ascii_case(key).then_some(value.as_str()))
+        })
+    }
+
+    fn build_from_grpc_values(
+        request: &dyn std::any::Any,
+        authorization: Option<&str>,
+        datetime: Option<&str>,
+        channel_id: Option<&str>,
+    ) -> Result<DefaultAuthenticationContext, AuthError> {
+        let mut context = DefaultAuthenticationContext::new();
+
+        if let Some(channel_id) = channel_id {
+            context.base.set_channel_id(Some(CheetahString::from(channel_id)));
+        }
+
+        let rpc_code = std::any::type_name_of_val(request);
+        context.base.set_rpc_code(Some(CheetahString::from(rpc_code)));
+
+        let authorization = authorization.unwrap_or("");
+        if authorization.is_empty() {
+            return Ok(context);
+        }
+
+        let datetime = datetime.ok_or_else(|| AuthError::MissingDateTime("datetime header is required".into()))?;
+        Self::set_request_timestamp(&mut context, datetime);
+
+        let parts: Vec<&str> = authorization.splitn(2, SPACE).collect();
+        if parts.len() != 2 {
+            return Err(AuthError::InvalidAuthorizationHeader(
+                "authentication header format is incorrect".into(),
+            ));
+        }
+
+        let key_values: Vec<&str> = parts[1].split(COMMA).collect();
+        for key_value in key_values {
+            let kv: Vec<&str> = key_value.trim().splitn(2, EQUAL).collect();
+            if kv.len() != 2 {
+                warn!("Skipping invalid authentication key-value pair: {}", key_value);
+                continue;
+            }
+
+            let auth_item = kv[0];
+            let value = kv[1];
+
+            match auth_item {
+                CREDENTIAL => {
+                    let credential_parts: Vec<&str> = value.split(SLASH).collect();
+                    if credential_parts.is_empty() {
+                        return Err(AuthError::InvalidCredential("credential is empty".into()));
+                    }
+                    context.set_username(CheetahString::from(credential_parts[0]));
+                }
+                SIGNATURE => {
+                    let base64_signature = Self::hex_to_base64(value)?;
+                    context.set_signature(CheetahString::from(base64_signature));
+                }
+                _ => {}
+            }
+        }
+
+        context.set_content(datetime.as_bytes().to_vec());
+
+        Ok(context)
+    }
+
     fn remoting_request_timestamp(fields: &std::collections::HashMap<CheetahString, CheetahString>) -> Option<&str> {
         fields
             .get(&CheetahString::from(TIMESTAMP))
@@ -189,81 +276,12 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
         metadata: &tonic::metadata::MetadataMap,
         request: &dyn std::any::Any,
     ) -> Result<DefaultAuthenticationContext, AuthError> {
-        let mut context = DefaultAuthenticationContext::new();
-
-        // Extract channel ID from metadata
-        if let Some(channel_id) = metadata.get("channel-id") {
-            if let Ok(channel_id_str) = channel_id.to_str() {
-                context.base.set_channel_id(Some(CheetahString::from(channel_id_str)));
-            }
-        }
-
-        // Set RPC code from request type name
-        let rpc_code = std::any::type_name_of_val(request);
-        context.base.set_rpc_code(Some(CheetahString::from(rpc_code)));
-
-        // Extract Authorization header
-        let authorization = metadata
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        if authorization.is_empty() {
-            return Ok(context);
-        }
-
-        // Extract DateTime header (required if authorization present)
-        let datetime = metadata
-            .get("x-mq-date-time")
-            .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| AuthError::MissingDateTime("datetime header is required".into()))?;
-        Self::set_request_timestamp(&mut context, datetime);
-
-        // Parse authorization header: "MQv2-HMAC-SHA1 Credential=xxx, Signature=yyy"
-        let parts: Vec<&str> = authorization.splitn(2, SPACE).collect();
-        if parts.len() != 2 {
-            return Err(AuthError::InvalidAuthorizationHeader(
-                "authentication header format is incorrect".into(),
-            ));
-        }
-
-        // Parse key-value pairs: "Credential=xxx, Signature=yyy"
-        let key_values: Vec<&str> = parts[1].split(COMMA).collect();
-        for key_value in key_values {
-            let kv: Vec<&str> = key_value.trim().splitn(2, EQUAL).collect();
-            if kv.len() != 2 {
-                warn!("Skipping invalid authentication key-value pair: {}", key_value);
-                continue;
-            }
-
-            let auth_item = kv[0];
-            let value = kv[1];
-
-            match auth_item {
-                CREDENTIAL => {
-                    // Extract username from credential: "username/region/service" or just
-                    // "username"
-                    let credential_parts: Vec<&str> = value.split(SLASH).collect();
-                    if credential_parts.is_empty() {
-                        return Err(AuthError::InvalidCredential("credential is empty".into()));
-                    }
-                    context.set_username(CheetahString::from(credential_parts[0]));
-                }
-                SIGNATURE => {
-                    // Convert hex signature to base64
-                    let base64_signature = Self::hex_to_base64(value)?;
-                    context.set_signature(CheetahString::from(base64_signature));
-                }
-                _ => {
-                    // Ignore other fields like "SignedHeaders"
-                }
-            }
-        }
-
-        // Set content to datetime bytes for signature verification
-        context.set_content(datetime.as_bytes().to_vec());
-
-        Ok(context)
+        Self::build_from_grpc_values(
+            request,
+            metadata.get("authorization").and_then(|v| v.to_str().ok()),
+            metadata.get(X_MQ_DATE_TIME).and_then(|v| v.to_str().ok()),
+            metadata.get("channel-id").and_then(|v| v.to_str().ok()),
+        )
     }
 
     fn build_from_remoting(
@@ -385,6 +403,27 @@ mod tests {
         let timestamp = DefaultAuthenticationContextBuilder::parse_request_timestamp_millis("2023-12-27T19:46:19Z");
 
         assert_eq!(timestamp, Some(1_703_706_379_000));
+    }
+
+    #[test]
+    fn build_from_grpc_metadata_map_parses_authorization_header() {
+        let builder = DefaultAuthenticationContextBuilder::new();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "Authorization".to_owned(),
+            "MQv2-HMAC-SHA1 Credential=alice/us-east/service, SignedHeaders=x-mq-date-time, Signature=48656C6C6F"
+                .to_owned(),
+        );
+        metadata.insert("X-Mq-Date-Time".to_owned(), "20231227T194619Z".to_owned());
+        metadata.insert("Channel-Id".to_owned(), "channel-a".to_owned());
+
+        let context = builder.build_from_grpc_metadata_map(&metadata, &()).unwrap();
+
+        assert_eq!(context.username(), Some(&CheetahString::from("alice")));
+        assert_eq!(context.signature(), Some(&CheetahString::from("SGVsbG8=")));
+        assert_eq!(context.content(), Some(b"20231227T194619Z".as_slice()));
+        assert_eq!(context.base.channel_id(), Some(&CheetahString::from("channel-a")));
+        assert_eq!(context.request_timestamp_millis(), Some(1_703_706_379_000));
     }
 
     #[test]

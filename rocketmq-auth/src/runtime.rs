@@ -65,6 +65,27 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn local(config: &AuthConfig) -> RocketMQResult<Self> {
+        validate_metadata_provider_name(
+            "authenticationMetadataProvider",
+            config.authentication_metadata_provider.as_str(),
+            &[
+                "LocalAuthenticationMetadataProvider",
+                "FileSnapshotAuthenticationMetadataProvider",
+                "local",
+                "file",
+            ],
+        )?;
+        validate_metadata_provider_name(
+            "authorizationMetadataProvider",
+            config.authorization_metadata_provider.as_str(),
+            &[
+                "LocalAuthorizationMetadataProvider",
+                "FileSnapshotAuthorizationMetadataProvider",
+                "local",
+                "file",
+            ],
+        )?;
+
         let authentication_metadata_provider = Arc::new(LocalAuthenticationMetadataProvider::with_config(config)?);
         let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
         authorization_metadata_provider
@@ -183,6 +204,26 @@ impl ProviderRegistry {
         self.set_acl_white_list_snapshot(updated_snapshot)?;
         Ok(self.advance_acl_generation())
     }
+}
+
+fn validate_metadata_provider_name(key: &'static str, configured: &str, supported: &[&str]) -> RocketMQResult<()> {
+    let configured = configured.trim();
+    if configured.is_empty()
+        || supported
+            .iter()
+            .any(|candidate| configured.eq_ignore_ascii_case(candidate))
+    {
+        return Ok(());
+    }
+
+    Err(RocketMQError::auth_config_invalid(
+        key,
+        format!(
+            "unsupported metadata provider '{}'; supported providers: {}",
+            configured,
+            supported.join(", ")
+        ),
+    ))
 }
 
 pub struct AuthRuntimeBuilder {
@@ -904,6 +945,41 @@ mod tests {
         let mut ext_fields = HashMap::new();
         ext_fields.insert(CheetahString::from_static_str("topic"), CheetahString::from(topic));
         RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(ext_fields)
+    }
+
+    #[test]
+    fn provider_registry_rejects_unsupported_metadata_provider() {
+        let config = AuthConfig {
+            authentication_metadata_provider: CheetahString::from_static_str("RocksDBAuthenticationMetadataProvider"),
+            ..AuthConfig::default()
+        };
+
+        let error = match ProviderRegistry::local(&config) {
+            Ok(_) => panic!("unsupported provider should fail fast"),
+            Err(error) => error,
+        };
+
+        assert!(
+            matches!(error, RocketMQError::AuthConfigInvalid { key, .. } if key == "authenticationMetadataProvider")
+        );
+        assert!(error.to_string().contains("unsupported metadata provider"));
+    }
+
+    #[test]
+    fn provider_registry_accepts_file_snapshot_metadata_provider_aliases() {
+        let config = AuthConfig {
+            authentication_metadata_provider: CheetahString::from_static_str(
+                "FileSnapshotAuthenticationMetadataProvider",
+            ),
+            authorization_metadata_provider: CheetahString::from_static_str(
+                "FileSnapshotAuthorizationMetadataProvider",
+            ),
+            ..AuthConfig::default()
+        };
+
+        let registry = ProviderRegistry::local(&config).expect("file snapshot aliases should use local providers");
+
+        assert_eq!(registry.acl_generation(), 0);
     }
 
     #[tokio::test]

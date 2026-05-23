@@ -43,6 +43,7 @@ use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
+use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType;
@@ -434,6 +435,29 @@ impl BrokerMetricsManager {
         &self.meter
     }
 
+    pub fn register_auth_observable_gauge<F>(&self, auth_snapshot_fn: F)
+    where
+        F: Fn() -> Option<AuthMetricsSnapshot> + Send + Sync + 'static,
+    {
+        let attributes_supplier = self.attributes_supplier.clone();
+        let _auth_metrics = self
+            .meter
+            .u64_observable_gauge(BrokerMetricsConstant::GAUGE_AUTH_METRIC_VALUE)
+            .with_description("Current RocketMQ auth metric counter values")
+            .with_callback(move |observer| {
+                let Some(snapshot) = auth_snapshot_fn() else {
+                    return;
+                };
+
+                for sample in snapshot.samples() {
+                    let mut attrs = attributes_supplier.get();
+                    attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_AUTH_METRIC, sample.name));
+                    observer.observe(sample.value, &attrs);
+                }
+            })
+            .build();
+    }
+
     // ========================================================================
     // Messages In/Out Metrics
     // ========================================================================
@@ -807,6 +831,20 @@ mod tests {
     fn test_noop_attributes_supplier() {
         let supplier = NoopAttributesSupplier;
         assert!(supplier.get().is_empty());
+    }
+
+    #[test]
+    fn test_register_auth_observable_gauge() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let meter = meter_provider.meter("auth-metrics-test");
+        let manager = BrokerMetricsManager::new(meter, Arc::new(NoopAttributesSupplier));
+
+        manager.register_auth_observable_gauge(|| {
+            Some(AuthMetricsSnapshot {
+                authentication_failures: 1,
+                ..AuthMetricsSnapshot::default()
+            })
+        });
     }
 
     #[test]

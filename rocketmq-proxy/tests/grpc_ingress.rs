@@ -23,6 +23,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::StreamExt;
+use hmac::digest::KeyInit;
+use hmac::Hmac;
+use hmac::Mac;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
@@ -70,9 +73,13 @@ use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy::UpdateOffsetPlan;
 use rocketmq_proxy::UpdateOffsetRequest;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use sha1::Sha1;
 use tokio::sync::oneshot;
 use tonic::metadata::MetadataValue;
 use tonic::Request;
+
+type HmacSha1 = Hmac<Sha1>;
+const AUTH_TEST_DATETIME: &str = "20231227T194619Z";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ObservedRouteContext {
@@ -261,6 +268,99 @@ async fn query_route_integration_injects_transport_context() {
         "expected remote address to be recorded, got {:?}",
         observed[0].remote_addr
     );
+}
+
+#[tokio::test]
+async fn query_route_integration_enforces_auth_enabled_runtime() {
+    let test_dir = std::env::temp_dir().join(format!("rocketmq-rust-proxy-auth-e2e-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&test_dir).expect("create proxy auth e2e test dir");
+    let acl_file = test_dir.join("plain_acl.yml");
+    fs::write(
+        &acl_file,
+        r#"
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    admin: true
+"#,
+    )
+    .expect("write proxy auth e2e acl file");
+
+    let auth_runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+        auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+        acl_file: acl_file.to_string_lossy().into_owned(),
+        authentication_enabled: true,
+        authorization_enabled: true,
+        ..ProxyAuthConfig::default()
+    })
+    .await
+    .expect("proxy auth runtime should build")
+    .expect("proxy auth runtime should be enabled");
+
+    let route_service = Arc::new(RecordingRouteService::default());
+    let service_manager = Arc::new(ClusterServiceManager::with_services(
+        route_service.clone(),
+        Arc::new(NormalMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ));
+    let listen_addr = reserve_loopback_addr();
+    let runtime = ProxyRuntime::builder(ProxyConfig {
+        grpc: GrpcConfig {
+            listen_addr: listen_addr.to_string(),
+            ..GrpcConfig::default()
+        },
+        ..ProxyConfig::default()
+    })
+    .with_service_manager(service_manager)
+    .with_auth_runtime(auth_runtime)
+    .build();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let mut server_task = tokio::spawn(async move {
+        runtime
+            .serve_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    wait_for_server_ready(listen_addr, &mut server_task)
+        .await
+        .expect("proxy runtime should become ready");
+    let mut client = connect_with_retry(listen_addr).await;
+
+    let unauthorized = client
+        .query_route(route_request("TopicA"))
+        .await
+        .expect("unauthenticated query route should return payload status")
+        .into_inner();
+    assert_eq!(
+        unauthorized.status.as_ref().map(|status| status.code),
+        Some(v2::Code::Unauthorized as i32)
+    );
+
+    let mut authorized_request = route_request("TopicA");
+    apply_auth_headers(&mut authorized_request, "alice", "secret");
+    let authorized = client
+        .query_route(authorized_request)
+        .await
+        .expect("authenticated query route should succeed")
+        .into_inner();
+    assert_eq!(
+        authorized.status.as_ref().map(|status| status.code),
+        Some(v2::Code::Ok as i32)
+    );
+    assert_eq!(route_service.observed().len(), 1);
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "proxy runtime should shut down cleanly: {serve_result:?}"
+    );
+    let _ = fs::remove_dir_all(test_dir);
 }
 
 #[tokio::test]
@@ -710,6 +810,25 @@ fn route_request(topic: &str) -> Request<v2::QueryRouteRequest> {
         .metadata_mut()
         .insert("x-mq-client-id", MetadataValue::from_static("integration-client"));
     request
+}
+
+fn apply_auth_headers<T>(request: &mut Request<T>, username: &str, secret: &str) {
+    let mut mac = HmacSha1::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(AUTH_TEST_DATETIME.as_bytes());
+    let signature = hex::encode(mac.finalize().into_bytes());
+    let authorization =
+        format!("MQv2-HMAC-SHA1 Credential={username}, SignedHeaders=x-mq-date-time, Signature={signature}");
+
+    request
+        .metadata_mut()
+        .insert("x-mq-date-time", MetadataValue::from_static(AUTH_TEST_DATETIME));
+    request.metadata_mut().insert(
+        "authorization",
+        MetadataValue::try_from(authorization.as_str()).expect("auth metadata"),
+    );
+    request
+        .metadata_mut()
+        .insert("channel-id", MetadataValue::from_static("integration-auth-channel"));
 }
 
 fn send_message_request(topic: &str, message_id: &str) -> Request<v2::SendMessageRequest> {

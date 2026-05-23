@@ -39,6 +39,7 @@ pub use authorization::context::default_authorization_context::DefaultAuthorizat
 pub use authorization::evaluator::AuthorizationEvaluator;
 pub use authorization::provider::AuthorizationProvider;
 pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
+pub use observability::AuthMetricSample;
 pub use observability::AuthMetrics;
 pub use observability::AuthMetricsSnapshot;
 pub use runtime::AuthRuntime;

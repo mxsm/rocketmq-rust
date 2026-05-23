@@ -172,11 +172,12 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
     /// Create context from gRPC metadata.
     fn new_context_from_metadata(
         &self,
-        _metadata: &HashMap<String, String>,
-        _request: Box<dyn Any + Send>,
+        metadata: &HashMap<String, String>,
+        request: Box<dyn Any + Send>,
     ) -> Self::Context {
-        // TODO: Implement gRPC metadata parsing when grpc feature is enabled
-        DefaultAuthenticationContext::new()
+        self.authentication_context_builder
+            .build_from_grpc_metadata_map(metadata, request.as_ref())
+            .unwrap_or_else(|_| DefaultAuthenticationContext::new())
     }
 
     /// Create context from remoting command.
@@ -194,6 +195,8 @@ fn map_auth_error(error: AuthError) -> rocketmq_error::RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cheetah_string::CheetahString;
+
     use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
 
     #[tokio::test]
@@ -208,6 +211,25 @@ mod tests {
     fn test_default_provider_creation() {
         let provider = DefaultAuthenticationProvider::new();
         assert!(provider.auth_config.is_none());
+    }
+
+    #[test]
+    fn test_new_context_from_metadata_uses_grpc_header_parser() {
+        let provider = DefaultAuthenticationProvider::new();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "authorization".to_owned(),
+            "MQv2-HMAC-SHA1 Credential=alice, SignedHeaders=x-mq-date-time, Signature=48656C6C6F".to_owned(),
+        );
+        metadata.insert("x-mq-date-time".to_owned(), "20231227T194619Z".to_owned());
+        metadata.insert("channel-id".to_owned(), "channel-a".to_owned());
+
+        let context = provider.new_context_from_metadata(&metadata, Box::new(()));
+
+        assert_eq!(context.username(), Some(&CheetahString::from("alice")));
+        assert_eq!(context.signature(), Some(&CheetahString::from("SGVsbG8=")));
+        assert_eq!(context.content(), Some(b"20231227T194619Z".as_slice()));
+        assert_eq!(context.base.channel_id(), Some(&CheetahString::from("channel-a")));
     }
 
     #[tokio::test]

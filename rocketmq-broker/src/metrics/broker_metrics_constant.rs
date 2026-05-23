@@ -48,6 +48,7 @@ impl BrokerMetricsConstant {
     pub const GAUGE_CONSUMER_INFLIGHT_MESSAGES: &'static str = "rocketmq_consumer_inflight_messages";
     pub const GAUGE_CONSUMER_QUEUEING_LATENCY: &'static str = "rocketmq_consumer_queueing_latency";
     pub const GAUGE_CONSUMER_READY_MESSAGES: &'static str = "rocketmq_consumer_ready_messages";
+    pub const GAUGE_AUTH_METRIC_VALUE: &'static str = "rocketmq_auth_metric_value";
 
     // Counter Metrics - Consumer Actions
     pub const COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL: &'static str = "rocketmq_send_to_dlq_messages_total";
@@ -77,6 +78,7 @@ impl BrokerMetricsConstant {
     pub const LABEL_LANGUAGE: &'static str = "language";
     pub const LABEL_VERSION: &'static str = "version";
     pub const LABEL_CONSUME_MODE: &'static str = "consume_mode";
+    pub const LABEL_AUTH_METRIC: &'static str = "auth_metric";
 }
 
 /// Organized constants by metric type for better usability
@@ -98,6 +100,7 @@ pub mod metrics {
         pub const CONSUMER_INFLIGHT_MESSAGES: &str = BMC::GAUGE_CONSUMER_INFLIGHT_MESSAGES;
         pub const CONSUMER_QUEUEING_LATENCY: &str = BMC::GAUGE_CONSUMER_QUEUEING_LATENCY;
         pub const CONSUMER_READY_MESSAGES: &str = BMC::GAUGE_CONSUMER_READY_MESSAGES;
+        pub const AUTH_METRIC_VALUE: &str = BMC::GAUGE_AUTH_METRIC_VALUE;
         pub const HALF_MESSAGES: &str = BMC::GAUGE_HALF_MESSAGES;
     }
 
@@ -153,6 +156,7 @@ pub mod labels {
         pub const LANGUAGE: &str = BMC::LABEL_LANGUAGE;
         pub const VERSION: &str = BMC::LABEL_VERSION;
         pub const CONSUME_MODE: &str = BMC::LABEL_CONSUME_MODE;
+        pub const AUTH_METRIC: &str = BMC::LABEL_AUTH_METRIC;
     }
 
     /// Node type values
@@ -193,6 +197,7 @@ impl BrokerMetricsConstant {
             Self::GAUGE_CONSUMER_INFLIGHT_MESSAGES,
             Self::GAUGE_CONSUMER_QUEUEING_LATENCY,
             Self::GAUGE_CONSUMER_READY_MESSAGES,
+            Self::GAUGE_AUTH_METRIC_VALUE,
             Self::GAUGE_HALF_MESSAGES,
         ]
     }
@@ -237,6 +242,7 @@ impl BrokerMetricsConstant {
             Self::LABEL_LANGUAGE,
             Self::LABEL_VERSION,
             Self::LABEL_CONSUME_MODE,
+            Self::LABEL_AUTH_METRIC,
         ]
     }
 
@@ -292,6 +298,7 @@ pub enum MetricCategory {
     Producer,
     Transaction,
     Performance,
+    Auth,
 }
 
 impl MetricCategory {
@@ -314,6 +321,7 @@ impl MetricCategory {
                 Some(Self::Transaction)
             }
             name if name.contains("latency") || name.contains("execution_time") => Some(Self::Performance),
+            name if name.contains("auth") => Some(Self::Auth),
             _ => None,
         }
     }
@@ -345,6 +353,7 @@ mod tests {
             BrokerMetricsConstant::LABEL_CLUSTER_NAME
         );
         assert_eq!(labels::business::TOPIC, BrokerMetricsConstant::LABEL_TOPIC);
+        assert_eq!(labels::business::AUTH_METRIC, BrokerMetricsConstant::LABEL_AUTH_METRIC);
         assert_eq!(labels::node_types::BROKER, BrokerMetricsConstant::NODE_TYPE_BROKER);
     }
 
@@ -353,6 +362,7 @@ mod tests {
         let gauge_metrics = BrokerMetricsConstant::get_all_gauge_metrics();
         assert!(!gauge_metrics.is_empty());
         assert!(gauge_metrics.contains(&BrokerMetricsConstant::GAUGE_PROCESSOR_WATERMARK));
+        assert!(gauge_metrics.contains(&BrokerMetricsConstant::GAUGE_AUTH_METRIC_VALUE));
 
         let counter_metrics = BrokerMetricsConstant::get_all_counter_metrics();
         assert!(!counter_metrics.is_empty());
@@ -365,6 +375,7 @@ mod tests {
         let all_labels = BrokerMetricsConstant::get_all_labels();
         assert!(!all_labels.is_empty());
         assert!(all_labels.contains(&BrokerMetricsConstant::LABEL_CLUSTER_NAME));
+        assert!(all_labels.contains(&BrokerMetricsConstant::LABEL_AUTH_METRIC));
     }
 
     #[test]
@@ -419,6 +430,10 @@ mod tests {
         assert_eq!(
             MetricCategory::from_metric_name("rocketmq_finish_message_latency"),
             Some(MetricCategory::Performance)
+        );
+        assert_eq!(
+            MetricCategory::from_metric_name("rocketmq_auth_metric_value"),
+            Some(MetricCategory::Auth)
         );
     }
 
