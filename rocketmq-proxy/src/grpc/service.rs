@@ -213,7 +213,11 @@ impl<P> ProxyGrpcService<P> {
     }
 
     pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
-        self.metrics.snapshot(&self.sessions)
+        let auth = self
+            .auth_runtime
+            .as_ref()
+            .map(|runtime| runtime.auth_metrics_snapshot());
+        self.metrics.snapshot(&self.sessions, auth)
     }
 
     fn context<T>(&self, rpc_name: &'static str, request: &Request<T>) -> Result<ProxyContext, Status> {
@@ -2662,6 +2666,7 @@ mod tests {
         );
 
         let snapshot = service.metrics_snapshot();
+        assert_eq!(snapshot.auth, None);
         let rpc = snapshot
             .rpcs
             .iter()
@@ -2716,6 +2721,9 @@ mod tests {
         );
 
         let snapshot = service.metrics_snapshot();
+        let auth = snapshot.auth.expect("auth metrics should be exported");
+        assert_eq!(auth.whitelist_misses, 1);
+        assert_eq!(auth.authentication_failures, 1);
         let rpc = snapshot
             .rpcs
             .iter()

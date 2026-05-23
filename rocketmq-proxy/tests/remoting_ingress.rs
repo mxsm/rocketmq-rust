@@ -18,6 +18,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use rocketmq_auth::authentication::acl_signer;
 use rocketmq_proxy::context::ProxyContext;
 use rocketmq_proxy::context::ResolvedEndpoint;
 use rocketmq_proxy::ClusterServiceManager;
@@ -27,6 +28,8 @@ use rocketmq_proxy::DefaultMessageService;
 use rocketmq_proxy::DefaultTransactionService;
 use rocketmq_proxy::GrpcConfig;
 use rocketmq_proxy::MetadataService;
+use rocketmq_proxy::ProxyAuthConfig;
+use rocketmq_proxy::ProxyAuthRuntime;
 use rocketmq_proxy::ProxyConfig;
 use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
@@ -41,6 +44,7 @@ use rocketmq_remoting::connection::Connection;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
@@ -190,6 +194,111 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
 }
 
 #[tokio::test]
+async fn query_route_over_remoting_integration_enforces_auth_enabled_runtime() {
+    let test_dir = std::env::temp_dir().join(format!("rocketmq-rust-proxy-remoting-auth-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&test_dir).expect("create proxy remoting auth test dir");
+    let acl_file = test_dir.join("plain_acl.yml");
+    std::fs::write(
+        &acl_file,
+        r#"
+accounts:
+  - accessKey: alice
+    secretKey: secret
+    admin: true
+"#,
+    )
+    .expect("write proxy remoting auth acl file");
+
+    let auth_runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+        auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+        acl_file: acl_file.to_string_lossy().into_owned(),
+        authentication_enabled: true,
+        authorization_enabled: true,
+        ..ProxyAuthConfig::default()
+    })
+    .await
+    .expect("proxy auth runtime should build")
+    .expect("proxy auth runtime should be enabled");
+    let route_service = Arc::new(RecordingRouteService::default());
+    let service_manager = Arc::new(ClusterServiceManager::with_services(
+        route_service.clone(),
+        Arc::new(StaticMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ));
+
+    let grpc_addr = free_local_addr();
+    let remoting_addr = free_local_addr();
+    let runtime = ProxyRuntime::builder(ProxyConfig {
+        grpc: GrpcConfig {
+            listen_addr: grpc_addr.to_string(),
+            ..GrpcConfig::default()
+        },
+        remoting: RemotingConfig {
+            enabled: true,
+            listen_addr: remoting_addr.to_string(),
+        },
+        ..ProxyConfig::default()
+    })
+    .with_service_manager(service_manager)
+    .with_auth_runtime(auth_runtime)
+    .build();
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        runtime
+            .serve_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    let mut connection = connect_remoting_with_retry(remoting_addr).await;
+
+    let unauthorized = RemotingCommand::create_request_command(
+        RequestCode::GetRouteinfoByTopic,
+        GetRouteInfoRequestHeader::new("TopicA", None),
+    )
+    .set_opaque(41);
+    connection
+        .send_command(unauthorized)
+        .await
+        .expect("unauthenticated remoting request should be sent");
+    let response = receive_remoting_response(&mut connection).await;
+    assert_eq!(response.code(), ResponseCode::NoPermission as i32);
+    assert_eq!(response.opaque(), 41);
+
+    let mut authorized = RemotingCommand::create_request_command(
+        RequestCode::GetRouteinfoByTopic,
+        GetRouteInfoRequestHeader::new("TopicA", None),
+    )
+    .set_opaque(42);
+    sign_remoting_command(&mut authorized, "alice", "secret");
+    connection
+        .send_command(authorized)
+        .await
+        .expect("authenticated remoting request should be sent");
+    let response = receive_remoting_response(&mut connection).await;
+    assert_eq!(
+        response.code(),
+        ResponseCode::Success as i32,
+        "authenticated response remark: {:?}",
+        response.remark()
+    );
+    assert_eq!(response.opaque(), 42);
+    assert_eq!(route_service.observed().len(), 1);
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+    let _ = std::fs::remove_dir_all(test_dir);
+}
+
+#[tokio::test]
 async fn request_code_not_supported_over_remoting_integration_returns_compatible_response() {
     let service_manager = Arc::new(ClusterServiceManager::with_services(
         Arc::new(RecordingRouteService::default()),
@@ -279,6 +388,32 @@ async fn receive_remoting_response(connection: &mut Connection) -> RemotingComma
     })
     .await
     .expect("remoting response should arrive before timeout")
+}
+
+fn sign_remoting_command(command: &mut RemotingCommand, access_key: &str, secret_key: &str) {
+    command.make_custom_header_to_net();
+    command.ensure_ext_fields_initialized();
+    command.add_ext_field("AccessKey", access_key);
+
+    let mut sorted_fields = BTreeMap::new();
+    if let Some(fields) = command.ext_fields() {
+        for (key, value) in fields {
+            if key.as_str() != "Signature" {
+                sorted_fields.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    let mut content = Vec::new();
+    for value in sorted_fields.values() {
+        content.extend_from_slice(value.as_bytes());
+    }
+    if let Some(body) = command.body() {
+        content.extend_from_slice(body);
+    }
+
+    let signature = acl_signer::cal_signature(content.as_slice(), secret_key).expect("remoting signature should build");
+    command.add_ext_field("Signature", signature.as_str());
 }
 
 fn free_local_addr() -> SocketAddr {

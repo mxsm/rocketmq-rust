@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use rocketmq_auth::AuthMetricsSnapshot;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 use tracing::warn;
@@ -119,6 +120,7 @@ pub struct ProxyRpcMetricsSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyMetricsSnapshot {
     pub rpcs: Vec<ProxyRpcMetricsSnapshot>,
+    pub auth: Option<AuthMetricsSnapshot>,
     pub sessions: usize,
     pub tracked_receipt_handles: usize,
     pub lite_subscriptions: usize,
@@ -175,7 +177,11 @@ impl ProxyMetrics {
         }
     }
 
-    pub fn snapshot(&self, sessions: &ClientSessionRegistry) -> ProxyMetricsSnapshot {
+    pub fn snapshot(
+        &self,
+        sessions: &ClientSessionRegistry,
+        auth: Option<AuthMetricsSnapshot>,
+    ) -> ProxyMetricsSnapshot {
         let mut rpcs = self
             .rpcs
             .iter()
@@ -198,6 +204,7 @@ impl ProxyMetrics {
 
         ProxyMetricsSnapshot {
             rpcs,
+            auth,
             sessions: sessions.len(),
             tracked_receipt_handles: sessions.tracked_handle_count(),
             lite_subscriptions: sessions.lite_subscription_count(),
@@ -252,8 +259,9 @@ mod tests {
             std::time::Duration::from_millis(6),
         );
 
-        let snapshot = metrics.snapshot(&ClientSessionRegistry::default());
+        let snapshot = metrics.snapshot(&ClientSessionRegistry::default(), None);
         assert_eq!(snapshot.rpcs.len(), 1);
+        assert_eq!(snapshot.auth, None);
         let rpc = &snapshot.rpcs[0];
         assert_eq!(rpc.rpc_name, "QueryRoute");
         assert_eq!(rpc.started, 2);

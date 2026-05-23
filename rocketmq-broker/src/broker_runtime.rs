@@ -24,6 +24,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::SignatureAlgorithm;
@@ -332,6 +333,10 @@ impl BrokerRuntime {
     #[cfg(test)]
     pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<LocalFileMessageStore>> {
         &mut self.inner
+    }
+
+    pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
+        self.inner.auth_metrics_snapshot()
     }
 
     #[cfg(test)]
@@ -1088,7 +1093,15 @@ impl BrokerRuntime {
         let auth_config = build_auth_config(self.inner.broker_config());
         match AuthRuntimeBuilder::new(auth_config).build().await {
             Ok(auth_runtime) => {
-                self.inner.auth_runtime = Some(Arc::new(auth_runtime));
+                let auth_runtime = Arc::new(auth_runtime);
+                if let Some(metrics_manager) =
+                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global()
+                {
+                    let auth_runtime_for_metrics = auth_runtime.clone();
+                    metrics_manager
+                        .register_auth_observable_gauge(move || Some(auth_runtime_for_metrics.metrics_snapshot()));
+                }
+                self.inner.auth_runtime = Some(auth_runtime);
                 true
             }
             Err(error) => {
@@ -1637,6 +1650,10 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
+    pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
+        self.auth_runtime.as_ref().map(|runtime| runtime.metrics_snapshot())
+    }
+
     #[inline]
     pub fn store_host_mut(&mut self) -> &mut SocketAddr {
         &mut self.store_host
@@ -3579,6 +3596,67 @@ accounts:
 
         assert_eq!(auth_runtime.acl_generation(), generation);
         assert_eq!(auth_runtime.metrics_snapshot().acl_reload_attempts, reload_attempts);
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn broker_runtime_exposes_auth_metrics_snapshot() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-auth-metrics-{}", current_millis()));
+        std::fs::create_dir_all(&temp_root).expect("create broker auth metrics test root");
+        let acl_file = temp_root.join("plain_acl.yml");
+        std::fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: alice
+    secretKey: secret
+"#,
+        )
+        .expect("write initial acl file");
+
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            acl_file: acl_file.to_string_lossy().into_owned().into(),
+            authentication_enabled: true,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.auth_metrics_snapshot().is_none());
+        assert!(runtime.initial_acl().await);
+
+        let auth_runtime = runtime
+            .inner
+            .auth_runtime
+            .as_ref()
+            .expect("auth runtime should be initialized")
+            .clone();
+        assert_eq!(
+            runtime
+                .auth_metrics_snapshot()
+                .expect("auth metrics should be exposed")
+                .whitelist_misses,
+            0
+        );
+
+        assert!(!auth_runtime
+            .is_acl_white_remote_address(None, Some("203.0.113.10"))
+            .expect("white list check should succeed"));
+
+        assert_eq!(
+            runtime
+                .auth_metrics_snapshot()
+                .expect("auth metrics should be exposed")
+                .whitelist_misses,
+            1
+        );
+        tokio::time::timeout(Duration::from_secs(5), runtime.shutdown_basic_service())
+            .await
+            .expect("broker basic service shutdown should be bounded");
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

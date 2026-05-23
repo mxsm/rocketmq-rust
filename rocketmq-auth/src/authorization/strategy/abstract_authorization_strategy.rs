@@ -143,7 +143,7 @@ impl AbstractAuthorizationStrategy {
     /// 1. Check if context is null
     /// 2. Check if authorization is enabled
     /// 3. Check whitelist
-    /// 4. Would delegate to authorization provider (placeholder for now)
+    /// 4. Fails closed when no concrete authorization provider is attached
     ///
     /// # Arguments
     ///
@@ -190,8 +190,6 @@ impl AbstractAuthorizationStrategy {
             }
         }
 
-        // TODO: Delegate to authorization provider
-        // For now, return Ok since no provider is configured
         debug!(
             "Authorization evaluation for subject: {:?}, resource: {:?}, actions: {:?}",
             context.subject().map(|s| s.subject_key()),
@@ -199,8 +197,9 @@ impl AbstractAuthorizationStrategy {
             context.actions()
         );
 
-        debug!("Authorization provider not yet integrated, allowing access");
-        Ok(())
+        Err(AuthorizationError::NotInitialized(
+            "authorization strategy does not have a concrete provider".to_owned(),
+        ))
     }
 
     /// Gets a reference to the authorization configuration.
@@ -230,8 +229,11 @@ impl AbstractAuthorizationStrategy {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::action::Action;
 
     use super::*;
+    use crate::authentication::enums::subject_type::SubjectType;
+    use crate::authorization::model::resource::Resource;
 
     fn create_test_config(enabled: bool, whitelist: &str) -> AuthConfig {
         AuthConfig {
@@ -338,10 +340,15 @@ mod tests {
         let config = create_test_config(true, "");
         let strategy = AbstractAuthorizationStrategy::new(config, None).unwrap();
 
-        let context = DefaultAuthorizationContext::default();
+        let context = DefaultAuthorizationContext::of(
+            "alice",
+            SubjectType::User,
+            Resource::of_topic("topic-a"),
+            Action::Get,
+            "127.0.0.1",
+        );
         let result = strategy.do_evaluate(&context).await;
 
-        // Should pass because provider integration is TODO
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(AuthorizationError::NotInitialized(_))));
     }
 }

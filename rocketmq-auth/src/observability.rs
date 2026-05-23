@@ -59,6 +59,81 @@ pub struct AuthMetricsSnapshot {
     pub authorization_failures: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthMetricSample {
+    pub name: &'static str,
+    pub value: u64,
+}
+
+impl AuthMetricsSnapshot {
+    pub const SAMPLE_COUNT: usize = 15;
+
+    pub fn samples(&self) -> [AuthMetricSample; Self::SAMPLE_COUNT] {
+        [
+            AuthMetricSample {
+                name: "acl_reload_attempts",
+                value: self.acl_reload_attempts,
+            },
+            AuthMetricSample {
+                name: "acl_reload_successes",
+                value: self.acl_reload_successes,
+            },
+            AuthMetricSample {
+                name: "acl_reload_failures",
+                value: self.acl_reload_failures,
+            },
+            AuthMetricSample {
+                name: "acl_reload_skipped",
+                value: self.acl_reload_skipped,
+            },
+            AuthMetricSample {
+                name: "cache_hits",
+                value: self.cache_hits,
+            },
+            AuthMetricSample {
+                name: "cache_misses",
+                value: self.cache_misses,
+            },
+            AuthMetricSample {
+                name: "cache_invalidations",
+                value: self.cache_invalidations,
+            },
+            AuthMetricSample {
+                name: "signature_successes",
+                value: self.signature_successes,
+            },
+            AuthMetricSample {
+                name: "signature_failures",
+                value: self.signature_failures,
+            },
+            AuthMetricSample {
+                name: "whitelist_hits",
+                value: self.whitelist_hits,
+            },
+            AuthMetricSample {
+                name: "whitelist_misses",
+                value: self.whitelist_misses,
+            },
+            AuthMetricSample {
+                name: "authentication_successes",
+                value: self.authentication_successes,
+            },
+            AuthMetricSample {
+                name: "authentication_failures",
+                value: self.authentication_failures,
+            },
+            AuthMetricSample {
+                name: "authorization_successes",
+                value: self.authorization_successes,
+            },
+            AuthMetricSample {
+                name: "authorization_failures",
+                value: self.authorization_failures,
+            },
+        ]
+    }
+}
+
 impl AuthMetrics {
     pub fn snapshot(&self) -> AuthMetricsSnapshot {
         AuthMetricsSnapshot {
@@ -155,6 +230,7 @@ impl AuthMetrics {
 #[cfg(test)]
 mod tests {
     use super::AuthMetrics;
+    use super::AuthMetricsSnapshot;
 
     #[test]
     fn auth_metrics_snapshot_tracks_all_counter_groups() {
@@ -192,5 +268,22 @@ mod tests {
         assert_eq!(snapshot.authentication_failures, 1);
         assert_eq!(snapshot.authorization_successes, 1);
         assert_eq!(snapshot.authorization_failures, 1);
+    }
+
+    #[test]
+    fn auth_metrics_snapshot_exports_stable_samples() {
+        let snapshot = AuthMetricsSnapshot {
+            acl_reload_attempts: 1,
+            authorization_failures: 15,
+            ..AuthMetricsSnapshot::default()
+        };
+
+        let samples = snapshot.samples();
+
+        assert_eq!(samples.len(), AuthMetricsSnapshot::SAMPLE_COUNT);
+        assert_eq!(samples[0].name, "acl_reload_attempts");
+        assert_eq!(samples[0].value, 1);
+        assert_eq!(samples[14].name, "authorization_failures");
+        assert_eq!(samples[14].value, 15);
     }
 }
