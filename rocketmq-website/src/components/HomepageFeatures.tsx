@@ -6,7 +6,7 @@ import {translate} from '@docusaurus/Translate';
 type FeatureItem = {
   title: string;
   Svg: React.ComponentType<React.ComponentProps<'svg'>>;
-  description: JSX.Element;
+  description: React.JSX.Element;
 };
 
 function Feature({ title, Svg, description }: FeatureItem) {
