@@ -6,6 +6,13 @@ const config: Config = {
     title: 'RocketMQ-Rust',
     tagline: 'High-performance messaging middleware built with Rust',
     favicon: 'img/favicon.ico',
+    scripts: [
+        {
+            src: 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6996532981042566',
+            async: true,
+            crossorigin: 'anonymous',
+        },
+    ],
 
     // Set the production url of your site here
     url: 'https://rocketmqrust.com',
@@ -239,7 +246,7 @@ const config: Config = {
             contextualSearch: true,
         },
         // Using custom DevWarningBanner component instead of built-in announcementBar
-    } satisfies PresetOptions['themeConfig'],
+    } satisfies Config['themeConfig'],
 
     themes: ['@docusaurus/theme-mermaid'],
 };
