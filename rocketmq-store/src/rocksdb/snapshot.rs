@@ -12,30 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
-pub mod base;
-pub mod config;
-pub mod consume_queue;
-pub mod filter;
-pub mod ha;
-pub mod hook;
-mod index;
-mod kv;
-pub mod log_file;
-pub(crate) mod message_encoder;
-pub mod message_store;
-pub mod pop;
-pub mod queue;
-#[cfg(feature = "rocksdb_store")]
-pub mod rocksdb;
-pub(crate) mod services;
-pub mod stats;
-pub mod store;
-pub mod store_error;
-pub mod store_path_config_helper;
-#[cfg(feature = "tieredstore")]
-pub mod tieredstore;
-pub mod timer;
-pub mod utils;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RocksDbSnapshotToken {
+    pub created_at_millis: u64,
+}
