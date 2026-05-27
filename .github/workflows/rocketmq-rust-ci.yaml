@@ -66,8 +66,14 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
-          LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+          # Find libclang directory and verify it exists
+          LIBCLANG_DIR=$(dirname $(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1))
+          if [ -n "$LIBCLANG_DIR" ]; then
+            echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+            echo "Found libclang at: $LIBCLANG_DIR"
+          else
+            echo "Warning: libclang not found, using system default"
+          fi
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -123,8 +129,15 @@ jobs:
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
-          LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+
+          # Find libclang directory and verify it exists
+          LIBCLANG_DIR=$(dirname $(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1))
+          if [ -n "$LIBCLANG_DIR" ]; then
+            echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+            echo "Found libclang at: $LIBCLANG_DIR"
+          else
+            echo "Warning: libclang not found, using system default"
+          fi
 
       # ---------- macOS ----------
       - name: Install system dependencies (macOS)
@@ -185,8 +198,15 @@ jobs:
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
-          LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+
+          # Find libclang directory and verify it exists
+          LIBCLANG_DIR=$(dirname $(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1))
+          if [ -n "$LIBCLANG_DIR" ]; then
+            echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+            echo "Found libclang at: $LIBCLANG_DIR"
+          else
+            echo "Warning: libclang not found, using system default"
+          fi
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
