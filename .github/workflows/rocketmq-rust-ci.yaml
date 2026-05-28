@@ -66,13 +66,32 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
-          # Find libclang directory and verify it exists
-          LIBCLANG_DIR=$(dirname $(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1))
-          if [ -n "$LIBCLANG_DIR" ]; then
-            echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
-            echo "Found libclang at: $LIBCLANG_DIR"
+          # Find libclang.so with multiple fallback strategies
+          LIBCLANG_PATH=""
+
+          # Strategy 1: Search common locations
+          for path in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+            if [ -f "$path/libclang.so" ] || ls "$path"/libclang.so.* >/dev/null 2>&1; then
+              LIBCLANG_PATH="$path"
+              echo "Found libclang at: $LIBCLANG_PATH (strategy 1)"
+              break
+            fi
+          done
+
+          # Strategy 2: Use find as fallback
+          if [ -z "$LIBCLANG_PATH" ]; then
+            LIBCLANG_FILE=$(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1)
+            if [ -n "$LIBCLANG_FILE" ]; then
+              LIBCLANG_PATH=$(dirname "$LIBCLANG_FILE")
+              echo "Found libclang at: $LIBCLANG_PATH (strategy 2)"
+            fi
+          fi
+
+          # Set environment variable if found
+          if [ -n "$LIBCLANG_PATH" ]; then
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
           else
-            echo "Warning: libclang not found, using system default"
+            echo "Warning: libclang not found, bindgen may fail"
           fi
 
       - name: Set up Rust nightly
@@ -130,13 +149,32 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
-          # Find libclang directory and verify it exists
-          LIBCLANG_DIR=$(dirname $(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1))
-          if [ -n "$LIBCLANG_DIR" ]; then
-            echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
-            echo "Found libclang at: $LIBCLANG_DIR"
+          # Find libclang.so with multiple fallback strategies
+          LIBCLANG_PATH=""
+
+          # Strategy 1: Search common locations
+          for path in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+            if [ -f "$path/libclang.so" ] || ls "$path"/libclang.so.* >/dev/null 2>&1; then
+              LIBCLANG_PATH="$path"
+              echo "Found libclang at: $LIBCLANG_PATH (strategy 1)"
+              break
+            fi
+          done
+
+          # Strategy 2: Use find as fallback
+          if [ -z "$LIBCLANG_PATH" ]; then
+            LIBCLANG_FILE=$(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1)
+            if [ -n "$LIBCLANG_FILE" ]; then
+              LIBCLANG_PATH=$(dirname "$LIBCLANG_FILE")
+              echo "Found libclang at: $LIBCLANG_PATH (strategy 2)"
+            fi
+          fi
+
+          # Set environment variable if found
+          if [ -n "$LIBCLANG_PATH" ]; then
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
           else
-            echo "Warning: libclang not found, using system default"
+            echo "Warning: libclang not found, bindgen may fail"
           fi
 
       # ---------- macOS ----------
@@ -199,13 +237,32 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
-          # Find libclang directory and verify it exists
-          LIBCLANG_DIR=$(dirname $(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1))
-          if [ -n "$LIBCLANG_DIR" ]; then
-            echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
-            echo "Found libclang at: $LIBCLANG_DIR"
+          # Find libclang.so with multiple fallback strategies
+          LIBCLANG_PATH=""
+
+          # Strategy 1: Search common locations
+          for path in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+            if [ -f "$path/libclang.so" ] || ls "$path"/libclang.so.* >/dev/null 2>&1; then
+              LIBCLANG_PATH="$path"
+              echo "Found libclang at: $LIBCLANG_PATH (strategy 1)"
+              break
+            fi
+          done
+
+          # Strategy 2: Use find as fallback
+          if [ -z "$LIBCLANG_PATH" ]; then
+            LIBCLANG_FILE=$(find /usr/lib -name "libclang.so*" 2>/dev/null | head -n 1)
+            if [ -n "$LIBCLANG_FILE" ]; then
+              LIBCLANG_PATH=$(dirname "$LIBCLANG_FILE")
+              echo "Found libclang at: $LIBCLANG_PATH (strategy 2)"
+            fi
+          fi
+
+          # Set environment variable if found
+          if [ -n "$LIBCLANG_PATH" ]; then
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
           else
-            echo "Warning: libclang not found, using system default"
+            echo "Warning: libclang not found, bindgen may fail"
           fi
 
       - name: Set up Rust nightly
