@@ -105,6 +105,8 @@ jobs:
             CC
             CXX
             LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Format check
@@ -174,7 +176,15 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew update
-          brew install cmake protobuf snappy lz4 zstd
+          brew install cmake protobuf snappy lz4 zstd llvm
+
+          # Set up LLVM paths for bindgen on macOS
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "LLVM_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
+          echo "LIBCLANG_PATH=$LLVM_PREFIX/lib" >> $GITHUB_ENV
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$LLVM_PREFIX/lib:$DYLD_FALLBACK_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "PATH=$LLVM_PREFIX/bin:$PATH" >> $GITHUB_ENV
+          echo "Configured LLVM at: $LLVM_PREFIX"
 
       # ---------- Windows ----------
       - name: Install system dependencies (Windows)
@@ -195,6 +205,8 @@ jobs:
             CC
             CXX
             LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Build (all features)
@@ -266,6 +278,8 @@ jobs:
             CC
             CXX
             LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Install cargo-llvm-cov
