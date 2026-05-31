@@ -92,7 +92,7 @@ opentelemetry-otlp = { version = "0.32", features = [
 async-trait = "0.1"
 
 # Storage backends
-rocksdb = { version = "0.24", optional = true }
+rocksdb = { workspace = true, optional = true }
 
 [build-dependencies]
 tonic-prost-build = "0.14.6"

@@ -12,30 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-#![allow(unused_variables)]
+use bytes::Bytes;
 
-pub mod base;
-pub mod config;
-pub mod consume_queue;
-pub mod filter;
-pub mod ha;
-pub mod hook;
-mod index;
-mod kv;
-pub mod log_file;
-pub(crate) mod message_encoder;
-pub mod message_store;
-pub mod pop;
-pub mod queue;
-#[cfg(feature = "rocksdb_store")]
-pub mod rocksdb;
-pub(crate) mod services;
-pub mod stats;
-pub mod store;
-pub mod store_error;
-pub mod store_path_config_helper;
-#[cfg(feature = "tieredstore")]
-pub mod tieredstore;
-pub mod timer;
-pub mod utils;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RocksDbScanItem {
+    pub key: Bytes,
+    pub value: Bytes,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RocksDbScanOptions {
+    pub cf: String,
+    pub prefix: Vec<u8>,
+    pub limit: usize,
+}
+
+impl RocksDbScanOptions {
+    pub fn prefix(cf: impl Into<String>, prefix: impl Into<Vec<u8>>, limit: usize) -> Self {
+        Self {
+            cf: cf.into(),
+            prefix: prefix.into(),
+            limit,
+        }
+    }
+}

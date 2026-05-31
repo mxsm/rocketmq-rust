@@ -66,8 +66,29 @@ jobs:
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
 
-          LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+          # Use llvm-config to find libclang path
+          if command -v llvm-config >/dev/null 2>&1; then
+            LIBCLANG_PATH=$(llvm-config --libdir)
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+            echo "Found libclang using llvm-config at: $LIBCLANG_PATH"
+          else
+            # Fallback: Search for llvm-config with version suffix
+            LLVM_CONFIG=$(ls /usr/bin/llvm-config-* 2>/dev/null | sort -V | tail -n 1)
+            if [ -n "$LLVM_CONFIG" ]; then
+              LIBCLANG_PATH=$($LLVM_CONFIG --libdir)
+              echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+              echo "Found libclang using $LLVM_CONFIG at: $LIBCLANG_PATH"
+            else
+              # Last resort: search manually
+              for path in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+                if [ -f "$path/libclang.so" ] || ls "$path"/libclang.so.* >/dev/null 2>&1; then
+                  echo "LIBCLANG_PATH=$path" >> $GITHUB_ENV
+                  echo "Found libclang at: $path (manual search)"
+                  break
+                fi
+              done
+            fi
+          fi
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -84,6 +105,8 @@ jobs:
             CC
             CXX
             LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Format check
@@ -123,15 +146,45 @@ jobs:
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
-          LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+
+          # Use llvm-config to find libclang path
+          if command -v llvm-config >/dev/null 2>&1; then
+            LIBCLANG_PATH=$(llvm-config --libdir)
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+            echo "Found libclang using llvm-config at: $LIBCLANG_PATH"
+          else
+            # Fallback: Search for llvm-config with version suffix
+            LLVM_CONFIG=$(ls /usr/bin/llvm-config-* 2>/dev/null | sort -V | tail -n 1)
+            if [ -n "$LLVM_CONFIG" ]; then
+              LIBCLANG_PATH=$($LLVM_CONFIG --libdir)
+              echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+              echo "Found libclang using $LLVM_CONFIG at: $LIBCLANG_PATH"
+            else
+              # Last resort: search manually
+              for path in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+                if [ -f "$path/libclang.so" ] || ls "$path"/libclang.so.* >/dev/null 2>&1; then
+                  echo "LIBCLANG_PATH=$path" >> $GITHUB_ENV
+                  echo "Found libclang at: $path (manual search)"
+                  break
+                fi
+              done
+            fi
+          fi
 
       # ---------- macOS ----------
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           brew update
-          brew install cmake protobuf snappy lz4 zstd
+          brew install cmake protobuf snappy lz4 zstd llvm
+
+          # Set up LLVM paths for bindgen on macOS
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "LLVM_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
+          echo "LIBCLANG_PATH=$LLVM_PREFIX/lib" >> $GITHUB_ENV
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$LLVM_PREFIX/lib:$DYLD_FALLBACK_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "PATH=$LLVM_PREFIX/bin:$PATH" >> $GITHUB_ENV
+          echo "Configured LLVM at: $LLVM_PREFIX"
 
       # ---------- Windows ----------
       - name: Install system dependencies (Windows)
@@ -152,6 +205,8 @@ jobs:
             CC
             CXX
             LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Build (all features)
@@ -185,8 +240,30 @@ jobs:
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
-          LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
+
+          # Use llvm-config to find libclang path
+          if command -v llvm-config >/dev/null 2>&1; then
+            LIBCLANG_PATH=$(llvm-config --libdir)
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+            echo "Found libclang using llvm-config at: $LIBCLANG_PATH"
+          else
+            # Fallback: Search for llvm-config with version suffix
+            LLVM_CONFIG=$(ls /usr/bin/llvm-config-* 2>/dev/null | sort -V | tail -n 1)
+            if [ -n "$LLVM_CONFIG" ]; then
+              LIBCLANG_PATH=$($LLVM_CONFIG --libdir)
+              echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+              echo "Found libclang using $LLVM_CONFIG at: $LIBCLANG_PATH"
+            else
+              # Last resort: search manually
+              for path in /usr/lib/llvm-*/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+                if [ -f "$path/libclang.so" ] || ls "$path"/libclang.so.* >/dev/null 2>&1; then
+                  echo "LIBCLANG_PATH=$path" >> $GITHUB_ENV
+                  echo "Found libclang at: $path (manual search)"
+                  break
+                fi
+              done
+            fi
+          fi
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -201,6 +278,8 @@ jobs:
             CC
             CXX
             LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Install cargo-llvm-cov
