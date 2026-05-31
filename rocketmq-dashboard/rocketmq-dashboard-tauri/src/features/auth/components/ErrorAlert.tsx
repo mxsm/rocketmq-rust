@@ -17,14 +17,15 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({ message, title = 'Action
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -10, scale: 0.95 }}
                     transition={{ duration: 0.2 }}
-                    className="flex items-start gap-3 p-4 bg-red-950/80 border border-red-500/50 rounded-xl shadow-[0_0_15px_rgba(239,68,68,0.2)] backdrop-blur-md"
+                    className="auth-error"
+                    role="alert"
                 >
-                    <div className="p-2 bg-red-500/10 rounded-full shrink-0">
-                        <AlertCircle className="h-5 w-5 text-red-500" />
+                    <div className="auth-error-icon">
+                        <AlertCircle className="h-5 w-5" />
                     </div>
-                    <div className="flex-1 pt-0.5">
-                        <p className="font-bold text-white mb-1">{title}</p>
-                        <p className="text-sm text-white font-medium">{message}</p>
+                    <div>
+                        <p className="auth-error-title">{title}</p>
+                        <p className="auth-error-message">{message}</p>
                     </div>
                 </motion.div>
             )}

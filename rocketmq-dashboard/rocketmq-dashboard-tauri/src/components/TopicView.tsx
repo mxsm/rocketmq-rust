@@ -1,4 +1,4 @@
-import React, {useEffect, useState, ReactNode} from 'react';
+import React, {useEffect, useMemo, useState, ReactNode} from 'react';
 import {motion, AnimatePresence} from 'motion/react';
 import {
     Activity,
@@ -55,6 +55,13 @@ interface Topic {
     name: string;
     type: string;
     clusters: string[];
+    brokers: string[];
+    readQueueCount: number;
+    writeQueueCount: number;
+    perm: number;
+    order: boolean;
+    systemTopic: boolean;
+    messageType: string;
     operations: string[];
 }
 
@@ -106,6 +113,13 @@ const mapTopicListItem = (item: TopicListItem): Topic => ({
     name: item.topic,
     type: item.category,
     clusters: item.clusters,
+    brokers: item.brokers,
+    readQueueCount: item.readQueueCount,
+    writeQueueCount: item.writeQueueCount,
+    perm: item.perm,
+    order: item.order,
+    systemTopic: item.systemTopic,
+    messageType: item.messageType,
     operations: buildTopicOperations(item),
 });
 
@@ -151,6 +165,7 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     const [routeData, setRouteData] = useState<TopicRouteView | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [selectedBrokerName, setSelectedBrokerName] = useState<string | null>(null);
 
     useEffect(() => {
         if (!isOpen || !topic?.name) {
@@ -162,6 +177,7 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
         const loadRoute = async () => {
             setIsLoading(true);
             setError('');
+            setSelectedBrokerName(null);
 
             try {
                 const result = await TopicService.getTopicRoute({topic: topic.name});
@@ -191,157 +207,297 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
 
     const brokers = routeData?.brokers ?? [];
     const queues = routeData?.queues ?? [];
+    const selectedBroker = selectedBrokerName
+        ? brokers.find((broker) => broker.brokerName === selectedBrokerName) ?? brokers[0]
+        : brokers[0];
+    const selectedBrokerQueues = selectedBroker
+        ? queues.filter((queue) => queue.brokerName === selectedBroker.brokerName)
+        : queues;
+    const totalAddressCount = brokers.reduce((sum, broker) => sum + broker.addresses.length, 0);
+    const totalReadQueues = queues.reduce((sum, queue) => sum + queue.readQueueNums, 0);
+    const totalWriteQueues = queues.reduce((sum, queue) => sum + queue.writeQueueNums, 0);
+    const permissionValues = [...new Set(queues.map((queue) => queue.perm))];
+    const clusterNames = [...new Set(brokers.map((broker) => broker.clusterName))];
+    const maxQueueCount = Math.max(...queues.flatMap((queue) => [queue.readQueueNums, queue.writeQueueNums]), 1);
+    const formatRoutePermission = (perm: number) => {
+        const canWrite = (perm & 0x2) === 0x2;
+        const canRead = (perm & 0x4) === 0x4;
+
+        if (canRead && canWrite) {
+            return `Perm ${perm} · RW`;
+        }
+
+        if (canRead) {
+            return `Perm ${perm} · R`;
+        }
+
+        if (canWrite) {
+            return `Perm ${perm} · W`;
+        }
+
+        return `Perm ${perm}`;
+    };
+    const copyRouteSnapshot = async () => {
+        const snapshot = JSON.stringify(
+            {
+                topic: routeData?.topic ?? topic?.name,
+                brokers,
+                queues,
+            },
+            null,
+            2,
+        );
+
+        try {
+            await navigator.clipboard.writeText(snapshot);
+            toast.success('Topic route snapshot copied');
+        } catch {
+            toast.error('Failed to copy topic route snapshot');
+        }
+    };
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root topic-router-modal-root">
                 <motion.div
                     initial={{opacity: 0}}
                     animate={{opacity: 1}}
                     exit={{opacity: 0}}
                     onClick={onClose}
-                    className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm transition-opacity"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    initial={{opacity: 0, scale: 0.96, y: 16}}
                     animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-4xl bg-white dark:bg-gray-900 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
+                    exit={{opacity: 0, scale: 0.96, y: 16}}
+                    className="topic-status-dialog topic-router-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="topic-router-title"
                 >
-                    {/* Header */}
-                    <div className="px-6 py-5 bg-white dark:bg-gray-900 flex items-center justify-between border-b border-gray-100 dark:border-gray-800">
-                        <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-                            {topic?.name}Router
-                        </h3>
-                        <button
-                            onClick={onClose}
-                            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
+                    <header className="topic-status-header">
+                        <div className="topic-status-title-wrap">
+                            <div className="topic-status-icon" aria-hidden="true">
+                                <Network className="topic-icon"/>
+                            </div>
+                            <div>
+                                <span>Topic route topology</span>
+                                <h3 id="topic-router-title">Topic Router</h3>
+                                <p>
+                                    Route snapshot for <strong>{routeData?.topic ?? topic?.name ?? 'Unknown topic'}</strong>
+                                </p>
+                            </div>
+                        </div>
+                        <div className="topic-status-header-actions">
+                            <button type="button" className="topic-status-secondary-button" onClick={() => void copyRouteSnapshot()} disabled={!routeData}>
+                                Copy Route
+                            </button>
+                            <button type="button" className="topic-status-close" onClick={onClose} aria-label="Close topic router">
+                                <X className="topic-icon" aria-hidden="true"/>
+                            </button>
+                        </div>
+                    </header>
 
-                    {/* Content */}
-                    <div className="p-6 overflow-y-auto space-y-8 bg-gray-50/50 dark:bg-gray-950/50">
+                    <div className="topic-status-body">
+                        <section className="topic-status-kpi-grid" aria-label="Topic route summary">
+                            <article className="topic-status-kpi is-info">
+                                <div>
+                                    <span>Brokers</span>
+                                    <strong>{brokers.length}</strong>
+                                    <small>{totalAddressCount} address routes</small>
+                                </div>
+                                <Server className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-success">
+                                <div>
+                                    <span>Queues</span>
+                                    <strong>{totalReadQueues + totalWriteQueues}</strong>
+                                    <small>{totalReadQueues} read / {totalWriteQueues} write</small>
+                                </div>
+                                <Database className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-blue">
+                                <div>
+                                    <span>Permission</span>
+                                    <strong>{permissionValues.length ? permissionValues.join(', ') : '-'}</strong>
+                                    <small>unique route permissions</small>
+                                </div>
+                                <Shield className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-violet">
+                                <div>
+                                    <span>Clusters</span>
+                                    <strong>{clusterNames.length}</strong>
+                                    <small>{clusterNames[0] ?? 'No cluster route'}</small>
+                                </div>
+                                <Network className="topic-icon" aria-hidden="true"/>
+                            </article>
+                        </section>
+
                         {isLoading && (
-                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                Loading topic route data from the current NameServer...
+                            <div className="topic-status-state">
+                                <Network className="topic-icon" aria-hidden="true"/>
+                                <strong>Loading topic route</strong>
+                                <span>Fetching broker and queue route data from the current NameServer.</span>
                             </div>
                         )}
 
                         {!isLoading && error && (
-                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                {error}
+                            <div className="topic-status-state is-error">
+                                <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                <strong>Failed to load route data</strong>
+                                <span>{error}</span>
                             </div>
                         )}
 
-                        {/* Broker Datas Section */}
-                        {!isLoading && !error && (
-                        <div>
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                <Server className="w-4 h-4 text-gray-500 dark:text-gray-400"/>
-                                Broker Datas
-                            </h4>
-                            {brokers.length === 0 ? (
-                                <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-8 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                    No broker route data was returned for this topic.
-                                </div>
-                            ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {brokers.map((broker, i) => (
-                                    <div key={i}
-                                         className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md transition-shadow">
-                                        <div className="flex items-center justify-between mb-4">
-                                            <div className="flex flex-col gap-1">
-                                                <span className="text-base font-bold text-gray-900 dark:text-white">{broker.brokerName}</span>
-                                                <span className="text-xs text-gray-500 dark:text-gray-400">{broker.clusterName}</span>
-                                            </div>
-                                            <span
-                                                className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-2.5 py-1 rounded-full font-medium border border-gray-200 dark:border-gray-700">
-                        {broker.addresses.length} Addrs
-                      </span>
+                        {!isLoading && !error && brokers.length === 0 && queues.length === 0 && (
+                            <div className="topic-status-state">
+                                <Database className="topic-icon" aria-hidden="true"/>
+                                <strong>No route data returned</strong>
+                                <span>The NameServer did not return broker or queue route rows for this topic.</span>
+                            </div>
+                        )}
+
+                        {!isLoading && !error && (brokers.length > 0 || queues.length > 0) && (
+                            <section className="topic-router-workspace">
+                                <div className="topic-router-panel topic-router-broker-panel">
+                                    <div className="topic-status-panel-header">
+                                        <div>
+                                            <h4>Broker Inventory</h4>
+                                            <p>NameServer broker route and address identities.</p>
                                         </div>
-                                        <div className="space-y-2">
-                                            {broker.addresses.map((addr, j) => (
-                                                <div key={j}
-                                                     className="flex items-center justify-between text-xs bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg border border-gray-100 dark:border-gray-800/50 font-mono">
-                                                    <span className="text-gray-500 dark:text-gray-500 font-semibold">ID: {addr.brokerId}</span>
-                                                    <span className="text-gray-700 dark:text-gray-300">{addr.address}</span>
+                                        <span>{brokers.length} brokers</span>
+                                    </div>
+
+                                    <div className="topic-router-broker-list">
+                                        {brokers.map((broker) => {
+                                            const isSelected = selectedBroker?.brokerName === broker.brokerName;
+
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={`${broker.clusterName}-${broker.brokerName}`}
+                                                    className={`topic-router-broker-card ${isSelected ? 'is-selected' : ''}`}
+                                                    onClick={() => setSelectedBrokerName(broker.brokerName)}
+                                                >
+                                                    <span>
+                                                        <strong>{broker.brokerName}</strong>
+                                                        <small>{broker.clusterName}</small>
+                                                    </span>
+                                                    <b>{broker.addresses.length} addr</b>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {selectedBroker && (
+                                        <div className="topic-router-address-list">
+                                            <span>Address identities</span>
+                                            {selectedBroker.addresses.map((address) => (
+                                                <div key={`${selectedBroker.brokerName}-${address.brokerId}-${address.address}`}>
+                                                    <strong>ID {address.brokerId}</strong>
+                                                    <code>{address.address}</code>
                                                 </div>
                                             ))}
                                         </div>
-                                    </div>
-                                ))}
-                            </div>
-                            )}
-                        </div>
-                        )}
-
-                        {/* Queue Datas Section */}
-                        {!isLoading && !error && (
-                        <div>
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                <Database className="w-4 h-4 text-gray-500 dark:text-gray-400"/>
-                                Queue Datas
-                            </h4>
-                            {queues.length === 0 ? (
-                                <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-8 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                    No queue route data was returned for this topic.
+                                    )}
                                 </div>
-                            ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {queues.map((queue, i) => (
-                                    <div key={i}
-                                         className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md transition-shadow flex flex-col">
-                                        <div className="flex items-center space-x-3 mb-5">
-                                            <div
-                                                className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-900/30">
-                                                <Server className="w-4 h-4"/>
-                                            </div>
-                                            <span className="text-sm font-bold text-gray-900 dark:text-white">{queue.brokerName}</span>
-                                        </div>
 
-                                        <div className="grid grid-cols-2 gap-4 mb-5 flex-1">
-                                            <div
-                                                className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl border border-gray-100 dark:border-gray-800 text-center group hover:border-blue-200 dark:hover:border-blue-800 transition-colors">
-                                                <div className="text-[10px] uppercase text-gray-400 dark:text-gray-500 font-bold mb-1 tracking-wider">Read</div>
-                                                <div
-                                                    className="text-xl font-mono font-bold text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{queue.readQueueNums}</div>
-                                            </div>
-                                            <div
-                                                className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-xl border border-gray-100 dark:border-gray-800 text-center group hover:border-blue-200 dark:hover:border-blue-800 transition-colors">
-                                                <div className="text-[10px] uppercase text-gray-400 dark:text-gray-500 font-bold mb-1 tracking-wider">Write
-                                                </div>
-                                                <div
-                                                    className="text-xl font-mono font-bold text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{queue.writeQueueNums}</div>
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center justify-between pt-4 border-t border-gray-100 dark:border-gray-800 mt-auto">
-                                            <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Permission</span>
-                                            <span
-                                                className="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 rounded-md border border-blue-100 dark:border-blue-900/30">
-                         Perm: {queue.perm}
-                       </span>
+                                <div className="topic-router-panel topic-router-map-panel">
+                                    <div className="topic-status-panel-header">
+                                        <div>
+                                            <h4>Route Map</h4>
+                                            <p>Cluster to broker queue distribution.</p>
                                         </div>
                                     </div>
-                                ))}
-                            </div>
-                            )}
-                        </div>
-                        )}
 
+                                    {selectedBroker ? (
+                                        <div className="topic-router-map">
+                                            <div className="topic-router-map-card">
+                                                <span>Cluster</span>
+                                                <strong>{selectedBroker.clusterName}</strong>
+                                                <small>{selectedBrokerQueues.length} queue routes</small>
+                                            </div>
+                                            <div className="topic-router-link" aria-hidden="true"/>
+                                            <div className="topic-router-map-card is-broker">
+                                                <span>Broker</span>
+                                                <strong>{selectedBroker.brokerName}</strong>
+                                                <small>{selectedBroker.addresses[0]?.address ?? 'No address'}</small>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="topic-status-state is-compact">
+                                            <Network className="topic-icon" aria-hidden="true"/>
+                                            <strong>No broker selected</strong>
+                                            <span>Select a broker to inspect route topology.</span>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="topic-router-panel topic-router-queue-panel">
+                                    <div className="topic-status-panel-header">
+                                        <div>
+                                            <h4>Queue Routes</h4>
+                                            <p>Read/write allocation by broker.</p>
+                                        </div>
+                                        <span>{queues.length} routes</span>
+                                    </div>
+
+                                    {queues.length === 0 ? (
+                                        <div className="topic-status-state is-compact">
+                                            <Database className="topic-icon" aria-hidden="true"/>
+                                            <strong>No queue routes</strong>
+                                            <span>No queue route data was returned for this topic.</span>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="topic-router-table-head" aria-hidden="true">
+                                                <span>Broker</span>
+                                                <span>Read</span>
+                                                <span>Write</span>
+                                                <span>Perm</span>
+                                            </div>
+                                            <div className="topic-router-queue-list">
+                                                {queues.map((queue, index) => {
+                                                    const selected = selectedBroker?.brokerName === queue.brokerName;
+                                                    const readWidth = `${Math.max(6, Math.round((queue.readQueueNums / maxQueueCount) * 100))}%`;
+                                                    const writeWidth = `${Math.max(6, Math.round((queue.writeQueueNums / maxQueueCount) * 100))}%`;
+
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            key={`${queue.brokerName}-${index}`}
+                                                            className={`topic-router-queue-row ${selected ? 'is-selected' : ''}`}
+                                                            onClick={() => setSelectedBrokerName(queue.brokerName)}
+                                                        >
+                                                            <span className="topic-router-queue-broker">
+                                                                <strong>{queue.brokerName}</strong>
+                                                                <small>{brokers.find((broker) => broker.brokerName === queue.brokerName)?.clusterName ?? 'Unknown cluster'}</small>
+                                                            </span>
+                                                            <span className="topic-router-queue-number">{queue.readQueueNums}</span>
+                                                            <span className="topic-router-queue-number">{queue.writeQueueNums}</span>
+                                                            <span className="topic-router-permission">{formatRoutePermission(queue.perm)}</span>
+                                                            <span className="topic-router-bars" aria-hidden="true">
+                                                                <i><b style={{width: readWidth}}/></i>
+                                                                <i><b style={{width: writeWidth}}/></i>
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            </section>
+                        )}
                     </div>
 
-                    {/* Footer */}
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-                        <button
-                            onClick={onClose}
-                            className="px-6 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                        >
+                    <footer className="topic-status-footer">
+                        <span>Route data is read-only and reflects the current NameServer response.</span>
+                        <button type="button" className="topic-status-secondary-button" onClick={onClose}>
                             Close
                         </button>
-                    </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
@@ -432,6 +588,45 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
     const attributes = Object.entries(configData?.attributes ?? {}).sort(([left], [right]) => left.localeCompare(right));
     const inconsistentFields = configData?.inconsistentFields ?? [];
     const activeBroker = selectedBroker ?? configData?.brokerName ?? '';
+    const queueBalanceTotal = (configData?.writeQueueNums ?? 0) + (configData?.readQueueNums ?? 0);
+    const writeQueuePercent = queueBalanceTotal > 0
+        ? `${Math.max(6, Math.round(((configData?.writeQueueNums ?? 0) / queueBalanceTotal) * 100))}%`
+        : '0%';
+    const readQueuePercent = queueBalanceTotal > 0
+        ? `${Math.max(6, Math.round(((configData?.readQueueNums ?? 0) / queueBalanceTotal) * 100))}%`
+        : '0%';
+    const configPermissionLabel = configData ? formatTopicPermission(configData.perm) : '-';
+    const consistencyLabel = inconsistentFields.length > 0 ? `${inconsistentFields.length} drift fields` : 'Aligned';
+
+    const copyConfigSnapshot = async () => {
+        if (!configData) {
+            return;
+        }
+
+        const snapshot = JSON.stringify(
+            {
+                topicName: configData.topicName,
+                brokerName: activeBroker,
+                clusterName: configData.clusterName,
+                writeQueueNums: configData.writeQueueNums,
+                readQueueNums: configData.readQueueNums,
+                perm: configData.perm,
+                order: configData.order,
+                messageType: configData.messageType,
+                attributes: configData.attributes,
+                inconsistentFields: configData.inconsistentFields,
+            },
+            null,
+            2,
+        );
+
+        try {
+            await navigator.clipboard.writeText(snapshot);
+            toast.success('Topic config snapshot copied');
+        } catch {
+            toast.error('Failed to copy topic config snapshot');
+        }
+    };
 
     const handleDeleteByBroker = async () => {
         if (!configData || !activeBroker) {
@@ -465,272 +660,298 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root topic-config-modal-root">
                 <motion.div
                     initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
+                    animate={{opacity: 1}}
                     exit={{opacity: 0}}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    initial={{opacity: 0, scale: 0.96, y: 16}}
                     animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-4xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
+                    exit={{opacity: 0, scale: 0.96, y: 16}}
+                    className="topic-status-dialog topic-config-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="topic-config-title"
                 >
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
-                        <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <Settings className="w-5 h-5 mr-2 text-blue-500"/>
-                                Topic Configuration
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                Inspect the current broker-side config for <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name || 'undefined'}</span>
-                            </p>
+                    <header className="topic-status-header">
+                        <div className="topic-status-title-wrap">
+                            <div className="topic-status-icon" aria-hidden="true">
+                                <Settings className="topic-icon"/>
+                            </div>
+                            <div>
+                                <span>Broker-side topic config</span>
+                                <h3 id="topic-config-title">Topic Configuration</h3>
+                                <p>
+                                    Config snapshot for <strong>{configData?.topicName ?? topic?.name ?? 'Unknown topic'}</strong>
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
+                        <div className="topic-status-header-actions">
+                            <button type="button" className="topic-status-secondary-button" onClick={() => void copyConfigSnapshot()} disabled={!configData}>
+                                Copy Config
+                            </button>
+                            <button type="button" className="topic-status-close" onClick={onClose} aria-label="Close topic configuration">
+                                <X className="topic-icon" aria-hidden="true"/>
+                            </button>
+                        </div>
+                    </header>
 
-                    <div className="p-6 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/50 space-y-6">
+                    <div className="topic-status-body">
+                        <section className="topic-status-kpi-grid" aria-label="Topic configuration summary">
+                            <article className="topic-status-kpi is-info">
+                                <div>
+                                    <span>Broker</span>
+                                    <strong>{activeBroker || '-'}</strong>
+                                    <small>selected anchor broker</small>
+                                </div>
+                                <Server className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-success">
+                                <div>
+                                    <span>Queues</span>
+                                    <strong>{configData ? `${configData.writeQueueNums}/${configData.readQueueNums}` : '-'}</strong>
+                                    <small>write / read queue count</small>
+                                </div>
+                                <Database className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-blue">
+                                <div>
+                                    <span>Permission</span>
+                                    <strong>{configPermissionLabel}</strong>
+                                    <small>current broker permission</small>
+                                </div>
+                                <Shield className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className={`topic-status-kpi ${inconsistentFields.length > 0 ? 'is-warning' : 'is-violet'}`}>
+                                <div>
+                                    <span>Consistency</span>
+                                    <strong>{consistencyLabel}</strong>
+                                    <small>{attributes.length} extra attributes</small>
+                                </div>
+                                <Key className="topic-icon" aria-hidden="true"/>
+                            </article>
+                        </section>
+
                         {isLoading && (
-                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                Loading topic configuration from the current broker view...
+                            <div className="topic-status-state">
+                                <Settings className="topic-icon" aria-hidden="true"/>
+                                <strong>Loading topic configuration</strong>
+                                <span>Fetching broker-side config from the current NameServer view.</span>
                             </div>
                         )}
 
                         {!isLoading && error && (
-                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                {error}
+                            <div className="topic-status-state is-error">
+                                <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                <strong>Failed to load topic configuration</strong>
+                                <span>{error}</span>
                             </div>
                         )}
 
                         {!isLoading && !error && configData && (
-                            <>
-                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                                    <div className="flex flex-col gap-4">
-                                        <div className="flex flex-col gap-1">
-                                            <h4 className="text-sm font-bold text-gray-900 dark:text-white flex items-center uppercase tracking-wider">
-                                                <Server className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Deployment Target
-                                            </h4>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400">
-                                                Switch the anchor broker to inspect the exact config returned by that broker.
-                                            </p>
-                                        </div>
-
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                            <div>
-                                                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Cluster Names</label>
-                                                <div className="min-h-[42px] px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-wrap gap-1.5 items-center">
-                                                    {clusterOptions.map((clusterName) => (
-                                                        <span
-                                                            key={clusterName}
-                                                            className="bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs border border-blue-100 dark:border-blue-800 font-medium"
-                                                        >
-                                                            {clusterName}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Anchor Broker</label>
-                                                <div className="relative">
-                                                    <select
-                                                        value={activeBroker}
-                                                        onChange={(event) => setSelectedBroker(event.target.value)}
-                                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer shadow-sm"
-                                                    >
-                                                        {brokerOptions.map((brokerName) => (
-                                                            <option key={brokerName} value={brokerName}>
-                                                                {brokerName}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                    <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none"/>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {brokerOptions.map((brokerName) => (
-                                                <button
-                                                    key={brokerName}
-                                                    type="button"
-                                                    onClick={() => setSelectedBroker(brokerName)}
-                                                    className={`px-2 py-1 rounded text-xs border transition-colors ${
-                                                        brokerName === activeBroker
-                                                            ? 'bg-blue-600 border-blue-600 text-white dark:bg-blue-500 dark:border-blue-500'
-                                                            : 'bg-gray-50 border-gray-200 text-gray-600 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'
-                                                    }`}
-                                                >
-                                                    {brokerName}
-                                                </button>
-                                            ))}
+                            <section className="topic-config-workspace">
+                                <div className="topic-config-panel topic-config-target-panel">
+                                    <div className="topic-status-panel-header">
+                                        <div>
+                                            <h4>Deployment Target</h4>
+                                            <p>Switch broker context before editing or deleting.</p>
                                         </div>
                                     </div>
-                                </div>
 
-                                {inconsistentFields.length > 0 && (
-                                    <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-5 py-4 text-sm text-amber-700 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-                                        <div className="flex items-center gap-2 font-semibold">
-                                            <AlertTriangle className="w-4 h-4"/>
-                                            Broker configs are not fully aligned
-                                        </div>
-                                        <div className="mt-2 flex flex-wrap gap-2">
-                                            {inconsistentFields.map((field) => (
-                                                <span
-                                                    key={field}
-                                                    className="rounded-full border border-amber-300/80 bg-white/80 px-2 py-0.5 text-xs dark:border-amber-800 dark:bg-amber-950/40"
-                                                >
-                                                    {TOPIC_CONFIG_FIELD_LABELS[field] ?? field}
+                                    <div className="topic-config-section">
+                                        <span>Cluster Names</span>
+                                        <div className="topic-config-chip-list">
+                                            {(clusterOptions.length ? clusterOptions : [configData.clusterName].filter(Boolean) as string[]).map((clusterName) => (
+                                                <span key={clusterName} className="topic-config-chip is-active">
+                                                    {clusterName}
                                                 </span>
                                             ))}
                                         </div>
                                     </div>
-                                )}
 
-                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                        <FileText className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Topic Definition
-                                    </h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                        <div className="md:col-span-2">
-                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Topic Name</label>
-                                            <input
-                                                type="text"
-                                                value={configData.topicName}
-                                                readOnly
-                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
-                                            />
-                                        </div>
+                                    <label className="topic-config-select-field">
+                                        <span>Anchor Broker</span>
+                                        <select value={activeBroker} onChange={(event) => setSelectedBroker(event.target.value)}>
+                                            {brokerOptions.length > 0 ? (
+                                                brokerOptions.map((brokerName) => (
+                                                    <option key={brokerName} value={brokerName}>
+                                                        {brokerName}
+                                                    </option>
+                                                ))
+                                            ) : (
+                                                <option value={activeBroker}>{activeBroker || 'No broker returned'}</option>
+                                            )}
+                                        </select>
+                                        <ChevronDown className="topic-icon" aria-hidden="true"/>
+                                    </label>
+
+                                    <div className="topic-config-broker-list">
+                                        {brokerOptions.map((brokerName) => (
+                                            <button
+                                                key={brokerName}
+                                                type="button"
+                                                onClick={() => setSelectedBroker(brokerName)}
+                                                className={brokerName === activeBroker ? 'is-selected' : ''}
+                                            >
+                                                {brokerName}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="topic-config-danger-note">
+                                        <Trash2 className="topic-icon" aria-hidden="true"/>
                                         <div>
-                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Message Type</label>
-                                            <input
-                                                type="text"
-                                                value={configData.messageType}
-                                                readOnly
-                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
-                                            />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Ordered Delivery</label>
-                                            <input
-                                                type="text"
-                                                value={configData.order ? 'Enabled' : 'Disabled'}
-                                                readOnly
-                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400"
-                                            />
+                                            <strong>Broker deletion is scoped</strong>
+                                            <span>Delete removes this topic from the selected broker only.</span>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                        <Database className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Queue Configuration
-                                    </h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                <div className="topic-config-panel topic-config-definition-panel">
+                                    <div className="topic-status-panel-header">
                                         <div>
-                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Write Queues</label>
-                                            <input
-                                                type="text"
-                                                value={String(configData.writeQueueNums)}
-                                                readOnly
-                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
-                                            />
+                                            <h4>Definition & Queue Plan</h4>
+                                            <p>Read-only broker config snapshot for the selected target.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="topic-config-field is-wide">
+                                        <span>Topic Name</span>
+                                        <strong>{configData.topicName}</strong>
+                                    </div>
+
+                                    <div className="topic-config-field-grid">
+                                        <div className="topic-config-field">
+                                            <span>Message Type</span>
+                                            <strong>{configData.messageType}</strong>
+                                        </div>
+                                        <div className="topic-config-field">
+                                            <span>Ordered Delivery</span>
+                                            <strong>{configData.order ? 'Enabled' : 'Disabled'}</strong>
+                                        </div>
+                                    </div>
+
+                                    <div className="topic-config-queue-grid">
+                                        <div>
+                                            <span>Write Queues</span>
+                                            <strong>{configData.writeQueueNums}</strong>
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Read Queues</label>
-                                            <input
-                                                type="text"
-                                                value={String(configData.readQueueNums)}
-                                                readOnly
-                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
-                                            />
+                                            <span>Read Queues</span>
+                                            <strong>{configData.readQueueNums}</strong>
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Permission</label>
-                                            <input
-                                                type="text"
-                                                value={String(configData.perm)}
-                                                readOnly
-                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
-                                            />
+                                            <span>Permission</span>
+                                            <strong>{configPermissionLabel}</strong>
+                                        </div>
+                                    </div>
+
+                                    <div className="topic-config-balance">
+                                        <div>
+                                            <span>Queue balance</span>
+                                            <strong>
+                                                {configData.writeQueueNums === configData.readQueueNums
+                                                    ? 'Write and read queues are aligned'
+                                                    : 'Write and read queue counts differ'}
+                                            </strong>
+                                        </div>
+                                        <div className="topic-config-balance-bars" aria-hidden="true">
+                                            <i><b style={{width: writeQueuePercent}}/></i>
+                                            <i><b style={{width: readQueuePercent}}/></i>
                                         </div>
                                     </div>
                                 </div>
 
-                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                        <Key className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Topic Attributes
-                                    </h4>
+                                <aside className="topic-config-panel topic-config-attributes-panel">
+                                    <div className="topic-status-panel-header">
+                                        <div>
+                                            <h4>Attributes</h4>
+                                            <p>Extra attributes and broker consistency.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className={`topic-config-consistency ${inconsistentFields.length > 0 ? 'is-warning' : 'is-aligned'}`}>
+                                        <span>Consistency</span>
+                                        <strong>{inconsistentFields.length > 0 ? 'Drift detected' : 'Aligned'}</strong>
+                                        <small>
+                                            {inconsistentFields.length > 0
+                                                ? `${inconsistentFields.length} fields differ across brokers`
+                                                : 'No broker drift detected'}
+                                        </small>
+                                    </div>
+
+                                    {inconsistentFields.length > 0 && (
+                                        <div className="topic-config-drift-list">
+                                            {inconsistentFields.map((field) => (
+                                                <span key={field}>{TOPIC_CONFIG_FIELD_LABELS[field] ?? field}</span>
+                                            ))}
+                                        </div>
+                                    )}
+
                                     {attributes.length === 0 ? (
-                                        <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/80 px-4 py-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
-                                            No extra topic attributes were returned for this broker.
+                                        <div className="topic-config-empty-attrs">
+                                            <Key className="topic-icon" aria-hidden="true"/>
+                                            <strong>No extra attributes</strong>
+                                            <span>This broker returned only core topic configuration fields.</span>
                                         </div>
                                     ) : (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="topic-config-attr-list">
                                             {attributes.map(([key, value]) => (
-                                                <div
-                                                    key={key}
-                                                    className="rounded-lg border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-800 dark:bg-gray-800/50"
-                                                >
-                                                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                                        {formatAttributeLabel(key)}
-                                                    </div>
-                                                    <div className="mt-2 break-all font-mono text-sm text-gray-800 dark:text-gray-200">
-                                                        {value}
-                                                    </div>
-                                                    <div className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
-                                                        {key}
-                                                    </div>
+                                                <div key={key}>
+                                                    <span>{formatAttributeLabel(key)}</span>
+                                                    <strong>{value}</strong>
+                                                    <small>{key}</small>
                                                 </div>
                                             ))}
                                         </div>
                                     )}
-                                </div>
+                                </aside>
+                            </section>
+                        )}
 
-                                {actionError && (
-                                    <div className="rounded-xl border border-red-200 bg-red-50/80 px-5 py-4 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                        {actionError}
-                                    </div>
-                                )}
-                            </>
+                        {actionError && (
+                            <div className="topic-status-state is-error">
+                                <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                <strong>Topic action failed</strong>
+                                <span>{actionError}</span>
+                            </div>
                         )}
                     </div>
 
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
-                        <button
-                            onClick={onClose}
-                            className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                        >
-                            Close
-                        </button>
-                        <button
-                            onClick={() => void handleDeleteByBroker()}
-                            disabled={!configData || isLoading || isDeletingBroker || !activeBroker}
-                            className="px-6 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 transition-all shadow-md hover:shadow-lg flex items-center disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-600 dark:text-white dark:hover:bg-red-500"
-                        >
-                            <Trash2 className="w-4 h-4 mr-2"/>
-                            {isDeletingBroker ? 'Deleting...' : 'Delete This Broker'}
-                        </button>
-                        <button
-                            onClick={() => {
-                                if (configData) {
-                                    onEdit(buildTopicEditorSeedFromConfig(configData));
-                                }
-                            }}
-                            disabled={!configData || isLoading}
-                            className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center disabled:cursor-not-allowed disabled:opacity-50 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                        >
-                            <Save className="w-4 h-4 mr-2"/>
-                            Edit Topic
-                        </button>
-                    </div>
+                    <footer className="topic-status-footer topic-config-footer">
+                        <span>Config is read-only here. Use Edit Topic to commit queue, permission, or type changes.</span>
+                        <div className="topic-config-footer-actions">
+                            <button type="button" className="topic-status-secondary-button" onClick={onClose}>
+                                Close
+                            </button>
+                            <button
+                                type="button"
+                                className="topic-status-secondary-button topic-config-danger-button"
+                                onClick={() => void handleDeleteByBroker()}
+                                disabled={!configData || isLoading || isDeletingBroker || !activeBroker}
+                            >
+                                <Trash2 className="topic-icon" aria-hidden="true"/>
+                                {isDeletingBroker ? 'Deleting...' : 'Delete Broker'}
+                            </button>
+                            <button
+                                type="button"
+                                className="topic-status-primary-button topic-config-edit-button"
+                                onClick={() => {
+                                    if (configData) {
+                                        onEdit(buildTopicEditorSeedFromConfig(configData));
+                                    }
+                                }}
+                                disabled={!configData || isLoading}
+                            >
+                                <Save className="topic-icon" aria-hidden="true"/>
+                                Edit Topic
+                            </button>
+                        </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
@@ -741,6 +962,7 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     const [statusData, setStatusData] = useState<TopicStatusView | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [selectedOffsetKey, setSelectedOffsetKey] = useState<string | null>(null);
 
     useEffect(() => {
         if (!isOpen || !topic?.name) {
@@ -752,6 +974,7 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
         const loadStatus = async () => {
             setIsLoading(true);
             setError('');
+            setSelectedOffsetKey(null);
 
             try {
                 const result = await TopicService.getTopicStats({topic: topic.name});
@@ -784,6 +1007,15 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     const totalMaxOffset = offsets.reduce((acc, curr) => acc + curr.maxOffset, 0);
     const queueCount = statusData?.queueCount ?? offsets.length;
     const greatestOffset = offsets.reduce((max, row) => Math.max(max, row.maxOffset, row.minOffset), 0);
+    const totalOffsetRange = offsets.reduce((acc, row) => acc + Math.max(row.maxOffset - row.minOffset, 0), 0);
+    const totalMessageCount = statusData?.totalMessageCount ?? totalOffsetRange;
+    const activeQueueCount = offsets.filter((row) => row.lastUpdateTimestamp > 0 || row.maxOffset > row.minOffset).length;
+    const latestUpdateTimestamp = offsets.reduce((latest, row) => Math.max(latest, row.lastUpdateTimestamp), 0);
+    const getOffsetKey = (row: TopicStatusView['offsets'][number], index: number) =>
+        `${row.brokerName}-${row.queueId}-${index}`;
+    const selectedOffset = selectedOffsetKey
+        ? offsets.find((row, index) => getOffsetKey(row, index) === selectedOffsetKey) ?? offsets[0]
+        : offsets[0];
 
     const formatTimestamp = (timestamp: number) => {
         if (!timestamp || timestamp <= 0) {
@@ -819,170 +1051,235 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
         return `${Math.max(4, Math.round((value / greatestOffset) * 100))}%`;
     };
 
+    const copySelectedSnapshot = async () => {
+        if (!selectedOffset) {
+            return;
+        }
+
+        const snapshot = [
+            `topic=${statusData?.topic ?? topic?.name ?? ''}`,
+            `broker=${selectedOffset.brokerName}`,
+            `queue=${selectedOffset.queueId}`,
+            `minOffset=${selectedOffset.minOffset}`,
+            `maxOffset=${selectedOffset.maxOffset}`,
+            `updated=${formatTimestamp(selectedOffset.lastUpdateTimestamp)}`,
+        ].join('\n');
+
+        try {
+            await navigator.clipboard.writeText(snapshot);
+            toast.success('Topic status snapshot copied');
+        } catch {
+            toast.error('Failed to copy topic status snapshot');
+        }
+    };
+
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root">
                 <motion.div
                     initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
+                    animate={{opacity: 1}}
                     exit={{opacity: 0}}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    initial={{opacity: 0, scale: 0.96, y: 16}}
                     animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-5xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
+                    exit={{opacity: 0, scale: 0.96, y: 16}}
+                    className="topic-status-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="topic-status-title"
                 >
-                    {/* Header */}
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
-                        <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <Activity className="w-5 h-5 mr-2 text-blue-500"/>
-                                Topic Status
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                Real-time offset status for <span
-                                className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name || 'OrderPlaced_TOPIC'}</span>
-                            </p>
+                    <header className="topic-status-header">
+                        <div className="topic-status-title-wrap">
+                            <div className="topic-status-icon" aria-hidden="true">
+                                <Activity className="topic-icon"/>
+                            </div>
+                            <div>
+                                <span>Real-time offset health</span>
+                                <h3 id="topic-status-title">Topic Status</h3>
+                                <p>
+                                    Snapshot for <strong>{statusData?.topic ?? topic?.name ?? 'Unknown topic'}</strong>
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
+                        <div className="topic-status-header-actions">
+                            <button type="button" className="topic-status-secondary-button" onClick={() => void copySelectedSnapshot()} disabled={!selectedOffset}>
+                                Copy Snapshot
+                            </button>
+                            <button type="button" className="topic-status-close" onClick={onClose} aria-label="Close topic status">
+                                <X className="topic-icon" aria-hidden="true"/>
+                            </button>
+                        </div>
+                    </header>
 
-                    {/* Content */}
-                    <div className="p-6 overflow-auto bg-gray-50/50 dark:bg-gray-950/50 flex-1 space-y-6">
-                        {/* Summary Cards */}
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div
-                                className="bg-white dark:bg-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
+                    <div className="topic-status-body">
+                        <section className="topic-status-kpi-grid" aria-label="Topic status summary">
+                            <article className="topic-status-kpi is-info">
                                 <div>
-                                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Queues</p>
-                                    <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{queueCount}</p>
+                                    <span>Total Messages</span>
+                                    <strong>{totalMessageCount.toLocaleString()}</strong>
+                                    <small>reported by status API</small>
                                 </div>
-                                <div
-                                    className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
-                                    <Layers className="w-5 h-5"/>
-                                </div>
-                            </div>
-                            <div
-                                className="bg-white dark:bg-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
+                                <Layers className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-success">
                                 <div>
-                                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Min Offset</p>
-                                    <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 font-mono">{totalMinOffset.toLocaleString()}</p>
+                                    <span>Active Queues</span>
+                                    <strong>{activeQueueCount}/{queueCount}</strong>
+                                    <small>queues with recent offsets</small>
                                 </div>
-                                <div
-                                    className="w-10 h-10 rounded-lg bg-green-50 dark:bg-green-900/30 flex items-center justify-center text-green-600 dark:text-green-400">
-                                    <ArrowDownCircle className="w-5 h-5"/>
-                                </div>
-                            </div>
-                            <div
-                                className="bg-white dark:bg-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between">
+                                <ArrowDownCircle className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-blue">
                                 <div>
-                                    <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Total Max Offset</p>
-                                    <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1 font-mono">{totalMaxOffset.toLocaleString()}</p>
+                                    <span>Total Min Offset</span>
+                                    <strong>{totalMinOffset.toLocaleString()}</strong>
+                                    <small>sum of queue low marks</small>
                                 </div>
-                                <div
-                                    className="w-10 h-10 rounded-lg bg-purple-50 dark:bg-purple-900/30 flex items-center justify-center text-purple-600 dark:text-purple-400">
-                                    <ArrowUpCircle className="w-5 h-5"/>
+                                <ArrowDownCircle className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-violet">
+                                <div>
+                                    <span>Total Max Offset</span>
+                                    <strong>{totalMaxOffset.toLocaleString()}</strong>
+                                    <small>sum of queue high marks</small>
                                 </div>
-                            </div>
-                        </div>
+                                <ArrowUpCircle className="topic-icon" aria-hidden="true"/>
+                            </article>
+                        </section>
 
                         {isLoading && (
-                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                Loading real-time topic status from the current NameServer...
+                            <div className="topic-status-state">
+                                <Activity className="topic-icon" aria-hidden="true"/>
+                                <strong>Loading topic status</strong>
+                                <span>Fetching real-time offsets from the current NameServer.</span>
                             </div>
                         )}
 
                         {!isLoading && error && (
-                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                {error}
+                            <div className="topic-status-state is-error">
+                                <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                <strong>Failed to load topic status</strong>
+                                <span>{error}</span>
                             </div>
                         )}
 
                         {!isLoading && !error && offsets.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                No queue offsets were returned for this topic.
+                            <div className="topic-status-state">
+                                <Database className="topic-icon" aria-hidden="true"/>
+                                <strong>No queue offsets returned</strong>
+                                <span>The NameServer did not return queue status rows for this topic.</span>
                             </div>
                         )}
 
                         {!isLoading && !error && offsets.length > 0 && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {offsets.map((row, i) => (
-                                    <div key={`${row.brokerName}-${row.queueId}-${i}`}
-                                         className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden flex flex-col">
-
-                                        <div
-                                            className="px-4 py-3 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between bg-gray-50/30 dark:bg-gray-800/30">
-                                            <div className="flex items-center space-x-2">
-                                                <div
-                                                    className="w-6 h-6 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-xs font-bold text-gray-700 dark:text-gray-300 shadow-sm">
-                                                    {row.queueId}
-                                                </div>
-                                                <span className="text-sm font-semibold text-gray-900 dark:text-white">{row.brokerName}</span>
-                                            </div>
-                                            <span
-                                                className="text-[10px] font-mono text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-700">
-                        ID: {row.queueId}
-                     </span>
+                            <section className="topic-status-workspace">
+                                <div className="topic-status-table-panel">
+                                    <div className="topic-status-panel-header">
+                                        <div>
+                                            <h4>Queue Offsets</h4>
+                                            <p>Compact scan by broker, queue id, min/max offset, and update time.</p>
                                         </div>
-
-                                        <div className="p-4 space-y-4 flex-1">
-                                            <div className="space-y-1">
-                                                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                                                    <span>Min Offset</span>
-                                                    <span className="font-mono text-gray-900 dark:text-white">{row.minOffset.toLocaleString()}</span>
-                                                </div>
-                                                <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                                                    <div className="bg-green-500 h-1.5 rounded-full" style={{width: calcBarWidth(row.minOffset)}}></div>
-                                                </div>
-                                            </div>
-                                            <div className="space-y-1">
-                                                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                                                    <span>Max Offset</span>
-                                                    <span className="font-mono text-gray-900 dark:text-white">{row.maxOffset.toLocaleString()}</span>
-                                                </div>
-                                                <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                                                    <div className="bg-purple-500 h-1.5 rounded-full" style={{width: calcBarWidth(row.maxOffset)}}></div>
-                                                </div>
-                                            </div>
-                                            <div className="rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-800/40 dark:text-gray-400">
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <span>Last Updated</span>
-                                                    <span className="font-mono text-right text-gray-700 dark:text-gray-300">{formatTimestamp(row.lastUpdateTimestamp)}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div
-                                            className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 text-[10px] text-gray-400 dark:text-gray-500 flex items-center justify-between">
-                    <span className="flex items-center">
-                       <Clock className="w-3 h-3 mr-1"/>
-                       Updated
-                    </span>
-                                            <span className="font-mono">{formatTimeOnly(row.lastUpdateTimestamp)}</span>
-                                        </div>
+                                        <span>{formatTimestamp(latestUpdateTimestamp)}</span>
                                     </div>
-                                ))}
-                            </div>
+
+                                    <div className="topic-status-table-head" aria-hidden="true">
+                                        <span>Queue</span>
+                                        <span>Broker</span>
+                                        <span>Min</span>
+                                        <span>Max</span>
+                                        <span>Range</span>
+                                    </div>
+
+                                    <div className="topic-status-rows">
+                                        {offsets.map((row, index) => {
+                                            const rowKey = getOffsetKey(row, index);
+                                            const isSelected = selectedOffset
+                                                ? getOffsetKey(selectedOffset, offsets.indexOf(selectedOffset)) === rowKey
+                                                : index === 0;
+                                            const range = Math.max(row.maxOffset - row.minOffset, 0);
+
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={rowKey}
+                                                    className={`topic-status-row ${isSelected ? 'is-selected' : ''}`}
+                                                    onClick={() => setSelectedOffsetKey(rowKey)}
+                                                >
+                                                    <span className="topic-status-queue-id">{row.queueId}</span>
+                                                    <span className="topic-status-broker">
+                                                        <strong>{row.brokerName}</strong>
+                                                        <small>{formatTimeOnly(row.lastUpdateTimestamp)}</small>
+                                                    </span>
+                                                    <span className="topic-status-number">{row.minOffset.toLocaleString()}</span>
+                                                    <span className="topic-status-number">{row.maxOffset.toLocaleString()}</span>
+                                                    <span className="topic-status-range">
+                                                        <i>
+                                                            <b style={{width: calcBarWidth(row.maxOffset)}}/>
+                                                        </i>
+                                                        <small>{range.toLocaleString()}</small>
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <aside className="topic-status-inspector" aria-label="Selected queue details">
+                                    {selectedOffset && (
+                                        <>
+                                            <span>Selected queue</span>
+                                            <h4>Queue {selectedOffset.queueId}</h4>
+                                            <p>{selectedOffset.brokerName}</p>
+
+                                            <div className="topic-status-inspector-value">
+                                                <span>Offset Range</span>
+                                                <strong>
+                                                    {selectedOffset.minOffset.toLocaleString()} → {selectedOffset.maxOffset.toLocaleString()}
+                                                </strong>
+                                                <i>
+                                                    <b style={{width: calcBarWidth(selectedOffset.maxOffset)}}/>
+                                                </i>
+                                            </div>
+
+                                            <div className="topic-status-inspector-grid">
+                                                <div>
+                                                    <span>Delta</span>
+                                                    <strong>{Math.max(selectedOffset.maxOffset - selectedOffset.minOffset, 0).toLocaleString()}</strong>
+                                                </div>
+                                                <div>
+                                                    <span>Queue ID</span>
+                                                    <strong>{selectedOffset.queueId}</strong>
+                                                </div>
+                                            </div>
+
+                                            <div className="topic-status-update-card">
+                                                <Clock className="topic-icon" aria-hidden="true"/>
+                                                <div>
+                                                    <span>Last Updated</span>
+                                                    <strong>{formatTimestamp(selectedOffset.lastUpdateTimestamp)}</strong>
+                                                </div>
+                                            </div>
+
+                                            <button type="button" className="topic-status-primary-button" onClick={() => void copySelectedSnapshot()}>
+                                                Copy Snapshot
+                                            </button>
+                                        </>
+                                    )}
+                                </aside>
+                            </section>
                         )}
                     </div>
 
-                    {/* Footer */}
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-                        <button
-                            onClick={onClose}
-                            className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-medium transition-colors shadow-sm"
-                        >
+                    <footer className="topic-status-footer">
+                        <span>Offsets are read-only snapshots from the current NameServer session.</span>
+                        <button type="button" className="topic-status-secondary-button" onClick={onClose}>
                             Close
                         </button>
-                    </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
@@ -991,6 +1288,7 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
 
 const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     const [consumerItems, setConsumerItems] = useState<TopicConsumerInfoView[]>([]);
+    const [selectedConsumerGroup, setSelectedConsumerGroup] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -1002,6 +1300,7 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProp
         let cancelled = false;
 
         setConsumerItems([]);
+        setSelectedConsumerGroup(null);
         setIsLoading(true);
         setError('');
 
@@ -1009,7 +1308,9 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProp
             try {
                 const response = await TopicService.getTopicConsumers({topic: topic.name});
                 if (!cancelled) {
-                    setConsumerItems(response.items ?? []);
+                    const items = response.items ?? [];
+                    setConsumerItems(items);
+                    setSelectedConsumerGroup(items[0]?.consumerGroup ?? null);
                 }
             } catch (loadError) {
                 if (!cancelled) {
@@ -1034,150 +1335,229 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProp
     const totalLag = consumerItems.reduce((sum, item) => sum + item.totalDiff, 0);
     const totalInflight = consumerItems.reduce((sum, item) => sum + item.inflightDiff, 0);
     const totalConsumeTps = consumerItems.reduce((sum, item) => sum + item.consumeTps, 0);
+    const selectedConsumer = consumerItems.find((item) => item.consumerGroup === selectedConsumerGroup) ?? consumerItems[0] ?? null;
+    const maxLag = Math.max(0, ...consumerItems.map((item) => item.totalDiff));
+    const selectedLagPercent = selectedConsumer && maxLag > 0
+        ? `${Math.max(5, Math.round((selectedConsumer.totalDiff / maxLag) * 100))}%`
+        : '0%';
+    const laggingGroupCount = consumerItems.filter((item) => item.totalDiff > 0).length;
+    const healthLabel = totalLag > 0 ? 'Lagging' : 'Caught up';
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root topic-consumer-modal-root">
                 <motion.div
                     initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
+                    animate={{opacity: 1}}
                     exit={{opacity: 0}}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    initial={{opacity: 0, scale: 0.96, y: 16}}
                     animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-6xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
+                    exit={{opacity: 0, scale: 0.96, y: 16}}
+                    className="topic-status-dialog topic-consumer-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="topic-consumer-title"
                 >
-                    {/* Header */}
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
-                        <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <Users className="w-5 h-5 mr-2 text-blue-500"/>
-                                Consumer Manage
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                Manage consumer groups and view lag for <span
-                                className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name}</span>
-                            </p>
+                    <header className="topic-status-header">
+                        <div className="topic-status-title-wrap">
+                            <div className="topic-status-icon" aria-hidden="true">
+                                <Users className="topic-icon"/>
+                            </div>
+                            <div>
+                                <span>Consumer runtime snapshot</span>
+                                <h3 id="topic-consumer-title">Consumer Manage</h3>
+                                <p>
+                                    Monitor consumer-group lag and throughput for <strong>{topic?.name}</strong>
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
+                        <div className="topic-status-header-actions">
+                            <span className={`topic-consumer-health-chip ${totalLag > 0 ? 'is-warning' : 'is-healthy'}`}>
+                                {isLoading ? 'Loading' : healthLabel}
+                            </span>
+                            <button type="button" className="topic-status-close" onClick={onClose} aria-label="Close consumer manage">
+                                <X className="topic-icon" aria-hidden="true"/>
+                            </button>
+                        </div>
+                    </header>
 
-                    {/* Content */}
-                    <div className="p-6 overflow-auto bg-gray-50/50 dark:bg-gray-950/50 space-y-6">
+                    <div className="topic-status-body topic-consumer-body">
                         {isLoading && (
-                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                Loading consumer runtime data from the current NameServer...
+                            <div className="topic-status-state">
+                                <Users className="topic-icon" aria-hidden="true"/>
+                                <strong>Loading consumer runtime data</strong>
+                                <span>Fetching the current NameServer snapshot.</span>
                             </div>
                         )}
 
                         {!isLoading && error && (
-                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                {error}
+                            <div className="topic-status-state is-error">
+                                <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                <strong>Failed to load consumer runtime data</strong>
+                                <span>{error}</span>
                             </div>
                         )}
 
                         {!isLoading && !error && consumerItems.length > 0 && (
                             <>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-5">
-                                        <div className="text-xs uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Consumer Groups</div>
-                                        <div className="mt-3 text-3xl font-bold text-gray-900 dark:text-white">{consumerItems.length}</div>
-                                    </div>
-                                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-5">
-                                        <div className="text-xs uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Total Lag</div>
-                                        <div className="mt-3 text-3xl font-bold text-red-600 dark:text-red-400">{totalLag.toLocaleString()}</div>
-                                    </div>
-                                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-5">
-                                        <div className="text-xs uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400">Consume TPS</div>
-                                        <div className="mt-3 text-3xl font-bold text-emerald-600 dark:text-emerald-400">{totalConsumeTps.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
-                                    </div>
-                                </div>
-
-                                <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
-                                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between gap-4">
+                                <section className="topic-status-kpi-grid topic-consumer-kpi-grid" aria-label="Consumer runtime summary">
+                                    <article className="topic-status-kpi is-info">
                                         <div>
-                                            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold tracking-wider">Current Runtime Snapshot</div>
-                                            <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                                                The backend currently exposes consumer-group level lag and TPS. Queue-level offset detail will be added when that view model is available.
-                                            </div>
+                                            <span>Consumer Groups</span>
+                                            <strong>{consumerItems.length}</strong>
+                                            <small>{laggingGroupCount} groups with lag</small>
                                         </div>
-                                        <div className="hidden md:flex items-center gap-6">
-                                            <div className="text-right">
-                                                <div className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold tracking-wider mb-1">Inflight</div>
-                                                <div className="text-sm font-mono text-gray-700 dark:text-gray-300">{totalInflight.toLocaleString()}</div>
+                                        <Users className="topic-icon" aria-hidden="true"/>
+                                    </article>
+                                    <article className={`topic-status-kpi ${totalLag > 0 ? 'is-warning' : 'is-success'}`}>
+                                        <div>
+                                            <span>Total Lag</span>
+                                            <strong>{totalLag.toLocaleString()}</strong>
+                                            <small>messages behind</small>
+                                        </div>
+                                        <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                    </article>
+                                    <article className="topic-status-kpi is-violet">
+                                        <div>
+                                            <span>Inflight</span>
+                                            <strong>{totalInflight.toLocaleString()}</strong>
+                                            <small>currently processing</small>
+                                        </div>
+                                        <Clock className="topic-icon" aria-hidden="true"/>
+                                    </article>
+                                    <article className="topic-status-kpi is-success">
+                                        <div>
+                                            <span>Consume TPS</span>
+                                            <strong>{totalConsumeTps.toLocaleString(undefined, {maximumFractionDigits: 2})}</strong>
+                                            <small>messages / sec</small>
+                                        </div>
+                                        <Activity className="topic-icon" aria-hidden="true"/>
+                                    </article>
+                                </section>
+
+                                <section className="topic-consumer-workspace">
+                                    <div className="topic-consumer-panel topic-consumer-table-panel">
+                                        <div className="topic-status-panel-header">
+                                            <div>
+                                                <h4>Current Runtime Snapshot</h4>
+                                                <p>Group-level lag and TPS are available now; queue-level offset detail can attach later.</p>
                                             </div>
+                                            <span>{consumerItems.length} active</span>
+                                        </div>
+
+                                        <div className="topic-consumer-table-head">
+                                            <span>Consumer Group</span>
+                                            <span>Total Lag</span>
+                                            <span>Inflight</span>
+                                            <span>Consume TPS</span>
+                                        </div>
+
+                                        <div className="topic-consumer-rows">
+                                            {consumerItems.map((item) => {
+                                                const isSelected = selectedConsumer?.consumerGroup === item.consumerGroup;
+                                                const lagPercent = maxLag > 0
+                                                    ? `${Math.max(5, Math.round((item.totalDiff / maxLag) * 100))}%`
+                                                    : '0%';
+
+                                                return (
+                                                    <button
+                                                        key={item.consumerGroup}
+                                                        type="button"
+                                                        className={`topic-consumer-row ${isSelected ? 'is-selected' : ''}`}
+                                                        onClick={() => setSelectedConsumerGroup(item.consumerGroup)}
+                                                    >
+                                                        <span className="topic-consumer-group">
+                                                            <span className="topic-consumer-avatar">
+                                                                <Users className="topic-icon" aria-hidden="true"/>
+                                                            </span>
+                                                            <span>
+                                                                <small>Consumer Group</small>
+                                                                <strong>{item.consumerGroup}</strong>
+                                                            </span>
+                                                        </span>
+                                                        <span className={`topic-consumer-lag ${item.totalDiff > 0 ? 'is-warning' : 'is-healthy'}`}>
+                                                            <b>{item.totalDiff.toLocaleString()}</b>
+                                                            <i><em style={{width: lagPercent}}/></i>
+                                                        </span>
+                                                        <span className="topic-consumer-number">{item.inflightDiff.toLocaleString()}</span>
+                                                        <span className="topic-consumer-number">
+                                                            {item.consumeTps.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     </div>
 
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-left text-sm">
-                                            <thead className="bg-gray-50/50 dark:bg-gray-800/50 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider font-semibold border-b border-gray-100 dark:border-gray-800">
-                                                <tr>
-                                                    <th className="px-6 py-3 font-medium">Consumer Group</th>
-                                                    <th className="px-6 py-3 font-medium text-right">Total Lag</th>
-                                                    <th className="px-6 py-3 font-medium text-right">Inflight</th>
-                                                    <th className="px-6 py-3 font-medium text-right">Consume TPS</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
-                                                {consumerItems.map((item) => (
-                                                    <tr key={item.consumerGroup} className="hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-colors group">
-                                                        <td className="px-6 py-4">
-                                                            <div className="flex items-center space-x-3">
-                                                                <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 shrink-0">
-                                                                    <Users className="w-4 h-4"/>
-                                                                </div>
-                                                                <div>
-                                                                    <div className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold tracking-wider">Consumer Group</div>
-                                                                    <div className="font-mono font-semibold text-gray-900 dark:text-white break-all">{item.consumerGroup}</div>
-                                                                </div>
-                                                            </div>
-                                                        </td>
-                                                        <td className="px-6 py-4 text-right">
-                                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-bold bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 border border-red-100 dark:border-red-800">
-                                                                {item.totalDiff.toLocaleString()}
-                                                            </span>
-                                                        </td>
-                                                        <td className="px-6 py-4 font-mono text-gray-600 dark:text-gray-400 text-right">
-                                                            {item.inflightDiff.toLocaleString()}
-                                                        </td>
-                                                        <td className="px-6 py-4 font-mono text-gray-600 dark:text-gray-400 text-right">
-                                                            {item.consumeTps.toLocaleString(undefined, {maximumFractionDigits: 2})}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
+                                    <aside className="topic-consumer-panel topic-consumer-inspector">
+                                        <div className="topic-status-panel-header">
+                                            <div>
+                                                <h4>Selected Group</h4>
+                                                <p>Backlog pressure for the active selection.</p>
+                                            </div>
+                                        </div>
+
+                                        {selectedConsumer && (
+                                            <>
+                                                <div className="topic-consumer-selected-name">
+                                                    <span>{selectedConsumer.totalDiff > 0 ? 'Lagging' : 'Caught up'}</span>
+                                                    <strong>{selectedConsumer.consumerGroup}</strong>
+                                                </div>
+
+                                                <div className={`topic-consumer-pressure-card ${selectedConsumer.totalDiff > 0 ? 'is-warning' : 'is-healthy'}`}>
+                                                    <span>Backlog Pressure</span>
+                                                    <strong>{selectedConsumer.totalDiff.toLocaleString()} messages behind</strong>
+                                                    <i><em style={{width: selectedLagPercent}}/></i>
+                                                    <small>
+                                                        {selectedConsumer.totalDiff > 0
+                                                            ? 'Prioritize this group before offsets drift further.'
+                                                            : 'No backlog pressure reported for this group.'}
+                                                    </small>
+                                                </div>
+
+                                                <div className="topic-consumer-mini-grid">
+                                                    <div>
+                                                        <span>Inflight</span>
+                                                        <strong>{selectedConsumer.inflightDiff.toLocaleString()}</strong>
+                                                    </div>
+                                                    <div>
+                                                        <span>TPS</span>
+                                                        <strong>{selectedConsumer.consumeTps.toLocaleString(undefined, {maximumFractionDigits: 2})}</strong>
+                                                    </div>
+                                                </div>
+                                            </>
+                                        )}
+
+                                        <div className="topic-consumer-note">
+                                            <Database className="topic-icon" aria-hidden="true"/>
+                                            <span>Queue-level offset details can be added here when the backend view model becomes available.</span>
+                                        </div>
+                                    </aside>
+                                </section>
                             </>
                         )}
 
                         {!isLoading && !error && consumerItems.length === 0 && (
-                            <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
-                                No active consumer runtime snapshot was returned for this topic.
+                            <div className="topic-status-state is-compact">
+                                <Users className="topic-icon" aria-hidden="true"/>
+                                <strong>No active consumer snapshot</strong>
+                                <span>No consumer runtime snapshot was returned for this topic.</span>
                             </div>
                         )}
                     </div>
 
-                    {/* Footer */}
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-                        <button
-                            onClick={onClose}
-                            className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-medium transition-colors shadow-sm"
-                        >
-                            Close
-                        </button>
-                    </div>
+                    <footer className="topic-status-footer topic-consumer-footer">
+                        <span>Runtime data is read-only here. Use reset or skip actions from the topic card when needed.</span>
+                        <div>
+                            <button type="button" className="topic-status-secondary-button" onClick={onClose}>
+                                Close
+                            </button>
+                        </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
@@ -1270,198 +1650,244 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
         }
     };
 
+    const producerPathText = topicMessageType === 'TRANSACTION'
+        ? 'Transaction producer path. Local transaction is committed immediately for test send.'
+        : `Standard producer path for ${topicMessageType}.`;
+    const canSubmit = Boolean(messageBody.trim()) && !isSubmitting && !isLoadingConfig;
+
     if (!isOpen) return null;
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root topic-send-modal-root">
                 <motion.div
                     initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
+                    animate={{opacity: 1}}
                     exit={{opacity: 0}}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    initial={{opacity: 0, scale: 0.96, y: 16}}
                     animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-lg bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col border border-gray-100 dark:border-gray-800"
+                    exit={{opacity: 0, scale: 0.96, y: 16}}
+                    className="topic-status-dialog topic-send-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="topic-send-title"
                 >
-                    {/* Header */}
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
+                    <header className="topic-status-header">
+                        <div className="topic-status-title-wrap">
+                            <div className="topic-status-icon" aria-hidden="true">
+                                <Send className="topic-icon"/>
+                            </div>
+                            <div>
+                                <span>Producer test send</span>
+                                <h3 id="topic-send-title">Send Message</h3>
+                                <p>
+                                    Compose and commit a test message to <strong>{topic?.name}</strong>
+                                </p>
+                            </div>
+                        </div>
+                        <div className="topic-status-header-actions">
+                            <span className={`topic-send-type-chip ${topicMessageType === 'TRANSACTION' ? 'is-transaction' : ''}`}>
+                                {isLoadingConfig ? 'Loading type' : topicMessageType}
+                            </span>
+                            <button type="button" className="topic-status-close" onClick={onClose} aria-label="Close send message">
+                                <X className="topic-icon" aria-hidden="true"/>
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="topic-status-body topic-send-body">
+                        <section className="topic-status-kpi-grid topic-send-kpi-grid" aria-label="Send message summary">
+                            <article className="topic-status-kpi is-info">
+                                <div>
+                                    <span>Target</span>
+                                    <strong>{topic?.name ?? '-'}</strong>
+                                    <small>topic endpoint</small>
+                                </div>
+                                <FileText className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-blue">
+                                <div>
+                                    <span>Type</span>
+                                    <strong>{isLoadingConfig ? '...' : topicMessageType}</strong>
+                                    <small>producer route</small>
+                                </div>
+                                <Layers className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className={`topic-status-kpi ${traceEnabled ? 'is-success' : 'is-violet'}`}>
+                                <div>
+                                    <span>Trace</span>
+                                    <strong>{traceEnabled ? 'On' : 'Off'}</strong>
+                                    <small>message trace toggle</small>
+                                </div>
+                                <Activity className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className={`topic-status-kpi ${messageBody.trim() ? 'is-success' : 'is-warning'}`}>
+                                <div>
+                                    <span>Payload</span>
+                                    <strong>{messageBody.trim() ? 'Ready' : 'Required'}</strong>
+                                    <small>relaxed JSON accepted</small>
+                                </div>
+                                <Key className="topic-icon" aria-hidden="true"/>
+                            </article>
+                        </section>
+
+                        <section className="topic-send-workspace">
+                            <aside className="topic-send-panel topic-send-target-panel">
+                                <div className="topic-status-panel-header">
+                                    <div>
+                                        <h4>Target Context</h4>
+                                        <p>Broker-side message type is checked before commit.</p>
+                                    </div>
+                                </div>
+
+                                <div className="topic-send-readonly-grid">
+                                    <div>
+                                        <FileText className="topic-icon" aria-hidden="true"/>
+                                        <span>Topic</span>
+                                        <strong>{topic?.name ?? '-'}</strong>
+                                    </div>
+                                    <div>
+                                        <Layers className="topic-icon" aria-hidden="true"/>
+                                        <span>Message Type</span>
+                                        <strong>{isLoadingConfig ? 'Loading...' : topicMessageType}</strong>
+                                    </div>
+                                </div>
+
+                                <label className="topic-send-field">
+                                    <span><Tag className="topic-icon" aria-hidden="true"/>Tag</span>
+                                    <input
+                                        type="text"
+                                        value={tag}
+                                        onChange={(event) => setTag(event.target.value)}
+                                        className="topic-send-input"
+                                        placeholder="Optional tag..."
+                                    />
+                                </label>
+
+                                <label className="topic-send-field">
+                                    <span><Key className="topic-icon" aria-hidden="true"/>Key</span>
+                                    <input
+                                        type="text"
+                                        value={messageKey}
+                                        onChange={(event) => setMessageKey(event.target.value)}
+                                        className="topic-send-input"
+                                        placeholder="Optional key..."
+                                    />
+                                </label>
+
+                                <label className={`topic-send-trace-toggle ${traceEnabled ? 'is-on' : ''}`}>
+                                    <input
+                                        type="checkbox"
+                                        checked={traceEnabled}
+                                        onChange={(event) => setTraceEnabled(event.target.checked)}
+                                    />
+                                    <i aria-hidden="true"/>
+                                    <span>
+                                        <Activity className="topic-icon" aria-hidden="true"/>
+                                        Enable Message Trace
+                                    </span>
+                                </label>
+                            </aside>
+
+                            <main className="topic-send-panel topic-send-payload-panel">
+                                <div className="topic-status-panel-header">
+                                    <div>
+                                        <h4>Message Payload</h4>
+                                        <p>Required body. Standard JSON and relaxed JSON are supported.</p>
+                                    </div>
+                                </div>
+
+                                <label className="topic-send-field topic-send-body-field">
+                                    <span><FileText className="topic-icon" aria-hidden="true"/>Body <b>*</b></span>
+                                    <textarea
+                                        rows={8}
+                                        value={messageBody}
+                                        onChange={(event) => setMessageBody(event.target.value)}
+                                        className="topic-send-textarea"
+                                        placeholder="{ 1: 'value', nested: { 2: true } }"
+                                    />
+                                </label>
+
+                                <div className="topic-send-helper">
+                                    <Key className="topic-icon" aria-hidden="true"/>
+                                    <span>
+                                        Numeric keys like <code>{`{ 1: 'value' }`}</code> will be normalized before sending.
+                                    </span>
+                                </div>
+
+                                <div className="topic-send-route-note">
+                                    <Send className="topic-icon" aria-hidden="true"/>
+                                    <span>{producerPathText}</span>
+                                </div>
+                            </main>
+
+                            <aside className="topic-send-panel topic-send-result-panel">
+                                <div className="topic-status-panel-header">
+                                    <div>
+                                        <h4>Commit Preview</h4>
+                                        <p>Broker acknowledgement appears here.</p>
+                                    </div>
+                                </div>
+
+                                {!sendResult && (
+                                    <div className="topic-send-ready-card">
+                                        <span>{canSubmit ? 'READY TO COMMIT' : 'WAITING FOR BODY'}</span>
+                                        <strong>{canSubmit ? 'Payload ready' : 'No message body'}</strong>
+                                        <small>Fill body and commit to receive message ID, queue, and offset.</small>
+                                    </div>
+                                )}
+
+                                {sendResult && (
+                                    <div className="topic-send-result-card">
+                                        <Check className="topic-icon" aria-hidden="true"/>
+                                        <span>Send Result</span>
+                                        <strong>{sendResult.sendStatus}</strong>
+                                        <code>
+                                            {sendResult.messageId ? `Message ID: ${sendResult.messageId}` : 'Broker accepted without message id'}
+                                        </code>
+                                        {sendResult.localTransactionState && (
+                                            <small>Local transaction: {sendResult.localTransactionState}</small>
+                                        )}
+                                        {sendResult.transactionId && (
+                                            <code>Transaction ID: {sendResult.transactionId}</code>
+                                        )}
+                                        <small>
+                                            Queue: {sendResult.brokerName ?? '-'} / {sendResult.queueId ?? '-'} / offset {sendResult.queueOffset}
+                                        </small>
+                                    </div>
+                                )}
+
+                                {error && (
+                                    <div className="topic-send-error">
+                                        <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                        <span>{error}</span>
+                                    </div>
+                                )}
+                            </aside>
+                        </section>
+                    </div>
+
+                    <footer className="topic-status-footer topic-send-footer">
+                        <span>Commit sends once. Trace can be enabled before submit for observability.</span>
                         <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <Send className="w-5 h-5 mr-2 text-blue-500"/>
-                                Send Message
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                Send a message to <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name}</span>
-                            </p>
+                            <button type="button" className="topic-status-secondary-button" onClick={onClose}>
+                                Close
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSubmit()}
+                                disabled={!canSubmit}
+                                className="topic-status-primary-button topic-send-commit-button"
+                            >
+                                <Send className="topic-icon" aria-hidden="true"/>
+                                {isLoadingConfig ? 'Preparing...' : isSubmitting ? 'Sending...' : 'Commit'}
+                            </button>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
-
-                    {/* Content */}
-                    <div className="p-6 space-y-5 bg-gray-50/50 dark:bg-gray-950/50">
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
-                            {/* Topic */}
-                            <div className="grid grid-cols-[120px_1fr] items-center gap-4">
-                                <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400">
-                                    <FileText className="w-4 h-4 text-gray-400 dark:text-gray-500"/>
-                                    Topic:
-                                </label>
-                                <input
-                                    type="text"
-                                    value={topic?.name || ''}
-                                    disabled
-                                    className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 cursor-not-allowed font-mono"
-                                />
-                            </div>
-
-                            <div className="grid grid-cols-[120px_1fr] items-center gap-4">
-                                <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400">
-                                    <Layers className="w-4 h-4 text-gray-400 dark:text-gray-500"/>
-                                    Message Type:
-                                </label>
-                                <input
-                                    type="text"
-                                    value={isLoadingConfig ? 'Loading...' : topicMessageType}
-                                    disabled
-                                    className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 cursor-not-allowed font-mono"
-                                />
-                            </div>
-
-                            {/* Tag */}
-                            <div className="grid grid-cols-[120px_1fr] items-center gap-4">
-                                <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400">
-                                    <Tag className="w-4 h-4 text-gray-400 dark:text-gray-500"/>
-                                    Tag:
-                                </label>
-                                <input
-                                    type="text"
-                                    value={tag}
-                                    onChange={(event) => setTag(event.target.value)}
-                                    className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-400 dark:placeholder-gray-600"
-                                    placeholder="Optional tag..."
-                                />
-                            </div>
-
-                            {/* Key */}
-                            <div className="grid grid-cols-[120px_1fr] items-center gap-4">
-                                <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400">
-                                    <Key className="w-4 h-4 text-gray-400 dark:text-gray-500"/>
-                                    Key:
-                                </label>
-                                <input
-                                    type="text"
-                                    value={messageKey}
-                                    onChange={(event) => setMessageKey(event.target.value)}
-                                    className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-400 dark:placeholder-gray-600"
-                                    placeholder="Optional key..."
-                                />
-                            </div>
-
-                            {/* Message Body */}
-                            <div className="grid grid-cols-[120px_1fr] gap-4">
-                                <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400 pt-2">
-                                    <FileText className="w-4 h-4 text-gray-400 dark:text-gray-500"/>
-                                    <span className="flex items-center">
-                    <span className="text-red-500 mr-1">*</span>Body:
-                  </span>
-                                </label>
-                                <textarea
-                                    rows={5}
-                                    value={messageBody}
-                                    onChange={(event) => setMessageBody(event.target.value)}
-                                    className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono resize-none placeholder-gray-400 dark:placeholder-gray-600"
-                                    placeholder="{ 1: 'value', nested: { 2: true } }"
-                                />
-                            </div>
-                            <div className="col-start-2 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
-                                Standard JSON and relaxed JSON are both supported here. Numeric keys like <span className="font-mono">{`{ 1: 'value' }`}</span> will be normalized before sending.
-                            </div>
-                            <div className="col-start-2 rounded-lg border border-gray-200 bg-gray-50/90 px-3 py-2 text-xs text-gray-600 dark:border-gray-800 dark:bg-gray-800/80 dark:text-gray-300">
-                                {topicMessageType === 'TRANSACTION'
-                                    ? 'This topic uses TRANSACTION semantics. The desktop sender will use a transaction producer and commit the local transaction immediately, matching the Java dashboard test-send flow.'
-                                    : `This topic will be sent through the standard producer path for ${topicMessageType}.`}
-                            </div>
-
-                            {/* Enable Message Trace */}
-                            <div className="grid grid-cols-[120px_1fr] items-center gap-4 pt-1">
-                                <div
-                                    className="col-start-2 flex items-center bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-100 dark:border-gray-700">
-                                    <label className="flex items-center space-x-3 cursor-pointer select-none w-full">
-                                        <div className="relative">
-                                            <input
-                                                type="checkbox"
-                                                checked={traceEnabled}
-                                                onChange={(event) => setTraceEnabled(event.target.checked)}
-                                                className="peer sr-only"
-                                            />
-                                            <div
-                                                className="w-9 h-5 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                                        </div>
-                                        <div className="flex items-center text-sm text-gray-700 dark:text-gray-300 font-medium">
-                                            <Activity className="w-4 h-4 mr-2 text-blue-500"/>
-                                            Enable Message Trace
-                                        </div>
-                                    </label>
-                                </div>
-                            </div>
-
-                            {error && (
-                                <div className="rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                    {error}
-                                </div>
-                            )}
-
-                            {sendResult && (
-                                <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300">
-                                    <div className="font-semibold">Send result: {sendResult.sendStatus}</div>
-                                    <div className="mt-1 font-mono text-xs break-all">
-                                        {sendResult.messageId ? `Message ID: ${sendResult.messageId}` : 'Broker accepted the message without returning a message id.'}
-                                    </div>
-                                    {sendResult.localTransactionState && (
-                                        <div className="mt-1 text-xs">
-                                            Local transaction: {sendResult.localTransactionState}
-                                        </div>
-                                    )}
-                                    {sendResult.transactionId && (
-                                        <div className="mt-1 font-mono text-xs break-all">
-                                            Transaction ID: {sendResult.transactionId}
-                                        </div>
-                                    )}
-                                    <div className="mt-1 text-xs">
-                                        Queue: {sendResult.brokerName ?? '-'} / {sendResult.queueId ?? '-'} / offset {sendResult.queueOffset}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
-                        <button
-                            onClick={onClose}
-                            className="px-6 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                        >
-                            Close
-                        </button>
-                        <button
-                            onClick={() => void handleSubmit()}
-                            disabled={isSubmitting || isLoadingConfig}
-                            className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                        >
-                            <Send className="w-4 h-4 mr-2"/>
-                            {isLoadingConfig ? 'Preparing...' : isSubmitting ? 'Sending...' : 'Commit'}
-                        </button>
-                    </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
@@ -1981,71 +2407,131 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
         }
     };
 
+    const isCreateMode = mode === 'create';
+    const targetSummary = selectedClusters.length > 0
+        ? `${selectedClusters.length} cluster${selectedClusters.length === 1 ? '' : 's'}`
+        : 'No cluster';
+    const brokerScopeSummary = selectedBrokers.length > 0
+        ? `${selectedBrokers.length} broker${selectedBrokers.length === 1 ? '' : 's'}`
+        : 'All brokers';
+    const queueSummary = `${writeQueueNums || 0} / ${readQueueNums || 0}`;
+    const queuePlanAligned = writeQueueNums === readQueueNums;
+    const canSubmit = Boolean(topicName.trim())
+        && selectedClusters.length > 0
+        && writeQueueNums > 0
+        && readQueueNums > 0
+        && Number.isFinite(writeQueueNums)
+        && Number.isFinite(readQueueNums)
+        && Number.isFinite(perm);
+
     if (!isOpen) return null;
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root topic-editor-modal-root">
                 <motion.div
                     initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
+                    animate={{opacity: 1}}
                     exit={{opacity: 0}}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    initial={{opacity: 0, scale: 0.96, y: 16}}
                     animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-2xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
+                    exit={{opacity: 0, scale: 0.96, y: 16}}
+                    className="topic-status-dialog topic-editor-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="topic-editor-title"
                 >
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
-                        <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <Settings className="w-5 h-5 mr-2 text-blue-500"/>
-                                {mode === 'create' ? 'Add Topic' : 'Update Topic'}
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                {mode === 'create'
-                                    ? 'Create a topic and choose the target clusters or brokers explicitly.'
-                                    : <>Update settings for <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{seed?.topicName}</span></>}
-                            </p>
+                    <header className="topic-status-header">
+                        <div className="topic-status-title-wrap">
+                            <div className="topic-status-icon" aria-hidden="true">
+                                <Settings className="topic-icon"/>
+                            </div>
+                            <div>
+                                <span>Topic lifecycle action</span>
+                                <h3 id="topic-editor-title">{isCreateMode ? 'Add Topic' : 'Update Topic'}</h3>
+                                <p>
+                                    {isCreateMode
+                                        ? 'Choose deployment targets, define topic metadata, and preview queue permissions.'
+                                        : <>Update settings for <strong>{seed?.topicName}</strong></>}
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
+                        <div className="topic-status-header-actions">
+                            <span className={`topic-editor-mode-chip ${isCreateMode ? 'is-create' : 'is-update'}`}>
+                                {isCreateMode ? 'Create mode' : 'Update mode'}
+                            </span>
+                            <button type="button" className="topic-status-close" onClick={onClose} aria-label="Close topic editor">
+                                <X className="topic-icon" aria-hidden="true"/>
+                            </button>
+                        </div>
+                    </header>
 
-                    <div className="p-6 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/50 space-y-6" onClick={() => setIsBrokerDropdownOpen(false)}>
+                    <div className="topic-status-body topic-editor-body" onClick={() => setIsBrokerDropdownOpen(false)}>
                         {error && (
-                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                {error}
+                            <div className="topic-status-state is-error topic-editor-error">
+                                <AlertTriangle className="topic-icon" aria-hidden="true"/>
+                                <strong>Topic validation failed</strong>
+                                <span>{error}</span>
                             </div>
                         )}
 
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                <Server className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Deployment Target
-                            </h4>
-                            <div className="space-y-5">
+                        <section className="topic-status-kpi-grid topic-editor-kpi-grid" aria-label="Topic editor summary">
+                            <article className={`topic-status-kpi ${selectedClusters.length > 0 ? 'is-info' : 'is-warning'}`}>
                                 <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
-                                        Cluster Targets <span className="text-red-500">*</span>
-                                    </label>
-                                    <div className="flex flex-wrap gap-2">
+                                    <span>Targets</span>
+                                    <strong>{targetSummary}</strong>
+                                    <small>{brokerScopeSummary}</small>
+                                </div>
+                                <Server className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-blue">
+                                <div>
+                                    <span>Topic</span>
+                                    <strong>{topicName.trim() || 'Unnamed'}</strong>
+                                    <small>{isCreateMode ? 'new topic' : 'name locked in update'}</small>
+                                </div>
+                                <FileText className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className={`topic-status-kpi ${queuePlanAligned ? 'is-success' : 'is-warning'}`}>
+                                <div>
+                                    <span>Queues</span>
+                                    <strong>{queueSummary}</strong>
+                                    <small>write / read queues</small>
+                                </div>
+                                <Database className="topic-icon" aria-hidden="true"/>
+                            </article>
+                            <article className="topic-status-kpi is-violet">
+                                <div>
+                                    <span>Permission</span>
+                                    <strong>Perm {perm}</strong>
+                                    <small>{order ? 'ordered delivery' : 'unordered delivery'}</small>
+                                </div>
+                                <Shield className="topic-icon" aria-hidden="true"/>
+                            </article>
+                        </section>
+
+                        <section className="topic-editor-workspace">
+                            <aside className="topic-editor-panel topic-editor-target-panel">
+                                <div className="topic-status-panel-header">
+                                    <div>
+                                        <h4>Deployment Target</h4>
+                                        <p>Select clusters first, then optionally narrow to brokers.</p>
+                                    </div>
+                                </div>
+
+                                <div className="topic-editor-section">
+                                    <span>Cluster Targets <b>*</b></span>
+                                    <div className="topic-editor-chip-list">
                                         {availableClusters.map((clusterName) => (
                                             <button
                                                 key={clusterName}
                                                 type="button"
+                                                className={`topic-editor-chip ${selectedClusters.includes(clusterName) ? 'is-active' : ''}`}
                                                 onClick={() => toggleCluster(clusterName)}
-                                                className={`inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
-                                                    selectedClusters.includes(clusterName)
-                                                        ? 'bg-gray-900 text-white border-gray-900 dark:bg-gray-700 dark:border-gray-600'
-                                                        : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 dark:hover:bg-gray-700'
-                                                }`}
                                             >
                                                 {clusterName}
                                             </button>
@@ -2053,37 +2539,38 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
                                     </div>
                                 </div>
 
-                                <div className="relative">
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Broker Name (Optional Multi-select)</label>
-                                    <div
-                                        onClick={(event) => {
-                                            event.stopPropagation();
+                                <div className="topic-editor-section topic-editor-broker-section" onClick={(event) => event.stopPropagation()}>
+                                    <span>Broker Scope</span>
+                                    <button
+                                        type="button"
+                                        className={`topic-editor-select-trigger ${isBrokerDropdownOpen ? 'is-open' : ''}`}
+                                        onClick={() => {
                                             if (availableBrokers.length > 0) {
-                                                setIsBrokerDropdownOpen(!isBrokerDropdownOpen);
+                                                setIsBrokerDropdownOpen((previous) => !previous);
                                             }
                                         }}
-                                        className="w-full min-h-[42px] px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 cursor-pointer hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-sm flex flex-wrap gap-1.5 items-center transition-all relative"
+                                        disabled={availableBrokers.length === 0}
                                     >
-                                        {selectedBrokers.length === 0 ? (
-                                            <span className="text-gray-400 dark:text-gray-500">
-                                                {availableBrokers.length === 0 ? 'Select cluster targets first...' : 'Apply to all brokers in the selected clusters'}
-                                            </span>
-                                        ) : (
-                                            selectedBrokers.map((broker) => (
-                                                <span key={broker} className="bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs border border-blue-100 dark:border-blue-800 flex items-center font-medium">
+                                        <span>
+                                            {selectedBrokers.length > 0
+                                                ? brokerScopeSummary
+                                                : availableBrokers.length === 0
+                                                    ? 'Select cluster targets first'
+                                                    : 'All brokers in selected clusters'}
+                                        </span>
+                                        <ChevronDown className="topic-icon" aria-hidden="true"/>
+                                    </button>
+
+                                    {selectedBrokers.length > 0 && (
+                                        <div className="topic-editor-chip-list is-compact">
+                                            {selectedBrokers.map((broker) => (
+                                                <button key={broker} type="button" className="topic-editor-chip is-active" onClick={() => toggleBroker(broker)}>
                                                     {broker}
-                                                    <X
-                                                        className="w-3 h-3 ml-1 hover:text-blue-900 dark:hover:text-blue-100 cursor-pointer"
-                                                        onClick={(event) => {
-                                                            event.stopPropagation();
-                                                            toggleBroker(broker);
-                                                        }}
-                                                    />
-                                                </span>
-                                            ))
-                                        )}
-                                        <ChevronDown className={`absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none transition-transform duration-200 ${isBrokerDropdownOpen ? 'rotate-180' : ''}`}/>
-                                    </div>
+                                                    <X className="topic-icon" aria-hidden="true"/>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
 
                                     <AnimatePresence>
                                         {isBrokerDropdownOpen && availableBrokers.length > 0 && (
@@ -2091,141 +2578,167 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
                                                 initial={{opacity: 0, y: 5}}
                                                 animate={{opacity: 1, y: 0}}
                                                 exit={{opacity: 0, y: 5}}
-                                                className="absolute z-20 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-48 overflow-y-auto"
-                                                onClick={(event) => event.stopPropagation()}
+                                                className="topic-editor-dropdown"
                                             >
                                                 {availableBrokers.map((broker) => (
-                                                    <div
-                                                        key={broker}
-                                                        onClick={() => toggleBroker(broker)}
-                                                        className="px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer flex items-center space-x-3 border-b border-gray-50 dark:border-gray-700 last:border-0"
-                                                    >
-                                                        <div className={`w-4 h-4 border rounded flex items-center justify-center transition-colors ${selectedBrokers.includes(broker) ? 'bg-blue-600 border-blue-600 dark:bg-blue-500 dark:border-blue-500' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900'}`}>
-                                                            {selectedBrokers.includes(broker) && <Check className="w-3 h-3 text-white"/>}
-                                                        </div>
-                                                        <span className={`text-sm ${selectedBrokers.includes(broker) ? 'text-gray-900 dark:text-white font-medium' : 'text-gray-600 dark:text-gray-300'}`}>
-                                                            {broker}
+                                                    <button key={broker} type="button" onClick={() => toggleBroker(broker)}>
+                                                        <span className={selectedBrokers.includes(broker) ? 'is-checked' : ''}>
+                                                            {selectedBrokers.includes(broker) && <Check className="topic-icon" aria-hidden="true"/>}
                                                         </span>
-                                                    </div>
+                                                        <strong>{broker}</strong>
+                                                    </button>
                                                 ))}
                                             </motion.div>
                                         )}
                                     </AnimatePresence>
                                 </div>
-                            </div>
-                        </div>
 
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                <FileText className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Topic Definition
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                <div className="md:col-span-2">
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Topic Name <span className="text-red-500">*</span>
-                                    </label>
+                                <div className={`topic-editor-target-note ${selectedClusters.length > 0 ? 'is-ready' : ''}`}>
+                                    <Server className="topic-icon" aria-hidden="true"/>
+                                    <div>
+                                        <strong>{selectedClusters.length > 0 ? 'Target ready' : 'Target required'}</strong>
+                                        <span>{selectedClusters.length > 0 ? brokerScopeSummary : 'Choose at least one cluster before submit.'}</span>
+                                    </div>
+                                </div>
+                            </aside>
+
+                            <main className="topic-editor-panel topic-editor-definition-panel">
+                                <div className="topic-status-panel-header">
+                                    <div>
+                                        <h4>Topic Definition</h4>
+                                        <p>Topic identity, message type, queues, and permissions.</p>
+                                    </div>
+                                </div>
+
+                                <label className="topic-editor-field is-wide">
+                                    <span>Topic Name <b>*</b></span>
                                     <input
                                         type="text"
                                         value={topicName}
-                                        readOnly={mode === 'update'}
+                                        readOnly={!isCreateMode}
                                         onChange={(event) => setTopicName(event.target.value)}
-                                        className={`w-full px-3 py-2.5 border rounded-lg text-sm transition-all font-mono ${
-                                            mode === 'update'
-                                                ? 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400'
-                                                : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm'
-                                        }`}
+                                        className={`topic-editor-input ${!isCreateMode ? 'is-readonly' : ''}`}
                                     />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Message Type</label>
-                                    <div className="relative">
+                                </label>
+
+                                <label className="topic-editor-field is-wide">
+                                    <span>Message Type</span>
+                                    <div className="topic-editor-select-field">
                                         <select
                                             value={messageType}
                                             onChange={(event) => setMessageType(event.target.value)}
-                                            className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer shadow-sm"
                                         >
                                             {TOPIC_MESSAGE_TYPE_OPTIONS.map((option) => (
-                                                <option key={option} value={option}>
-                                                    {option}
-                                                </option>
+                                                <option key={option} value={option}>{option}</option>
                                             ))}
                                         </select>
-                                        <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none"/>
+                                        <ChevronDown className="topic-icon" aria-hidden="true"/>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
+                                </label>
 
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                <Database className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Queue Configuration
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Write Queues <span className="text-red-500">*</span>
-                                    </label>
+                                <div className="topic-editor-queue-grid">
+                                    <label className="topic-editor-field">
+                                        <span>Write Queues <b>*</b></span>
                                     <input
                                         type="number"
                                         min={1}
                                         value={writeQueueNums}
                                         onChange={(event) => setWriteQueueNums(Number(event.target.value))}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
+                                            className="topic-editor-input"
                                     />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Read Queues <span className="text-red-500">*</span>
                                     </label>
+                                    <label className="topic-editor-field">
+                                        <span>Read Queues <b>*</b></span>
                                     <input
                                         type="number"
                                         min={1}
                                         value={readQueueNums}
                                         onChange={(event) => setReadQueueNums(Number(event.target.value))}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
+                                            className="topic-editor-input"
                                     />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Permission (Perm) <span className="text-red-500">*</span>
                                     </label>
+                                    <label className="topic-editor-field">
+                                        <span>Permission <b>*</b></span>
                                     <input
                                         type="number"
                                         min={0}
                                         value={perm}
                                         onChange={(event) => setPerm(Number(event.target.value))}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
+                                            className="topic-editor-input"
                                     />
+                                    </label>
                                 </div>
-                            </div>
-                            <label className="mt-5 inline-flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
-                                <input
-                                    type="checkbox"
-                                    checked={order}
-                                    onChange={(event) => setOrder(event.target.checked)}
-                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800"
-                                />
-                                Ordered delivery
-                            </label>
-                        </div>
+
+                                <label className={`topic-editor-order-toggle ${order ? 'is-on' : ''}`}>
+                                    <input
+                                        type="checkbox"
+                                        checked={order}
+                                        onChange={(event) => setOrder(event.target.checked)}
+                                    />
+                                    <i aria-hidden="true">
+                                        {order && <Check className="topic-icon" aria-hidden="true"/>}
+                                    </i>
+                                    <span>
+                                        Ordered delivery
+                                        <small>{order ? 'FIFO-sensitive consumers will receive ordered routing.' : 'Disabled for this topic.'}</small>
+                                    </span>
+                                </label>
+                            </main>
+
+                            <aside className="topic-editor-panel topic-editor-preview-panel">
+                                <div className="topic-status-panel-header">
+                                    <div>
+                                        <h4>Commit Preview</h4>
+                                        <p>Review the request before submit.</p>
+                                    </div>
+                                </div>
+
+                                <div className="topic-editor-preview-card">
+                                    <span>Request Payload</span>
+                                    <code>clusterNameList: [{selectedClusters.join(', ') || '-'}]</code>
+                                    <code>brokerNameList: [{selectedBrokers.join(', ') || '-'}]</code>
+                                    <code>topicName: {topicName.trim() || '-'}</code>
+                                    <code>writeQueueNums: {writeQueueNums}</code>
+                                    <code>readQueueNums: {readQueueNums}</code>
+                                    <code>perm: {perm}</code>
+                                </div>
+
+                                <div className={`topic-editor-plan-card ${queuePlanAligned ? 'is-ready' : 'is-warning'}`}>
+                                    <Database className="topic-icon" aria-hidden="true"/>
+                                    <div>
+                                        <strong>{queuePlanAligned ? 'Queue plan aligned' : 'Queue counts differ'}</strong>
+                                        <span>Write/read queues are {queueSummary}.</span>
+                                    </div>
+                                </div>
+
+                                <div className={`topic-editor-plan-card ${canSubmit ? 'is-ready' : 'is-warning'}`}>
+                                    <Shield className="topic-icon" aria-hidden="true"/>
+                                    <div>
+                                        <strong>{canSubmit ? 'Ready to submit' : 'Missing required fields'}</strong>
+                                        <span>{canSubmit ? `${isCreateMode ? 'Create' : 'Update'} request is valid locally.` : 'Topic name, target cluster, and queue counts are required.'}</span>
+                                    </div>
+                                </div>
+                            </aside>
+                        </section>
                     </div>
 
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
-                        <button
-                            onClick={onClose}
-                            className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => void handleSubmit()}
-                            disabled={isSubmitting}
-                            className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center disabled:cursor-not-allowed disabled:opacity-70 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                        >
-                            <Save className="w-4 h-4 mr-2"/>
-                            {isSubmitting ? (mode === 'create' ? 'Creating...' : 'Saving...') : (mode === 'create' ? 'Create Topic' : 'Commit Changes')}
-                        </button>
-                    </div>
+                    <footer className="topic-status-footer topic-editor-footer">
+                        <span>Create/Update validates topic name, target cluster, and queue counts before submit.</span>
+                        <div>
+                            <button type="button" className="topic-status-secondary-button" onClick={onClose}>
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleSubmit()}
+                                disabled={isSubmitting}
+                                className="topic-status-primary-button topic-editor-submit-button"
+                            >
+                                <Save className="topic-icon" aria-hidden="true"/>
+                                {isSubmitting ? (isCreateMode ? 'Creating...' : 'Saving...') : (isCreateMode ? 'Create Topic' : 'Commit Changes')}
+                            </button>
+                        </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
@@ -2370,11 +2883,115 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
     );
 };
 
+const TOPIC_DANGER_OPERATIONS = new Set(['Reset Consumer Offset', 'Skip Message Accumulate', 'Delete']);
+
+const TOPIC_ROW_ACTIONS = ['Status', 'Router', 'Topic Config'];
+
+const formatCompactNumber = (value: number) =>
+    Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1}).format(value);
+
+const formatTopicPermission = (perm: number) => {
+    const canWrite = (perm & 0x2) === 0x2;
+    const canRead = (perm & 0x4) === 0x4;
+
+    if (canRead && canWrite) {
+        return 'RW';
+    }
+
+    if (canRead) {
+        return 'R';
+    }
+
+    if (canWrite) {
+        return 'W';
+    }
+
+    return `Perm ${perm}`;
+};
+
+const getTopicTone = (type: string) => {
+    switch (type) {
+        case 'SYSTEM':
+            return 'system';
+        case 'RETRY':
+            return 'retry';
+        case 'DLQ':
+            return 'dlq';
+        case 'FIFO':
+            return 'fifo';
+        case 'TRANSACTION':
+            return 'transaction';
+        case 'DELAY':
+            return 'delay';
+        default:
+            return 'normal';
+    }
+};
+
+const joinOrFallback = (items: string[], fallback: string) => (items.length > 0 ? items.join(', ') : fallback);
+
+const TopicSummaryCard = ({
+    label,
+    value,
+    hint,
+    tone,
+    icon,
+}: {
+    label: string;
+    value: string;
+    hint: string;
+    tone: 'info' | 'blue' | 'success' | 'warning' | 'danger';
+    icon: ReactNode;
+}) => (
+    <article className={`topic-summary-card is-${tone}`}>
+        <div>
+            <span>{label}</span>
+            <strong>{value}</strong>
+            <small>{hint}</small>
+        </div>
+        <div className="topic-summary-icon" aria-hidden="true">
+            {icon}
+        </div>
+    </article>
+);
+
+const TopicTypeBadge = ({type}: { type: string }) => (
+    <span className={`topic-type-badge is-${getTopicTone(type)}`}>{type}</span>
+);
+
+const TopicActionButton = ({
+    operation,
+    icon: Icon,
+    compact = false,
+    onClick,
+}: {
+    operation: string;
+    icon: React.ElementType;
+    compact?: boolean;
+    onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}) => {
+    const isDanger = TOPIC_DANGER_OPERATIONS.has(operation);
+    const isStatus = operation === 'Status';
+
+    return (
+        <button
+            type="button"
+            aria-label={`${operation} topic`}
+            onClick={onClick}
+            className={`topic-action-button ${compact ? 'is-compact' : ''} ${isDanger ? 'is-danger' : ''} ${isStatus ? 'is-status' : ''}`}
+        >
+            <Icon className="topic-icon" aria-hidden="true"/>
+            <span>{operation}</span>
+        </button>
+    );
+};
+
 export const TopicView = () => {
     const {data, error, isLoading, isRefreshPending, isRefreshing, refresh} = useTopicCatalog();
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedFilters, setSelectedFilters] = useState<Record<TopicCategory, boolean>>(buildDefaultTopicFilters);
     const [currentPage, setCurrentPage] = useState(1);
+    const [selectedTopicName, setSelectedTopicName] = useState<string | null>(null);
     const [editorModal, setEditorModal] = useState<{ isOpen: boolean, mode: 'create' | 'update', seed: TopicEditorSeed | null }>({
         isOpen: false,
         mode: 'create',
@@ -2395,25 +3012,51 @@ export const TopicView = () => {
         }
     }, [error]);
 
-    const topics = (data?.items ?? []).map(mapTopicListItem);
+    const topics = useMemo(() => (data?.items ?? []).map(mapTopicListItem), [data?.items]);
     const normalizedSearch = searchTerm.trim().toLowerCase();
-    const filteredTopics = topics.filter((topic) => {
-        const matchesType = selectedFilters[topic.type as TopicCategory] ?? true;
-        if (!matchesType) {
-            return false;
-        }
+    const filteredTopics = useMemo(
+        () =>
+            topics.filter((topic) => {
+                const matchesType = selectedFilters[topic.type as TopicCategory] ?? true;
+                if (!matchesType) {
+                    return false;
+                }
 
-        if (!normalizedSearch) {
-            return true;
-        }
+                if (!normalizedSearch) {
+                    return true;
+                }
 
-        return topic.name.toLowerCase().includes(normalizedSearch) || topic.type.toLowerCase().includes(normalizedSearch);
-    });
+                const searchableText = [
+                    topic.name,
+                    topic.type,
+                    topic.messageType,
+                    ...topic.clusters,
+                    ...topic.brokers,
+                ].join(' ').toLowerCase();
+
+                return searchableText.includes(normalizedSearch);
+            }),
+        [normalizedSearch, selectedFilters, topics],
+    );
     const totalPages = Math.max(1, Math.ceil(filteredTopics.length / TOPIC_PAGE_SIZE));
     const pagedTopics = filteredTopics.slice(
         (currentPage - 1) * TOPIC_PAGE_SIZE,
         currentPage * TOPIC_PAGE_SIZE,
     );
+    const selectedTopic = filteredTopics.find((topic) => topic.name === selectedTopicName) ?? filteredTopics[0] ?? null;
+    const topicTypeCounts = useMemo(
+        () =>
+            TOPIC_FILTER_ORDER.reduce((acc, key) => {
+                acc[key] = topics.filter((topic) => topic.type === key).length;
+                return acc;
+            }, {} as Record<TopicCategory, number>),
+        [topics],
+    );
+    const totalQueueCount = topics.reduce((sum, topic) => sum + topic.readQueueCount + topic.writeQueueCount, 0);
+    const systemTopicCount = topics.filter((topic) => topic.systemTopic || topic.type === 'SYSTEM').length;
+    const retryAndDlqCount = topics.filter((topic) => topic.type === 'RETRY' || topic.type === 'DLQ').length;
+    const targetBrokerCount = data?.targets.reduce((sum, target) => sum + target.brokerNames.length, 0) ?? 0;
+    const activeFilterCount = TOPIC_FILTER_ORDER.filter((key) => selectedFilters[key]).length;
 
     useEffect(() => {
         setCurrentPage(1);
@@ -2424,6 +3067,19 @@ export const TopicView = () => {
             setCurrentPage(totalPages);
         }
     }, [currentPage, totalPages]);
+
+    useEffect(() => {
+        if (filteredTopics.length === 0) {
+            if (selectedTopicName !== null) {
+                setSelectedTopicName(null);
+            }
+            return;
+        }
+
+        if (!selectedTopicName || !filteredTopics.some((topic) => topic.name === selectedTopicName)) {
+            setSelectedTopicName(filteredTopics[0].name);
+        }
+    }, [filteredTopics, selectedTopicName]);
 
     const toggleFilter = (key: TopicCategory) => {
         setSelectedFilters((prev) => ({...prev, [key]: !prev[key]}));
@@ -2474,13 +3130,6 @@ export const TopicView = () => {
         }
     };
 
-    const getTopicColor = (type: string) => {
-        if (type === 'SYSTEM') return 'text-red-600 bg-red-50 dark:bg-red-900/30 dark:text-red-400 border-red-100 dark:border-red-800 ring-red-500/20';
-        if (type === 'RETRY') return 'text-orange-600 bg-orange-50 dark:bg-orange-900/30 dark:text-orange-400 border-orange-100 dark:border-orange-800 ring-orange-500/20';
-        if (type === 'DLQ') return 'text-purple-600 bg-purple-50 dark:bg-purple-900/30 dark:text-purple-400 border-purple-100 dark:border-purple-800 ring-purple-500/20';
-        return 'text-blue-600 bg-blue-50 dark:bg-blue-900/30 dark:text-blue-400 border-blue-100 dark:border-blue-800 ring-blue-500/20';
-    };
-
     const getFilterIcon = (key: string) => {
         switch (key) {
             case 'NORMAL':
@@ -2504,8 +3153,13 @@ export const TopicView = () => {
         }
     };
 
+    const selectedClusterLabel = selectedTopic ? joinOrFallback(selectedTopic.clusters, 'No cluster route') : 'No topic selected';
+    const selectedBrokerLabel = selectedTopic ? joinOrFallback(selectedTopic.brokers, 'No broker route') : 'No broker route';
+    const visibleStart = filteredTopics.length === 0 ? 0 : (currentPage - 1) * TOPIC_PAGE_SIZE + 1;
+    const visibleEnd = Math.min(currentPage * TOPIC_PAGE_SIZE, filteredTopics.length);
+
     return (
-        <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
+        <div className="topic-page animate-in fade-in slide-in-from-bottom-4 duration-500">
             <TopicStatusModal
                 isOpen={statusModal.isOpen}
                 onClose={() => setStatusModal({isOpen: false, topic: null})}
@@ -2561,29 +3215,57 @@ export const TopicView = () => {
                 onDeleted={refresh}
             />
 
-            {/* Filter Toolbar */}
-            <div
-                className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm space-y-4 sticky top-0 z-10 backdrop-blur-xl bg-white/90 dark:bg-gray-900/90 transition-colors">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="relative flex-1 max-w-md">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500"/>
+            <section className="topic-summary-grid" aria-label="Topic summary">
+                <TopicSummaryCard
+                    label="Topics"
+                    value={formatCompactNumber(topics.length)}
+                    hint={`${topicTypeCounts.NORMAL ?? 0} normal / ${retryAndDlqCount} retry or DLQ`}
+                    tone="info"
+                    icon={<Database className="topic-icon"/>}
+                />
+                <TopicSummaryCard
+                    label="Queues"
+                    value={formatCompactNumber(totalQueueCount)}
+                    hint="read and write allocation"
+                    tone="blue"
+                    icon={<Layers className="topic-icon"/>}
+                />
+                <TopicSummaryCard
+                    label="System Topics"
+                    value={formatCompactNumber(systemTopicCount)}
+                    hint="guarded lifecycle actions"
+                    tone="danger"
+                    icon={<Shield className="topic-icon"/>}
+                />
+                <TopicSummaryCard
+                    label="Targets"
+                    value={formatCompactNumber(data?.targets.length ?? 0)}
+                    hint={`${targetBrokerCount} brokers available`}
+                    tone="success"
+                    icon={<Server className="topic-icon"/>}
+                />
+            </section>
+
+            <section className="topic-command-panel" aria-label="Topic filters and actions">
+                <div className="topic-command-main">
+                    <label className="topic-search-field">
+                        <Search className="topic-icon" aria-hidden="true"/>
+                        <span className="sr-only">Filter topics</span>
                         <input
                             type="text"
-                            placeholder="Filter topics..."
+                            placeholder="Search topic, cluster, broker, or message type"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-10 pr-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-inner dark:text-white dark:placeholder:text-gray-500"
                         />
-                    </div>
+                    </label>
 
-                    <div className="flex items-center space-x-3">
+                    <div className="topic-command-actions">
                         <Button
-                            variant="primary"
+                            variant="accent"
                             icon={Plus}
                             onClick={() => setEditorModal({isOpen: true, mode: 'create', seed: null})}
-                            className="dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
                         >
-                            Add/Update
+                            Add / Update
                         </Button>
                         <Button
                             variant="secondary"
@@ -2591,132 +3273,233 @@ export const TopicView = () => {
                             iconClassName={isRefreshPending ? 'rotate-180' : 'rotate-0'}
                             onClick={() => void refresh()}
                             disabled={isRefreshPending || isLoading}
-                            className="dark:bg-gray-900 dark:text-white dark:border dark:border-gray-700 dark:hover:bg-gray-800"
                         >
                             {isRefreshing ? 'Refreshing...' : 'Refresh'}
                         </Button>
                     </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-50 dark:border-gray-800">
-                    <div className="flex items-center text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase mr-2">
-                        <Filter className="w-3 h-3 mr-1"/>
-                        Types:
+                <div className="topic-filter-row">
+                    <div className="topic-filter-label">
+                        <Filter className="topic-icon" aria-hidden="true"/>
+                        Types
                     </div>
                     {TOPIC_FILTER_ORDER.map((key) => {
                         const checked = selectedFilters[key];
                         const Icon = getFilterIcon(key);
+
                         return (
                             <button
+                                type="button"
                                 key={key}
                                 onClick={() => toggleFilter(key)}
-                                className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 border ${
-                                    checked
-                                        ? 'bg-gray-900 text-white border-gray-900 dark:bg-gray-700 dark:text-white dark:border-gray-600 shadow-md transform scale-105'
-                                        : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-700'
-                                }`}
+                                className={`topic-filter-chip is-${getTopicTone(key)} ${checked ? 'is-active' : ''}`}
                             >
-                                <Icon className={`w-3 h-3 mr-1.5 ${checked ? 'text-gray-300 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'}`}/>
-                                {key}
+                                <Icon className="topic-icon" aria-hidden="true"/>
+                                <span>{key}</span>
+                                <strong>{topicTypeCounts[key] ?? 0}</strong>
                             </button>
                         );
                     })}
+                    <span className="topic-filter-count">
+                        {activeFilterCount}/{TOPIC_FILTER_ORDER.length} active
+                    </span>
                 </div>
-            </div>
+            </section>
 
-            {/* Topic Grid */}
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-                <AnimatePresence mode="popLayout">
-                    {pagedTopics.map((topic, index) => (
-                        <motion.div
-                            layout
-                            key={topic.name}
-                            initial={{opacity: 0, y: 20, scale: 0.95}}
-                            animate={{opacity: 1, y: 0, scale: 1}}
-                            exit={{opacity: 0, scale: 0.9, transition: {duration: 0.2}}}
-                            transition={{delay: index * 0.05, type: "spring", stiffness: 300, damping: 25}}
-                            whileHover={{
-                                y: -4,
-                                transition: {duration: 0.2}
-                            }}
-                            className={`bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col group relative ring-1 ring-transparent hover:ring-2 transition-all ${
-                                topic.type === 'SYSTEM' ? 'hover:ring-red-100 dark:hover:ring-red-900/50' :
-                                    topic.type === 'DLQ' ? 'hover:ring-purple-100 dark:hover:ring-purple-900/50' : 'hover:ring-blue-100 dark:hover:ring-blue-900/50'
-                            }`}
-                        >
-                            {/* Decorative background gradient */}
-                            <div
-                                className={`absolute top-0 right-0 w-32 h-32 bg-gradient-to-br opacity-5 dark:opacity-10 rounded-bl-full pointer-events-none transition-opacity duration-300 group-hover:opacity-10 dark:group-hover:opacity-20 ${
-                                    topic.type === 'SYSTEM' ? 'from-red-500 to-transparent' :
-                                        topic.type === 'DLQ' ? 'from-purple-500 to-transparent' : 'from-blue-500 to-transparent'
-                                }`}/>
+            <section className="topic-workspace">
+                <div className="topic-catalog-panel">
+                    <div className="topic-panel-header">
+                        <div>
+                            <h2>Topic Catalog</h2>
+                            <p>
+                                {isLoading
+                                    ? 'Loading topics from the current NameServer...'
+                                    : `Showing ${visibleStart}-${visibleEnd} of ${filteredTopics.length} matched topics.`}
+                            </p>
+                        </div>
+                        <div className="topic-panel-meta">
+                            <span>{formatCompactNumber(topics.length)} total</span>
+                            <span>{formatCompactNumber(filteredTopics.length)} matched</span>
+                        </div>
+                    </div>
 
-                            <div className="p-5 border-b border-gray-50 dark:border-gray-800 flex items-start justify-between relative z-0">
-                                <div className="flex items-center space-x-4">
-                                    <div className={`p-2.5 rounded-xl shadow-sm ${getTopicColor(topic.type)}`}>
-                                        <Database className="w-5 h-5"/>
-                                    </div>
-                                    <div>
-                                        <h3 className={`text-base font-bold tracking-tight ${topic.type === 'SYSTEM' ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
-                                            {topic.name}
-                                        </h3>
-                                        <div className="flex items-center space-x-2 mt-1.5">
-                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${
-                            topic.type === 'SYSTEM' ? 'bg-red-50 text-red-600 border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-900/50' :
-                                topic.type === 'DLQ' ? 'bg-purple-50 text-purple-600 border-purple-100 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-900/50' :
-                                    'bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700'
-                        }`}>
-                          {topic.type}
-                        </span>
+                    <div className="topic-table-head" aria-hidden="true">
+                        <span>Topic</span>
+                        <span>Queues</span>
+                        <span>Perm</span>
+                        <span>Quick Actions</span>
+                    </div>
+
+                    <div className="topic-row-list">
+                        <AnimatePresence mode="popLayout">
+                            {pagedTopics.map((topic, index) => {
+                                const isSelected = selectedTopic?.name === topic.name;
+
+                                return (
+                                    <motion.article
+                                        layout
+                                        key={topic.name}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-pressed={isSelected}
+                                        aria-label={`Select topic ${topic.name}`}
+                                        initial={{opacity: 0, y: 14}}
+                                        animate={{opacity: 1, y: 0}}
+                                        exit={{opacity: 0, scale: 0.98}}
+                                        transition={{delay: index * 0.025}}
+                                        onClick={() => setSelectedTopicName(topic.name)}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter' || event.key === ' ') {
+                                                event.preventDefault();
+                                                setSelectedTopicName(topic.name);
+                                            }
+                                        }}
+                                        className={`topic-row is-${getTopicTone(topic.type)} ${isSelected ? 'is-selected' : ''}`}
+                                    >
+                                        <div className="topic-row-main">
+                                            <div className="topic-row-icon">
+                                                <Database className="topic-icon" aria-hidden="true"/>
+                                            </div>
+                                            <div className="topic-row-copy">
+                                                <div className="topic-row-title">
+                                                    <strong>{topic.name}</strong>
+                                                    <TopicTypeBadge type={topic.type}/>
+                                                </div>
+                                                <span>{joinOrFallback(topic.clusters, 'No cluster')} · {joinOrFallback(topic.brokers, 'No broker')}</span>
+                                            </div>
                                         </div>
-                                    </div>
-                                </div>
+                                        <div className="topic-row-metric">
+                                            <strong>{topic.readQueueCount}/{topic.writeQueueCount}</strong>
+                                            <span>R/W queues</span>
+                                        </div>
+                                        <div className="topic-row-metric">
+                                            <strong>{formatTopicPermission(topic.perm)}</strong>
+                                            <span>{topic.order ? 'ordered' : 'standard'}</span>
+                                        </div>
+                                        <div className="topic-row-actions">
+                                            {TOPIC_ROW_ACTIONS.map((operation) => {
+                                                const Icon = getActionIcon(operation);
+                                                return (
+                                                    <TopicActionButton
+                                                        key={operation}
+                                                        operation={operation === 'Topic Config' ? 'Config' : operation}
+                                                        icon={Icon}
+                                                        compact
+                                                        onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            handleOperation(operation, topic);
+                                                        }}
+                                                    />
+                                                );
+                                            })}
+                                        </div>
+                                    </motion.article>
+                                );
+                            })}
+                        </AnimatePresence>
+                    </div>
 
-                                {/* Quick Action Menu Trigger (Visual only for now) */}
-                                <button className="text-gray-300 hover:text-gray-600 dark:text-gray-600 dark:hover:text-gray-400 transition-colors p-1">
-                                    <MoreHorizontal className="w-5 h-5"/>
-                                </button>
+                    {filteredTopics.length === 0 && (
+                        <div className="topic-empty-state">
+                            <Database className="topic-icon" aria-hidden="true"/>
+                            <strong>{isLoading ? 'Loading topics' : 'No topics matched'}</strong>
+                            <span>
+                                {isLoading
+                                    ? 'The current NameServer topic catalog is being loaded.'
+                                    : 'Adjust the search text or re-enable topic type filters.'}
+                            </span>
+                        </div>
+                    )}
+                </div>
+
+                <aside className="topic-inspector-panel" aria-label="Selected topic details">
+                    {selectedTopic ? (
+                        <>
+                            <div className="topic-inspector-header">
+                                <span>Selected Topic</span>
+                                <h2>{selectedTopic.name}</h2>
+                                <div className="topic-inspector-tags">
+                                    <TopicTypeBadge type={selectedTopic.type}/>
+                                    <span>{selectedTopic.messageType}</span>
+                                </div>
                             </div>
 
-                            <div className="p-4 flex-1 bg-gray-50/30 dark:bg-gray-950/30">
-                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                                    {topic.operations.map((op) => {
-                                        const Icon = getActionIcon(op);
-                                        const isDanger = ['Reset Consumer Offset', 'Skip Message Accumulate', 'Delete'].includes(op);
+                            <div className="topic-inspector-grid">
+                                <div>
+                                    <span>Read Queues</span>
+                                    <strong>{selectedTopic.readQueueCount}</strong>
+                                </div>
+                                <div>
+                                    <span>Write Queues</span>
+                                    <strong>{selectedTopic.writeQueueCount}</strong>
+                                </div>
+                                <div>
+                                    <span>Permission</span>
+                                    <strong>{formatTopicPermission(selectedTopic.perm)}</strong>
+                                </div>
+                                <div>
+                                    <span>Ordering</span>
+                                    <strong>{selectedTopic.order ? 'On' : 'Off'}</strong>
+                                </div>
+                            </div>
 
+                            <div className="topic-inspector-section">
+                                <div>
+                                    <span>Cluster Route</span>
+                                    <strong>{selectedClusterLabel}</strong>
+                                </div>
+                                <div>
+                                    <span>Broker Route</span>
+                                    <strong>{selectedBrokerLabel}</strong>
+                                </div>
+                            </div>
+
+                            <div className="topic-inspector-actions">
+                                <div className="topic-section-title">
+                                    <Activity className="topic-icon" aria-hidden="true"/>
+                                    Actions
+                                </div>
+                                <div className="topic-action-grid">
+                                    {selectedTopic.operations.map((operation) => {
+                                        const Icon = operation === 'Topic Config' ? Settings : getActionIcon(operation);
                                         return (
-                                            <button
-                                                key={op}
-                                                onClick={() => handleOperation(op, topic)}
-                                                className={`flex flex-col items-center justify-center p-2.5 rounded-lg text-xs font-medium transition-all duration-200 border group/btn relative overflow-hidden ${
-                                                    isDanger
-                                                        ? 'bg-white border-red-50 text-red-600 hover:bg-red-50 hover:border-red-200 hover:shadow-sm dark:bg-gray-900 dark:border-red-900/30 dark:text-red-400 dark:hover:bg-red-900/20 dark:hover:border-red-800'
-                                                        : 'bg-white border-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-100 hover:shadow-sm dark:bg-gray-900 dark:border-gray-800 dark:text-gray-400 dark:hover:bg-blue-900/20 dark:hover:text-blue-400 dark:hover:border-blue-800'
-                                                }`}
-                                            >
-                                                <Icon
-                                                    className={`w-4 h-4 mb-1.5 transition-transform duration-200 group-hover/btn:scale-110 ${isDanger ? 'opacity-90' : 'opacity-70'}`}/>
-                                                <span className="text-center text-[10px] leading-tight truncate w-full">{op}</span>
-                                            </button>
+                                            <TopicActionButton
+                                                key={operation}
+                                                operation={operation === 'Topic Config' ? 'Config' : operation}
+                                                icon={Icon}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    handleOperation(operation, selectedTopic);
+                                                }}
+                                            />
                                         );
                                     })}
+                                    <TopicActionButton
+                                        operation="More"
+                                        icon={MoreHorizontal}
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            toast(`More actions for ${selectedTopic.name}`);
+                                        }}
+                                    />
                                 </div>
                             </div>
-                        </motion.div>
-                    ))}
-                </AnimatePresence>
-            </div>
+                        </>
+                    ) : (
+                        <div className="topic-empty-state is-compact">
+                            <Database className="topic-icon" aria-hidden="true"/>
+                            <strong>No topic selected</strong>
+                            <span>Select a topic from the catalog to inspect route, queue, and lifecycle actions.</span>
+                        </div>
+                    )}
+                </aside>
+            </section>
 
-            {filteredTopics.length === 0 && (
-                <div className="rounded-2xl border border-dashed border-gray-200 bg-white/70 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/70 dark:text-gray-400">
-                    {isLoading
-                        ? 'Loading topics from the current NameServer...'
-                        : 'No topics matched the current search keyword or type filters.'}
-                </div>
-            )}
-
-            {/* Pagination */}
-            <div className="flex items-center justify-center pt-6">
+            <div className="topic-footer">
+                <span>
+                    Page {currentPage} of {totalPages} · {filteredTopics.length} matched
+                </span>
                 <Pagination
                     currentPage={currentPage}
                     totalPages={totalPages}

@@ -1,19 +1,47 @@
-import React, { useMemo } from 'react';
-import { Card } from '../../../components/ui/LegacyCard';
-import { Activity, Calendar, RefreshCw } from 'lucide-react';
+import React, { useMemo, type ReactNode } from 'react';
+import { Activity, Calendar, Database, RefreshCw, Server, ShieldCheck } from 'lucide-react';
 import { Button } from '../../../components/ui/LegacyButton';
 import { useClusterCatalog } from '../../cluster/hooks/useClusterCatalog';
 
 const formatNumber = (value: number) => value.toLocaleString();
+const formatTps = (value: number) => value.toFixed(2);
+
+const DashboardMetricCard = ({
+  label,
+  value,
+  hint,
+  tone,
+  icon,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+  tone: 'success' | 'info' | 'violet' | 'warning';
+  icon: ReactNode;
+}) => (
+  <article className={`dashboard-metric-card is-${tone}`}>
+    <div className="dashboard-metric-copy">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{hint}</small>
+    </div>
+    <div className="dashboard-metric-icon" aria-hidden="true">
+      {icon}
+    </div>
+  </article>
+);
 
 export const BrokerOverview = () => {
   const { data, isLoading, isRefreshing, loadError, refresh } = useClusterCatalog();
 
+  const brokers = data?.items ?? [];
+  const summary = data?.summary;
+
   const brokerRows = useMemo(() => {
-    return [...(data?.items ?? [])]
+    return [...brokers]
       .sort((left, right) => right.todayReceivedTotal - left.todayReceivedTotal)
       .slice(0, 8);
-  }, [data?.items]);
+  }, [brokers]);
 
   const todayDate = useMemo(
     () =>
@@ -26,9 +54,27 @@ export const BrokerOverview = () => {
   );
 
   const totalThroughput = useMemo(
-    () => (data?.items ?? []).reduce((sum, item) => sum + item.produceTps + item.consumeTps, 0),
-    [data?.items]
+    () => brokers.reduce((sum, item) => sum + item.produceTps + item.consumeTps, 0),
+    [brokers]
   );
+
+  const totals = useMemo(
+    () =>
+      brokers.reduce(
+        (acc, item) => ({
+          received: acc.received + item.todayReceivedTotal,
+          produced: acc.produced + item.todayProduce,
+        }),
+        { received: 0, produced: 0 }
+      ),
+    [brokers]
+  );
+
+  const activeBrokerCount = summary?.activeBrokers ?? brokers.filter((item) => item.isActive).length;
+  const totalBrokerCount = summary?.totalBrokers ?? brokers.length;
+  const brokerHealthHint = `${summary?.inactiveBrokers ?? Math.max(totalBrokerCount - activeBrokerCount, 0)} inactive`;
+  const topBroker = brokerRows[0];
+  const transportState = `${data?.useVipChannel ? 'VIP on' : 'VIP off'} / ${data?.useTls ? 'TLS on' : 'TLS off'}`;
 
   const handleRefresh = async () => {
     try {
@@ -39,86 +85,137 @@ export const BrokerOverview = () => {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2">
-        <Card
-          title="Broker Overview"
-          className="h-full"
-          headerAction={
+    <section className="dashboard-overview" aria-label="Broker overview">
+      <div className="dashboard-kpi-grid">
+        <DashboardMetricCard
+          label="Broker health"
+          value={`${activeBrokerCount} active`}
+          hint={`${totalBrokerCount} total brokers, ${brokerHealthHint}`}
+          tone="success"
+          icon={<Server className="dashboard-icon" />}
+        />
+        <DashboardMetricCard
+          label="Total throughput"
+          value={formatTps(totalThroughput)}
+          hint="Messages / sec"
+          tone="info"
+          icon={<Activity className="dashboard-icon" />}
+        />
+        <DashboardMetricCard
+          label="Today's traffic"
+          value={formatNumber(totals.received)}
+          hint={`${formatNumber(totals.produced)} produced`}
+          tone="violet"
+          icon={<Database className="dashboard-icon" />}
+        />
+        <DashboardMetricCard
+          label="Security posture"
+          value={data?.useVipChannel ? 'VIP on' : 'VIP off'}
+          hint={transportState}
+          tone="warning"
+          icon={<ShieldCheck className="dashboard-icon" />}
+        />
+      </div>
+
+      <div className="dashboard-broker-layout">
+        <div className="dashboard-panel dashboard-broker-panel">
+          <div className="dashboard-panel-header">
+            <div>
+              <h2>Broker Overview</h2>
+              <p>Sorted by received messages with address and production deltas.</p>
+            </div>
             <Button variant="ghost" onClick={() => void handleRefresh()} disabled={isRefreshing}>
-              <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`ops-button-icon ${isRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
-          }
-        >
-          {loadError ? (
-            <div className="rounded-xl border border-red-200 bg-red-50/80 dark:border-red-900/40 dark:bg-red-950/20 px-4 py-3 text-sm text-red-700 dark:text-red-300">
-              {loadError}
-            </div>
-          ) : null}
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-gray-500 uppercase bg-gray-50/50 border-b border-gray-100 dark:border-gray-800">
+          </div>
+
+          {loadError ? <div className="dashboard-alert is-error">{loadError}</div> : null}
+
+          <div className="dashboard-table-scroll">
+            <table className="dashboard-table">
+              <thead>
                 <tr>
-                  <th className="px-4 py-3 font-medium bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-200">Broker Name</th>
-                  <th className="px-4 py-3 font-medium bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-200">Address</th>
-                  <th className="px-4 py-3 font-medium text-right bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-200">Today Received</th>
-                  <th className="px-4 py-3 font-medium text-right bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-200">Today Produced</th>
-                  <th className="px-4 py-3 font-medium text-right bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-200">Yesterday</th>
+                  <th>Broker Name</th>
+                  <th>Address</th>
+                  <th className="is-number">Today Received</th>
+                  <th className="is-number">Produced</th>
+                  <th className="is-number">Yesterday</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              <tbody>
                 {brokerRows.length ? (
                   brokerRows.map((broker) => (
-                    <tr key={`${broker.clusterName}-${broker.brokerName}-${broker.brokerId}`} className="hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                      <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">
-                        {broker.brokerName}
+                    <tr
+                      key={`${broker.clusterName}-${broker.brokerName}-${broker.brokerId}`}
+                      className={broker.isActive ? 'is-active' : undefined}
+                    >
+                      <td>
+                        <div className="dashboard-broker-name">
+                          <span className={broker.isActive ? 'is-online' : 'is-offline'} />
+                          <strong>{broker.brokerName}</strong>
+                        </div>
                       </td>
-                      <td className="px-4 py-3 font-mono text-gray-600 dark:text-gray-400">{broker.address}</td>
-                      <td className="px-4 py-3 text-right font-medium text-blue-600 dark:text-blue-400">
-                        {formatNumber(broker.todayReceivedTotal)}
-                      </td>
-                      <td className="px-4 py-3 text-right dark:text-gray-300">
-                        {formatNumber(broker.todayProduce)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-gray-500 dark:text-gray-500">
-                        {formatNumber(broker.yesterdayProduce)}
-                      </td>
+                      <td className="dashboard-mono">{broker.address}</td>
+                      <td className="is-number">{formatNumber(broker.todayReceivedTotal)}</td>
+                      <td className="is-number">{formatNumber(broker.todayProduce)}</td>
+                      <td className="is-number">{formatNumber(broker.yesterdayProduce)}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={5} className="px-4 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
-                      {isLoading ? 'Loading broker overview...' : 'No broker data available'}
+                    <td colSpan={5}>
+                      <div className="dashboard-empty">
+                        {isLoading ? 'Loading broker overview...' : 'No broker data available'}
+                      </div>
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        </Card>
-      </div>
+        </div>
 
-      <div className="space-y-6">
-         <div className="bg-white dark:bg-gray-900 p-6 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm flex items-center justify-between">
+        <aside className="dashboard-panel dashboard-runtime-panel" aria-label="Runtime snapshot">
+          <div className="dashboard-panel-header">
             <div>
-              <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">Current Date</h3>
-              <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">{todayDate}</p>
+              <h2>Runtime Snapshot</h2>
+              <p>Broker TPS and local clock stay visible beside the table.</p>
             </div>
-            <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
-              <Calendar className="w-5 h-5" />
+          </div>
+
+          <div className="dashboard-runtime-grid">
+            <div className="dashboard-runtime-card">
+              <Calendar className="dashboard-icon" />
+              <span>Current Date</span>
+              <strong>{todayDate}</strong>
             </div>
-         </div>
-         
-         <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 border border-gray-100 dark:border-gray-800 shadow-sm">
-            <div className="flex items-center space-x-2 mb-4 text-gray-500 dark:text-gray-400">
-                <Activity className="w-4 h-4 text-blue-500" />
-                <span className="text-sm font-medium">Total Throughput</span>
+            <div className="dashboard-runtime-card">
+              <Activity className="dashboard-icon" />
+              <span>Total Throughput</span>
+              <strong>{formatTps(totalThroughput)} msg/s</strong>
             </div>
-            <div className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">{totalThroughput.toFixed(2)}</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">Messages / sec</div>
-         </div>
+          </div>
+
+          <div className="dashboard-tps-highlight">
+            <div>
+              <span>Top broker</span>
+              <strong>{topBroker ? `${topBroker.brokerName}-${topBroker.brokerId}` : 'No broker'}</strong>
+              <small>{topBroker?.address ?? data?.currentNamesrv ?? 'No endpoint selected'}</small>
+            </div>
+            <div className="dashboard-tps-mini">
+              <label>Producer TPS</label>
+              <div className="dashboard-mini-track is-producer">
+                <span style={{ width: topBroker ? `${Math.min(topBroker.produceTps * 10, 100)}%` : '0%' }} />
+              </div>
+              <label>Consumer TPS</label>
+              <div className="dashboard-mini-track is-consumer">
+                <span style={{ width: topBroker ? `${Math.min(topBroker.consumeTps * 10, 100)}%` : '0%' }} />
+              </div>
+            </div>
+          </div>
+        </aside>
       </div>
-    </div>
+    </section>
   );
 };

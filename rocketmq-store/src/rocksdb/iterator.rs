@@ -36,3 +36,22 @@ impl RocksDbScanOptions {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RocksDbRangeScanOptions {
+    pub cf: String,
+    pub start: Vec<u8>,
+    pub end: Vec<u8>,
+    pub limit: usize,
+}
+
+impl RocksDbRangeScanOptions {
+    pub fn new(cf: impl Into<String>, start: impl Into<Vec<u8>>, end: impl Into<Vec<u8>>, limit: usize) -> Self {
+        Self {
+            cf: cf.into(),
+            start: start.into(),
+            end: end.into(),
+            limit,
+        }
+    }
+}

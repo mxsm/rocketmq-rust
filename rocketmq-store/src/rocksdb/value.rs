@@ -24,6 +24,38 @@ pub struct ConsumeQueueValue {
     pub msg_store_time: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsumeQueueOffsetValue {
+    pub commit_log_offset: i64,
+    pub consume_queue_offset: i64,
+}
+
+impl ConsumeQueueOffsetValue {
+    pub const ENCODED_LEN: usize = 16;
+
+    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+        dst.reserve(Self::ENCODED_LEN);
+        dst.extend_from_slice(&self.commit_log_offset.to_be_bytes());
+        dst.extend_from_slice(&self.consume_queue_offset.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+        if src.len() != Self::ENCODED_LEN {
+            return Err(codec_error(format!(
+                "consume queue offset value must be {} bytes, got {}",
+                Self::ENCODED_LEN,
+                src.len()
+            )));
+        }
+
+        Ok(Self {
+            commit_log_offset: read_i64(src, 0)?,
+            consume_queue_offset: read_i64(src, 8)?,
+        })
+    }
+}
+
 impl ConsumeQueueValue {
     pub const ENCODED_LEN: usize = 28;
 
