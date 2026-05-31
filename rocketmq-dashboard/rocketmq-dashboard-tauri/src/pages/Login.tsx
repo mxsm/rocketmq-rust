@@ -12,15 +12,36 @@ export const Login = () => {
                     initial={{ opacity: 0, x: -50 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.8, ease: 'easeOut' }}
-                    className="flex-1 flex flex-col items-center md:items-start text-center md:text-left"
+                    className="auth-hero"
                 >
-                    <div className="relative w-full max-w-[500px] aspect-square flex items-center justify-center">
-                        <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,_rgba(56,189,248,0.16),_transparent_55%)] blur-[90px]" />
-                        <div className="absolute inset-[12%] rounded-full border border-sky-300/10 bg-[radial-gradient(circle_at_top,_rgba(125,211,252,0.14),_transparent_45%)]" />
+                    <div className="auth-hero-copy">
+                        <span className="auth-kicker">RocketMQ Rust Operations</span>
+                        <h1>Message infrastructure control without the clutter.</h1>
+                        <p>
+                            Monitor brokers, inspect topics and groups, trace messages, and manage access from one dense desktop console.
+                        </p>
+                    </div>
+
+                    <div className="auth-signal-grid">
+                        <div>
+                            <span>Broker health</span>
+                            <strong>Live</strong>
+                        </div>
+                        <div>
+                            <span>Trace query</span>
+                            <strong>Ready</strong>
+                        </div>
+                        <div>
+                            <span>ACL posture</span>
+                            <strong>Guarded</strong>
+                        </div>
+                    </div>
+
+                    <div className="auth-product-frame">
                         <img
                             src={rocketImage}
                             alt="RocketMQ Rust"
-                            className="relative z-10 w-full h-full object-contain drop-shadow-2xl"
+                            className="auth-product-image"
                         />
                     </div>
                 </motion.div>

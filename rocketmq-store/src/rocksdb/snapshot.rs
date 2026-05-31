@@ -12,7 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RocksDbSnapshotToken {
-    pub created_at_millis: u64,
+use bytes::Bytes;
+use rocketmq_error::RocketMQError;
+
+use crate::rocksdb::error::column_family_missing_error;
+use crate::rocksdb::error::RocksDbErrorKind;
+use crate::rocksdb::error::RocksDbResultExt;
+
+pub struct RocksDbSnapshot<'a> {
+    db: &'a ::rocksdb::DB,
+    snapshot: ::rocksdb::Snapshot<'a>,
+}
+
+impl<'a> RocksDbSnapshot<'a> {
+    pub(crate) fn new(db: &'a ::rocksdb::DB) -> Self {
+        Self {
+            db,
+            snapshot: db.snapshot(),
+        }
+    }
+
+    pub fn get_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Bytes>, RocketMQError> {
+        let handle = self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))?;
+        self.snapshot
+            .get_cf(&handle, key)
+            .map(|value| value.map(Bytes::from))
+            .map_rocksdb(RocksDbErrorKind::Snapshot)
+    }
 }

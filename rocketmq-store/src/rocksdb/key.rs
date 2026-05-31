@@ -46,3 +46,51 @@ impl ConsumeQueueKey {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumeQueueOffsetBoundary {
+    Max,
+    Min,
+}
+
+impl ConsumeQueueOffsetBoundary {
+    fn marker(self) -> &'static [u8; 3] {
+        match self {
+            Self::Max => b"max",
+            Self::Min => b"min",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumeQueueOffsetKey {
+    pub topic: String,
+    pub queue_id: i32,
+    pub boundary: ConsumeQueueOffsetBoundary,
+}
+
+impl ConsumeQueueOffsetKey {
+    const CTRL_1: u8 = 1;
+
+    pub fn encoded_len(&self) -> usize {
+        4 + 1 + self.topic.len() + 1 + 3 + 1 + 4
+    }
+
+    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+        let topic_len = i32::try_from(self.topic.len()).map_err(|_| RocketMQError::ConfigInvalidValue {
+            key: "rocksdb.consume_queue_offset.topic",
+            value: self.topic.len().to_string(),
+            reason: "topic length exceeds Java i32 key layout".to_string(),
+        })?;
+
+        dst.reserve(self.encoded_len());
+        dst.extend_from_slice(&topic_len.to_be_bytes());
+        dst.push(Self::CTRL_1);
+        dst.extend_from_slice(self.topic.as_bytes());
+        dst.push(Self::CTRL_1);
+        dst.extend_from_slice(self.boundary.marker());
+        dst.push(Self::CTRL_1);
+        dst.extend_from_slice(&self.queue_id.to_be_bytes());
+        Ok(())
+    }
+}

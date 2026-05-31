@@ -27,27 +27,28 @@ export const LoginForm: React.FC = () => {
                 y: { duration: 0.8, delay: 0.2, ease: 'easeOut' },
                 x: { duration: 0.65 },
             }}
-            className="w-full max-w-md"
+            className="auth-form-wrap"
         >
-            <div className="bg-gray-900/80 backdrop-blur-2xl border border-gray-800 p-8 md:p-10 rounded-3xl shadow-2xl">
-                <div className="mb-10">
-                    <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">
+            <div className="auth-card">
+                <div className="auth-card-header">
+                    <span className="auth-form-kicker">Admin access</span>
+                    <h1>
                         Sign in to your account
                     </h1>
-                    <p className="text-gray-400 text-sm">
+                    <p>
                         Use the local administrator credentials to access the dashboard.
                     </p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <div className="space-y-4">
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider ml-1">
+                <form onSubmit={handleSubmit} className="auth-form">
+                    <div className="auth-fields">
+                        <div className="auth-field">
+                            <label>
                                 Username
                             </label>
                             <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                                    <User className="h-4 w-4 text-gray-500" />
+                                <div className="auth-field-icon">
+                                    <User className="h-4 w-4" />
                                 </div>
                                 <input
                                     type="text"
@@ -58,7 +59,7 @@ export const LoginForm: React.FC = () => {
                                             clearError();
                                         }
                                     }}
-                                    className="block w-full pl-10 pr-4 py-3 bg-gray-950/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm font-medium hover:border-gray-600"
+                                    className="auth-input"
                                     placeholder="Enter your username"
                                     required
                                     disabled={isLoading}
@@ -66,13 +67,13 @@ export const LoginForm: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider ml-1">
+                        <div className="auth-field">
+                            <label>
                                 Password
                             </label>
                             <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                                    <Lock className="h-4 w-4 text-gray-500" />
+                                <div className="auth-field-icon">
+                                    <Lock className="h-4 w-4" />
                                 </div>
                                 <input
                                     type="password"
@@ -83,7 +84,7 @@ export const LoginForm: React.FC = () => {
                                             clearError();
                                         }
                                     }}
-                                    className="block w-full pl-10 pr-4 py-3 bg-gray-950/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm font-medium hover:border-gray-600"
+                                    className="auth-input"
                                     placeholder="Enter your password"
                                     required
                                     disabled={isLoading}
@@ -97,7 +98,7 @@ export const LoginForm: React.FC = () => {
                     <button
                         type="submit"
                         disabled={isLoading}
-                        className="w-full flex items-center justify-center py-3.5 px-4 bg-white text-black hover:bg-gray-100 rounded-xl font-bold shadow-lg transform hover:-translate-y-0.5 active:translate-y-0 transition-all disabled:opacity-70 disabled:cursor-not-allowed disabled:transform-none"
+                        className="auth-submit"
                     >
                         {isLoading ? (
                             <Loader2 className="w-5 h-5 animate-spin" />
@@ -110,8 +111,8 @@ export const LoginForm: React.FC = () => {
                     </button>
                 </form>
 
-                <div className="mt-8 pt-6 border-t border-gray-800">
-                    <p className="text-sm text-gray-500">
+                <div className="auth-footnote">
+                    <p>
                         First-time login requires a password change before the dashboard becomes available.
                     </p>
                 </div>

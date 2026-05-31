@@ -27,11 +27,11 @@ import {
 } from '../../components/ui/card';
 
 const glassCardClass =
-    'border-white/60 bg-white/75 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/8 dark:bg-white/[0.04] dark:shadow-[0_24px_64px_rgba(0,0,0,0.32)]';
+    'ops-card account-card';
 const secondaryActionButtonClass =
-    'h-11 rounded-2xl border-black/15 bg-white/70 px-4 text-gray-700 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] hover:!bg-white hover:!text-gray-900 dark:border-white/12 dark:bg-white/[0.04] dark:text-gray-100 dark:hover:!bg-white/[0.15] dark:hover:!text-white';
+    'ops-button ops-button-outline account-action-button';
 const dangerActionButtonClass =
-    'h-11 rounded-2xl border-black/15 bg-white/70 px-4 text-rose-700 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] hover:!bg-rose-50 hover:!text-rose-900 dark:border-white/12 dark:bg-white/[0.04] dark:text-rose-300 dark:hover:!bg-rose-500/[0.25] dark:hover:!text-rose-50';
+    'ops-button ops-button-danger account-action-button';
 
 const formatTimestamp = (value: string | null | undefined) => {
     if (!value) {
