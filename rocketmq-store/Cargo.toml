@@ -78,7 +78,7 @@ tempfile = "3.27.0"
 
 memmap2                 = "0.9.10"
 trait-variant.workspace = true
-sysinfo                 = "0.39.2"
+sysinfo                 = "0.39.3"
 cheetah-string          = { workspace = true }
 thiserror               = { workspace = true }
 
