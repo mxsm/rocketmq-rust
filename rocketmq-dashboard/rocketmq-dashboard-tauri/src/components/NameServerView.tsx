@@ -18,54 +18,67 @@ import { Button } from '../components/ui/LegacyButton';
 import { Input } from '../components/ui/LegacyInput';
 import { Toggle } from '../components/ui/LegacyToggle';
 
-const HEARTBEAT_WAVE_PATHS = [
-    'M4 20 C10 20, 12 9, 18 9 S26 28, 33 20 S42 8, 50 15 S58 28, 66 20 S76 10, 84 16 S94 20, 108 20',
-    'M4 20 C10 20, 12 13, 18 13 S26 24, 33 20 S42 12, 50 17 S58 24, 66 20 S76 13, 84 17 S94 20, 108 20',
-    'M4 20 C10 20, 12 7, 18 7 S26 31, 33 20 S42 6, 50 14 S58 31, 66 20 S76 8, 84 15 S94 20, 108 20',
-];
-const OFFLINE_WAVE_PATH = 'M4 20 L108 20';
+const HEARTBEAT_SIGNAL_PATH = 'M10 22 H32 L39 13 L48 30 L57 18 L66 22 H78 L87 10 L96 31 L105 20 H122';
+const OFFLINE_SIGNAL_PATH = 'M10 22 H122';
+const HEARTBEAT_NODES = [0, 1, 2, 3];
 
 const NameServerHeartbeatWave = ({ isAlive }: { isAlive: boolean }) => (
-    <div className={`nameserver-pulse ${isAlive ? 'is-alive' : ''}`} aria-label={isAlive ? 'Reachable' : 'No heartbeat'}>
-        <span className="nameserver-pulse-baseline" />
-        <svg viewBox="0 0 112 40" className="nameserver-pulse-wave" aria-hidden="true">
+    <div
+        className={`nameserver-pulse ${isAlive ? 'is-alive' : 'is-offline'}`}
+        aria-label={isAlive ? 'Reachable' : 'No heartbeat'}
+    >
+        <span className="nameserver-pulse-grid" />
+        <span className="nameserver-pulse-glow" />
+        {isAlive ? (
+            <motion.span
+                className="nameserver-pulse-sweep"
+                animate={{ x: ['-34px', '188px'], opacity: [0, 0.88, 0] }}
+                transition={{ duration: 1.65, repeat: Infinity, ease: 'easeInOut' }}
+            />
+        ) : null}
+        <svg viewBox="0 0 132 44" className="nameserver-pulse-wave" aria-hidden="true">
             <motion.path
-                d={isAlive ? HEARTBEAT_WAVE_PATHS[0] : OFFLINE_WAVE_PATH}
+                d={isAlive ? HEARTBEAT_SIGNAL_PATH : OFFLINE_SIGNAL_PATH}
                 fill="none"
-                stroke={isAlive ? 'rgba(52, 211, 153, 0.95)' : 'rgba(117, 131, 151, 0.86)'}
-                strokeWidth="2.5"
+                stroke={isAlive ? 'rgba(45, 212, 191, 0.98)' : 'rgba(117, 131, 151, 0.72)'}
+                strokeWidth="2.6"
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 animate={
                     isAlive
                         ? {
-                              d: HEARTBEAT_WAVE_PATHS,
-                              opacity: [0.72, 1, 0.82, 1],
-                              pathLength: [0.92, 1, 0.95, 1],
+                              opacity: [0.62, 1, 0.72],
+                              pathLength: [0.16, 1, 1],
                           }
                         : {
-                              opacity: [0.45, 0.7, 0.45],
+                              opacity: [0.36, 0.58, 0.36],
                           }
                 }
                 transition={{
-                    duration: isAlive ? 1.6 : 2.4,
+                    duration: isAlive ? 1.65 : 2.6,
                     repeat: Infinity,
                     ease: 'easeInOut',
                 }}
             />
-            {isAlive ? (
-                <motion.circle
-                    cx="104"
-                    cy="20"
-                    r="2.6"
-                    fill="rgba(52, 211, 153, 1)"
-                    animate={{ opacity: [0.45, 1, 0.45], scale: [0.9, 1.15, 0.9] }}
-                    transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
-                />
-            ) : (
-                <circle cx="104" cy="20" r="2.2" fill="rgba(117, 131, 151, 0.78)" />
-            )}
         </svg>
+        <span className="nameserver-pulse-nodes" aria-hidden="true">
+            {HEARTBEAT_NODES.map((node) => (
+                <motion.span
+                    key={node}
+                    animate={
+                        isAlive
+                            ? { opacity: [0.25, 1, 0.25], scale: [0.72, 1.22, 0.72] }
+                            : { opacity: [0.22, 0.5, 0.22], scale: 1 }
+                    }
+                    transition={{
+                        duration: isAlive ? 1.35 : 2.4,
+                        repeat: Infinity,
+                        ease: 'easeInOut',
+                        delay: node * 0.18,
+                    }}
+                />
+            ))}
+        </span>
     </div>
 );
 

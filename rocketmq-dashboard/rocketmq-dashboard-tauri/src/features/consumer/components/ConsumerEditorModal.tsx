@@ -1,14 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+    Activity,
     AlertCircle,
+    Bell,
+    CheckCircle2,
     CheckSquare,
+    Hash,
     Layers,
     LoaderCircle,
     Plus,
+    RotateCcw,
     Save,
     Settings,
+    SlidersHorizontal,
+    Target,
     X,
+    type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { ClusterService } from '../../../services/cluster.service';
@@ -50,6 +58,41 @@ interface ConsumerEditorFormState {
     groupSysFlag: number;
     consumeTimeoutMinute: number;
 }
+
+const EDITOR_SECTIONS = [
+    {
+        key: 'basic',
+        label: 'Basic',
+        description: 'Group identity and runtime switches',
+        icon: Settings,
+    },
+    {
+        key: 'targets',
+        label: 'Targets',
+        description: 'Clusters and exact broker scope',
+        icon: Target,
+    },
+    {
+        key: 'retry',
+        label: 'Retry',
+        description: 'Queues, retries, and timeout',
+        icon: RotateCcw,
+    },
+    {
+        key: 'broker',
+        label: 'Broker Policy',
+        description: 'Broker ID, flags, and notifications',
+        icon: SlidersHorizontal,
+    },
+    {
+        key: 'review',
+        label: 'Review',
+        description: 'Mutation summary before commit',
+        icon: CheckCircle2,
+    },
+] as const;
+
+type EditorSectionKey = (typeof EDITOR_SECTIONS)[number]['key'];
 
 const createDefaultFormState = (): ConsumerEditorFormState => ({
     consumerGroup: '',
@@ -139,6 +182,9 @@ const mergeConfigIntoForm = (
     consumeTimeoutMinute: config.consumeTimeoutMinute,
 });
 
+const formatCountLabel = (count: number, singular: string, plural = `${singular}s`) =>
+    `${count} ${count === 1 ? singular : plural}`;
+
 export const ConsumerEditorModal = ({
     isOpen,
     onClose,
@@ -149,9 +195,16 @@ export const ConsumerEditorModal = ({
     const isEditMode = Boolean(consumer);
     const [form, setForm] = useState<ConsumerEditorFormState>(createDefaultFormState);
     const [clusterOptions, setClusterOptions] = useState<ClusterBrokerOptionGroup[]>([]);
+    const [activeSection, setActiveSection] = useState<EditorSectionKey>('basic');
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (isOpen) {
+            setActiveSection('basic');
+        }
+    }, [consumer, isOpen]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -261,10 +314,12 @@ export const ConsumerEditorModal = ({
         setError('');
         const trimmedGroup = form.consumerGroup.trim();
         if (!trimmedGroup) {
+            setActiveSection('basic');
             setError('Consumer group is required.');
             return;
         }
         if (form.clusterNameList.length === 0 && form.brokerNameList.length === 0) {
+            setActiveSection('targets');
             setError('Select at least one cluster or broker target before saving.');
             return;
         }
@@ -295,231 +350,529 @@ export const ConsumerEditorModal = ({
     }
 
     const title = isEditMode ? 'Update Consumer Group' : 'Add Consumer Group';
+    const activeSectionConfig = EDITOR_SECTIONS.find((section) => section.key === activeSection) ?? EDITOR_SECTIONS[0];
+    const ActiveIcon = activeSectionConfig.icon;
+    const selectedTargetCount = form.clusterNameList.length + form.brokerNameList.length;
+    const enabledControlCount = [
+        form.consumeEnable,
+        form.consumeFromMinEnable,
+        form.consumeBroadcastEnable,
+        form.notifyConsumerIdsChangedEnable,
+    ].filter(Boolean).length;
+    const clusterTargetLabel = formatCountLabel(form.clusterNameList.length, 'cluster');
+    const brokerTargetLabel = formatCountLabel(form.brokerNameList.length, 'broker');
+
+    const renderActiveSection = () => {
+        switch (activeSection) {
+            case 'targets':
+                return (
+                    <div className="consumer-editor-section-stack">
+                        <OptionGroupList
+                            icon={<Layers className="topic-icon" aria-hidden="true" />}
+                            title="Clusters"
+                            description="Select a cluster when every broker in that cluster should receive the same group config."
+                            emptyLabel="Cluster discovery returned no selectable clusters."
+                            options={clusterOptions.map((option) => ({
+                                key: option.clusterName,
+                                label: option.clusterName,
+                                description: formatCountLabel(option.brokers.length, 'broker'),
+                                selected: form.clusterNameList.includes(option.clusterName),
+                                onToggle: () => toggleCluster(option.clusterName),
+                            }))}
+                        />
+                        <OptionGroupList
+                            icon={<CheckSquare className="topic-icon" aria-hidden="true" />}
+                            title="Brokers"
+                            description="Use broker targets for a narrower write scope or for mixed-cluster updates."
+                            emptyLabel="No brokers were returned by the cluster inventory."
+                            options={brokerOptions.map((option) => ({
+                                key: `${option.clusterName}:${option.brokerName}`,
+                                label: option.brokerName,
+                                description: option.clusterName,
+                                selected: form.brokerNameList.includes(option.brokerName),
+                                onToggle: () => toggleBroker(option.brokerName),
+                            }))}
+                        />
+                    </div>
+                );
+            case 'retry':
+                return (
+                    <div className="consumer-editor-number-grid">
+                        <NumberField
+                            label="Retry Queues"
+                            value={form.retryQueueNums}
+                            onChange={(value) => updateField('retryQueueNums', value)}
+                        />
+                        <NumberField
+                            label="Max Retries"
+                            value={form.retryMaxTimes}
+                            onChange={(value) => updateField('retryMaxTimes', value)}
+                        />
+                        <NumberField
+                            label="Consume Timeout"
+                            unit="minutes"
+                            value={form.consumeTimeoutMinute}
+                            onChange={(value) => updateField('consumeTimeoutMinute', value)}
+                        />
+                        <NumberField
+                            label="Slow Consume Broker ID"
+                            value={form.whichBrokerWhenConsumeSlowly}
+                            onChange={(value) => updateField('whichBrokerWhenConsumeSlowly', value)}
+                        />
+                    </div>
+                );
+            case 'broker':
+                return (
+                    <div className="consumer-editor-section-stack">
+                        <div className="consumer-editor-number-grid">
+                            <NumberField
+                                label="Broker ID"
+                                value={form.brokerId}
+                                onChange={(value) => updateField('brokerId', value)}
+                            />
+                            <NumberField
+                                label="System Flag"
+                                value={form.groupSysFlag}
+                                onChange={(value) => updateField('groupSysFlag', value)}
+                            />
+                        </div>
+                        <ToggleField
+                            label="Notify Consumer ID Changes"
+                            description="Pushes group metadata changes to online consumer IDs when the broker supports it."
+                            checked={form.notifyConsumerIdsChangedEnable}
+                            onChange={(checked) => updateField('notifyConsumerIdsChangedEnable', checked)}
+                        />
+                    </div>
+                );
+            case 'review':
+                return (
+                    <div className="consumer-editor-review-grid">
+                        <ReviewLine label="Consumer Group" value={form.consumerGroup.trim() || 'Not set'} mono />
+                        <ReviewLine label="Target Scope" value={`${clusterTargetLabel} / ${brokerTargetLabel}`} />
+                        <ReviewLine label="Delivery Controls" value={`${enabledControlCount} enabled / orderly ${form.consumeMessageOrderly ? 'on' : 'off'}`} />
+                        <ReviewLine label="Retry Policy" value={`${form.retryQueueNums} queues / ${form.retryMaxTimes} max retries`} />
+                        <ReviewLine label="Timeout" value={`${form.consumeTimeoutMinute} minutes`} />
+                        <ReviewLine label="Broker Policy" value={`broker ${form.brokerId} / flag ${form.groupSysFlag}`} mono />
+                    </div>
+                );
+            case 'basic':
+            default:
+                return (
+                    <div className="consumer-editor-section-stack">
+                        <TextField
+                            label="Consumer Group"
+                            value={form.consumerGroup}
+                            required
+                            readOnly={isEditMode}
+                            placeholder="please_rename_unique_group_name"
+                            onChange={(value) => updateField('consumerGroup', value)}
+                        />
+                        <div className="consumer-editor-toggle-grid">
+                            <ToggleField
+                                label="Consume Enable"
+                                description="Allow consumers to receive messages for this group."
+                                checked={form.consumeEnable}
+                                onChange={(checked) => updateField('consumeEnable', checked)}
+                            />
+                            <ToggleField
+                                label="Consume From Min"
+                                description="Start from the minimum queue offset when there is no local progress."
+                                checked={form.consumeFromMinEnable}
+                                onChange={(checked) => updateField('consumeFromMinEnable', checked)}
+                            />
+                            <ToggleField
+                                label="Broadcast Mode"
+                                description="Enable broadcast-style consumption semantics."
+                                checked={form.consumeBroadcastEnable}
+                                onChange={(checked) => updateField('consumeBroadcastEnable', checked)}
+                            />
+                            <ToggleField
+                                label="Orderly Consumption"
+                                description="Preserve queue ordering when the group requires ordered delivery."
+                                checked={form.consumeMessageOrderly}
+                                onChange={(checked) => updateField('consumeMessageOrderly', checked)}
+                            />
+                        </div>
+                    </div>
+                );
+        }
+    };
 
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root">
                 <motion.div
                     initial={{ opacity: 0 }}
-                    animate={{ opacity: 0.3 }}
+                    animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    initial={{ opacity: 0, scale: 0.96, y: 12 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                    className="relative flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-gray-100 bg-white shadow-2xl dark:border-gray-800 dark:bg-gray-900"
+                    exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                    className="topic-status-dialog consumer-editor-dialog"
                 >
-                    <div className="z-10 flex shrink-0 items-center justify-between border-b border-gray-100 bg-white px-6 py-5 dark:border-gray-800 dark:bg-gray-900">
-                        <div>
-                            <h3 className="flex items-center text-xl font-bold text-gray-800 dark:text-white">
-                                <Plus className="mr-2 h-5 w-5 text-blue-500" />
-                                {title}
-                            </h3>
-                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                                <span className="font-mono font-medium text-gray-700 dark:text-gray-300">
-                                    {getConsumerLabel(consumer)}
-                                </span>
-                            </p>
+                    <header className="topic-status-header consumer-editor-header">
+                        <div className="topic-status-title-wrap">
+                            <span className="topic-status-icon consumer-editor-title-icon">
+                                <Plus className="topic-icon" aria-hidden="true" />
+                            </span>
+                            <div>
+                                <span>Consumer group mutation</span>
+                                <h3>{title}</h3>
+                                <p>
+                                    <strong>{getConsumerLabel(consumer)}</strong>
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="rounded-full p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-                        >
-                            <X className="h-5 w-5" />
-                        </button>
-                    </div>
 
-                    <div className="flex-1 overflow-y-auto bg-gray-50/50 p-6 dark:bg-gray-950/50">
+                        <div className="topic-status-header-actions consumer-editor-header-actions">
+                            <EditorChip tone="success" label={isEditMode ? 'Update mode' : 'Create mode'} />
+                            <EditorChip tone={selectedTargetCount > 0 ? 'info' : 'warning'} label={formatCountLabel(selectedTargetCount, 'target')} />
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="topic-status-close"
+                                aria-label="Close consumer group editor"
+                            >
+                                <X className="topic-icon" aria-hidden="true" />
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="topic-status-body consumer-editor-body">
                         {isLoading ? (
-                            <div className="flex min-h-[360px] items-center justify-center">
-                                <div className="flex items-center gap-3 rounded-full bg-white px-4 py-2 text-sm text-gray-600 shadow-sm dark:bg-gray-900 dark:text-gray-300">
-                                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                                    Loading consumer group editor...
-                                </div>
+                            <div className="topic-status-state">
+                                <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true" />
+                                <strong>Loading consumer group editor</strong>
+                                <span>Resolving cluster inventory and broker-side group configuration.</span>
                             </div>
                         ) : (
-                            <div className="space-y-6">
-                                {error && (
-                                    <div className="flex items-start gap-3 rounded-2xl border border-red-200/70 bg-red-50/80 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <>
+                                {error ? (
+                                    <div className="topic-status-state is-error consumer-editor-error">
+                                        <AlertCircle className="topic-icon" aria-hidden="true" />
+                                        <strong>Consumer group editor needs attention</strong>
                                         <span>{error}</span>
                                     </div>
-                                )}
+                                ) : null}
 
-                                <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                                    <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="flex items-center gap-2">
-                                            <div className="rounded-lg bg-blue-50 p-1.5 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
-                                                <Settings className="h-4 w-4" />
-                                            </div>
-                                            <h4 className="font-semibold text-gray-900 dark:text-white">Basic Information</h4>
-                                        </div>
-                                        <FormField label="Consumer Group">
-                                            <input
-                                                value={form.consumerGroup}
-                                                onChange={(event) => updateField('consumerGroup', event.target.value)}
-                                                readOnly={isEditMode}
-                                                className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                                            />
-                                        </FormField>
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <ToggleField label="Consume Enable" checked={form.consumeEnable} onChange={(checked) => updateField('consumeEnable', checked)} />
-                                            <ToggleField label="Consume From Min" checked={form.consumeFromMinEnable} onChange={(checked) => updateField('consumeFromMinEnable', checked)} />
-                                            <ToggleField label="Broadcast Mode" checked={form.consumeBroadcastEnable} onChange={(checked) => updateField('consumeBroadcastEnable', checked)} />
-                                            <ToggleField label="Orderly Consumption" checked={form.consumeMessageOrderly} onChange={(checked) => updateField('consumeMessageOrderly', checked)} />
+                                <section className="consumer-editor-target-strip" aria-label="Selected consumer group target scope">
+                                    <div className="consumer-editor-target-copy">
+                                        <span className="consumer-editor-panel-icon is-violet">
+                                            <Layers className="topic-icon" aria-hidden="true" />
+                                        </span>
+                                        <div>
+                                            <span>Target Scope</span>
+                                            <strong>{selectedTargetCount > 0 ? `${clusterTargetLabel} / ${brokerTargetLabel}` : 'No target selected'}</strong>
+                                            <small>Cluster selection fans out to all brokers; broker selection applies exact write scope.</small>
                                         </div>
                                     </div>
-
-                                    <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="flex items-center gap-2">
-                                            <div className="rounded-lg bg-purple-50 p-1.5 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
-                                                <Layers className="h-4 w-4" />
-                                            </div>
-                                            <h4 className="font-semibold text-gray-900 dark:text-white">Target Scope</h4>
-                                        </div>
-                                        <p className="text-xs leading-5 text-gray-500 dark:text-gray-400">
-                                            Select clusters, brokers, or both. Cluster selection applies the configuration to all brokers in that cluster, while broker selection lets you narrow or expand the exact write scope.
-                                        </p>
-                                        <OptionGroupList
-                                            icon={<Layers className="h-4 w-4" />}
-                                            title="Clusters"
-                                            options={clusterOptions.map((option) => ({
-                                                key: option.clusterName,
-                                                label: `${option.clusterName} (${option.brokers.length})`,
-                                                selected: form.clusterNameList.includes(option.clusterName),
-                                                onToggle: () => toggleCluster(option.clusterName),
-                                            }))}
-                                        />
-                                        <OptionGroupList
-                                            icon={<CheckSquare className="h-4 w-4" />}
-                                            title="Brokers"
-                                            options={brokerOptions.map((option) => ({
-                                                key: `${option.clusterName}:${option.brokerName}`,
-                                                label: option.brokerName,
-                                                description: option.clusterName,
-                                                selected: form.brokerNameList.includes(option.brokerName),
-                                                onToggle: () => toggleBroker(option.brokerName),
-                                            }))}
+                                    <div className="consumer-editor-target-pills">
+                                        <TargetPreviewChips
+                                            clusters={form.clusterNameList}
+                                            brokers={form.brokerNameList}
+                                            onOpenTargets={() => setActiveSection('targets')}
                                         />
                                     </div>
                                 </section>
 
-                                <section className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                                    <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="flex items-center gap-2">
-                                            <div className="rounded-lg bg-orange-50 p-1.5 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400">
-                                                <Save className="h-4 w-4" />
-                                            </div>
-                                            <h4 className="font-semibold text-gray-900 dark:text-white">Retry & Timeout</h4>
-                                        </div>
-                                        <NumberField label="Retry Queues" value={form.retryQueueNums} onChange={(value) => updateField('retryQueueNums', value)} />
-                                        <NumberField label="Max Retries" value={form.retryMaxTimes} onChange={(value) => updateField('retryMaxTimes', value)} />
-                                        <NumberField label="Consume Timeout (Minutes)" value={form.consumeTimeoutMinute} onChange={(value) => updateField('consumeTimeoutMinute', value)} />
-                                        <NumberField label="Slow Consume Broker ID" value={form.whichBrokerWhenConsumeSlowly} onChange={(value) => updateField('whichBrokerWhenConsumeSlowly', value)} />
-                                    </div>
-
-                                    <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="flex items-center gap-2">
-                                            <div className="rounded-lg bg-emerald-50 p-1.5 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                                <Plus className="h-4 w-4" />
-                                            </div>
-                                            <h4 className="font-semibold text-gray-900 dark:text-white">Broker Policy</h4>
-                                        </div>
-                                        <NumberField label="Broker ID" value={form.brokerId} onChange={(value) => updateField('brokerId', value)} />
-                                        <NumberField label="System Flag" value={form.groupSysFlag} onChange={(value) => updateField('groupSysFlag', value)} />
-                                        <ToggleField label="Notify Consumer ID Changes" checked={form.notifyConsumerIdsChangedEnable} onChange={(checked) => updateField('notifyConsumerIdsChangedEnable', checked)} />
-                                    </div>
+                                <section className="topic-status-kpi-grid consumer-editor-summary-grid" aria-label="Consumer group mutation summary">
+                                    <EditorKpiCard
+                                        label="Identity"
+                                        value={form.consumerGroup.trim() || 'New group'}
+                                        note={isEditMode ? 'name locked while editing' : 'name required before save'}
+                                        tone="blue"
+                                        icon={Hash}
+                                    />
+                                    <EditorKpiCard
+                                        label="Controls"
+                                        value={`${enabledControlCount} on`}
+                                        note={`orderly ${form.consumeMessageOrderly ? 'enabled' : 'disabled'}`}
+                                        tone="success"
+                                        icon={Activity}
+                                    />
+                                    <EditorKpiCard
+                                        label="Retry Policy"
+                                        value={`${form.retryMaxTimes} max`}
+                                        note={`${form.retryQueueNums} queue / ${form.consumeTimeoutMinute} min`}
+                                        tone="warning"
+                                        icon={RotateCcw}
+                                    />
+                                    <EditorKpiCard
+                                        label="Broker Policy"
+                                        value={`ID ${form.brokerId}`}
+                                        note={form.notifyConsumerIdsChangedEnable ? 'notify changes enabled' : 'notify changes disabled'}
+                                        tone="violet"
+                                        icon={Bell}
+                                    />
                                 </section>
-                            </div>
+
+                                <section className="consumer-editor-workspace">
+                                    <aside className="consumer-editor-nav-panel" aria-label="Consumer editor sections">
+                                        <div className="consumer-editor-nav-heading">
+                                            <strong>Create Flow</strong>
+                                            <span>Review each section before committing.</span>
+                                        </div>
+                                        {EDITOR_SECTIONS.map((section, index) => {
+                                            const SectionIcon = section.icon;
+                                            return (
+                                                <button
+                                                    key={section.key}
+                                                    type="button"
+                                                    className={`consumer-editor-nav-row ${section.key === activeSection ? 'is-selected' : ''}`}
+                                                    onClick={() => setActiveSection(section.key)}
+                                                >
+                                                    <span className="consumer-editor-nav-index">{index + 1}</span>
+                                                    <span className="consumer-editor-nav-copy">
+                                                        <strong>{section.label}</strong>
+                                                        <small>{section.description}</small>
+                                                    </span>
+                                                    <SectionIcon className="topic-icon" aria-hidden="true" />
+                                                </button>
+                                            );
+                                        })}
+                                    </aside>
+
+                                    <section className="consumer-editor-content-panel" aria-label={`${activeSectionConfig.label} editor section`}>
+                                        <div className="consumer-editor-panel-header">
+                                            <div className="consumer-editor-panel-title">
+                                                <span className="consumer-editor-panel-icon">
+                                                    <ActiveIcon className="topic-icon" aria-hidden="true" />
+                                                </span>
+                                                <div>
+                                                    <h4>{activeSectionConfig.label}</h4>
+                                                    <p>{activeSectionConfig.description}</p>
+                                                </div>
+                                            </div>
+                                            <span>{isEditMode ? 'Update' : 'Create'}</span>
+                                        </div>
+                                        <div className="consumer-editor-panel-body">{renderActiveSection()}</div>
+                                    </section>
+
+                                    <aside className="consumer-editor-review-panel" aria-label="Commit preview">
+                                        <div className="consumer-editor-review-heading">
+                                            <span className="consumer-editor-panel-icon is-success">
+                                                <CheckCircle2 className="topic-icon" aria-hidden="true" />
+                                            </span>
+                                            <div>
+                                                <h4>Commit Preview</h4>
+                                                <p>Same request payload is applied to selected targets.</p>
+                                            </div>
+                                        </div>
+                                        <div className="consumer-editor-review-list">
+                                            <ReviewLine label="Targets" value={`${clusterTargetLabel} / ${brokerTargetLabel}`} />
+                                            <ReviewLine label="Delivery" value={`${enabledControlCount} controls enabled`} />
+                                            <ReviewLine label="Retry" value={`${form.retryQueueNums} queues, ${form.retryMaxTimes} max`} />
+                                            <ReviewLine label="Timeout" value={`${form.consumeTimeoutMinute} minutes`} />
+                                        </div>
+                                    </aside>
+                                </section>
+                            </>
                         )}
                     </div>
 
-                    <div className="z-10 flex shrink-0 items-center justify-between border-t border-gray-100 bg-white px-6 py-4 dark:border-gray-800 dark:bg-gray-900">
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
+                    <footer className="topic-status-footer consumer-editor-footer">
+                        <span>
                             {isEditMode
                                 ? 'Updating a group keeps the current name and reapplies settings to the selected targets.'
                                 : 'Creating a group writes the same subscription group config to all selected targets.'}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={onClose}
-                                className="rounded-xl border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                            >
+                        </span>
+                        <div>
+                            <button type="button" onClick={onClose} className="topic-status-secondary-button">
                                 Cancel
                             </button>
                             <button
+                                type="button"
                                 onClick={() => void handleSubmit()}
                                 disabled={isLoading || isSaving}
-                                className="flex items-center rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:hover:bg-gray-800"
+                                className="topic-status-primary-button consumer-editor-save-button"
                             >
-                                {isSaving ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                {isSaving ? (
+                                    <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true" />
+                                ) : (
+                                    <Save className="topic-icon" aria-hidden="true" />
+                                )}
                                 {isEditMode ? 'Save Changes' : 'Create Group'}
                             </button>
                         </div>
-                    </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>
     );
 };
 
-const FormField = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <label className="block space-y-1">
-        <span className="text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{label}</span>
-        {children}
+const EditorChip = ({
+    label,
+    tone,
+}: {
+    label: string;
+    tone: 'success' | 'warning' | 'info';
+}) => (
+    <span className={`consumer-editor-chip is-${tone}`}>
+        <i aria-hidden="true" />
+        {label}
+    </span>
+);
+
+const EditorKpiCard = ({
+    label,
+    value,
+    note,
+    tone,
+    icon: Icon,
+}: {
+    label: string;
+    value: string;
+    note: string;
+    tone: 'success' | 'warning' | 'blue' | 'violet';
+    icon: LucideIcon;
+}) => (
+    <div className={`topic-status-kpi consumer-editor-kpi is-${tone}`}>
+        <div>
+            <span>{label}</span>
+            <strong title={value}>{value}</strong>
+            <small>{note}</small>
+        </div>
+        <Icon className="topic-icon" aria-hidden="true" />
+    </div>
+);
+
+const TargetPreviewChips = ({
+    clusters,
+    brokers,
+    onOpenTargets,
+}: {
+    clusters: string[];
+    brokers: string[];
+    onOpenTargets: () => void;
+}) => {
+    const targets = [
+        ...clusters.map((cluster) => ({ key: `cluster:${cluster}`, label: cluster, type: 'Cluster' })),
+        ...brokers.map((broker) => ({ key: `broker:${broker}`, label: broker, type: 'Broker' })),
+    ];
+
+    if (targets.length === 0) {
+        return (
+            <button type="button" onClick={onOpenTargets} className="consumer-editor-target-empty">
+                Select targets
+            </button>
+        );
+    }
+
+    const visibleTargets = targets.slice(0, 3);
+    return (
+        <>
+            {visibleTargets.map((target) => (
+                <button
+                    key={target.key}
+                    type="button"
+                    onClick={onOpenTargets}
+                    className="consumer-editor-target-chip"
+                    title={`${target.type}: ${target.label}`}
+                >
+                    <span>{target.type}</span>
+                    <strong>{target.label}</strong>
+                </button>
+            ))}
+            {targets.length > visibleTargets.length ? (
+                <button type="button" onClick={onOpenTargets} className="consumer-editor-target-more">
+                    +{targets.length - visibleTargets.length}
+                </button>
+            ) : null}
+        </>
+    );
+};
+
+const TextField = ({
+    label,
+    value,
+    required = false,
+    readOnly = false,
+    placeholder,
+    onChange,
+}: {
+    label: string;
+    value: string;
+    required?: boolean;
+    readOnly?: boolean;
+    placeholder?: string;
+    onChange: (value: string) => void;
+}) => (
+    <label className="consumer-editor-field is-wide">
+        <span>{label}{required ? ' *' : ''}</span>
+        <input
+            value={value}
+            readOnly={readOnly}
+            placeholder={placeholder}
+            onChange={(event) => onChange(event.target.value)}
+            className={readOnly ? 'is-readonly' : ''}
+        />
+        {readOnly ? <small>Group name is locked while updating an existing consumer group.</small> : null}
     </label>
 );
 
 const NumberField = ({
     label,
     value,
+    unit,
     onChange,
 }: {
     label: string;
     value: number;
+    unit?: string;
     onChange: (value: number) => void;
 }) => (
-    <FormField label={label}>
+    <label className="consumer-editor-field">
+        <span>{label}</span>
         <input
             type="number"
+            min="0"
             value={value}
             onChange={(event) => onChange(Number(event.target.value))}
-            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
         />
-    </FormField>
+        {unit ? <small>{unit}</small> : null}
+    </label>
 );
 
 const ToggleField = ({
     label,
+    description,
     checked,
     onChange,
 }: {
     label: string;
+    description?: string;
     checked: boolean;
     onChange: (checked: boolean) => void;
 }) => (
-    <label className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 px-3 py-2.5 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-200">
-        <span>{label}</span>
-        <button
-            type="button"
-            onClick={() => onChange(!checked)}
-            className={`h-6 w-11 rounded-full p-0.5 transition ${checked ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'}`}
-        >
-            <span className={`block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
-        </button>
-    </label>
+    <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        className={`consumer-editor-toggle ${checked ? 'is-enabled' : 'is-disabled'}`}
+    >
+        <span>
+            <strong>{label}</strong>
+            {description ? <small>{description}</small> : null}
+        </span>
+        <i aria-hidden="true" />
+    </button>
 );
 
 const OptionGroupList = ({
     icon,
     title,
+    description,
+    emptyLabel,
     options,
 }: {
-    icon: React.ReactNode;
+    icon: ReactNode;
     title: string;
+    description: string;
+    emptyLabel: string;
     options: Array<{
         key: string;
         label: string;
@@ -528,33 +881,45 @@ const OptionGroupList = ({
         onToggle: () => void;
     }>;
 }) => (
-    <div className="space-y-3">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">
-            {icon}
-            <span>{title}</span>
+    <div className="consumer-editor-option-group">
+        <div className="consumer-editor-option-heading">
+            <span className="consumer-editor-panel-icon">{icon}</span>
+            <div>
+                <strong>{title}</strong>
+                <small>{description}</small>
+            </div>
         </div>
         {options.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-                No options available.
-            </div>
+            <div className="consumer-editor-empty-option">{emptyLabel}</div>
         ) : (
-            <div className="flex flex-wrap gap-2">
+            <div className="consumer-editor-option-list">
                 {options.map((option) => (
                     <button
                         key={option.key}
                         type="button"
                         onClick={option.onToggle}
-                        className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                            option.selected
-                                ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
-                                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
-                        }`}
+                        className={`consumer-editor-option-chip ${option.selected ? 'is-selected' : ''}`}
                     >
-                        {option.label}
-                        {option.description ? <span className="ml-2 text-xs opacity-70">{option.description}</span> : null}
+                        <span>{option.label}</span>
+                        {option.description ? <small>{option.description}</small> : null}
                     </button>
                 ))}
             </div>
         )}
+    </div>
+);
+
+const ReviewLine = ({
+    label,
+    value,
+    mono = false,
+}: {
+    label: string;
+    value: string;
+    mono?: boolean;
+}) => (
+    <div className="consumer-editor-review-line">
+        <span>{label}</span>
+        <strong className={mono ? 'is-mono' : ''} title={value}>{value}</strong>
     </div>
 );
