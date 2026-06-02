@@ -1,9 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AlertCircle, FileBox, FileText, Layers, LoaderCircle, X } from 'lucide-react';
+import {
+    Activity,
+    AlertCircle,
+    Clock,
+    Database,
+    FileBox,
+    FileText,
+    Layers,
+    LoaderCircle,
+    Server,
+    X,
+} from 'lucide-react';
 import { ConsumerService } from '../../../services/consumer.service';
 import type {
     ConsumerGroupListItem,
+    ConsumerTopicDetailItem,
     ConsumerTopicDetailView,
 } from '../types/consumer.types';
 
@@ -16,6 +28,11 @@ interface ConsumerDetailModalProps {
 
 const getConsumerLabel = (consumer: ConsumerGroupListItem | null) =>
     consumer?.displayGroupName ?? consumer?.rawGroupName ?? '-';
+
+const getBrokerScope = (address?: string) => {
+    const trimmed = address?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : 'All brokers';
+};
 
 const getErrorMessage = (error: unknown, fallback: string) => {
     if (typeof error === 'string' && error.trim().length > 0) {
@@ -40,6 +57,8 @@ const formatTimestamp = (timestamp: number) => {
     return new Date(timestamp).toLocaleString();
 };
 
+const getTopicQueueCount = (topic: ConsumerTopicDetailItem) => topic.queueStatInfoList.length;
+
 export const ConsumerDetailModal = ({
     isOpen,
     onClose,
@@ -47,6 +66,7 @@ export const ConsumerDetailModal = ({
     address,
 }: ConsumerDetailModalProps) => {
     const [data, setData] = useState<ConsumerTopicDetailView | null>(null);
+    const [selectedTopicName, setSelectedTopicName] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -59,6 +79,7 @@ export const ConsumerDetailModal = ({
         setIsLoading(true);
         setError('');
         setData(null);
+        setSelectedTopicName('');
 
         void ConsumerService.queryConsumerTopicDetail({
             consumerGroup: consumer.rawGroupName,
@@ -67,6 +88,7 @@ export const ConsumerDetailModal = ({
             .then((response) => {
                 if (!cancelled) {
                     setData(response);
+                    setSelectedTopicName(response.topics[0]?.topic ?? '');
                 }
             })
             .catch((loadError) => {
@@ -85,198 +107,259 @@ export const ConsumerDetailModal = ({
         };
     }, [address, consumer, isOpen]);
 
+    const consumerLabel = getConsumerLabel(consumer);
+    const brokerScope = getBrokerScope(address);
+    const topics = data?.topics ?? [];
+    const queueCount = useMemo(
+        () => topics.reduce((total, topic) => total + topic.queueStatInfoList.length, 0),
+        [topics],
+    );
+    const selectedTopic = useMemo(
+        () => topics.find((topic) => topic.topic === selectedTopicName) ?? topics[0] ?? null,
+        [selectedTopicName, topics],
+    );
+    const lagStateClass = data && data.totalDiff > 0 ? 'is-warning' : 'is-healthy';
+
     if (!isOpen) {
         return null;
     }
 
-    const consumerLabel = getConsumerLabel(consumer);
-
     return (
         <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="topic-status-modal-root">
                 <motion.div
                     initial={{ opacity: 0 }}
-                    animate={{ opacity: 0.3 }}
+                    animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     onClick={onClose}
-                    className="absolute inset-0 bg-black"
+                    className="topic-status-backdrop"
                 />
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                    initial={{ opacity: 0, scale: 0.96, y: 12 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                    className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-100 bg-white shadow-2xl dark:border-gray-800 dark:bg-gray-900"
+                    exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                    className="topic-status-dialog consumer-topic-detail-dialog"
                 >
-                    <div className="z-10 flex shrink-0 items-center justify-between border-b border-gray-100 bg-white px-6 py-5 dark:border-gray-800 dark:bg-gray-900">
-                        <div>
-                            <h3 className="flex items-center text-xl font-bold text-gray-800 dark:text-white">
-                                <FileText className="mr-2 h-5 w-5 text-blue-500" />
-                                Consumer Details
-                            </h3>
-                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                                <span className="font-mono font-medium text-gray-700 dark:text-gray-300">
-                                    {consumerLabel}
-                                </span>
-                                <span className="mx-2 text-gray-300 dark:text-gray-600">|</span>
-                                <span>{address?.trim() || 'All brokers'}</span>
-                            </p>
+                    <header className="topic-status-header consumer-topic-detail-header">
+                        <div className="topic-status-title-wrap">
+                            <span className="topic-status-icon">
+                                <FileText className="topic-icon" aria-hidden="true" />
+                            </span>
+                            <div>
+                                <span>Consumer topic backlog</span>
+                                <h3>Consumer Details</h3>
+                                <p>
+                                    <strong>{consumerLabel}</strong>
+                                    <i aria-hidden="true">/</i>
+                                    <span>{brokerScope}</span>
+                                </p>
+                            </div>
                         </div>
-                        <button
-                            onClick={onClose}
-                            className="rounded-full p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-                        >
-                            <X className="h-5 w-5" />
-                        </button>
-                    </div>
 
-                    <div className="flex-1 space-y-6 overflow-y-auto bg-gray-50/50 p-6 dark:bg-gray-950/50">
+                        <div className="topic-status-header-actions consumer-topic-detail-header-actions">
+                            <span className={`consumer-topic-detail-chip ${lagStateClass}`}>
+                                <i aria-hidden="true" />
+                                {data && data.totalDiff > 0 ? 'Lagging' : 'No lag'}
+                            </span>
+                            {data && (
+                                <span className="consumer-topic-detail-chip is-info">
+                                    {data.topicCount} topics
+                                </span>
+                            )}
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="topic-status-close"
+                                aria-label="Close consumer details dialog"
+                            >
+                                <X className="topic-icon" aria-hidden="true" />
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="topic-status-body consumer-topic-detail-body">
                         {isLoading ? (
-                            <div className="flex min-h-[320px] items-center justify-center">
-                                <div className="flex items-center gap-3 rounded-full bg-white px-4 py-2 text-sm text-gray-600 shadow-sm dark:bg-gray-900 dark:text-gray-300">
-                                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                                    Loading consumer details...
-                                </div>
+                            <div className="topic-status-state">
+                                <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true" />
+                                <strong>Loading consumer details</strong>
+                                <span>Querying topic offsets and queue lag from the active broker scope.</span>
                             </div>
                         ) : error ? (
-                            <div className="flex items-start gap-3 rounded-2xl border border-red-200/70 bg-red-50/80 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <div className="topic-status-state is-error">
+                                <AlertCircle className="topic-icon" aria-hidden="true" />
+                                <strong>Unable to load consumer details</strong>
                                 <span>{error}</span>
                             </div>
-                        ) : data && data.topics.length > 0 ? (
+                        ) : data && topics.length > 0 ? (
                             <>
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                                    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500">
-                                            Topic Count
+                                <section className="topic-status-kpi-grid consumer-topic-detail-summary-grid" aria-label="Consumer detail summary">
+                                    <div className="topic-status-kpi consumer-topic-detail-kpi is-blue">
+                                        <div>
+                                            <span>Topic Count</span>
+                                            <strong>{data.topicCount}</strong>
+                                            <small>tracked topics</small>
                                         </div>
-                                        <div className="mt-3 text-2xl font-bold text-gray-900 dark:text-white">
-                                            {data.topicCount}
-                                        </div>
+                                        <Database className="topic-icon" aria-hidden="true" />
                                     </div>
-                                    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500">
-                                            Total Lag
+                                    <div className={`topic-status-kpi consumer-topic-detail-kpi ${lagStateClass}`}>
+                                        <div>
+                                            <span>Total Lag</span>
+                                            <strong>{data.totalDiff}</strong>
+                                            <small>{data.totalDiff > 0 ? 'queue pressure detected' : 'all queues caught up'}</small>
                                         </div>
-                                        <div className="mt-3 text-2xl font-bold text-orange-500 dark:text-orange-400">
-                                            {data.totalDiff}
-                                        </div>
+                                        <Activity className="topic-icon" aria-hidden="true" />
                                     </div>
-                                    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500">
-                                            Address Scope
+                                    <div className="topic-status-kpi consumer-topic-detail-kpi">
+                                        <div>
+                                            <span>Queue Rows</span>
+                                            <strong>{queueCount}</strong>
+                                            <small>offset records</small>
                                         </div>
-                                        <div className="mt-3 text-sm font-semibold text-gray-900 dark:text-white">
-                                            {address?.trim() || 'All brokers'}
-                                        </div>
+                                        <Server className="topic-icon" aria-hidden="true" />
                                     </div>
-                                </div>
+                                    <div className="topic-status-kpi consumer-topic-detail-kpi is-violet">
+                                        <div>
+                                            <span>Address Scope</span>
+                                            <strong>{brokerScope}</strong>
+                                            <small>runtime source</small>
+                                        </div>
+                                        <Clock className="topic-icon" aria-hidden="true" />
+                                    </div>
+                                </section>
 
-                                {data.topics.map((topic) => {
-                                    const isRetryTopic = topic.topic.startsWith('%RETRY%');
-                                    return (
-                                        <section
-                                            key={topic.topic}
-                                            className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900"
-                                        >
-                                            <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50/50 px-6 py-4 dark:border-gray-800 dark:bg-gray-800/50">
-                                                <div className="flex items-center space-x-2">
-                                                    <div
-                                                        className={`rounded-lg p-1.5 ${
-                                                            isRetryTopic
-                                                                ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-                                                                : 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
-                                                        }`}
+                                <section className="consumer-topic-detail-workspace">
+                                    <aside className="consumer-topic-detail-topic-panel" aria-label="Topic backlog list">
+                                        <div className="consumer-topic-detail-panel-header">
+                                            <div>
+                                                <h4>Topic Backlog</h4>
+                                                <p>Select a topic to inspect queue-level offsets.</p>
+                                            </div>
+                                            <span>{topics.length} topics</span>
+                                        </div>
+
+                                        <div className="consumer-topic-detail-topic-list">
+                                            {topics.map((topic) => {
+                                                const selected = selectedTopic?.topic === topic.topic;
+                                                const isRetryTopic = topic.topic.startsWith('%RETRY%');
+                                                return (
+                                                    <button
+                                                        type="button"
+                                                        key={topic.topic}
+                                                        className={`consumer-topic-detail-topic-row ${selected ? 'is-selected' : ''} ${isRetryTopic ? 'is-retry' : 'is-normal'}`}
+                                                        onClick={() => setSelectedTopicName(topic.topic)}
                                                     >
-                                                        {isRetryTopic ? <Layers className="h-4 w-4" /> : <FileBox className="h-4 w-4" />}
-                                                    </div>
-                                                    <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">
-                                                        {topic.topic}
-                                                    </span>
-                                                </div>
-                                                <div className="flex items-center space-x-6 text-xs font-mono">
-                                                    <div className="flex items-center text-gray-500 dark:text-gray-400">
-                                                        <span className="mr-2 uppercase font-semibold tracking-wider text-gray-400 dark:text-gray-500">
-                                                            Total Lag:
+                                                        <span className="consumer-topic-detail-topic-icon">
+                                                            {isRetryTopic ? (
+                                                                <Layers className="topic-icon" aria-hidden="true" />
+                                                            ) : (
+                                                                <FileBox className="topic-icon" aria-hidden="true" />
+                                                            )}
                                                         </span>
-                                                        <span className="rounded bg-amber-100 px-2 py-0.5 font-bold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                                                        <span className="consumer-topic-detail-topic-copy">
+                                                            <strong title={topic.topic}>{topic.topic}</strong>
+                                                            <small>{getTopicQueueCount(topic)} queues</small>
+                                                        </span>
+                                                        <span className={`consumer-topic-detail-lag-pill ${topic.diffTotal > 0 ? 'is-warning' : 'is-healthy'}`}>
                                                             {topic.diffTotal}
                                                         </span>
-                                                    </div>
-                                                    <div className="flex items-center text-gray-500 dark:text-gray-400">
-                                                        <span className="mr-2 uppercase font-semibold tracking-wider text-gray-400 dark:text-gray-500">
-                                                            Last Consume:
-                                                        </span>
-                                                        <span className="text-gray-900 dark:text-white">
-                                                            {formatTimestamp(topic.lastTimestamp)}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </aside>
 
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-left text-sm">
-                                                    <thead>
-                                                        <tr className="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-800 dark:bg-gray-800/50 dark:text-gray-400">
-                                                            <th className="px-6 py-3">Broker</th>
-                                                            <th className="px-6 py-3">Queue ID</th>
-                                                            <th className="px-6 py-3 text-right">Broker Offset</th>
-                                                            <th className="px-6 py-3 text-right">Consumer Offset</th>
-                                                            <th className="px-6 py-3 text-right">Lag (Diff)</th>
-                                                            <th className="px-6 py-3">Client Info</th>
-                                                            <th className="px-6 py-3 text-right">Last Consume Time</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                                                        {topic.queueStatInfoList.map((queue) => (
-                                                            <tr
-                                                                key={`${topic.topic}-${queue.brokerName}-${queue.queueId}`}
-                                                                className="transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                                    <section className="consumer-topic-detail-queue-panel" aria-label="Selected topic queue details">
+                                        {selectedTopic ? (
+                                            <>
+                                                <div className="consumer-topic-detail-panel-header">
+                                                    <div>
+                                                        <h4 title={selectedTopic.topic}>{selectedTopic.topic}</h4>
+                                                        <p>Last consume {formatTimestamp(selectedTopic.lastTimestamp)}</p>
+                                                    </div>
+                                                    <span className={`consumer-topic-detail-lag-pill ${selectedTopic.diffTotal > 0 ? 'is-warning' : 'is-healthy'}`}>
+                                                        Total lag {selectedTopic.diffTotal}
+                                                    </span>
+                                                </div>
+
+                                                <div className="consumer-topic-detail-table">
+                                                    <div className="consumer-topic-detail-table-head">
+                                                        <span>Queue</span>
+                                                        <span>Offsets</span>
+                                                        <span>Lag</span>
+                                                        <span>Client</span>
+                                                        <span>Last Consume</span>
+                                                    </div>
+
+                                                    {selectedTopic.queueStatInfoList.length === 0 ? (
+                                                        <div className="consumer-topic-detail-state">
+                                                            <Server className="topic-icon" aria-hidden="true" />
+                                                            <strong>No queue details</strong>
+                                                            <span>This topic did not return queue-level offset rows.</span>
+                                                        </div>
+                                                    ) : (
+                                                        selectedTopic.queueStatInfoList.map((queue) => (
+                                                            <div
+                                                                className="consumer-topic-detail-row"
+                                                                key={`${selectedTopic.topic}-${queue.brokerName}-${queue.queueId}`}
                                                             >
-                                                                <td className="px-6 py-3 font-mono text-gray-600 dark:text-gray-400">
-                                                                    {queue.brokerName}
-                                                                </td>
-                                                                <td className="px-6 py-3 font-mono text-gray-600 dark:text-gray-400">
-                                                                    {queue.queueId}
-                                                                </td>
-                                                                <td className="px-6 py-3 text-right font-mono text-gray-900 dark:text-gray-300">
-                                                                    {queue.brokerOffset}
-                                                                </td>
-                                                                <td className="px-6 py-3 text-right font-mono text-gray-900 dark:text-gray-300">
-                                                                    {queue.consumerOffset}
-                                                                </td>
-                                                                <td className="px-6 py-3 text-right font-mono font-bold text-amber-600 dark:text-amber-400">
+                                                                <span data-label="Queue" className="consumer-topic-detail-cell is-queue">
+                                                                    <strong>{queue.brokerName}</strong>
+                                                                    <small>Queue {queue.queueId}</small>
+                                                                </span>
+                                                                <span data-label="Offsets" className="consumer-topic-detail-cell is-offset-pair">
+                                                                    <span>
+                                                                        <small>Broker</small>
+                                                                        <strong>{queue.brokerOffset}</strong>
+                                                                    </span>
+                                                                    <span>
+                                                                        <small>Consumer</small>
+                                                                        <strong>{queue.consumerOffset}</strong>
+                                                                    </span>
+                                                                </span>
+                                                                <span
+                                                                    data-label="Lag"
+                                                                    className={`consumer-topic-detail-cell is-number ${queue.diffTotal > 0 ? 'is-warning' : 'is-healthy'}`}
+                                                                >
                                                                     {queue.diffTotal}
-                                                                </td>
-                                                                <td className="px-6 py-3 text-xs text-gray-500 dark:text-gray-500">
+                                                                </span>
+                                                                <span data-label="Client" className="consumer-topic-detail-cell is-client" title={queue.clientInfo || '-'}>
                                                                     {queue.clientInfo || '-'}
-                                                                </td>
-                                                                <td className="px-6 py-3 text-right font-mono text-gray-500 dark:text-gray-400">
+                                                                </span>
+                                                                <span data-label="Last Consume" className="consumer-topic-detail-cell is-time" title={formatTimestamp(queue.lastTimestamp)}>
                                                                     {formatTimestamp(queue.lastTimestamp)}
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
+                                                                </span>
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <div className="consumer-topic-detail-state">
+                                                <FileBox className="topic-icon" aria-hidden="true" />
+                                                <strong>No topic selected</strong>
+                                                <span>Select a topic to inspect queue-level offsets.</span>
                                             </div>
-                                        </section>
-                                    );
-                                })}
+                                        )}
+                                    </section>
+                                </section>
                             </>
                         ) : (
-                            <div className="rounded-2xl border border-dashed border-gray-200 bg-white/70 px-6 py-16 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/70 dark:text-gray-400">
-                                No consumer detail data was returned for this group.
+                            <div className="topic-status-state">
+                                <FileText className="topic-icon" aria-hidden="true" />
+                                <strong>No consumer detail data</strong>
+                                <span>No topic-level offset data was returned for this consumer group.</span>
                             </div>
                         )}
                     </div>
 
-                    <div className="z-10 flex shrink-0 justify-end border-t border-gray-100 bg-white px-6 py-4 dark:border-gray-800 dark:bg-gray-900">
-                        <button
-                            onClick={onClose}
-                            className="rounded-lg bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg dark:border dark:border-gray-700 dark:!bg-gray-900 dark:!text-white dark:hover:!bg-gray-800"
-                        >
-                            Close
-                        </button>
-                    </div>
+                    <footer className="topic-status-footer consumer-topic-detail-footer">
+                        <span>Queue offsets are read-only and reflect the current consumer runtime snapshot.</span>
+                        <div>
+                            <button type="button" onClick={onClose} className="topic-status-secondary-button">
+                                Close
+                            </button>
+                        </div>
+                    </footer>
                 </motion.div>
             </div>
         </AnimatePresence>

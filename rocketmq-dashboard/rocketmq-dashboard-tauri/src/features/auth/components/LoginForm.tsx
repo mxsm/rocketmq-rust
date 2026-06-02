@@ -30,8 +30,12 @@ export const LoginForm: React.FC = () => {
             className="auth-form-wrap"
         >
             <div className="auth-card">
+                <span className="auth-card-light" aria-hidden="true" />
                 <div className="auth-card-header">
-                    <span className="auth-form-kicker">Admin access</span>
+                    <div className="auth-form-kicker-row">
+                        <span className="auth-form-kicker">Admin access</span>
+                        <span className="auth-form-chip">Local session</span>
+                    </div>
                     <h1>
                         Sign in to your account
                     </h1>

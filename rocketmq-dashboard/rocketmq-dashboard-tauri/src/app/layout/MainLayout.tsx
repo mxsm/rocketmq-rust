@@ -15,7 +15,10 @@ import {
     Sun,
     ChevronDown,
     LogOut,
-    UserRound
+    UserRound,
+    CheckCircle2,
+    MonitorDot,
+    ArrowRight
 } from 'lucide-react';
 import {Toaster, toast} from 'sonner@2.0.3';
 import {SidebarItem} from '../../components/ui/SidebarItem';
@@ -193,24 +196,52 @@ export const MainLayout = ({children}: MainLayoutProps) => {
                                 className="app-account-menu"
                             >
                                 <DropdownMenuLabel className="app-account-label">
-                                    <div className="app-account-name">{currentUser?.username ?? 'Admin'}</div>
-                                    <div className="app-account-subtitle">Local dashboard administrator</div>
+                                    <div className="app-account-identity">
+                                        <span className="app-account-avatar">{initials}</span>
+                                        <span className="app-account-copy">
+                                            <span className="app-account-name">{currentUser?.username ?? 'Admin'}</span>
+                                            <span className="app-account-subtitle">Local dashboard administrator</span>
+                                        </span>
+                                        <span className="app-account-session-chip">
+                                            <span />
+                                            Active
+                                        </span>
+                                    </div>
                                 </DropdownMenuLabel>
+                                <div className="app-menu-session-card">
+                                    <div>
+                                        <span>Session</span>
+                                        <strong>Local secured session</strong>
+                                    </div>
+                                    <CheckCircle2 className="h-4 w-4" />
+                                </div>
                                 <DropdownMenuSeparator className="app-menu-separator" />
                                 <DropdownMenuItem
                                     onSelect={() => setActiveTab('Account')}
                                     className="app-menu-item"
                                 >
-                                    <UserRound className="h-4 w-4" />
-                                    View Profile
+                                    <span className="app-menu-item-icon">
+                                        <UserRound className="h-4 w-4" />
+                                    </span>
+                                    <span className="app-menu-item-copy">
+                                        <span className="app-menu-item-title">View Profile</span>
+                                        <span className="app-menu-item-meta">Account details</span>
+                                    </span>
+                                    <ArrowRight className="app-menu-item-arrow h-4 w-4" />
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                     variant="destructive"
                                     onSelect={() => setIsLogoutDialogOpen(true)}
                                     className="app-menu-item app-menu-item-danger"
                                 >
-                                    <LogOut className="h-4 w-4" />
-                                    Sign Out
+                                    <span className="app-menu-item-icon">
+                                        <LogOut className="h-4 w-4" />
+                                    </span>
+                                    <span className="app-menu-item-copy">
+                                        <span className="app-menu-item-title">Sign Out</span>
+                                        <span className="app-menu-item-meta">End this workstation session</span>
+                                    </span>
+                                    <MonitorDot className="app-menu-item-arrow h-4 w-4" />
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>

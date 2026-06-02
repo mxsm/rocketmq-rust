@@ -1,34 +1,37 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
-  X,
-  FileText,
   Activity,
-  Users,
+  AlertCircle,
+  Clock3,
   Copy,
   Database,
-  Server,
-  Clock,
-  HardDrive,
+  FileText,
   Flag,
-  RefreshCw,
+  Globe2,
+  HardDrive,
   Hash,
-  Tag,
-  Globe,
-  Key,
-  Layers,
-  AlertCircle,
   Info,
+  KeyRound,
+  Layers,
+  RefreshCw,
+  Server,
+  Tag,
+  Users,
+  X,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { MessageService } from '../services/message.service';
-import type { MessageDetail, MessageSummary } from '../features/message/types/message.types';
+import type { MessageDetail, MessageSummary, MessageTrack } from '../features/message/types/message.types';
 
 interface MessageDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   message: MessageSummary | null;
 }
+
+const MONO_FAMILY = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace';
 
 export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailModalProps) => {
   const [detail, setDetail] = useState<MessageDetail | null>(null);
@@ -61,7 +64,7 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
       })
       .catch((loadError) => {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Failed to load message detail');
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load message detail.');
         }
       })
       .finally(() => {
@@ -75,9 +78,9 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
     };
   }, [isOpen, message]);
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success("Copied to clipboard");
+  const copyToClipboard = (text: string, label = 'Value') => {
+    void navigator.clipboard.writeText(text);
+    toast.success(`${label} copied`);
   };
 
   const handleDirectConsume = async (consumerGroup: string) => {
@@ -115,236 +118,445 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
     }
   };
 
-  const formatTimestamp = (value?: number | null) => {
-    if (!value) {
-      return '-';
-    }
-    return new Date(value).toLocaleString();
-  };
-
   const systemPropertyEntries = useMemo(() => {
     if (!detail) {
       return [];
     }
-    return Object.entries(detail.properties).filter(([key]) => key === key.toUpperCase());
+    return Object.entries(detail.properties ?? {}).filter(([key]) => key === key.toUpperCase());
   }, [detail]);
 
   const userPropertyEntries = useMemo(() => {
     if (!detail) {
       return [];
     }
-    return Object.entries(detail.properties).filter(([key]) => key !== key.toUpperCase());
+    return Object.entries(detail.properties ?? {}).filter(([key]) => key !== key.toUpperCase());
   }, [detail]);
 
-  const InfoItem = ({ icon: Icon, label, value, mono = false, copyable = false }: any) => (
-    <div className="flex items-start p-3 hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-lg transition-colors group">
-      <div className="mt-0.5 mr-3 text-gray-400 dark:text-gray-500">
-        <Icon className="w-4 h-4" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-[10px] uppercase font-bold text-gray-400 dark:text-gray-500 tracking-wider mb-0.5">{label}</div>
-        <div className={`text-sm text-gray-900 dark:text-gray-200 break-all flex items-center gap-2 ${mono ? 'font-mono' : ''}`}>
-          {value}
-          {copyable && (
-            <button 
-              onClick={() => copyToClipboard(value)}
-              className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded"
-            >
-              <Copy className="w-3 h-3 text-gray-400 dark:text-gray-500" />
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const PropertyItem = ({ label, value }: any) => (
-    <div className="flex items-center justify-between py-2 border-b border-gray-50 dark:border-gray-800 last:border-0">
-      <span className="text-xs font-medium text-gray-500 dark:text-gray-400">{label}</span>
-      <span className="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-0.5 rounded">{value}</span>
-    </div>
-  );
-
-  if (!isOpen) return null;
+  const messageTitle = detail?.topic ?? message?.topic ?? 'Message';
+  const messageId = detail?.msgId ?? message?.queryMsgId ?? message?.msgId ?? '-';
+  const trackCount = detail?.messageTrackList?.length ?? 0;
 
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-          className="absolute inset-0 bg-gray-900/40 backdrop-blur-sm transition-opacity"
-        />
-        
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          transition={{ duration: 0.2 }}
-          className="relative w-full max-w-5xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 sticky top-0 z-10">
-            <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              <FileText className="w-5 h-5 text-blue-500" />
-              Message Detail
-            </h2>
-            <button 
-              onClick={onClose}
-              className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+      {isOpen ? (
+        <div className="topic-status-modal-root message-detail-root">
+          <motion.div
+            className="topic-status-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
 
-          {/* Body Content */}
-          <div className="flex-1 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/50 p-6 space-y-6">
-            {isLoading ? (
-              <div className="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-                <RefreshCw className="mb-4 h-8 w-8 animate-spin text-blue-500" />
-                <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Loading message detail...</p>
+          <motion.div
+            className="topic-status-dialog message-detail-dialog"
+            initial={{ opacity: 0, y: 20, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.98 }}
+            transition={{ duration: 0.2 }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="message-detail-title"
+          >
+            <header className="topic-status-header message-detail-header">
+              <div className="topic-status-title-wrap">
+                <span className="topic-status-icon">
+                  <FileText className="topic-icon" aria-hidden="true" />
+                </span>
+                <div>
+                  <span>Message inspection</span>
+                  <h3 id="message-detail-title">Message Detail</h3>
+                  <p>
+                    <strong>{messageTitle}</strong>
+                    <i aria-hidden="true"> / </i>
+                    <code>{messageId}</code>
+                  </p>
+                </div>
               </div>
-            ) : error ? (
-              <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>{error}</div>
+
+              <div className="topic-status-header-actions message-detail-header-actions">
+                <span className="message-detail-chip is-blue">
+                  <Layers className="topic-icon" aria-hidden="true" />
+                  Queue {detail?.queueId ?? '-'}
+                </span>
+                <span className="message-detail-chip is-green">
+                  <Activity className="topic-icon" aria-hidden="true" />
+                  {trackCount} tracks
+                </span>
+                <button type="button" onClick={onClose} className="topic-status-close" aria-label="Close">
+                  <X className="topic-icon" aria-hidden="true" />
+                </button>
               </div>
-            ) : detail ? (
-              <>
-                <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Info</h3>
-                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-0">
-                    <InfoItem icon={Database} label="Topic" value={detail.topic} mono />
-                    <InfoItem icon={Globe} label="BornHost" value={detail.bornHost || '-'} mono />
+            </header>
 
-                    <InfoItem icon={Hash} label="Message ID" value={detail.msgId} mono copyable />
-                    <InfoItem icon={Clock} label="BornTime" value={formatTimestamp(detail.bornTimestamp)} mono />
+            <div className="topic-status-body message-detail-body">
+              {isLoading ? (
+                <MessageDetailState
+                  icon={RefreshCw}
+                  title="Loading message detail"
+                  copy="Fetching broker metadata, payload, properties, and tracking records."
+                  active
+                />
+              ) : error ? (
+                <MessageDetailState icon={AlertCircle} title="Message detail failed" copy={error} tone="danger" />
+              ) : detail ? (
+                <>
+                  <section className="topic-status-kpi-grid message-detail-summary-grid" aria-label="Message detail summary">
+                    <DetailMetric
+                      label="Topic"
+                      value={detail.topic}
+                      note="source topic"
+                      icon={Database}
+                      tone="blue"
+                    />
+                    <DetailMetric
+                      label="Queue"
+                      value={String(detail.queueId ?? '-')}
+                      note={`offset ${detail.queueOffset ?? '-'}`}
+                      icon={Layers}
+                      tone="cyan"
+                    />
+                    <DetailMetric
+                      label="Store Size"
+                      value={formatBytes(detail.storeSize)}
+                      note="broker payload"
+                      icon={HardDrive}
+                      tone="green"
+                    />
+                    <DetailMetric
+                      label="Reconsume"
+                      value={String(detail.reconsumeTimes ?? 0)}
+                      note={`${trackCount} tracking records`}
+                      icon={RefreshCw}
+                      tone="violet"
+                    />
+                  </section>
 
-                    <InfoItem icon={Server} label="StoreHost" value={detail.storeHost || '-'} mono />
-                    <InfoItem icon={Clock} label="StoreTime" value={formatTimestamp(detail.storeTimestamp)} mono />
-
-                    <InfoItem icon={Layers} label="Queue ID" value={String(detail.queueId ?? '-')} mono />
-                    <InfoItem icon={RefreshCw} label="Reconsume" value={String(detail.reconsumeTimes ?? '-')} mono />
-
-                    <InfoItem icon={HardDrive} label="StoreSize" value={detail.storeSize ? `${detail.storeSize} bytes` : '-'} mono />
-                    <InfoItem icon={Flag} label="SysFlag" value={String(detail.sysFlag ?? '-')} mono />
-
-                    <InfoItem icon={Key} label="BodyCRC" value={String(detail.bodyCrc ?? '-')} mono />
-                    <InfoItem icon={RefreshCw} label="Trans Offset" value={String(detail.preparedTransactionOffset ?? '-')} mono />
-
-                    <InfoItem icon={Tag} label="Flag" value={String(detail.flag ?? '-')} mono />
-                    <InfoItem icon={Layers} label="Queue Offset" value={String(detail.queueOffset ?? '-')} mono />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1">
-                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                        <Activity className="w-3.5 h-3.5" /> System Properties
-                      </h3>
-                      <span className="bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                        {systemPropertyEntries.length}
-                      </span>
-                    </div>
-                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-1">
-                      {systemPropertyEntries.length > 0 ? systemPropertyEntries.map(([key, value]) => (
-                        <PropertyItem key={key} label={key} value={value} />
-                      )) : (
-                        <div className="text-sm text-gray-500 dark:text-gray-400">No system properties</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between px-1">
-                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                        <Users className="w-3.5 h-3.5" /> User Properties
-                      </h3>
-                      <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                        {userPropertyEntries.length}
-                      </span>
-                    </div>
-                    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-1">
-                      {userPropertyEntries.length > 0 ? userPropertyEntries.map(([key, value]) => (
-                        <PropertyItem key={key} label={key} value={value} />
-                      )) : (
-                        <div className="text-sm text-gray-500 dark:text-gray-400">No user properties</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Body</h3>
-                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4 space-y-3">
-                    {detail.bodyText !== null && detail.bodyText !== undefined ? (
-                      <div className="font-mono text-sm text-gray-800 dark:text-gray-200 overflow-x-auto whitespace-pre-wrap break-all">
-                        {detail.bodyText}
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-                          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          <span>消息体不是有效 UTF-8，当前以 base64 形式展示。</span>
+                  <section className="message-detail-workspace">
+                    <div className="message-detail-main">
+                      <DetailPanel
+                        title="Message Info"
+                        eyebrow="broker runtime snapshot"
+                        icon={Info}
+                        badge="readonly"
+                      >
+                        <div className="message-detail-info-grid">
+                          <DetailInfoCell icon={Hash} label="Message ID" value={detail.msgId} copyable />
+                          <DetailInfoCell icon={Database} label="Topic" value={detail.topic} />
+                          <DetailInfoCell icon={Globe2} label="Born Host" value={detail.bornHost || '-'} />
+                          <DetailInfoCell icon={Server} label="Store Host" value={detail.storeHost || '-'} />
+                          <DetailInfoCell icon={Clock3} label="Born Time" value={formatTimestamp(detail.bornTimestamp)} />
+                          <DetailInfoCell icon={Clock3} label="Store Time" value={formatTimestamp(detail.storeTimestamp)} />
+                          <DetailInfoCell icon={Layers} label="Queue ID" value={String(detail.queueId ?? '-')} />
+                          <DetailInfoCell icon={Layers} label="Queue Offset" value={String(detail.queueOffset ?? '-')} />
+                          <DetailInfoCell icon={KeyRound} label="Body CRC" value={String(detail.bodyCrc ?? '-')} />
+                          <DetailInfoCell icon={Flag} label="Sys Flag" value={String(detail.sysFlag ?? '-')} />
+                          <DetailInfoCell icon={Tag} label="Flag" value={String(detail.flag ?? '-')} />
+                          <DetailInfoCell
+                            icon={RefreshCw}
+                            label="Trans Offset"
+                            value={String(detail.preparedTransactionOffset ?? '-')}
+                          />
                         </div>
-                        <div className="font-mono text-xs text-gray-800 dark:text-gray-200 overflow-x-auto break-all">
-                          {detail.bodyBase64 || '-'}
+                      </DetailPanel>
+
+                      <div className="message-detail-property-grid">
+                        <PropertyPanel
+                          title="System Properties"
+                          icon={Activity}
+                          entries={systemPropertyEntries}
+                          empty="No system properties"
+                          tone="blue"
+                        />
+                        <PropertyPanel
+                          title="User Properties"
+                          icon={Users}
+                          entries={userPropertyEntries}
+                          empty="No user properties"
+                          tone="violet"
+                        />
+                      </div>
+
+                      <DetailPanel title="Message Body" eyebrow="decoded payload" icon={FileText}>
+                        <MessageBody detail={detail} />
+                      </DetailPanel>
+                    </div>
+
+                    <aside className="message-detail-rail" aria-label="Message inspector">
+                      <DetailPanel title="Identity" eyebrow="copyable message coordinates" icon={Hash}>
+                        <div className="message-detail-identity-list">
+                          <IdentityRow label="Message ID" value={detail.msgId} onCopy={copyToClipboard} />
+                          <IdentityRow label="Query ID" value={message?.queryMsgId ?? detail.msgId} onCopy={copyToClipboard} />
+                          <IdentityRow label="Topic" value={detail.topic} onCopy={copyToClipboard} />
                         </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                      </DetailPanel>
 
-                <div className="space-y-3">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider px-1">Message Tracking</h3>
-                  <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4">
-                    {detail.messageTrackList && detail.messageTrackList.length > 0 ? (
-                      <div className="space-y-2">
-                        {detail.messageTrackList.map((track) => (
-                          <div key={`${track.consumerGroup}-${track.trackType}`} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm dark:border-gray-800 dark:bg-gray-800/50">
-                            <div className="font-medium text-gray-900 dark:text-white">{track.consumerGroup}</div>
-                            <div className="mt-1 text-gray-600 dark:text-gray-300">{track.trackType}</div>
-                            <button
-                              onClick={() => void handleDirectConsume(track.consumerGroup)}
-                              disabled={consumingGroup === track.consumerGroup}
-                              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-amber-400 dark:hover:border-gray-600 dark:hover:bg-gray-700"
-                            >
-                              <RefreshCw className={`h-3.5 w-3.5 ${consumingGroup === track.consumerGroup ? 'animate-spin' : ''}`} />
-                              {consumingGroup === track.consumerGroup ? 'Requesting...' : 'Resend'}
-                            </button>
-                            {track.exceptionDesc && (
-                              <div className="mt-1 font-mono text-xs text-red-600 dark:text-red-300 break-all">{track.exceptionDesc}</div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
-                        <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
-                        <div>No consumer track records matched the current message.</div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            ) : null}
+                      <DetailPanel title="Message Tracking" eyebrow="consumer delivery state" icon={Activity} badge={String(trackCount)}>
+                        <TrackingList
+                          tracks={detail.messageTrackList ?? []}
+                          consumingGroup={consumingGroup}
+                          onDirectConsume={(consumerGroup) => void handleDirectConsume(consumerGroup)}
+                        />
+                      </DetailPanel>
+                    </aside>
+                  </section>
+                </>
+              ) : (
+                <MessageDetailState icon={Info} title="No message selected" copy="Choose a result card to inspect the detail payload." />
+              )}
+            </div>
 
-          </div>
-
-          {/* Footer */}
-          <div className="px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-100 dark:border-gray-800 flex justify-end">
-            <button
-              onClick={onClose}
-              className="px-6 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-            >
-              Close
-            </button>
-          </div>
-        </motion.div>
-      </div>
+            <footer className="topic-status-footer message-detail-footer">
+              <span>Message data is read-only and reflects the current broker response.</span>
+              <button type="button" onClick={onClose} className="topic-status-secondary-button">
+                Close
+              </button>
+            </footer>
+          </motion.div>
+        </div>
+      ) : null}
     </AnimatePresence>
   );
 };
+
+const formatTimestamp = (value?: number | null) => {
+  if (!value) {
+    return '-';
+  }
+  return new Date(value).toLocaleString();
+};
+
+const formatBytes = (value?: number | null) => {
+  if (value === null || value === undefined) {
+    return '-';
+  }
+  return `${value.toLocaleString()} bytes`;
+};
+
+const DetailMetric = ({
+  label,
+  value,
+  note,
+  icon: Icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  icon: LucideIcon;
+  tone: 'blue' | 'cyan' | 'green' | 'violet';
+}) => (
+  <article className={`topic-status-kpi message-detail-kpi is-${tone}`}>
+    <div>
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+      <small>{note}</small>
+    </div>
+    <Icon className="topic-icon" aria-hidden="true" />
+  </article>
+);
+
+const DetailPanel = ({
+  title,
+  eyebrow,
+  icon: Icon,
+  badge,
+  children,
+}: {
+  title: string;
+  eyebrow: string;
+  icon: LucideIcon;
+  badge?: string;
+  children: ReactNode;
+}) => (
+  <section className="message-detail-panel">
+    <div className="message-detail-panel-head">
+      <span className="message-detail-panel-icon">
+        <Icon className="topic-icon" aria-hidden="true" />
+      </span>
+      <div>
+        <h4>{title}</h4>
+        <p>{eyebrow}</p>
+      </div>
+      {badge ? <strong>{badge}</strong> : null}
+    </div>
+    <div className="message-detail-panel-body">{children}</div>
+  </section>
+);
+
+const DetailInfoCell = ({
+  icon: Icon,
+  label,
+  value,
+  copyable = false,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  copyable?: boolean;
+}) => (
+  <div className="message-detail-info-cell">
+    <Icon className="topic-icon" aria-hidden="true" />
+    <div>
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+    </div>
+    {copyable ? (
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard.writeText(value);
+          toast.success(`${label} copied`);
+        }}
+        aria-label={`Copy ${label}`}
+      >
+        <Copy className="topic-icon" aria-hidden="true" />
+      </button>
+    ) : null}
+  </div>
+);
+
+const PropertyPanel = ({
+  title,
+  icon: Icon,
+  entries,
+  empty,
+  tone,
+}: {
+  title: string;
+  icon: LucideIcon;
+  entries: Array<[string, string]>;
+  empty: string;
+  tone: 'blue' | 'violet';
+}) => (
+  <section className={`message-detail-property-panel is-${tone}`}>
+    <div className="message-detail-property-head">
+      <span>
+        <Icon className="topic-icon" aria-hidden="true" />
+        {title}
+      </span>
+      <strong>{entries.length}</strong>
+    </div>
+    {entries.length > 0 ? (
+      <div className="message-detail-property-list">
+        {entries.map(([key, value]) => (
+          <div key={key} className="message-detail-property-row">
+            <span title={key}>{key}</span>
+            <strong title={value}>{value}</strong>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <div className="message-detail-empty">{empty}</div>
+    )}
+  </section>
+);
+
+const MessageBody = ({ detail }: { detail: MessageDetail }) => {
+  const hasTextBody = detail.bodyText !== null && detail.bodyText !== undefined;
+  const body = hasTextBody ? detail.bodyText : detail.bodyBase64 || '-';
+
+  return (
+    <div className="message-detail-body-block">
+      <div className="message-detail-body-toolbar">
+        <span>{hasTextBody ? 'UTF-8 body' : 'Base64 body'}</span>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(body || '');
+            toast.success('Message body copied');
+          }}
+        >
+          <Copy className="topic-icon" aria-hidden="true" />
+          Copy Body
+        </button>
+      </div>
+      {!hasTextBody ? (
+        <div className="message-detail-notice">
+          <Info className="topic-icon" aria-hidden="true" />
+          <span>Message body is not valid UTF-8. Showing the base64 payload returned by the broker.</span>
+        </div>
+      ) : null}
+      <pre style={{ fontFamily: MONO_FAMILY }}>{body}</pre>
+    </div>
+  );
+};
+
+const IdentityRow = ({
+  label,
+  value,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  onCopy: (value: string, label?: string) => void;
+}) => (
+  <div className="message-detail-identity-row">
+    <span>{label}</span>
+    <strong title={value}>{value}</strong>
+    <button type="button" onClick={() => onCopy(value, label)} aria-label={`Copy ${label}`}>
+      <Copy className="topic-icon" aria-hidden="true" />
+    </button>
+  </div>
+);
+
+const TrackingList = ({
+  tracks,
+  consumingGroup,
+  onDirectConsume,
+}: {
+  tracks: MessageTrack[];
+  consumingGroup: string | null;
+  onDirectConsume: (consumerGroup: string) => void;
+}) => {
+  if (tracks.length === 0) {
+    return (
+      <div className="message-detail-empty is-tall">
+        <Info className="topic-icon" aria-hidden="true" />
+        <span>No consumer track records matched this message.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="message-detail-track-list">
+      {tracks.map((track) => (
+        <article key={`${track.consumerGroup}-${track.trackType}`} className="message-detail-track-card">
+          <div>
+            <strong title={track.consumerGroup}>{track.consumerGroup}</strong>
+            <span>{track.trackType}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onDirectConsume(track.consumerGroup)}
+            disabled={consumingGroup === track.consumerGroup}
+          >
+            <RefreshCw className={`topic-icon ${consumingGroup === track.consumerGroup ? 'is-spinning' : ''}`} aria-hidden="true" />
+            {consumingGroup === track.consumerGroup ? 'Requesting' : 'Resend'}
+          </button>
+          {track.exceptionDesc ? <p>{track.exceptionDesc}</p> : null}
+        </article>
+      ))}
+    </div>
+  );
+};
+
+const MessageDetailState = ({
+  icon: Icon,
+  title,
+  copy,
+  active = false,
+  tone = 'neutral',
+}: {
+  icon: LucideIcon;
+  title: string;
+  copy: string;
+  active?: boolean;
+  tone?: 'neutral' | 'danger';
+}) => (
+  <div className={`topic-status-state message-detail-state ${active ? 'is-active' : ''} ${tone === 'danger' ? 'is-error' : ''}`}>
+    <Icon className={`topic-icon ${active ? 'is-spinning' : ''}`} aria-hidden="true" />
+    <strong>{title}</strong>
+    <span>{copy}</span>
+  </div>
+);

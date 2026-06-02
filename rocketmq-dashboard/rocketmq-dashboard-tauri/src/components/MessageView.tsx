@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   Calendar,
@@ -6,16 +6,17 @@ import {
   Clock3,
   Copy,
   FileText,
+  Hash,
   Info,
   KeyRound,
+  Layers,
   Search,
   Tag,
 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { toast } from 'sonner@2.0.3';
 import { MessageDetailModal } from './MessageDetailModal';
 import { Pagination } from './Pagination';
-import { Input } from './ui/input';
 import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
 import type { MessageSummary } from '../features/message/types/message.types';
 import { MessageService } from '../services/message.service';
@@ -37,6 +38,13 @@ const formatDateTimeInput = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
     date.getMinutes(),
   )}:${pad(date.getSeconds())}`;
+
+const formatMessageTimestamp = (value: number) => {
+  if (!value) {
+    return '-';
+  }
+  return new Date(value).toLocaleString();
+};
 
 export const MessageView = () => {
   const [activeTab, setActiveTab] = useState<MessageTab>('Topic');
@@ -73,13 +81,6 @@ export const MessageView = () => {
     setTopicTaskId('');
     setTopicPagination(defaultPagination);
   }, [activeTab]);
-
-  const formatTimestamp = (value: number) => {
-    if (!value) {
-      return '-';
-    }
-    return new Date(value).toLocaleString();
-  };
 
   const resetTopicPagingState = () => {
     setMessages([]);
@@ -209,9 +210,9 @@ export const MessageView = () => {
   };
 
   const renderTopicSelector = () => (
-    <div className="flex items-center space-x-2">
-      <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Topic:</span>
-      <div className="relative group">
+    <label className="message-query-field is-topic">
+      <span>Topic</span>
+      <div className="message-select-wrap">
         <select
           value={topic}
           onChange={(event) => {
@@ -220,7 +221,6 @@ export const MessageView = () => {
               resetTopicPagingState();
             }
           }}
-          className="w-48 cursor-pointer appearance-none rounded-xl border border-gray-200 bg-gray-50 py-2 pl-3 pr-8 text-sm font-medium text-gray-700 transition-all focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
         >
           {availableTopics.length === 0 ? (
             <option value="">
@@ -234,9 +234,9 @@ export const MessageView = () => {
             ))
           )}
         </select>
-        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+        <ChevronDown className="message-query-icon" aria-hidden="true" />
       </div>
-    </div>
+    </label>
   );
 
   const renderSearchArea = () => {
@@ -245,70 +245,51 @@ export const MessageView = () => {
         return (
           <>
             {renderTopicSelector()}
-            <div className="mx-2 hidden h-8 w-px bg-gray-200 dark:bg-gray-700 xl:block" />
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Begin:</span>
-              <div className="relative">
-                <Input
-                  value={startDate}
-                  onChange={(event) => {
-                    setStartDate(event.target.value);
-                    resetTopicPagingState();
-                  }}
-                  className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                />
-                <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-              </div>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">End:</span>
-              <div className="relative">
-                <Input
-                  value={endDate}
-                  onChange={(event) => {
-                    setEndDate(event.target.value);
-                    resetTopicPagingState();
-                  }}
-                  className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                />
-                <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-              </div>
-            </div>
+            <div className="message-query-divider" />
+            <DateTimeField
+              label="Begin"
+              value={startDate}
+              onChange={(value) => {
+                setStartDate(value);
+                resetTopicPagingState();
+              }}
+            />
+            <DateTimeField
+              label="End"
+              value={endDate}
+              onChange={(value) => {
+                setEndDate(value);
+                resetTopicPagingState();
+              }}
+            />
           </>
         );
       case 'Message Key':
         return (
           <>
             {renderTopicSelector()}
-            <div className="mx-2 hidden h-8 w-px bg-gray-200 dark:bg-gray-700 md:block" />
-            <div className="flex flex-1 items-center space-x-2">
-              <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Key:</span>
-              <Input
-                value={msgKey}
-                onChange={(event) => setMsgKey(event.target.value)}
-                placeholder="Enter Message Key..."
-                className="min-w-[200px] flex-1 border-gray-200 bg-gray-50 text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              />
-            </div>
-            <div className="whitespace-nowrap rounded border border-orange-100 bg-orange-50 px-2 py-1 text-xs font-medium text-orange-500 dark:border-orange-900/30 dark:bg-orange-900/20 dark:text-orange-400">
-              Only returns up to 64 messages
-            </div>
+            <div className="message-query-divider" />
+            <TextQueryField
+              label="Key"
+              value={msgKey}
+              placeholder="Enter Message Key..."
+              onChange={setMsgKey}
+            />
+            <span className="message-query-limit">Only returns up to 64 messages</span>
           </>
         );
       case 'Message ID':
         return (
           <>
             {renderTopicSelector()}
-            <div className="mx-2 hidden h-8 w-px bg-gray-200 dark:bg-gray-700 md:block" />
-            <div className="flex flex-1 items-center space-x-2">
-              <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Message ID:</span>
-              <Input
-                value={msgId}
-                onChange={(event) => setMsgId(event.target.value)}
-                placeholder="Enter Message ID..."
-                className="min-w-[300px] flex-1 border-gray-200 bg-gray-50 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              />
-            </div>
+            <div className="message-query-divider" />
+            <TextQueryField
+              label="Message ID"
+              mono
+              value={msgId}
+              placeholder="Enter Message ID..."
+              onChange={setMsgId}
+            />
           </>
         );
       default:
@@ -326,218 +307,104 @@ export const MessageView = () => {
     return 'Enter a topic and message id to open the real detail dialog directly.';
   };
 
-  const renderMessageCards = () => (
-    <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
-      {messages.map((msg, index) => (
-        <motion.div
-          key={`${msg.topic}-${msg.msgId}`}
-          initial={{ opacity: 0, y: 20, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          whileHover={{
-            y: -4,
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)',
-          }}
-          transition={{
-            duration: 0.3,
-            delay: index * 0.05,
-            ease: [0.22, 1, 0.36, 1],
-          }}
-          className="group flex flex-col overflow-hidden rounded-[20px] border border-gray-100 bg-white shadow-sm transition-all duration-300 hover:border-blue-200 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-800"
-        >
-          {/* Header - Message ID Focused */}
-          <div className="border-b border-gray-100 bg-gradient-to-br from-gray-50/80 to-white p-5 dark:border-gray-800 dark:from-gray-800/80 dark:to-gray-900">
-            <div className="mb-3 flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-gray-100 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                <FileText className="h-5 w-5 text-blue-600 dark:text-blue-500" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between">
-                  <span className="mb-0.5 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                    Message ID
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigator.clipboard.writeText(msg.msgId);
-                      toast.success('Copied message ID');
-                    }}
-                    className="p-1 text-gray-300 transition-colors hover:text-blue-600 dark:text-gray-600 dark:hover:text-blue-400"
-                    title="Copy message id"
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <h3 className="truncate font-mono text-xs font-bold text-gray-900 dark:text-white" title={msg.msgId}>
-                  {msg.msgId}
-                </h3>
-              </div>
-            </div>
-          </div>
+  const statusText = activeTab === 'Topic'
+    ? hasSearched
+      ? `${messages.length} item(s) on page ${topicPagination.currentPage} / ${Math.max(topicPagination.totalPages, 1)}`
+      : 'ready'
+    : activeTab === 'Message ID'
+      ? selectedMessage
+        ? 'detail open'
+        : 'ready'
+      : hasSearched
+        ? `${messages.length} result(s)`
+        : 'ready';
 
-          {/* Body Content */}
-          <div className="flex-1 space-y-4 p-5">
-            {/* Tag Section */}
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-900/30">
-                <Tag className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              </div>
-              <div>
-                <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                  Tag
-                </div>
-                <span className="inline-flex items-center rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-bold text-gray-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                  {msg.tags || '-'}
-                </span>
-              </div>
-            </div>
+  const helperText = activeTab === 'Topic'
+    ? 'Topic query follows dynamic time defaults plus real topic/time pagination with backend taskId continuity.'
+    : activeTab === 'Message Key'
+      ? 'Message Key uses the real query path and returns up to 64 messages, matching the Java dashboard behavior.'
+      : 'Message ID opens the real detail dialog directly, while list results stay in the compact card layout.';
 
-            <div className="grid grid-cols-2 gap-4">
-              {/* Key Section */}
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 dark:bg-amber-900/30">
-                  <KeyRound className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                </div>
-                <div className="min-w-0">
-                  <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                    Key
-                  </div>
-                  <div
-                    className="truncate font-mono text-xs font-medium text-gray-900 dark:text-gray-300"
-                    title={msg.keys || '-'}
-                  >
-                    {msg.keys || '-'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Time Section */}
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-900/30">
-                  <Clock3 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                </div>
-                <div className="min-w-0">
-                  <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                    Store Time
-                  </div>
-                  <div
-                    className="truncate font-mono text-xs font-medium text-gray-900 dark:text-gray-300"
-                  >
-                    {formatTimestamp(msg.storeTimestamp)}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Action Footer - Previous Style (Full Width Black Button) */}
-          <div className="border-t border-gray-100 bg-gray-50/50 p-4 dark:border-gray-800 dark:bg-gray-800/50">
-            <button
-              onClick={() => setSelectedMessage(msg)}
-              className="flex w-full items-center justify-center space-x-2 rounded-xl bg-gray-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-gray-800 active:scale-[0.98] dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              <span>View Details</span>
-            </button>
-          </div>
-        </motion.div>
-      ))}
-    </div>
-  );
+  const pageWindowLabel = hasSearched && activeTab === 'Topic'
+    ? `${topicPagination.currentPage}/${Math.max(topicPagination.totalPages, 1)}`
+    : 'Ready';
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-6 pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="message-page">
       <MessageDetailModal
         isOpen={!!selectedMessage}
         onClose={() => setSelectedMessage(null)}
         message={selectedMessage}
       />
 
-      <div className="mb-8 flex justify-center">
-        <div className="inline-flex rounded-xl bg-gray-100 p-1 shadow-inner dark:bg-gray-800">
-          {(['Topic', 'Message Key', 'Message ID'] as MessageTab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`rounded-lg px-6 py-2 text-sm font-medium transition-all duration-200 ${
-                activeTab === tab
-                  ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
-                  : 'text-gray-500 hover:bg-gray-200/50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/50 dark:hover:text-gray-200'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
+      <section className="message-mode-strip" aria-label="Message query mode">
+        {(['Topic', 'Message Key', 'Message ID'] as MessageTab[]).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`message-mode-button ${activeTab === tab ? 'is-active' : ''}`}
+          >
+            {tab}
+          </button>
+        ))}
+      </section>
 
-      <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
-        <div className="flex flex-1 flex-wrap items-center gap-4">
+      <section className="message-query-surface" aria-label="Message search controls">
+        <div className="message-query-fields">
           {renderSearchArea()}
         </div>
 
-        <div>
-          <button
-            onClick={() => void handleSearch()}
-            disabled={isSearching || isTopicCatalogLoading}
-            className="flex items-center rounded-xl bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg active:scale-95 dark:border dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:hover:bg-gray-800"
-          >
-            <Search className="mr-2 h-4 w-4" />
-            {isSearching ? 'SEARCHING...' : 'SEARCH'}
-          </button>
-        </div>
-      </div>
+        <button
+          type="button"
+          onClick={() => void handleSearch()}
+          disabled={isSearching || isTopicCatalogLoading}
+          className="message-search-button"
+        >
+          <Search className="topic-icon" aria-hidden="true" />
+          {isSearching ? 'Searching' : 'Search'}
+        </button>
+      </section>
 
       {topicCatalogError ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>Failed to load topic catalog: {topicCatalogError}</div>
-        </div>
+        <MessageAlert tone="warning" message={`Failed to load topic catalog: ${topicCatalogError}`} />
       ) : null}
 
-      {searchError ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>{searchError}</div>
-        </div>
-      ) : null}
+      {searchError ? <MessageAlert tone="danger" message={searchError} /> : null}
 
-      <div className="flex items-center justify-between rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
-        <div className="flex items-center gap-2">
-          <Info className="h-4 w-4 text-blue-500" />
-          <span>
-            {activeTab === 'Topic'
-              ? 'Topic tab now follows the Java dashboard flow: dynamic time defaults plus real topic/time pagination with backend taskId continuity.'
-              : activeTab === 'Message Key'
-                ? 'Message Key uses the real query path and returns up to 64 messages, matching the Java dashboard behavior.'
-                : 'Message ID now opens the real detail dialog directly, and list results are shown as the new card layout.'}
-          </span>
+      <section className="message-info-strip" aria-label="Message query status">
+        <div>
+          <Info className="topic-icon" aria-hidden="true" />
+          <span>{helperText}</span>
         </div>
-        <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
-          {activeTab === 'Topic'
-            ? hasSearched
-              ? `${messages.length} item(s) on page ${topicPagination.currentPage} / ${Math.max(topicPagination.totalPages, 1)}`
-              : 'ready'
-            : activeTab === 'Message ID'
-              ? selectedMessage
-                ? 'detail open'
-                : 'ready'
-              : hasSearched
-                ? `${messages.length} result(s)`
-                : 'ready'}
-        </span>
-      </div>
+        <strong>{statusText}</strong>
+      </section>
+
+      <section className="message-summary-grid" aria-label="Message query summary">
+        <MessageKpiCard label="Mode" value={activeTab} note="active query path" tone="blue" icon={Layers} />
+        <MessageKpiCard label="Results" value={String(messages.length)} note="current result set" tone="cyan" icon={FileText} />
+        <MessageKpiCard label="Topic" value={topic || '-'} note="selected source" tone="green" icon={Tag} />
+        <MessageKpiCard label="Page" value={pageWindowLabel} note="task continuity" tone="violet" icon={Hash} />
+      </section>
 
       {isSearching ? (
-        <div className="flex flex-col items-center justify-center rounded-[28px] border border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <Search className="mb-4 h-10 w-10 animate-pulse text-blue-500" />
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Querying messages...</p>
-        </div>
+        <MessageState icon={Search} title="Querying messages" copy="The broker query is running for the selected mode and scope." active />
       ) : messages.length > 0 ? (
         <>
-          {renderMessageCards()}
+          <section className="message-result-grid" aria-label="Message search results">
+            {messages.map((message, index) => (
+              <MessageResultCard
+                key={`${message.topic}-${message.msgId}`}
+                message={message}
+                index={index}
+                formatTimestamp={formatMessageTimestamp}
+                onOpen={() => setSelectedMessage(message)}
+              />
+            ))}
+          </section>
 
           {activeTab === 'Topic' && topicPagination.totalPages > 1 ? (
-            <div className="flex items-center justify-center pt-2">
+            <div className="message-pagination-wrap">
               <Pagination
                 currentPage={topicPagination.currentPage}
                 totalPages={topicPagination.totalPages}
@@ -547,18 +414,178 @@ export const MessageView = () => {
           ) : null}
         </>
       ) : hasSearched ? (
-        <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">No matching messages were found</p>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Check the current topic, time range, key, or message id.</p>
-        </div>
+        <MessageState icon={Search} title="No matching messages" copy="Check the current topic, time range, key, or message id." />
       ) : (
-        <div className="flex flex-col items-center justify-center rounded-[28px] border border-dashed border-gray-200 bg-white px-6 py-20 text-center shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <Search className="mb-4 h-10 w-10 text-gray-300 dark:text-gray-600" />
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Search is ready</p>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">{renderEmptyCopy()}</p>
-        </div>
+        <MessageState icon={Search} title="Search is ready" copy={renderEmptyCopy()} />
       )}
     </div>
   );
 };
+
+const DateTimeField = ({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) => (
+  <label className="message-query-field is-time">
+    <span>{label}</span>
+    <div className="message-input-wrap">
+      <input value={value} onChange={(event) => onChange(event.target.value)} />
+      <Calendar className="message-query-icon" aria-hidden="true" />
+    </div>
+  </label>
+);
+
+const TextQueryField = ({
+  label,
+  value,
+  placeholder,
+  mono = false,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  mono?: boolean;
+  onChange: (value: string) => void;
+}) => (
+  <label className="message-query-field is-text">
+    <span>{label}</span>
+    <input
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className={mono ? 'is-mono' : ''}
+    />
+  </label>
+);
+
+const MessageAlert = ({ tone, message }: { tone: 'warning' | 'danger'; message: string }) => (
+  <div className={`message-alert is-${tone}`}>
+    <AlertCircle className="topic-icon" aria-hidden="true" />
+    <span>{message}</span>
+  </div>
+);
+
+const MessageKpiCard = ({
+  label,
+  value,
+  note,
+  tone,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  note: string;
+  tone: 'blue' | 'cyan' | 'green' | 'violet';
+  icon: typeof Layers;
+}) => (
+  <article className={`message-kpi-card is-${tone}`}>
+    <div>
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+      <small>{note}</small>
+    </div>
+    <Icon className="topic-icon" aria-hidden="true" />
+  </article>
+);
+
+const MessageResultCard = ({
+  message,
+  index,
+  formatTimestamp,
+  onOpen,
+}: {
+  message: MessageSummary;
+  index: number;
+  formatTimestamp: (timestamp: number) => string;
+  onOpen: () => void;
+}) => (
+  <motion.article
+    initial={{ opacity: 0, y: 14 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.22, delay: Math.min(index * 0.025, 0.22) }}
+    className="message-result-card"
+  >
+    <div className="message-result-head">
+      <span className="message-result-icon">
+        <FileText className="topic-icon" aria-hidden="true" />
+      </span>
+      <div>
+        <span>Message ID</span>
+        <strong title={message.msgId}>{message.msgId}</strong>
+      </div>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          navigator.clipboard.writeText(message.msgId);
+          toast.success('Copied message ID');
+        }}
+        className="message-copy-button"
+        aria-label="Copy message id"
+      >
+        <Copy className="topic-icon" aria-hidden="true" />
+      </button>
+    </div>
+
+    <div className="message-result-body">
+      <MessageMeta icon={Tag} label="Tag" value={message.tags || '-'} tone="blue" />
+      <MessageMeta icon={KeyRound} label="Key" value={message.keys || '-'} tone="amber" mono />
+      <MessageMeta icon={Clock3} label="Store Time" value={formatTimestamp(message.storeTimestamp)} tone="green" mono />
+    </div>
+
+    <div className="message-result-footer">
+      <button type="button" onClick={onOpen} className="message-detail-button">
+        <FileText className="topic-icon" aria-hidden="true" />
+        View Details
+      </button>
+    </div>
+  </motion.article>
+);
+
+const MessageMeta = ({
+  icon: Icon,
+  label,
+  value,
+  tone,
+  mono = false,
+}: {
+  icon: typeof Tag;
+  label: string;
+  value: string;
+  tone: 'blue' | 'amber' | 'green';
+  mono?: boolean;
+}) => (
+  <div className={`message-meta is-${tone}`}>
+    <span className="message-meta-icon">
+      <Icon className="topic-icon" aria-hidden="true" />
+    </span>
+    <div>
+      <span>{label}</span>
+      <strong className={mono ? 'is-mono' : ''} title={value}>{value}</strong>
+    </div>
+  </div>
+);
+
+const MessageState = ({
+  icon: Icon,
+  title,
+  copy,
+  active = false,
+}: {
+  icon: typeof Search;
+  title: string;
+  copy: string;
+  active?: boolean;
+}) => (
+  <div className={`message-state ${active ? 'is-active' : ''}`}>
+    <Icon className="topic-icon" aria-hidden="true" />
+    <strong>{title}</strong>
+    <span>{copy}</span>
+  </div>
+);
