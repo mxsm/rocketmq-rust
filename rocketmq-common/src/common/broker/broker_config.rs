@@ -115,6 +115,10 @@ mod defaults {
             .into()
     }
 
+    pub fn use_single_rocksdb_for_all_configs() -> bool {
+        false
+    }
+
     pub fn split_registration_size() -> i32 {
         800
     }
@@ -325,6 +329,22 @@ mod defaults {
 
     pub fn pop_from_retry_probability() -> i32 {
         20
+    }
+
+    pub fn pop_consumer_fs_service_init() -> bool {
+        true
+    }
+
+    pub fn pop_consumer_kv_service_log() -> bool {
+        false
+    }
+
+    pub fn pop_consumer_kv_service_init() -> bool {
+        false
+    }
+
+    pub fn pop_consumer_kv_service_enable() -> bool {
+        false
     }
 
     pub fn init_pop_offset_by_check_msg_in_mem() -> bool {
@@ -678,6 +698,9 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
 
+    #[serde(default = "defaults::use_single_rocksdb_for_all_configs")]
+    pub use_single_rocksdb_for_all_configs: bool,
+
     #[serde(default)]
     pub enable_split_registration: bool,
 
@@ -926,6 +949,18 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::pop_from_retry_probability")]
     pub pop_from_retry_probability: i32,
 
+    #[serde(default = "defaults::pop_consumer_fs_service_init")]
+    pub pop_consumer_fs_service_init: bool,
+
+    #[serde(default = "defaults::pop_consumer_kv_service_log")]
+    pub pop_consumer_kv_service_log: bool,
+
+    #[serde(default = "defaults::pop_consumer_kv_service_init")]
+    pub pop_consumer_kv_service_init: bool,
+
+    #[serde(default = "defaults::pop_consumer_kv_service_enable")]
+    pub pop_consumer_kv_service_enable: bool,
+
     #[serde(default)]
     pub pop_response_return_actual_retry_topic: bool,
 
@@ -1099,6 +1134,7 @@ impl Default for BrokerConfig {
                 .to_string_lossy()
                 .into_owned()
                 .into(),
+            use_single_rocksdb_for_all_configs: false,
             enable_split_registration: false,
             split_registration_size: 800,
             register_broker_timeout_mills: 24000,
@@ -1179,6 +1215,10 @@ impl Default for BrokerConfig {
             enable_retry_topic_v2: false,
             retrieve_message_from_pop_retry_topic_v1: true,
             pop_from_retry_probability: 20,
+            pop_consumer_fs_service_init: true,
+            pop_consumer_kv_service_log: false,
+            pop_consumer_kv_service_init: false,
+            pop_consumer_kv_service_enable: false,
             pop_response_return_actual_retry_topic: false,
             init_pop_offset_by_check_msg_in_mem: true,
             enable_pop_buffer_merge: false,
@@ -1320,6 +1360,10 @@ impl BrokerConfig {
         properties.insert("brokerPermission".into(), self.broker_permission.to_string().into());
         properties.insert("asyncSendEnable".into(), self.async_send_enable.to_string().into());
         properties.insert("storePathRootDir".into(), self.store_path_root_dir.clone());
+        properties.insert(
+            "useSingleRocksDBForAllConfigs".into(),
+            self.use_single_rocksdb_for_all_configs.to_string().into(),
+        );
         properties.insert(
             "enableSplitRegistration".into(),
             self.enable_split_registration.to_string().into(),
@@ -1536,6 +1580,26 @@ impl BrokerConfig {
             self.bit_map_length_consume_queue_ext.to_string().into(),
         );
         properties.insert(
+            "popConsumerFSServiceInit".into(),
+            self.pop_consumer_fs_service_init.to_string().into(),
+        );
+        properties.insert(
+            "popConsumerKVServiceLog".into(),
+            self.pop_consumer_kv_service_log.to_string().into(),
+        );
+        properties.insert(
+            "popConsumerKVServiceInit".into(),
+            self.pop_consumer_kv_service_init.to_string().into(),
+        );
+        properties.insert(
+            "popConsumerKVServiceEnable".into(),
+            self.pop_consumer_kv_service_enable.to_string().into(),
+        );
+        properties.insert(
+            "enablePopMessageThreshold".into(),
+            self.enable_pop_message_threshold.to_string().into(),
+        );
+        properties.insert(
             "validateSystemTopicWhenUpdateTopic".into(),
             self.validate_system_topic_when_update_topic.to_string().into(),
         );
@@ -1651,6 +1715,39 @@ mod tests {
         assert_eq!(config.wait_time_mills_in_transaction_queue, 3_000);
         assert_eq!(config.wait_time_mills_in_ack_queue, 3_000);
         assert_eq!(config.wait_time_mills_in_admin_broker_queue, 5_000);
+    }
+
+    #[test]
+    fn default_broker_config_uses_java_pop_kv_defaults() {
+        let config = BrokerConfig::default();
+
+        assert!(config.pop_consumer_fs_service_init);
+        assert!(!config.pop_consumer_kv_service_log);
+        assert!(!config.pop_consumer_kv_service_init);
+        assert!(!config.pop_consumer_kv_service_enable);
+        assert!(!config.enable_pop_message_threshold);
+
+        let properties = config.get_properties();
+        assert_eq!(
+            properties.get("popConsumerFSServiceInit").map(|value| value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("popConsumerKVServiceLog").map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("popConsumerKVServiceInit").map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("popConsumerKVServiceEnable").map(|value| value.as_str()),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("enablePopMessageThreshold").map(|value| value.as_str()),
+            Some("false")
+        );
     }
 
     #[test]

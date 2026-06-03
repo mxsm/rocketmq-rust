@@ -15,6 +15,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+#[cfg(feature = "rocksdb_store")]
+use std::path::Path;
+#[cfg(feature = "rocksdb_store")]
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -60,6 +64,9 @@ use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use rocketmq_store::ha::ha_service::HAService;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+#[cfg(feature = "rocksdb_store")]
+use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
+use rocketmq_store::message_store::GenericMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
@@ -80,6 +87,12 @@ use crate::client::net::broker_to_client::Broker2Client;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequestHoldService;
+#[cfg(feature = "rocksdb_store")]
+use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+#[cfg(feature = "rocksdb_store")]
+use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
+#[cfg(feature = "rocksdb_store")]
+use crate::config::rocksdb_manager::RocksDbBrokerConfigStorageLayout;
 use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::controller::replicas_manager::ControllerBrokerIdAction;
 use crate::controller::replicas_manager::ControllerRegisterFollowup;
@@ -140,10 +153,10 @@ use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlu
 use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
 
 type DefaultServerProcessor =
-    BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
+    BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
 
 type FasterServerProcessor =
-    BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
+    BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
 
 fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     AuthConfig {
@@ -166,9 +179,138 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     }
 }
 
+#[cfg(feature = "rocksdb_store")]
+struct BrokerRocksDbConfigManagers {
+    topic: Arc<RocksDbBrokerConfigManager>,
+    consumer_offset: Arc<RocksDbBrokerConfigManager>,
+    subscription_group: Arc<RocksDbBrokerConfigManager>,
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn open_broker_rocksdb_config_managers(
+    broker_config: &BrokerConfig,
+    message_store_config: &MessageStoreConfig,
+) -> Option<BrokerRocksDbConfigManagers> {
+    if !message_store_config.is_enable_rocksdb_store() {
+        return None;
+    }
+
+    let root = Path::new(broker_config.store_path_root_dir.as_str());
+    let use_single = broker_config.use_single_rocksdb_for_all_configs;
+    let topic_path = RocksDbBrokerConfigStorageLayout::topic_path(root, use_single);
+    let consumer_offset_path = RocksDbBrokerConfigStorageLayout::consumer_offset_path(root, use_single);
+    let subscription_group_path = RocksDbBrokerConfigStorageLayout::subscription_group_path(root, use_single);
+
+    if use_single {
+        return open_shared_broker_rocksdb_config_managers(topic_path, consumer_offset_path, subscription_group_path);
+    }
+
+    if !prepare_rocksdb_config_path_for_json_migration(&topic_path)
+        || !prepare_rocksdb_config_path_for_json_migration(&consumer_offset_path)
+        || !prepare_rocksdb_config_path_for_json_migration(&subscription_group_path)
+    {
+        return None;
+    }
+
+    let topic = match RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(topic_path)) {
+        Ok(manager) => Arc::new(manager),
+        Err(error) => {
+            error!("Open RocksDB topic config manager failed: {error}");
+            return None;
+        }
+    };
+    let consumer_offset =
+        match RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(consumer_offset_path))
+        {
+            Ok(manager) => Arc::new(manager),
+            Err(error) => {
+                error!("Open RocksDB consumer offset config manager failed: {error}");
+                return None;
+            }
+        };
+    let subscription_group = match RocksDbBrokerConfigManager::open(
+        RocksDbBrokerConfigManagerConfig::subscription_group(subscription_group_path),
+    ) {
+        Ok(manager) => Arc::new(manager),
+        Err(error) => {
+            error!("Open RocksDB subscription group config manager failed: {error}");
+            return None;
+        }
+    };
+
+    Some(BrokerRocksDbConfigManagers {
+        topic,
+        consumer_offset,
+        subscription_group,
+    })
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn open_shared_broker_rocksdb_config_managers(
+    topic_path: PathBuf,
+    consumer_offset_path: PathBuf,
+    subscription_group_path: PathBuf,
+) -> Option<BrokerRocksDbConfigManagers> {
+    if !prepare_rocksdb_config_path_for_json_migration(&topic_path) {
+        return None;
+    }
+    let configs = vec![
+        RocksDbBrokerConfigManagerConfig::topic(topic_path),
+        RocksDbBrokerConfigManagerConfig::consumer_offset(consumer_offset_path),
+        RocksDbBrokerConfigManagerConfig::subscription_group(subscription_group_path),
+    ];
+    let mut managers = match RocksDbBrokerConfigManager::open_shared(configs) {
+        Ok(managers) => managers,
+        Err(error) => {
+            error!("Open shared RocksDB broker config manager failed: {error}");
+            return None;
+        }
+    };
+    if managers.len() != 3 {
+        error!(
+            "Open shared RocksDB broker config manager returned invalid manager count: {}",
+            managers.len()
+        );
+        return None;
+    }
+
+    let topic = managers.remove(0);
+    let consumer_offset = managers.remove(0);
+    let subscription_group = managers.remove(0);
+    Some(BrokerRocksDbConfigManagers {
+        topic,
+        consumer_offset,
+        subscription_group,
+    })
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn prepare_rocksdb_config_path_for_json_migration(path: &Path) -> bool {
+    if !path.is_file() {
+        return true;
+    }
+    let backup_path = PathBuf::from(format!("{}.bak", path.to_string_lossy()));
+    if backup_path.exists() {
+        if let Err(error) = std::fs::remove_file(&backup_path) {
+            error!(
+                "Remove stale broker config backup before RocksDB migration failed: {}",
+                error
+            );
+            return false;
+        }
+    }
+    match std::fs::rename(path, &backup_path) {
+        Ok(()) => true,
+        Err(error) => {
+            error!("Move broker config file before RocksDB migration failed: {}", error);
+            false
+        }
+    }
+}
+
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
-    inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
+    inner: ArcMut<BrokerRuntimeInner<GenericMessageStore>>,
     broker_runtime: Option<RocketMQRuntime>,
     shutdown_hook: Option<BrokerShutdownHook>,
     proxy_request_processor: Option<DefaultServerProcessor>,
@@ -218,8 +360,24 @@ impl BrokerRuntime {
 
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
+        #[cfg(feature = "rocksdb_store")]
+        let rocksdb_config_managers =
+            open_broker_rocksdb_config_managers(broker_config.as_ref(), message_store_config.as_ref());
+        #[cfg(feature = "rocksdb_store")]
+        let consumer_offset_manager = match rocksdb_config_managers.as_ref() {
+            Some(managers) => ConsumerOffsetManager::new_with_rocksdb_config_manager(
+                broker_config.clone(),
+                message_store_config.clone(),
+                None,
+                Arc::clone(&managers.consumer_offset),
+            ),
+            None => ConsumerOffsetManager::new(broker_config.clone(), message_store_config.clone(), None),
+        };
+        #[cfg(not(feature = "rocksdb_store"))]
+        let consumer_offset_manager =
+            ConsumerOffsetManager::new(broker_config.clone(), message_store_config.clone(), None);
 
-        let mut inner = ArcMut::new(BrokerRuntimeInner::<LocalFileMessageStore> {
+        let mut inner = ArcMut::new(BrokerRuntimeInner::<GenericMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
             store_host,
             broker_addr: CheetahString::from(broker_address),
@@ -228,11 +386,7 @@ impl BrokerRuntime {
             //server_config,
             topic_config_manager: None,
             topic_queue_mapping_manager,
-            consumer_offset_manager: ConsumerOffsetManager::new(
-                broker_config.clone(),
-                message_store_config.clone(),
-                None,
-            ),
+            consumer_offset_manager,
             subscription_group_manager: None,
             consumer_filter_manager: Some(consumer_filter_manager),
 
@@ -297,10 +451,37 @@ impl BrokerRuntime {
             broker_runtime_inner: inner.clone(),
         }));
         let stats_manager = Arc::new(stats_manager);
-        inner.topic_config_manager = Some(TopicConfigManager::new(inner.clone(), true));
+        #[cfg(feature = "rocksdb_store")]
+        {
+            inner.topic_config_manager = Some(match rocksdb_config_managers.as_ref() {
+                Some(managers) => TopicConfigManager::new_with_rocksdb_config_manager(
+                    inner.clone(),
+                    true,
+                    Arc::clone(&managers.topic),
+                ),
+                None => TopicConfigManager::new(inner.clone(), true),
+            });
+        }
+        #[cfg(not(feature = "rocksdb_store"))]
+        {
+            inner.topic_config_manager = Some(TopicConfigManager::new(inner.clone(), true));
+        }
         inner.topic_route_info_manager = Some(TopicRouteInfoManager::new(inner.clone()));
         inner.escape_bridge = Some(EscapeBridge::new(inner.clone()));
-        inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
+        #[cfg(feature = "rocksdb_store")]
+        {
+            inner.subscription_group_manager = Some(match rocksdb_config_managers.as_ref() {
+                Some(managers) => SubscriptionGroupManager::new_with_rocksdb_config_manager(
+                    inner.clone(),
+                    Arc::clone(&managers.subscription_group),
+                ),
+                None => SubscriptionGroupManager::new(inner.clone()),
+            });
+        }
+        #[cfg(not(feature = "rocksdb_store"))]
+        {
+            inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
+        }
         inner.consumer_order_info_manager = Some(ConsumerOrderInfoManager::new(inner.clone()));
         inner.producer_manager.set_broker_stats_manager(stats_manager.clone());
         inner
@@ -331,7 +512,7 @@ impl BrokerRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<LocalFileMessageStore>> {
+    pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<GenericMessageStore>> {
         &mut self.inner
     }
 
@@ -477,18 +658,24 @@ impl BrokerRuntime {
             cold_data_cg_ctr_service.shutdown();
         }
 
-        if let Some(topic_config_manager) = self.inner.topic_config_manager.as_mut() {
+        if let Some(mut topic_config_manager) = self.inner.topic_config_manager.take() {
             topic_config_manager.persist();
             topic_config_manager.stop();
         }
 
-        if let Some(subscription_group_manager) = self.inner.subscription_group_manager.as_mut() {
+        if let Some(mut subscription_group_manager) = self.inner.subscription_group_manager.take() {
             subscription_group_manager.persist();
             subscription_group_manager.stop();
         }
 
-        self.inner.consumer_offset_manager.persist();
-        self.inner.consumer_offset_manager.stop();
+        let mut consumer_offset_manager = ConsumerOffsetManager::new(
+            self.inner.broker_config.clone(),
+            self.inner.message_store_config.clone(),
+            None,
+        );
+        std::mem::swap(&mut self.inner.consumer_offset_manager, &mut consumer_offset_manager);
+        consumer_offset_manager.persist();
+        consumer_offset_manager.stop();
 
         if let Some(message_store) = self.inner.message_store.as_mut() {
             if tokio::time::timeout(Duration::from_secs(15), message_store.shutdown())
@@ -545,7 +732,7 @@ impl BrokerRuntime {
         let mut flag = true;
         if self.inner.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
-            let mut message_store = match LocalFileMessageStore::try_new(
+            let mut local_file_store = match LocalFileMessageStore::try_new(
                 self.inner.message_store_config.clone(),
                 self.inner.broker_config.clone(),
                 self.inner.topic_config_manager().topic_config_table(),
@@ -558,9 +745,10 @@ impl BrokerRuntime {
                     return false;
                 }
             };
-            let message_store_clone = message_store.clone();
-            message_store.set_message_store_arc(message_store_clone);
-            self.inner.timer_message_store = message_store.get_timer_message_store().cloned();
+            let local_file_store_clone = local_file_store.clone();
+            local_file_store.set_message_store_arc(local_file_store_clone);
+            self.inner.timer_message_store = local_file_store.get_timer_message_store().cloned();
+            let message_store = ArcMut::new(GenericMessageStore::local_file(local_file_store));
             self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
             self.inner.message_store = Some(message_store.clone());
             let message_store_for_fast_failure = message_store.clone();
@@ -582,7 +770,51 @@ impl BrokerRuntime {
                 }
             }
         } else if self.inner.message_store_config.store_type == StoreType::RocksDB {
-            unimplemented!("Use RocksDB as message store unimplemented");
+            #[cfg(feature = "rocksdb_store")]
+            {
+                info!("Use RocksDB as consume queue store with local file commit log");
+                let rocksdb_message_store = match RocksDBMessageStore::try_new(
+                    self.inner.message_store_config.clone(),
+                    self.inner.broker_config.clone(),
+                    self.inner.topic_config_manager().topic_config_table(),
+                    self.inner.broker_stats_manager.clone(),
+                    false,
+                ) {
+                    Ok(message_store) => message_store,
+                    Err(error) => {
+                        error!("Initialize RocksDB message store failed: {error}");
+                        return false;
+                    }
+                };
+                let rocksdb_message_store = ArcMut::new(rocksdb_message_store);
+                self.inner.timer_message_store = rocksdb_message_store.get_timer_message_store().cloned();
+                let message_store = ArcMut::new(GenericMessageStore::rocksdb(rocksdb_message_store));
+                self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
+                self.inner.message_store = Some(message_store.clone());
+                let message_store_for_fast_failure = message_store.clone();
+                self.inner
+                    .broker_fast_failure
+                    .set_page_cache_busy_checker(move || message_store_for_fast_failure.is_os_page_cache_busy());
+                self.inner
+                    .consumer_offset_manager
+                    .set_message_store(Some(message_store));
+                if let Some(message_store) = &mut self.inner.message_store {
+                    match message_store.init().await {
+                        Ok(_) => {
+                            info!("Initialize RocksDB message store success");
+                        }
+                        Err(e) => {
+                            warn!("Initialize RocksDB message store failed, error: {:?}", e);
+                            flag = false;
+                        }
+                    }
+                }
+            }
+            #[cfg(not(feature = "rocksdb_store"))]
+            {
+                warn!("RocksDB message store requested but rocketmq-broker was built without rocksdb_store feature");
+                return false;
+            }
         } else {
             warn!("Unknown store type");
             return false;
@@ -4814,6 +5046,37 @@ accounts:
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn initialize_message_store_opens_rocksdb_owner_for_rocksdb_store_type() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-rocksdb-{}", current_millis()));
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            store_type: StoreType::RocksDB,
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize_metadata());
+        assert!(runtime.initialize_message_store().await);
+        let message_store = runtime
+            .inner
+            .message_store()
+            .expect("message store should be initialized");
+        let GenericMessageStore::RocksDBStore(rocksdb_owner) = message_store.as_ref() else {
+            panic!("RocksDB store type should initialize the broker main store as GenericMessageStore::RocksDBStore");
+        };
+        assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue"));
+
+        if let Some(message_store) = runtime.inner.message_store.as_mut() {
+            message_store.shutdown().await;
+        }
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
     #[tokio::test]
     async fn phase3_broker_production_request_codes_dispatch_to_expected_processors() {
         let mut runtime = new_phase3_test_runtime("phase3-dispatch").await;
@@ -6916,6 +7179,256 @@ accounts:
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn broker_runtime_keeps_local_file_config_managers_by_default() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-runtime-config-default-{}",
+            current_millis()
+        ));
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
+
+        assert!(!inner.topic_config_manager().is_rocksdb_config_enabled());
+        assert!(!inner.consumer_offset_manager().is_rocksdb_config_enabled());
+        assert!(!inner.subscription_group_manager().is_rocksdb_config_enabled());
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn broker_runtime_wires_rocksdb_config_managers_for_rocksdb_store_type() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-runtime-config-rocksdb-{}",
+            current_millis()
+        ));
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            store_type: StoreType::RocksDB,
+            real_time_persist_rocksdb_config: true,
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
+
+        assert!(inner.topic_config_manager().is_rocksdb_config_enabled());
+        assert_eq!(
+            inner.topic_config_manager().rocksdb_config_path(),
+            Some(temp_root.join("config").join("topics").as_path())
+        );
+        assert!(inner.consumer_offset_manager().is_rocksdb_config_enabled());
+        assert_eq!(
+            inner.consumer_offset_manager().rocksdb_config_path(),
+            Some(temp_root.join("config").join("consumerOffsets").as_path())
+        );
+        assert!(inner.subscription_group_manager().is_rocksdb_config_enabled());
+        assert_eq!(
+            inner.subscription_group_manager().rocksdb_config_path(),
+            Some(temp_root.join("config").join("subscriptionGroups").as_path())
+        );
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn broker_runtime_uses_single_rocksdb_config_path_when_enabled() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-runtime-config-single-{}",
+            current_millis()
+        ));
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            use_single_rocksdb_for_all_configs: true,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            store_type: StoreType::RocksDB,
+            real_time_persist_rocksdb_config: true,
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let inner = runtime.inner_for_test();
+        let metadata_path = temp_root.join("config").join("metadata");
+
+        assert_eq!(
+            inner.topic_config_manager().rocksdb_config_path(),
+            Some(metadata_path.as_path())
+        );
+        assert_eq!(
+            inner.consumer_offset_manager().rocksdb_config_path(),
+            Some(metadata_path.as_path())
+        );
+        assert_eq!(
+            inner.subscription_group_manager().rocksdb_config_path(),
+            Some(metadata_path.as_path())
+        );
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn broker_runtime_migrates_separate_file_metadata_to_rocksdb_and_recovers_without_json_files() {
+        run_metadata_migration_to_rocksdb_case(false).await;
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn broker_runtime_migrates_single_file_metadata_to_rocksdb_and_recovers_without_json_files() {
+        run_metadata_migration_to_rocksdb_case(true).await;
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    async fn run_metadata_migration_to_rocksdb_case(use_single_rocksdb_for_all_configs: bool) {
+        let suffix = if use_single_rocksdb_for_all_configs {
+            "single"
+        } else {
+            "separate"
+        };
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-runtime-config-migrate-{suffix}-{}",
+            current_millis()
+        ));
+        let topic = CheetahString::from_static_str("MigratedTopic");
+        let group = CheetahString::from_static_str("MigratedGroup");
+
+        let mut file_runtime =
+            new_metadata_config_runtime(&temp_root, StoreType::LocalFile, use_single_rocksdb_for_all_configs);
+        {
+            let inner = file_runtime.inner_for_test();
+            let topic_config = ArcMut::new(TopicConfig::with_queues(topic.clone(), 3, 5));
+            inner.topic_config_manager_mut().put_topic_config(topic_config.clone());
+            inner
+                .topic_config_manager_mut()
+                .persist_with_topic(topic.as_str(), Box::new(topic_config));
+            inner.consumer_offset_manager().commit_offset(
+                CheetahString::from_static_str("127.0.0.1:10911"),
+                &group,
+                &topic,
+                1,
+                42,
+            );
+            inner.consumer_offset_manager().persist();
+            let mut group_config = SubscriptionGroupConfig::new(group.clone());
+            group_config.set_consume_broadcast_enable(false);
+            inner
+                .subscription_group_manager_mut()
+                .update_subscription_group_config(&mut group_config);
+            inner
+                .subscription_group_manager_mut()
+                .update_forbidden_value(&group, &topic, 1 << 2);
+        }
+
+        let topic_config_file = file_runtime.inner_for_test().topic_config_manager().config_file_path();
+        let consumer_offset_file = file_runtime
+            .inner_for_test()
+            .consumer_offset_manager()
+            .config_file_path();
+        let subscription_group_file = file_runtime
+            .inner_for_test()
+            .subscription_group_manager()
+            .config_file_path();
+        drop(file_runtime);
+
+        let mut migrating_runtime =
+            new_metadata_config_runtime(&temp_root, StoreType::RocksDB, use_single_rocksdb_for_all_configs);
+        {
+            let inner = migrating_runtime.inner_for_test();
+            assert!(inner.topic_config_manager().load());
+            assert!(inner.consumer_offset_manager().load());
+            assert!(inner.subscription_group_manager().load());
+            assert_eq!(
+                inner
+                    .topic_config_manager()
+                    .select_topic_config(&topic)
+                    .map(|config| (config.read_queue_nums, config.write_queue_nums)),
+                Some((3, 5))
+            );
+            assert_eq!(inner.consumer_offset_manager().query_offset(&group, &topic, 1), 42);
+            assert!(inner
+                .subscription_group_manager()
+                .find_subscription_group_config(&group)
+                .is_some());
+            assert!(inner
+                .subscription_group_manager()
+                .is_forbidden(group.as_str(), topic.as_str(), 2));
+        }
+        tokio::time::timeout(Duration::from_secs(5), migrating_runtime.shutdown_basic_service())
+            .await
+            .expect("migrating runtime shutdown should finish");
+        drop(migrating_runtime);
+
+        for file in [topic_config_file, consumer_offset_file, subscription_group_file] {
+            let _ = std::fs::remove_file(&file);
+            let _ = std::fs::remove_file(format!("{file}.bak"));
+        }
+
+        let mut recovered_runtime =
+            new_metadata_config_runtime(&temp_root, StoreType::RocksDB, use_single_rocksdb_for_all_configs);
+        {
+            let inner = recovered_runtime.inner_for_test();
+            assert!(inner.topic_config_manager().load());
+            assert!(inner.consumer_offset_manager().load());
+            assert!(inner.subscription_group_manager().load());
+            assert_eq!(
+                inner
+                    .topic_config_manager()
+                    .select_topic_config(&topic)
+                    .map(|config| (config.read_queue_nums, config.write_queue_nums)),
+                Some((3, 5))
+            );
+            assert_eq!(inner.consumer_offset_manager().query_offset(&group, &topic, 1), 42);
+            let recovered_group = inner
+                .subscription_group_manager()
+                .find_subscription_group_config(&group)
+                .expect("subscription group should recover from rocksdb");
+            assert!(!recovered_group.consume_broadcast_enable());
+            assert!(inner
+                .subscription_group_manager()
+                .is_forbidden(group.as_str(), topic.as_str(), 2));
+        }
+        tokio::time::timeout(Duration::from_secs(5), recovered_runtime.shutdown_basic_service())
+            .await
+            .expect("recovered runtime shutdown should finish");
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn new_metadata_config_runtime(
+        root: &Path,
+        store_type: StoreType,
+        use_single_rocksdb_for_all_configs: bool,
+    ) -> BrokerRuntime {
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            use_single_rocksdb_for_all_configs,
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            store_type,
+            real_time_persist_rocksdb_config: matches!(store_type, StoreType::RocksDB),
+            ..MessageStoreConfig::default()
+        });
+        BrokerRuntime::new(broker_config, message_store_config)
+    }
+
     #[tokio::test]
     async fn apply_message_store_role_change_promotes_store_to_master() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-master-{}", current_millis()));
@@ -6932,7 +7445,7 @@ accounts:
         let mut runtime = BrokerRuntime::new(broker_config.clone(), message_store_config.clone());
         let mut store = new_controller_mode_message_store(&temp_root, broker_config, message_store_config);
         store.init().await.expect("init message store");
-        runtime.inner.message_store = Some(store.clone());
+        runtime.inner.message_store = Some(ArcMut::new(GenericMessageStore::local_file(store.clone())));
 
         runtime
             .inner
@@ -6965,7 +7478,7 @@ accounts:
         let mut runtime = BrokerRuntime::new(broker_config.clone(), message_store_config.clone());
         let mut store = new_controller_mode_message_store(&temp_root, broker_config, message_store_config);
         store.init().await.expect("init message store");
-        runtime.inner.message_store = Some(store.clone());
+        runtime.inner.message_store = Some(ArcMut::new(GenericMessageStore::local_file(store.clone())));
 
         runtime
             .inner

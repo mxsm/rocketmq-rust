@@ -19,12 +19,17 @@ pub mod column_family;
 pub mod config;
 pub mod consume_queue;
 pub mod error;
+pub mod index;
 pub mod iterator;
 pub mod key;
+pub mod maintenance;
+pub mod message;
 pub mod metrics;
 pub mod options;
 pub mod snapshot;
 pub mod store;
+pub mod timer;
+pub mod transaction;
 pub mod value;
 
 pub use config::RocksDbConfig;

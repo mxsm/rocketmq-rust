@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
+#[cfg(feature = "rocksdb_store")]
+use std::path::Path;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -23,6 +25,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::utils::file_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -37,9 +40,13 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_consumer_offset_path;
+#[cfg(feature = "rocksdb_store")]
+use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
 pub const TOPIC_GROUP_SEPARATOR: &str = "@";
 
@@ -49,6 +56,8 @@ pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
     message_store_config: Arc<MessageStoreConfig>,
     consumer_offset_wrapper: ConsumerOffsetWrapper,
     message_store: Option<ArcMut<MS>>,
+    #[cfg(feature = "rocksdb_store")]
+    rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
 
 impl<MS> ConsumerOffsetManager<MS>
@@ -71,8 +80,47 @@ where
                 version_change_counter: Arc::new(AtomicI64::new(0)),
             },
             message_store,
+            #[cfg(feature = "rocksdb_store")]
+            rocksdb_config_manager: None,
         }
     }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub fn new_with_rocksdb_config_manager(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        message_store: Option<ArcMut<MS>>,
+        rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
+    ) -> Self {
+        let mut manager = Self::new(broker_config, message_store_config, message_store);
+        manager.rocksdb_config_manager = Some(rocksdb_config_manager);
+        manager
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn is_rocksdb_config_enabled(&self) -> bool {
+        self.rocksdb_config_manager.is_some()
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn rocksdb_config_path(&self) -> Option<&Path> {
+        self.rocksdb_config_manager.as_ref().map(|manager| manager.path())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn export_to_json(&self) -> Result<(), rocketmq_error::RocketMQError> {
+        let json = self.encode_pretty(true);
+        if json.is_empty() {
+            return Ok(());
+        }
+        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str()).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(
+                "rocksdb-consumer-offset",
+                format!("export consumer offset config to json failed: {error}"),
+            )
+        })
+    }
+
     pub fn set_message_store(&mut self, message_store: Option<ArcMut<MS>>) {
         self.message_store = message_store;
     }
@@ -325,13 +373,184 @@ where
             return;
         }
 
+        {
+            let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
+            let mut reset_offset_table = self.consumer_offset_wrapper.reset_offset_table.write();
+            let mut pull_offset_table = self.consumer_offset_wrapper.pull_offset_table.write();
+            for key in &keys_to_remove {
+                offset_table.remove(key);
+                reset_offset_table.remove(key);
+                pull_offset_table.remove(key);
+            }
+        }
+
+        #[cfg(feature = "rocksdb_store")]
+        if let Err(error) = self.delete_offsets_from_rocksdb(&keys_to_remove) {
+            error!("delete consumer offsets from rocksdb failed: {}", error);
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn delete_offsets_from_rocksdb(&self, keys: &[CheetahString]) -> Result<(), rocketmq_error::RocketMQError> {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return Ok(());
+        };
+        for key in keys {
+            rocksdb_config_manager.delete(key.as_str())?;
+        }
+        rocksdb_config_manager.set_kv_data_version(self.consumer_offset_wrapper.data_version.as_ref().clone())?;
+        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_from_rocksdb_or_migrate_from_file(&self) -> bool {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return false;
+        };
+        match rocksdb_config_manager.default_cf_is_empty() {
+            Ok(false) => self.load_from_rocksdb(),
+            Ok(true) => self.migrate_config_file_to_rocksdb(),
+            Err(error) => {
+                error!("check consumer offset rocksdb config records failed: {}", error);
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn migrate_config_file_to_rocksdb(&self) -> bool {
+        if !self.config_file_or_backup_exists() {
+            return true;
+        }
+        if !self.load_from_config_file() {
+            return false;
+        }
+        if let Err(error) = self.persist_offsets_to_rocksdb() {
+            error!("migrate consumer offset config file to rocksdb failed: {}", error);
+            return false;
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn config_file_or_backup_exists(&self) -> bool {
+        let file_name = self.config_file_path();
+        Path::new(&file_name).exists() || Path::new(format!("{file_name}.bak").as_str()).exists()
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_from_rocksdb(&self) -> bool {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return false;
+        };
+
+        match rocksdb_config_manager.load_data_version() {
+            Ok(Some(data_version)) => self
+                .consumer_offset_wrapper
+                .data_version
+                .mut_from_ref()
+                .assign_new_one(&data_version),
+            Ok(None) => {}
+            Err(error) => {
+                error!("load consumer offset rocksdb dataVersion failed: {}", error);
+                return false;
+            }
+        }
+
+        let records = match rocksdb_config_manager.load_data() {
+            Ok(records) => records,
+            Err(error) => {
+                error!("load consumer offset from rocksdb failed: {}", error);
+                return false;
+            }
+        };
+
         let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
-        let mut reset_offset_table = self.consumer_offset_wrapper.reset_offset_table.write();
-        let mut pull_offset_table = self.consumer_offset_wrapper.pull_offset_table.write();
-        for key in keys_to_remove {
-            offset_table.remove(&key);
-            reset_offset_table.remove(&key);
-            pull_offset_table.remove(&key);
+        for (key, body) in records {
+            let topic_at_group = match String::from_utf8(key) {
+                Ok(value) => CheetahString::from_string(value),
+                Err(error) => {
+                    error!("decode consumer offset key from rocksdb failed: {}", error);
+                    return false;
+                }
+            };
+            let wrapper = match serde_json::from_slice::<RocksDbOffsetSerializeWrapper>(&body) {
+                Ok(wrapper) => wrapper,
+                Err(error) => {
+                    error!("decode consumer offset value from rocksdb failed: {}", error);
+                    return false;
+                }
+            };
+            offset_table.insert(topic_at_group, wrapper.offset_table);
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn persist_offsets_to_rocksdb(&self) -> Result<(), rocketmq_error::RocketMQError> {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return Ok(());
+        };
+        let records = self
+            .consumer_offset_wrapper
+            .offset_table
+            .read()
+            .iter()
+            .map(|(key, offset_table)| {
+                let wrapper = RocksDbOffsetSerializeWrapper {
+                    offset_table: offset_table.clone(),
+                };
+                serde_json::to_vec(&wrapper).map(|body| (key.as_bytes().to_vec(), body))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    "rocksdb-consumer-offset",
+                    format!("consumer offset encode failed: {error}"),
+                )
+            })?;
+        rocksdb_config_manager.batch_put_with_wal(&records)?;
+        rocksdb_config_manager.set_kv_data_version(self.consumer_offset_wrapper.data_version.as_ref().clone())?;
+        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn flush_rocksdb_config_if_needed(
+        &self,
+        rocksdb_config_manager: &RocksDbBrokerConfigManager,
+    ) -> Result<(), rocketmq_error::RocketMQError> {
+        if self.message_store_config.real_time_persist_rocksdb_config {
+            rocksdb_config_manager.flush_wal()?;
+        }
+        Ok(())
+    }
+
+    fn load_from_config_file(&self) -> bool {
+        let file_name = self.config_file_path();
+        match file_utils::file_to_string(file_name.as_str()) {
+            Ok(content) if content.is_empty() => self.load_from_backup_config_file(file_name.as_str()),
+            Ok(content) => {
+                self.decode(&content);
+                info!("load Config file: {} -----OK", file_name);
+                true
+            }
+            Err(_) => self.load_from_backup_config_file(file_name.as_str()),
+        }
+    }
+
+    fn load_from_backup_config_file(&self, file_name: &str) -> bool {
+        let backup_file_name = format!("{file_name}.bak");
+        match file_utils::file_to_string(backup_file_name.as_str()) {
+            Ok(content) if !content.is_empty() => {
+                self.decode(&content);
+                info!("load Config file: {} -----OK", backup_file_name);
+                true
+            }
+            Ok(_) => true,
+            Err(error) => {
+                error!("load Config file: {} -----Failed: {:?}", backup_file_name, error);
+                false
+            }
         }
     }
 }
@@ -340,6 +559,40 @@ impl<MS> ConfigManager for ConsumerOffsetManager<MS>
 where
     MS: MessageStore,
 {
+    fn load(&self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            return self.load_from_rocksdb_or_migrate_from_file();
+        }
+        self.load_from_config_file()
+    }
+
+    fn persist(&self) {
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            if let Err(error) = self.persist_offsets_to_rocksdb() {
+                error!("persist consumer offsets to rocksdb failed: {}", error);
+            }
+            return;
+        }
+
+        let json = self.encode_pretty(true);
+        if !json.is_empty() {
+            let file_name = self.config_file_path();
+            if file_utils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
+                error!("persist file {} exception", file_name);
+            }
+        }
+    }
+
+    fn stop(&mut self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
+            rocksdb_config_manager.close();
+        }
+        true
+    }
+
     fn config_file_path(&self) -> String {
         get_consumer_offset_path(self.message_store_config.store_path_root_dir.as_str())
     }
@@ -369,6 +622,14 @@ where
         }
     }
 }
+
+#[cfg(feature = "rocksdb_store")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RocksDbOffsetSerializeWrapper {
+    #[serde(rename = "offsetTable")]
+    offset_table: HashMap<i32, i64>,
+}
+
 #[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
     data_version: ArcMut<DataVersion>,
@@ -525,6 +786,7 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config_manager::ConfigManager;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
@@ -625,5 +887,111 @@ mod tests {
         let offsets = manager.query_offsets(&group, &topic).expect("offset map should exist");
         assert_eq!(offsets.get(&0), Some(&12));
         assert_eq!(offsets.get(&1), Some(&24));
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[test]
+    fn consumer_offset_manager_persists_offsets_to_rocksdb_and_loads_after_restart() {
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let rocksdb_path = temp_dir.path().join("config").join("consumerOffsets");
+        let manager: ConsumerOffsetManager<LocalFileMessageStore> =
+            ConsumerOffsetManager::new_with_rocksdb_config_manager(
+                Arc::new(BrokerConfig::default()),
+                Arc::new(MessageStoreConfig {
+                    store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+                    real_time_persist_rocksdb_config: true,
+                    ..MessageStoreConfig::default()
+                }),
+                None,
+                Arc::new(
+                    RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(
+                        rocksdb_path.clone(),
+                    ))
+                    .expect("rocksdb config manager should open"),
+                ),
+            );
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 1, 24);
+        manager.data_version().mut_from_ref().next_version();
+        manager.persist();
+        drop(manager);
+
+        let restarted: ConsumerOffsetManager<LocalFileMessageStore> =
+            ConsumerOffsetManager::new_with_rocksdb_config_manager(
+                Arc::new(BrokerConfig::default()),
+                Arc::new(MessageStoreConfig {
+                    store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+                    real_time_persist_rocksdb_config: true,
+                    ..MessageStoreConfig::default()
+                }),
+                None,
+                Arc::new(
+                    RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(rocksdb_path))
+                        .expect("rocksdb config manager should reopen"),
+                ),
+            );
+
+        assert!(restarted.load());
+        assert_eq!(restarted.query_offset(&group, &topic, 0), 12);
+        assert_eq!(restarted.query_offset(&group, &topic, 1), 24);
+        assert_eq!(restarted.data_version().counter(), 1);
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[test]
+    fn consumer_offset_manager_clean_group_deletes_offsets_from_rocksdb() {
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let rocksdb_path = temp_dir.path().join("config").join("consumerOffsets-delete");
+        let manager: ConsumerOffsetManager<LocalFileMessageStore> =
+            ConsumerOffsetManager::new_with_rocksdb_config_manager(
+                Arc::new(BrokerConfig::default()),
+                Arc::new(MessageStoreConfig {
+                    store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+                    real_time_persist_rocksdb_config: true,
+                    ..MessageStoreConfig::default()
+                }),
+                None,
+                Arc::new(
+                    RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(
+                        rocksdb_path.clone(),
+                    ))
+                    .expect("rocksdb config manager should open"),
+                ),
+            );
+        let group = CheetahString::from_static_str("group-a");
+        let topic = CheetahString::from_static_str("topic-a");
+
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 12);
+        manager.data_version().mut_from_ref().next_version();
+        manager.persist();
+        manager.clean_offset_by_group(&group);
+        drop(manager);
+
+        let restarted: ConsumerOffsetManager<LocalFileMessageStore> =
+            ConsumerOffsetManager::new_with_rocksdb_config_manager(
+                Arc::new(BrokerConfig::default()),
+                Arc::new(MessageStoreConfig {
+                    store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+                    real_time_persist_rocksdb_config: true,
+                    ..MessageStoreConfig::default()
+                }),
+                None,
+                Arc::new(
+                    RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::consumer_offset(rocksdb_path))
+                        .expect("rocksdb config manager should reopen"),
+                ),
+            );
+
+        assert!(restarted.load());
+        assert_eq!(restarted.query_offset(&group, &topic, 0), -1);
     }
 }

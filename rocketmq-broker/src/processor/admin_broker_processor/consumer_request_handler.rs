@@ -1100,10 +1100,8 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
-    async fn put_test_message(
-        inner: &mut crate::broker_runtime::BrokerRuntimeInner<
-            rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore,
-        >,
+    async fn put_test_message<MS: MessageStore>(
+        inner: &mut crate::broker_runtime::BrokerRuntimeInner<MS>,
         topic: &str,
     ) -> String {
         let mut message = MessageExtBrokerInner::default();

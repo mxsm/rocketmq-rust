@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+#[cfg(feature = "rocksdb_store")]
+use std::path::Path;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -22,6 +24,7 @@ use rocketmq_common::common::attribute::subscription_group_attributes::Subscript
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::mix_all::is_sys_consumer_group;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::utils::file_utils;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
@@ -29,11 +32,14 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_subscription_group_path;
 use crate::broker_runtime::BrokerRuntimeInner;
+#[cfg(feature = "rocksdb_store")]
+use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
 pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
@@ -49,6 +55,8 @@ pub(crate) struct SubscriptionGroupManager<MS: MessageStore> {
     data_version: Arc<parking_lot::RwLock<DataVersion>>,
 
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    #[cfg(feature = "rocksdb_store")]
+    rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
 
 impl<MS> SubscriptionGroupManager<MS>
@@ -61,9 +69,45 @@ where
             forbidden_table: Arc::new(DashMap::new()),
             data_version: Arc::new(parking_lot::RwLock::new(DataVersion::new())),
             broker_runtime_inner,
+            #[cfg(feature = "rocksdb_store")]
+            rocksdb_config_manager: None,
         };
         manager.init();
         manager
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn new_with_rocksdb_config_manager(
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
+    ) -> Self {
+        let mut manager = Self::new(broker_runtime_inner);
+        manager.rocksdb_config_manager = Some(rocksdb_config_manager);
+        manager
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn is_rocksdb_config_enabled(&self) -> bool {
+        self.rocksdb_config_manager.is_some()
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn rocksdb_config_path(&self) -> Option<&Path> {
+        self.rocksdb_config_manager.as_ref().map(|manager| manager.path())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn export_to_json(&self) -> Result<(), rocketmq_error::RocketMQError> {
+        let json = self.encode_pretty(true);
+        if json.is_empty() {
+            return Ok(());
+        }
+        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str()).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(
+                "rocksdb-subscription-group",
+                format!("export subscription group config to json failed: {error}"),
+            )
+        })
     }
 
     /// Initialize system default consumer groups
@@ -261,9 +305,264 @@ where
     pub fn data_version(&self) -> Arc<parking_lot::RwLock<DataVersion>> {
         self.data_version.clone()
     }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_from_rocksdb_or_migrate_from_file(&self) -> bool {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return false;
+        };
+        match rocksdb_config_manager.default_cf_is_empty() {
+            Ok(false) => self.load_from_rocksdb(),
+            Ok(true) => self.migrate_config_file_to_rocksdb(),
+            Err(error) => {
+                error!("check subscription group rocksdb config records failed: {}", error);
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn migrate_config_file_to_rocksdb(&self) -> bool {
+        if !self.config_file_or_backup_exists() {
+            return true;
+        }
+        if !self.load_from_config_file() {
+            return false;
+        }
+        if let Err(error) = self.persist_to_rocksdb() {
+            error!("migrate subscription group config file to rocksdb failed: {}", error);
+            return false;
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn config_file_or_backup_exists(&self) -> bool {
+        let file_name = self.config_file_path();
+        Path::new(&file_name).exists() || Path::new(format!("{file_name}.bak").as_str()).exists()
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_from_rocksdb(&self) -> bool {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return false;
+        };
+
+        match rocksdb_config_manager.load_data_version() {
+            Ok(Some(data_version)) => self.data_version.write().assign_new_one(&data_version),
+            Ok(None) => {}
+            Err(error) => {
+                error!("load subscription group rocksdb dataVersion failed: {}", error);
+                return false;
+            }
+        }
+
+        if !self.load_subscription_groups_from_rocksdb(rocksdb_config_manager) {
+            return false;
+        }
+        self.load_forbidden_from_rocksdb(rocksdb_config_manager)
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_subscription_groups_from_rocksdb(&self, rocksdb_config_manager: &RocksDbBrokerConfigManager) -> bool {
+        let records = match rocksdb_config_manager.load_data() {
+            Ok(records) => records,
+            Err(error) => {
+                error!("load subscription groups from rocksdb failed: {}", error);
+                return false;
+            }
+        };
+        for (key, body) in records {
+            let group_name = match String::from_utf8(key) {
+                Ok(value) => CheetahString::from_string(value),
+                Err(error) => {
+                    error!("decode subscription group key from rocksdb failed: {}", error);
+                    return false;
+                }
+            };
+            let mut config = match serde_json::from_slice::<SubscriptionGroupConfig>(&body) {
+                Ok(config) => config,
+                Err(error) => {
+                    error!("decode subscription group value from rocksdb failed: {}", error);
+                    return false;
+                }
+            };
+            if config.group_name().is_empty() {
+                config.set_group_name(group_name.clone());
+            }
+            self.subscription_group_table.insert(group_name, Arc::new(config));
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_forbidden_from_rocksdb(&self, rocksdb_config_manager: &RocksDbBrokerConfigManager) -> bool {
+        let records = match rocksdb_config_manager.load_cf_data("forbidden") {
+            Ok(records) => records,
+            Err(error) => {
+                error!("load subscription forbidden table from rocksdb failed: {}", error);
+                return false;
+            }
+        };
+        for (key, body) in records {
+            let group_name = match String::from_utf8(key) {
+                Ok(value) => CheetahString::from_string(value),
+                Err(error) => {
+                    error!("decode subscription forbidden key from rocksdb failed: {}", error);
+                    return false;
+                }
+            };
+            let topics = match serde_json::from_slice::<HashMap<CheetahString, i32>>(&body) {
+                Ok(topics) => topics,
+                Err(error) => {
+                    error!("decode subscription forbidden value from rocksdb failed: {}", error);
+                    return false;
+                }
+            };
+            let topic_map = DashMap::new();
+            for (topic, value) in topics {
+                topic_map.insert(topic, value);
+            }
+            self.forbidden_table.insert(group_name, topic_map);
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn persist_to_rocksdb(&self) -> Result<(), rocketmq_error::RocketMQError> {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return Ok(());
+        };
+        let records = self
+            .subscription_group_table
+            .iter()
+            .map(|entry| serde_json::to_vec(entry.value().as_ref()).map(|body| (entry.key().as_bytes().to_vec(), body)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    "rocksdb-subscription-group",
+                    format!("subscription group encode failed: {error}"),
+                )
+            })?;
+        rocksdb_config_manager.batch_put_with_wal(&records)?;
+        self.persist_forbidden_to_rocksdb(rocksdb_config_manager)?;
+        rocksdb_config_manager.set_kv_data_version(self.data_version.read().clone())?;
+        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn persist_forbidden_to_rocksdb(
+        &self,
+        rocksdb_config_manager: &RocksDbBrokerConfigManager,
+    ) -> Result<(), rocketmq_error::RocketMQError> {
+        for entry in self.forbidden_table.iter() {
+            let topics = entry
+                .value()
+                .iter()
+                .map(|topic_entry| (topic_entry.key().clone(), *topic_entry.value()))
+                .collect::<HashMap<_, _>>();
+            let body = serde_json::to_string(&topics).map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    "rocksdb-subscription-group",
+                    format!("forbidden table encode failed: {error}"),
+                )
+            })?;
+            rocksdb_config_manager.put_cf_string("forbidden", entry.key().as_str(), &body)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn flush_rocksdb_config_if_needed(
+        &self,
+        rocksdb_config_manager: &RocksDbBrokerConfigManager,
+    ) -> Result<(), rocketmq_error::RocketMQError> {
+        if self
+            .broker_runtime_inner
+            .message_store_config()
+            .real_time_persist_rocksdb_config
+        {
+            rocksdb_config_manager.flush_wal()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn delete_group_from_rocksdb(&self, group_name: &str) -> Result<(), rocketmq_error::RocketMQError> {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return Ok(());
+        };
+        rocksdb_config_manager.delete(group_name)?;
+        rocksdb_config_manager.delete_cf("forbidden", group_name)?;
+        rocksdb_config_manager.set_kv_data_version(self.data_version.read().clone())?;
+        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
+    }
+
+    fn load_from_config_file(&self) -> bool {
+        let file_name = self.config_file_path();
+        match file_utils::file_to_string(file_name.as_str()) {
+            Ok(content) if content.is_empty() => self.load_from_backup_config_file(file_name.as_str()),
+            Ok(content) => {
+                self.decode(&content);
+                info!("load Config file: {} -----OK", file_name);
+                true
+            }
+            Err(_) => self.load_from_backup_config_file(file_name.as_str()),
+        }
+    }
+
+    fn load_from_backup_config_file(&self, file_name: &str) -> bool {
+        let backup_file_name = format!("{file_name}.bak");
+        match file_utils::file_to_string(backup_file_name.as_str()) {
+            Ok(content) if !content.is_empty() => {
+                self.decode(&content);
+                info!("load Config file: {} -----OK", backup_file_name);
+                true
+            }
+            Ok(_) => true,
+            Err(error) => {
+                error!("load Config file: {} -----Failed: {:?}", backup_file_name, error);
+                false
+            }
+        }
+    }
 }
 
 impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
+    fn load(&self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            return self.load_from_rocksdb_or_migrate_from_file();
+        }
+        self.load_from_config_file()
+    }
+
+    fn persist(&self) {
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            if let Err(error) = self.persist_to_rocksdb() {
+                error!("persist subscription groups to rocksdb failed: {}", error);
+            }
+            return;
+        }
+
+        let json = self.encode_pretty(true);
+        if !json.is_empty() {
+            let file_name = self.config_file_path();
+            if file_utils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
+                error!("persist file {} exception", file_name);
+            }
+        }
+    }
+
+    fn stop(&mut self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
+            rocksdb_config_manager.close();
+        }
+        true
+    }
+
     fn config_file_path(&self) -> String {
         get_subscription_group_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
     }
@@ -460,6 +759,13 @@ where
         if old.is_some() {
             info!("Deleted subscription group: {}", group_name);
             self.update_data_version();
+            #[cfg(feature = "rocksdb_store")]
+            if let Err(error) = self.delete_group_from_rocksdb(group_name) {
+                error!(
+                    "delete subscription group from rocksdb failed, group={}, error={}",
+                    group_name, error
+                );
+            }
             self.persist();
         } else {
             warn!("Delete failed, subscription group not found: {}", group_name);
@@ -532,7 +838,6 @@ where
         if forbidden_value <= 0 {
             self.forbidden_table.remove(group);
             info!("Cleared group forbidden, {}@{}", group, topic);
-            return;
         } else {
             let old = self
                 .forbidden_table
@@ -875,6 +1180,117 @@ impl SubscriptionGroupWrapperInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn subscription_group_manager_persists_group_and_forbidden_to_rocksdb() {
+        use rocketmq_common::common::broker::broker_config::BrokerConfig;
+        use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+        use crate::broker_runtime::BrokerRuntime;
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let mut runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig {
+                store_path_root_dir: root.clone(),
+                ..BrokerConfig::default()
+            }),
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: root,
+                real_time_persist_rocksdb_config: true,
+                ..MessageStoreConfig::default()
+            }),
+        );
+        let inner = runtime.inner_for_test().clone();
+        let rocksdb_path = temp_dir.path().join("config").join("subscriptionGroups");
+        let mut manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
+            inner.clone(),
+            Arc::new(
+                RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(
+                    rocksdb_path.clone(),
+                ))
+                .expect("rocksdb config manager should open"),
+            ),
+        );
+        let group = CheetahString::from_static_str("GroupA");
+        let topic = CheetahString::from_static_str("TopicA");
+        let mut config = SubscriptionGroupConfig::new(group.clone());
+
+        manager.update_subscription_group_config(&mut config);
+        manager.set_forbidden(&group, &topic, 3);
+        drop(manager);
+
+        let restarted = SubscriptionGroupManager::new_with_rocksdb_config_manager(
+            inner,
+            Arc::new(
+                RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(rocksdb_path))
+                    .expect("rocksdb config manager should reopen"),
+            ),
+        );
+
+        assert!(restarted.load());
+        assert!(restarted.get_group_config(group.as_str()).is_some());
+        assert!(restarted.get_forbidden(&group, &topic, 3));
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn subscription_group_manager_delete_removes_group_and_forbidden_from_rocksdb() {
+        use rocketmq_common::common::broker::broker_config::BrokerConfig;
+        use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+        use crate::broker_runtime::BrokerRuntime;
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+        use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let mut runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig {
+                store_path_root_dir: root.clone(),
+                ..BrokerConfig::default()
+            }),
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: root,
+                real_time_persist_rocksdb_config: true,
+                ..MessageStoreConfig::default()
+            }),
+        );
+        let inner = runtime.inner_for_test().clone();
+        let rocksdb_path = temp_dir.path().join("config").join("subscriptionGroups-delete");
+        let mut manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
+            inner.clone(),
+            Arc::new(
+                RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(
+                    rocksdb_path.clone(),
+                ))
+                .expect("rocksdb config manager should open"),
+            ),
+        );
+        let group = CheetahString::from_static_str("GroupDelete");
+        let topic = CheetahString::from_static_str("TopicA");
+        let mut config = SubscriptionGroupConfig::new(group.clone());
+
+        manager.update_subscription_group_config(&mut config);
+        manager.set_forbidden(&group, &topic, 3);
+        manager.delete_subscription_group_config(group.as_str());
+        drop(manager);
+
+        let restarted = SubscriptionGroupManager::new_with_rocksdb_config_manager(
+            inner,
+            Arc::new(
+                RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(rocksdb_path))
+                    .expect("rocksdb config manager should reopen"),
+            ),
+        );
+
+        assert!(restarted.load());
+        assert!(restarted.get_group_config(group.as_str()).is_none());
+        assert!(!restarted.get_forbidden(&group, &topic, 3));
+    }
 
     #[test]
     fn test_consume_from_min_enable_default() {

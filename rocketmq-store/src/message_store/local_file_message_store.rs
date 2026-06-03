@@ -872,6 +872,9 @@ impl LocalFileMessageStore {
         if message_store_config.rocksdb_cq_double_write_enable {
             enabled.push("rocksdb_cq_double_write_enable");
         }
+        if message_store_config.trans_rocksdb_enable {
+            enabled.push("trans_rocksdb_enable");
+        }
         enabled
     }
 
@@ -881,7 +884,7 @@ impl LocalFileMessageStore {
                 "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
             ));
         }
-        if self.message_store_config.timer_rocksdb_enable {
+        if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
             return Err(StoreError::General(
                 "Timer RocksDB backend is not implemented in rocketmq-rust; keep timer_rocksdb_enable=false"
                     .to_string(),
@@ -4672,6 +4675,7 @@ mod tests {
                 real_time_persist_rocksdb_config: true,
                 enable_rocksdb_log: true,
                 rocksdb_cq_double_write_enable: true,
+                trans_rocksdb_enable: true,
                 ..MessageStoreConfig::default()
             },
         );
@@ -4689,6 +4693,7 @@ mod tests {
                 && message.contains("real_time_persist_rocksdb_config")
                 && message.contains("enable_rocksdb_log")
                 && message.contains("rocksdb_cq_double_write_enable")
+                && message.contains("trans_rocksdb_enable")
         ));
     }
 
@@ -4912,6 +4917,24 @@ mod tests {
                 if message.contains("Timer RocksDB backend")
                     && message.contains("timer_rocksdb_enable=false")
         ));
+    }
+
+    #[tokio::test]
+    async fn init_allows_timer_rocksdb_backend_when_store_type_is_rocksdb() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                store_type: StoreType::RocksDB,
+                timer_rocksdb_enable: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+
+        store
+            .init()
+            .await
+            .expect("rocksdb-typed store should accept timer rocksdb flag");
     }
 
     #[tokio::test]

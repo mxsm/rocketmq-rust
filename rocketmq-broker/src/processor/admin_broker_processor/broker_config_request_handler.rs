@@ -25,6 +25,8 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+#[cfg(feature = "rocksdb_store")]
+use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
@@ -222,11 +224,66 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<ExportRocksdbConfigToJsonRequestHeader>()?;
-        if let Err(error) = request_header.fetch_config_type() {
-            return Ok(Some(
-                response.set_code(ResponseCode::InvalidParameter).set_remark(error),
-            ));
+        let config_types = match request_header.fetch_config_type() {
+            Ok(config_types) => config_types,
+            Err(error) => {
+                return Ok(Some(
+                    response.set_code(ResponseCode::InvalidParameter).set_remark(error),
+                ));
+            }
+        };
+
+        #[cfg(feature = "rocksdb_store")]
+        {
+            let mut exported_count = 0usize;
+            for config_type in config_types {
+                let export_result = match config_type {
+                    ExportRocksdbConfigType::Topics
+                        if self
+                            .broker_runtime_inner
+                            .topic_config_manager()
+                            .is_rocksdb_config_enabled() =>
+                    {
+                        exported_count += 1;
+                        self.broker_runtime_inner.topic_config_manager().export_to_json()
+                    }
+                    ExportRocksdbConfigType::SubscriptionGroups
+                        if self
+                            .broker_runtime_inner
+                            .subscription_group_manager()
+                            .is_rocksdb_config_enabled() =>
+                    {
+                        exported_count += 1;
+                        self.broker_runtime_inner.subscription_group_manager().export_to_json()
+                    }
+                    ExportRocksdbConfigType::ConsumerOffsets
+                        if self
+                            .broker_runtime_inner
+                            .consumer_offset_manager()
+                            .is_rocksdb_config_enabled() =>
+                    {
+                        exported_count += 1;
+                        self.broker_runtime_inner.consumer_offset_manager().export_to_json()
+                    }
+                    _ => Ok(()),
+                };
+                if let Err(error) = export_result {
+                    return Ok(Some(
+                        response
+                            .set_code(ResponseCode::SystemError)
+                            .set_remark(format!("export rocksdb config to json failed: {error}")),
+                    ));
+                }
+            }
+            if exported_count > 0 {
+                return Ok(Some(
+                    response.set_code(ResponseCode::Success).set_remark("export done."),
+                ));
+            }
         }
+
+        #[cfg(not(feature = "rocksdb_store"))]
+        let _ = config_types;
 
         Ok(Some(
             response.set_code(ResponseCode::RequestCodeNotSupported).set_remark(
@@ -654,6 +711,8 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::config_manager::ConfigManager;
     use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::TimeUtils::current_millis;
@@ -665,8 +724,11 @@ mod tests {
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_rust::ArcMut;
+    use rocketmq_store::base::message_store::MessageStore;
+    use rocketmq_store::base::store_enum::StoreType;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;
     use rocketmq_store::timer::timer_message_store::TimerMessageStore;
@@ -701,6 +763,23 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await);
         runtime
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    async fn new_rocksdb_config_runtime(label: &str) -> BrokerRuntime {
+        let temp_root = temp_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            store_type: StoreType::RocksDB,
+            real_time_persist_rocksdb_config: true,
+            ..MessageStoreConfig::default()
+        });
+        BrokerRuntime::new(broker_config, message_store_config)
     }
 
     async fn create_test_channel() -> Channel {
@@ -921,6 +1000,84 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test]
+    async fn export_rocksdb_config_to_json_writes_requested_json_files() {
+        let mut runtime = new_rocksdb_config_runtime("export-rocksdb-config").await;
+        let inner = runtime.inner_for_test().clone();
+        let topic = CheetahString::from_static_str("ExportTopic");
+        let group = CheetahString::from_static_str("ExportGroup");
+
+        {
+            let topic_config = ArcMut::new(TopicConfig::with_queues(topic.clone(), 2, 4));
+            let inner_mut = runtime.inner_for_test();
+            inner_mut
+                .topic_config_manager_mut()
+                .put_topic_config(topic_config.clone());
+            inner_mut
+                .topic_config_manager_mut()
+                .data_version_ref_mut()
+                .next_version();
+            inner_mut
+                .topic_config_manager_mut()
+                .persist_with_topic(topic.as_str(), Box::new(topic_config));
+            inner_mut.consumer_offset_manager().commit_offset(
+                CheetahString::from_static_str("127.0.0.1:10911"),
+                &group,
+                &topic,
+                0,
+                77,
+            );
+            inner_mut
+                .consumer_offset_manager()
+                .data_version()
+                .mut_from_ref()
+                .next_version();
+            inner_mut.consumer_offset_manager().persist();
+            let mut group_config = SubscriptionGroupConfig::new(group.clone());
+            group_config.set_consume_broadcast_enable(false);
+            inner_mut
+                .subscription_group_manager_mut()
+                .update_subscription_group_config(&mut group_config);
+        }
+
+        let mut handler = BrokerConfigRequestHandler::new(inner);
+        let channel = create_test_channel().await;
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ExportRocksdbConfigToJson,
+            ExportRocksdbConfigToJsonRequestHeader {
+                config_type: CheetahString::from_static_str("topics;subscriptionGroups;consumerOffsets;"),
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .export_rocksdb_config_to_json(channel, ctx, RequestCode::ExportRocksdbConfigToJson, &mut request)
+            .await
+            .expect("export config should succeed")
+            .expect("export config should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.remark().map(|remark| remark.as_str()), Some("export done."));
+
+        let root = runtime.message_store_config().store_path_root_dir.as_str().to_string();
+        let topics_json = fs::read_to_string(crate::broker_path_config_helper::get_topic_config_path(&root))
+            .expect("topics json should be exported");
+        let offsets_json = fs::read_to_string(crate::broker_path_config_helper::get_consumer_offset_path(&root))
+            .expect("consumer offsets json should be exported");
+        let subscription_json =
+            fs::read_to_string(crate::broker_path_config_helper::get_subscription_group_path(&root))
+                .expect("subscription groups json should be exported");
+
+        assert!(topics_json.contains("ExportTopic"));
+        assert!(offsets_json.contains("ExportTopic@ExportGroup"));
+        assert!(subscription_json.contains("ExportGroup"));
+
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), runtime.shutdown_basic_service()).await;
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]

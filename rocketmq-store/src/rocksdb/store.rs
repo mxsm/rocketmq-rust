@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicBool;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -21,16 +23,21 @@ use rocketmq_error::RocketMQError;
 
 use crate::rocksdb::batch::RocksDbBatchOperation;
 use crate::rocksdb::batch::RocksDbWriteBatch;
+use crate::rocksdb::config::RocksDbColumnFamilyConfig;
 use crate::rocksdb::config::RocksDbConfig;
 use crate::rocksdb::error::closed_error;
 use crate::rocksdb::error::column_family_missing_error;
+use crate::rocksdb::error::reloading_error;
 use crate::rocksdb::error::RocksDbErrorKind;
 use crate::rocksdb::error::RocksDbResultExt;
 use crate::rocksdb::iterator::RocksDbRangeScanOptions;
 use crate::rocksdb::iterator::RocksDbScanItem;
 use crate::rocksdb::iterator::RocksDbScanOptions;
+use crate::rocksdb::metrics::RocksDbMetrics;
+use crate::rocksdb::metrics::RocksDbMetricsCollector;
 use crate::rocksdb::options::RocksDbOptionsFactory;
 use crate::rocksdb::snapshot::RocksDbSnapshot;
+use tracing::warn;
 
 pub trait KeyValueStore {
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), RocketMQError>;
@@ -40,17 +47,56 @@ pub trait KeyValueStore {
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<(), RocketMQError>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RocksDbStoreState {
+    Open,
+    Reloading,
+    Closed,
+}
+
+impl RocksDbStoreState {
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::Open => 0,
+            Self::Reloading => 1,
+            Self::Closed => 2,
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Open,
+            1 => Self::Reloading,
+            _ => Self::Closed,
+        }
+    }
+}
+
 pub struct RocksDbStore {
     db: Arc<::rocksdb::DB>,
-    closed: AtomicBool,
+    state: AtomicU8,
     write_options: ::rocksdb::WriteOptions,
+    metrics: Arc<RocksDbMetricsCollector>,
 }
 
 impl RocksDbStore {
     pub fn open(config: RocksDbConfig) -> Result<Self, RocketMQError> {
         let db_options = RocksDbOptionsFactory::db_options(&config)?;
-        let descriptors = config
-            .column_families
+        Self::open_with_column_families(config.clone(), db_options, config.column_families)
+    }
+
+    pub fn open_with_existing_column_families(config: RocksDbConfig) -> Result<Self, RocketMQError> {
+        let db_options = RocksDbOptionsFactory::db_options(&config)?;
+        let column_families = merge_existing_column_families(&config, &db_options)?;
+        Self::open_with_column_families(config, db_options, column_families)
+    }
+
+    fn open_with_column_families(
+        config: RocksDbConfig,
+        db_options: ::rocksdb::Options,
+        column_families: Vec<RocksDbColumnFamilyConfig>,
+    ) -> Result<Self, RocketMQError> {
+        let descriptors = column_families
             .iter()
             .map(|column_family| {
                 RocksDbOptionsFactory::cf_options(column_family)
@@ -66,9 +112,25 @@ impl RocksDbStore {
 
         Ok(Self {
             db: Arc::new(db),
-            closed: AtomicBool::new(false),
-            write_options: RocksDbOptionsFactory::write_options(config.wal_enabled, config.sync_write),
+            state: AtomicU8::new(RocksDbStoreState::Open.as_u8()),
+            write_options: RocksDbOptionsFactory::write_options(config.write_profile()),
+            metrics: Arc::new(RocksDbMetricsCollector::default()),
         })
+    }
+
+    pub fn create_cf_if_missing(&self, column_family: RocksDbColumnFamilyConfig) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        if self.db.cf_handle(&column_family.name).is_some() {
+            return Ok(());
+        }
+        column_family.validate()?;
+        let options = RocksDbOptionsFactory::cf_options(&column_family)?;
+        let result = self
+            .db
+            .create_cf(&column_family.name, &options)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::ColumnFamilyCreate));
+        self.record_result(&result, RocksDbMetricsCollector::record_write);
+        result
     }
 
     pub fn write_batch(&self, batch: &RocksDbWriteBatch) -> Result<(), RocketMQError> {
@@ -88,12 +150,19 @@ impl RocksDbStore {
                     let handle = self.cf_handle(cf)?;
                     rocksdb_batch.delete_cf(&handle, key);
                 }
+                RocksDbBatchOperation::DeleteRange { cf, start_key, end_key } => {
+                    let handle = self.cf_handle(cf)?;
+                    rocksdb_batch.delete_range_cf(&handle, start_key, end_key);
+                }
             }
         }
 
-        self.db
+        let result = self
+            .db
             .write_opt(rocksdb_batch, &self.write_options)
-            .map_rocksdb(RocksDbErrorKind::Batch)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Batch));
+        self.record_result(&result, RocksDbMetricsCollector::record_batch_write);
+        result
     }
 
     pub fn prefix_scan(&self, options: &RocksDbScanOptions) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
@@ -105,7 +174,7 @@ impl RocksDbStore {
         );
         let mut items = Vec::new();
         for item in iter {
-            let (key, value) = item.map_rocksdb(RocksDbErrorKind::Iterator)?;
+            let (key, value) = item.map_err(|error| self.map_native_error(error, RocksDbErrorKind::Iterator))?;
             if !key.starts_with(&options.prefix) {
                 break;
             }
@@ -117,7 +186,9 @@ impl RocksDbStore {
                 break;
             }
         }
-        Ok(items)
+        let result = Ok(items);
+        self.record_result(&result, RocksDbMetricsCollector::record_scan);
+        result
     }
 
     pub fn range_scan(&self, options: &RocksDbRangeScanOptions) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
@@ -129,7 +200,7 @@ impl RocksDbStore {
         );
         let mut items = Vec::new();
         for item in iter {
-            let (key, value) = item.map_rocksdb(RocksDbErrorKind::Iterator)?;
+            let (key, value) = item.map_err(|error| self.map_native_error(error, RocksDbErrorKind::Iterator))?;
             if !options.end.is_empty() && key.as_ref() >= options.end.as_slice() {
                 break;
             }
@@ -141,7 +212,9 @@ impl RocksDbStore {
                 break;
             }
         }
-        Ok(items)
+        let result = Ok(items);
+        self.record_result(&result, RocksDbMetricsCollector::record_scan);
+        result
     }
 
     pub fn snapshot(&self) -> Result<RocksDbSnapshot<'_>, RocketMQError> {
@@ -151,52 +224,332 @@ impl RocksDbStore {
 
     pub fn flush(&self) -> Result<(), RocketMQError> {
         self.ensure_open()?;
-        self.db.flush().map_rocksdb(RocksDbErrorKind::Flush)
+        let result = self
+            .db
+            .flush()
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Flush));
+        self.record_result(&result, RocksDbMetricsCollector::record_flush);
+        result
     }
 
-    pub fn close(&self) {
-        self.closed.store(true, Ordering::Release);
+    pub fn flush_wal(&self, sync: bool) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let result = self
+            .db
+            .flush_wal(sync)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Flush));
+        self.record_result(&result, RocksDbMetricsCollector::record_flush);
+        result
     }
 
-    pub(crate) fn db(&self) -> Arc<::rocksdb::DB> {
-        Arc::clone(&self.db)
+    pub fn compact_range_cf(&self, cf: &str, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let result = compact_range_cf_on_db(&self.db, cf, start, end);
+        self.record_result(&result, RocksDbMetricsCollector::record_manual_compaction);
+        result
     }
 
-    fn cf_handle(&self, cf: &str) -> Result<Arc<::rocksdb::BoundColumnFamily<'_>>, RocketMQError> {
-        self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))
+    pub async fn compact_range_cf_blocking(
+        &self,
+        cf: String,
+        start: Option<Vec<u8>>,
+        end: Option<Vec<u8>>,
+    ) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let metrics = Arc::clone(&self.metrics);
+        let result = tokio::task::spawn_blocking(move || {
+            compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref())?;
+            metrics.record_manual_compaction();
+            Ok(())
+        })
+        .await
+        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Compaction: {error}")))?;
+        if result.is_err() {
+            self.metrics.record_error();
+        }
+        result
     }
 
-    fn ensure_open(&self) -> Result<(), RocketMQError> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err(closed_error());
+    pub fn compact_range_cf_background(
+        &self,
+        cf: String,
+        start: Option<Vec<u8>>,
+        end: Option<Vec<u8>>,
+    ) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let metrics = Arc::clone(&self.metrics);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || {
+                if let Err(error) = compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref()) {
+                    warn!(error = %error, "failed to run RocksDB background compaction");
+                    metrics.record_error();
+                    return;
+                }
+                metrics.record_manual_compaction();
+            });
+        } else {
+            std::thread::Builder::new()
+                .name("rocksdb-manual-compaction".to_string())
+                .spawn(move || {
+                    if let Err(error) = compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref()) {
+                        warn!(error = %error, "failed to run RocksDB background compaction");
+                        metrics.record_error();
+                        return;
+                    }
+                    metrics.record_manual_compaction();
+                })
+                .map_err(|error| {
+                    RocketMQError::storage_write_failed("rocksdb", format!("Compaction: spawn failed: {error}"))
+                })?;
         }
         Ok(())
     }
+
+    pub fn manual_compaction_count(&self) -> u64 {
+        self.metrics().manual_compaction_count
+    }
+
+    pub fn metrics(&self) -> RocksDbMetrics {
+        self.metrics.snapshot()
+    }
+
+    pub fn property_value(&self, property: &str) -> Result<Option<String>, RocketMQError> {
+        self.ensure_open()?;
+        let result = self
+            .db
+            .property_value(property)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Property));
+        self.record_result(&result, RocksDbMetricsCollector::record_property_query);
+        result
+    }
+
+    pub fn property_value_cf(&self, cf: &str, property: &str) -> Result<Option<String>, RocketMQError> {
+        self.ensure_open()?;
+        let handle = self.cf_handle(cf)?;
+        let result = self
+            .db
+            .property_value_cf(&handle, property)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Property));
+        self.record_result(&result, RocksDbMetricsCollector::record_property_query);
+        result
+    }
+
+    pub fn property_int_value(&self, property: &str) -> Result<Option<u64>, RocketMQError> {
+        self.ensure_open()?;
+        let result = self
+            .db
+            .property_int_value(property)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Property));
+        self.record_result(&result, RocksDbMetricsCollector::record_property_query);
+        result
+    }
+
+    pub fn property_int_value_cf(&self, cf: &str, property: &str) -> Result<Option<u64>, RocketMQError> {
+        self.ensure_open()?;
+        let handle = self.cf_handle(cf)?;
+        let result = self
+            .db
+            .property_int_value_cf(&handle, property)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Property));
+        self.record_result(&result, RocksDbMetricsCollector::record_property_query);
+        result
+    }
+
+    pub async fn create_checkpoint(&self, target_dir: PathBuf) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let result = tokio::task::spawn_blocking(move || {
+            let checkpoint = ::rocksdb::checkpoint::Checkpoint::new(&db).map_rocksdb(RocksDbErrorKind::Checkpoint)?;
+            checkpoint
+                .create_checkpoint(target_dir)
+                .map_rocksdb(RocksDbErrorKind::Checkpoint)
+        })
+        .await
+        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Checkpoint: {error}")))?;
+        self.record_result(&result, RocksDbMetricsCollector::record_checkpoint);
+        result
+    }
+
+    pub async fn create_backup(&self, backup_dir: PathBuf) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let result = tokio::task::spawn_blocking(move || {
+            create_dir_all_for_rocksdb_operation(&backup_dir, RocksDbErrorKind::Backup)?;
+            let env = ::rocksdb::Env::new().map_rocksdb(RocksDbErrorKind::Backup)?;
+            let backup_options =
+                ::rocksdb::backup::BackupEngineOptions::new(&backup_dir).map_rocksdb(RocksDbErrorKind::Backup)?;
+            let mut backup_engine =
+                ::rocksdb::backup::BackupEngine::open(&backup_options, &env).map_rocksdb(RocksDbErrorKind::Backup)?;
+            backup_engine
+                .create_new_backup_flush(db.as_ref(), true)
+                .map_rocksdb(RocksDbErrorKind::Backup)
+        })
+        .await
+        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Backup: {error}")))?;
+        self.record_result(&result, RocksDbMetricsCollector::record_backup);
+        result
+    }
+
+    pub async fn restore_latest_backup(
+        backup_dir: PathBuf,
+        db_dir: PathBuf,
+        wal_dir: Option<PathBuf>,
+    ) -> Result<(), RocketMQError> {
+        tokio::task::spawn_blocking(move || {
+            create_dir_all_for_rocksdb_operation(&backup_dir, RocksDbErrorKind::Restore)?;
+            create_dir_all_for_rocksdb_operation(&db_dir, RocksDbErrorKind::Restore)?;
+            let wal_dir = wal_dir.unwrap_or_else(|| db_dir.clone());
+            create_dir_all_for_rocksdb_operation(&wal_dir, RocksDbErrorKind::Restore)?;
+
+            let env = ::rocksdb::Env::new().map_rocksdb(RocksDbErrorKind::Restore)?;
+            let backup_options =
+                ::rocksdb::backup::BackupEngineOptions::new(&backup_dir).map_rocksdb(RocksDbErrorKind::Restore)?;
+            let mut backup_engine =
+                ::rocksdb::backup::BackupEngine::open(&backup_options, &env).map_rocksdb(RocksDbErrorKind::Restore)?;
+            let mut restore_options = ::rocksdb::backup::RestoreOptions::default();
+            restore_options.set_keep_log_files(false);
+            backup_engine
+                .restore_from_latest_backup(&db_dir, &wal_dir, &restore_options)
+                .map_rocksdb(RocksDbErrorKind::Restore)
+        })
+        .await
+        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Restore: {error}")))?
+    }
+
+    pub fn close(&self) {
+        self.state.store(RocksDbStoreState::Closed.as_u8(), Ordering::Release);
+    }
+
+    pub fn state(&self) -> RocksDbStoreState {
+        RocksDbStoreState::from_u8(self.state.load(Ordering::Acquire))
+    }
+
+    pub fn mark_reloading(&self) {
+        let _ = self.state.compare_exchange(
+            RocksDbStoreState::Open.as_u8(),
+            RocksDbStoreState::Reloading.as_u8(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    fn cf_handle(&self, cf: &str) -> Result<Arc<::rocksdb::BoundColumnFamily<'_>>, RocketMQError> {
+        let result = self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf));
+        if result.is_err() {
+            self.metrics.record_error();
+        }
+        result
+    }
+
+    fn ensure_open(&self) -> Result<(), RocketMQError> {
+        match self.state() {
+            RocksDbStoreState::Open => Ok(()),
+            RocksDbStoreState::Reloading => Err(reloading_error()),
+            RocksDbStoreState::Closed => Err(closed_error()),
+        }
+    }
+
+    fn record_result<T>(&self, result: &Result<T, RocketMQError>, success_recorder: fn(&RocksDbMetricsCollector)) {
+        match result {
+            Ok(_) => success_recorder(&self.metrics),
+            Err(_) => self.metrics.record_error(),
+        }
+    }
+
+    fn map_native_error(&self, error: ::rocksdb::Error, kind: RocksDbErrorKind) -> RocketMQError {
+        if matches!(
+            error.kind(),
+            ::rocksdb::ErrorKind::Aborted | ::rocksdb::ErrorKind::Corruption | ::rocksdb::ErrorKind::Unknown
+        ) {
+            self.mark_reloading();
+        }
+        Err::<(), _>(error).map_rocksdb(kind).unwrap_err()
+    }
+}
+
+fn create_dir_all_for_rocksdb_operation(path: &Path, kind: RocksDbErrorKind) -> Result<(), RocketMQError> {
+    std::fs::create_dir_all(path)
+        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("{kind}: create directory: {error}")))
+}
+
+fn merge_existing_column_families(
+    config: &RocksDbConfig,
+    db_options: &::rocksdb::Options,
+) -> Result<Vec<RocksDbColumnFamilyConfig>, RocketMQError> {
+    let mut column_families = if config.column_families.is_empty() {
+        vec![RocksDbColumnFamilyConfig::consume_queue_default()]
+    } else {
+        config.column_families.clone()
+    };
+
+    if !config.path.join("CURRENT").exists() {
+        return Ok(column_families);
+    }
+
+    let existing_column_families =
+        ::rocksdb::DB::list_cf(db_options, &config.path).map_rocksdb(RocksDbErrorKind::Open)?;
+    for existing_name in existing_column_families {
+        if column_families
+            .iter()
+            .any(|column_family| column_family.name == existing_name)
+        {
+            continue;
+        }
+        let mut column_family = column_families
+            .first()
+            .cloned()
+            .unwrap_or_else(RocksDbColumnFamilyConfig::consume_queue_default);
+        column_family.name = existing_name;
+        column_families.push(column_family);
+    }
+    Ok(column_families)
+}
+
+fn compact_range_cf_on_db(
+    db: &::rocksdb::DB,
+    cf: &str,
+    start: Option<&[u8]>,
+    end: Option<&[u8]>,
+) -> Result<(), RocketMQError> {
+    let handle = db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))?;
+    db.compact_range_cf(&handle, start, end);
+    Ok(())
 }
 
 impl KeyValueStore for RocksDbStore {
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let handle = self.cf_handle(cf)?;
-        self.db
+        let result = self
+            .db
             .put_cf_opt(&handle, key, value, &self.write_options)
-            .map_rocksdb(RocksDbErrorKind::Write)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Write));
+        self.record_result(&result, RocksDbMetricsCollector::record_write);
+        result
     }
 
     fn get_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Bytes>, RocketMQError> {
         self.ensure_open()?;
         let handle = self.cf_handle(cf)?;
-        self.db
+        let result = self
+            .db
             .get_cf(&handle, key)
             .map(|value| value.map(Bytes::from))
-            .map_rocksdb(RocksDbErrorKind::Read)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Read));
+        self.record_result(&result, RocksDbMetricsCollector::record_read);
+        result
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let handle = self.cf_handle(cf)?;
-        self.db
+        let result = self
+            .db
             .delete_cf_opt(&handle, key, &self.write_options)
-            .map_rocksdb(RocksDbErrorKind::Write)
+            .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Write));
+        self.record_result(&result, RocksDbMetricsCollector::record_write);
+        result
     }
 }

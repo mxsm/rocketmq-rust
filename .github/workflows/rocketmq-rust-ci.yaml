@@ -116,6 +116,77 @@ jobs:
         run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
   # =========================
+  # RocksDB feature validation
+  # =========================
+  rocksdb-store:
+    name: RocksDB Store Feature (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang llvm libclang-dev \
+            cmake make ninja-build pkg-config \
+            protobuf-compiler \
+            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev
+
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> $GITHUB_ENV
+
+      - name: Install system dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install cmake ninja protoc llvm -y
+          Add-Content -Path $env:GITHUB_ENV -Value "LIBCLANG_PATH=C:\Program Files\LLVM\bin"
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+
+      - name: Cache Rust + RocksDB
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rocksdb-store-${{ matrix.os }}
+          workspaces: |
+            .
+          env-vars: |
+            CC
+            CXX
+            LIBCLANG_PATH
+            ROCKSDB_DISABLE_JEMALLOC
+
+      - name: Clippy rocksdb store
+        run: cargo clippy -p rocketmq-store --features rocksdb_store --all-targets -- -D warnings
+
+      - name: Clippy rocksdb broker
+        run: cargo clippy -p rocketmq-broker --features rocksdb_store --all-targets -- -D warnings
+
+      - name: Test rocksdb store foundation
+        run: cargo test -p rocketmq-store --features rocksdb_store --test rocksdb_foundation_tests
+
+      - name: Test rocksdb store semantics
+        run: cargo test -p rocketmq-store --features rocksdb_store --test rocksdb_store_semantics_tests
+
+      - name: Test rocksdb broker metadata and Pop
+        run: |
+          cargo test -p rocketmq-broker --features rocksdb_store rocksdb
+          cargo test -p rocketmq-broker --features rocksdb_store pop_consumer
+
+  # =========================
   # Build + Test
   # =========================
   build-test:

@@ -146,3 +146,8 @@ harness = false
 name              = "io_uring_performance"
 harness           = false
 required-features = ["io_uring"]
+
+[[bench]]
+name              = "rocksdb_store"
+harness           = false
+required-features = ["rocksdb_store"]

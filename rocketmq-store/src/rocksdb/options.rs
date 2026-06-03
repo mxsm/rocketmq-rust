@@ -19,6 +19,13 @@ use crate::rocksdb::config::RocksDbCompactionStyle;
 use crate::rocksdb::config::RocksDbCompressionType;
 use crate::rocksdb::config::RocksDbConfig;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RocksDbWriteProfile {
+    DisableWal,
+    Wal,
+    SyncWal,
+}
+
 pub struct RocksDbOptionsFactory;
 
 impl RocksDbOptionsFactory {
@@ -30,6 +37,8 @@ impl RocksDbOptionsFactory {
         options.set_max_open_files(config.max_open_files);
         options.set_max_background_jobs(config.max_background_jobs);
         options.set_max_subcompactions(config.max_subcompactions);
+        options.set_manual_wal_flush(config.manual_wal_flush);
+        options.set_atomic_flush(true);
         options.set_write_buffer_size(config.write_buffer_size);
         options.set_max_write_buffer_number(config.max_write_buffer_number);
         options.set_compression_type(to_rocksdb_compression(config.compression_type));
@@ -49,10 +58,22 @@ impl RocksDbOptionsFactory {
         Ok(options)
     }
 
-    pub fn write_options(wal_enabled: bool, sync_write: bool) -> ::rocksdb::WriteOptions {
+    pub fn write_options(profile: RocksDbWriteProfile) -> ::rocksdb::WriteOptions {
         let mut options = ::rocksdb::WriteOptions::default();
-        options.disable_wal(!wal_enabled);
-        options.set_sync(sync_write);
+        match profile {
+            RocksDbWriteProfile::DisableWal => {
+                options.disable_wal(true);
+                options.set_sync(false);
+            }
+            RocksDbWriteProfile::Wal => {
+                options.disable_wal(false);
+                options.set_sync(false);
+            }
+            RocksDbWriteProfile::SyncWal => {
+                options.disable_wal(false);
+                options.set_sync(true);
+            }
+        }
         options
     }
 

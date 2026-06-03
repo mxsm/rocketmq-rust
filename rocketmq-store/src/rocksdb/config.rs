@@ -16,6 +16,12 @@ use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
 
+use crate::config::message_store_config::MessageStoreConfig;
+use crate::rocksdb::options::RocksDbWriteProfile;
+use crate::store_path_config_helper::get_store_path_consume_queue;
+
+const ROCKSDB_MESSAGE_DIRECTORY: &str = "rocksdbstore";
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum RocksDbCompressionType {
     None,
@@ -75,6 +81,41 @@ impl RocksDbColumnFamilyConfig {
         }
     }
 
+    pub fn message_index_default() -> Self {
+        Self {
+            name: "default".to_string(),
+            ..Self::consume_queue_default()
+        }
+    }
+
+    pub fn message_timer() -> Self {
+        Self {
+            name: "timer".to_string(),
+            write_buffer_size: 128 * 1024 * 1024,
+            max_write_buffer_number: 4,
+            block_cache_size: 512 * 1024 * 1024,
+            block_size: 32 * 1024,
+            bloom_filter_bits: 16.0,
+            compression_type: RocksDbCompressionType::Lz4,
+            bottommost_compression_type: RocksDbCompressionType::Lz4,
+            compaction_style: RocksDbCompactionStyle::Universal,
+        }
+    }
+
+    pub fn message_transaction() -> Self {
+        Self {
+            name: "trans".to_string(),
+            write_buffer_size: 64 * 1024 * 1024,
+            max_write_buffer_number: 4,
+            block_cache_size: 256 * 1024 * 1024,
+            block_size: 32 * 1024,
+            bloom_filter_bits: 16.0,
+            compression_type: RocksDbCompressionType::Lz4,
+            bottommost_compression_type: RocksDbCompressionType::Lz4,
+            compaction_style: RocksDbCompactionStyle::Level,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), RocketMQError> {
         if self.name.is_empty() {
             return Err(RocketMQError::ConfigInvalidValue {
@@ -121,6 +162,11 @@ pub struct RocksDbConfig {
     pub max_open_files: i32,
     pub create_missing_column_families: bool,
     pub statistics_enabled: bool,
+    pub flush_interval_ms: usize,
+    pub compaction_interval_ms: usize,
+    pub checkpoint_interval_ms: usize,
+    pub backup_interval_ms: usize,
+    pub backup_dir: Option<PathBuf>,
     pub column_families: Vec<RocksDbColumnFamilyConfig>,
 }
 
@@ -145,6 +191,11 @@ impl Default for RocksDbConfig {
             max_open_files: -1,
             create_missing_column_families: true,
             statistics_enabled: true,
+            flush_interval_ms: 0,
+            compaction_interval_ms: 0,
+            checkpoint_interval_ms: 0,
+            backup_interval_ms: 0,
+            backup_dir: None,
             column_families: vec![
                 RocksDbColumnFamilyConfig::consume_queue_default(),
                 RocksDbColumnFamilyConfig::consume_queue_offset(),
@@ -154,6 +205,53 @@ impl Default for RocksDbConfig {
 }
 
 impl RocksDbConfig {
+    pub fn consume_queue_from_message_store_config(message_store_config: &MessageStoreConfig) -> Self {
+        Self {
+            enabled: message_store_config.is_enable_rocksdb_store(),
+            path: PathBuf::from(get_store_path_consume_queue(
+                message_store_config.store_path_root_dir.as_str(),
+            )),
+            wal_enabled: false,
+            sync_write: false,
+            column_families: vec![
+                RocksDbColumnFamilyConfig::consume_queue_default(),
+                RocksDbColumnFamilyConfig::consume_queue_offset(),
+            ],
+            ..Self::operational_from_message_store_config(message_store_config)
+        }
+    }
+
+    pub fn message_from_message_store_config(message_store_config: &MessageStoreConfig) -> Self {
+        Self {
+            enabled: message_store_config.is_enable_rocksdb_store(),
+            path: PathBuf::from(message_store_config.store_path_root_dir.as_str()).join(ROCKSDB_MESSAGE_DIRECTORY),
+            wal_enabled: false,
+            sync_write: false,
+            column_families: vec![
+                RocksDbColumnFamilyConfig::message_index_default(),
+                RocksDbColumnFamilyConfig::message_timer(),
+                RocksDbColumnFamilyConfig::message_transaction(),
+            ],
+            ..Self::operational_from_message_store_config(message_store_config)
+        }
+    }
+
+    fn operational_from_message_store_config(message_store_config: &MessageStoreConfig) -> Self {
+        Self {
+            flush_interval_ms: message_store_config.mem_table_flush_interval_ms,
+            compaction_interval_ms: message_store_config
+                .clean_rocksdb_dirty_cq_interval_min
+                .saturating_mul(60 * 1000),
+            checkpoint_interval_ms: message_store_config.rocksdb_checkpoint_interval_ms,
+            backup_interval_ms: message_store_config.rocksdb_backup_interval_ms,
+            backup_dir: message_store_config
+                .rocksdb_backup_dir
+                .as_ref()
+                .map(|path| PathBuf::from(path.as_str())),
+            ..Self::default()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), RocketMQError> {
         if self.path.as_os_str().is_empty() {
             return Err(RocketMQError::ConfigInvalidValue {
@@ -173,5 +271,13 @@ impl RocksDbConfig {
             column_family.validate()?;
         }
         Ok(())
+    }
+
+    pub fn write_profile(&self) -> RocksDbWriteProfile {
+        match (self.wal_enabled, self.sync_write) {
+            (false, _) => RocksDbWriteProfile::DisableWal,
+            (true, false) => RocksDbWriteProfile::Wal,
+            (true, true) => RocksDbWriteProfile::SyncWal,
+        }
     }
 }

@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+#[cfg(feature = "rocksdb_store")]
+use std::path::Path;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -45,12 +47,16 @@ use tracing::warn;
 
 use crate::broker_path_config_helper::get_topic_config_path;
 use crate::broker_runtime::BrokerRuntimeInner;
+#[cfg(feature = "rocksdb_store")]
+use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 
 pub(crate) struct TopicConfigManager<MS: MessageStore> {
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
     persist_lock: Arc<parking_lot::Mutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    #[cfg(feature = "rocksdb_store")]
+    rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
 
 impl<MS: MessageStore> TopicConfigManager<MS> {
@@ -62,11 +68,48 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             data_version: ArcMut::new(DataVersion::default()),
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
             broker_runtime_inner,
+            #[cfg(feature = "rocksdb_store")]
+            rocksdb_config_manager: None,
         };
         if init {
             manager.init();
         }
         manager
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn new_with_rocksdb_config_manager(
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        init: bool,
+        rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
+    ) -> Self {
+        let mut manager = Self::new(broker_runtime_inner, init);
+        manager.rocksdb_config_manager = Some(rocksdb_config_manager);
+        manager
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn is_rocksdb_config_enabled(&self) -> bool {
+        self.rocksdb_config_manager.is_some()
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn rocksdb_config_path(&self) -> Option<&Path> {
+        self.rocksdb_config_manager.as_ref().map(|manager| manager.path())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn export_to_json(&self) -> Result<(), rocketmq_error::RocketMQError> {
+        let json = self.encode_pretty(true);
+        if json.is_empty() {
+            return Ok(());
+        }
+        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str()).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(
+                "rocksdb-topic-config",
+                format!("export topic config to json failed: {error}"),
+            )
+        })
     }
 
     fn init(&mut self) {
@@ -460,6 +503,15 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.data_version
                 .mut_from_ref()
                 .next_version_with(state_machine_version);
+            #[cfg(feature = "rocksdb_store")]
+            if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
+                if let Err(error) = rocksdb_config_manager.delete(topic.as_str()) {
+                    error!(
+                        "delete topic config from rocksdb failed, topic={}, error={}",
+                        topic, error
+                    );
+                }
+            }
             self.persist();
         } else {
             warn!("delete topic config failed, topic: {} not exists", topic);
@@ -772,9 +824,232 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             }
         }
     }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_from_rocksdb_or_migrate_from_file(&self) -> bool {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return false;
+        };
+        match rocksdb_config_manager.default_cf_is_empty() {
+            Ok(false) => self.load_from_rocksdb(),
+            Ok(true) => self.migrate_config_file_to_rocksdb(),
+            Err(error) => {
+                error!("check topic rocksdb config records failed: {}", error);
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn migrate_config_file_to_rocksdb(&self) -> bool {
+        if !self.config_file_or_backup_exists() {
+            return true;
+        }
+        if !self.load_from_config_file() {
+            return false;
+        }
+        if let Err(error) = self.persist_all_topics_to_rocksdb() {
+            error!("migrate topic config file to rocksdb failed: {}", error);
+            return false;
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn config_file_or_backup_exists(&self) -> bool {
+        let file_name = self.config_file_path();
+        Path::new(&file_name).exists() || Path::new(format!("{file_name}.bak").as_str()).exists()
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn load_from_rocksdb(&self) -> bool {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return false;
+        };
+
+        match rocksdb_config_manager.load_data_version() {
+            Ok(Some(data_version)) => self.data_version.mut_from_ref().assign_new_one(&data_version),
+            Ok(None) => {}
+            Err(error) => {
+                error!("load topic rocksdb dataVersion failed: {}", error);
+                return false;
+            }
+        }
+
+        let records = match rocksdb_config_manager.load_data() {
+            Ok(records) => records,
+            Err(error) => {
+                error!("load topic config from rocksdb failed: {}", error);
+                return false;
+            }
+        };
+        for (key, body) in records {
+            if let Err(error) = self.decode_topic_config_record(&key, &body) {
+                error!("decode topic config from rocksdb failed: {}", error);
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn decode_topic_config_record(&self, key: &[u8], body: &[u8]) -> Result<(), rocketmq_error::RocketMQError> {
+        let topic_name = String::from_utf8(key.to_vec()).map_err(|error| {
+            rocketmq_error::RocketMQError::deserialization_failed(
+                "rocksdb-topic-config",
+                format!("topic key utf8 decode failed: {error}"),
+            )
+        })?;
+        let mut topic_config = serde_json::from_slice::<TopicConfig>(body).map_err(|error| {
+            rocketmq_error::RocketMQError::deserialization_failed(
+                "rocksdb-topic-config",
+                format!("topic config decode failed: {error}"),
+            )
+        })?;
+        if topic_config.topic_name.is_none() {
+            topic_config.topic_name = Some(CheetahString::from_string(topic_name.clone()));
+        }
+        self.topic_config_table
+            .insert(CheetahString::from_string(topic_name), ArcMut::new(topic_config));
+        Ok(())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn persist_topic_to_rocksdb(&self, topic_name: &str) -> Result<(), rocketmq_error::RocketMQError> {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return Ok(());
+        };
+        let Some(topic_config) = self.get_topic_config(topic_name) else {
+            return Ok(());
+        };
+        let body = serde_json::to_string(topic_config.as_ref()).map_err(|error| {
+            rocketmq_error::RocketMQError::storage_write_failed(
+                "rocksdb-topic-config",
+                format!("topic config encode failed: {error}"),
+            )
+        })?;
+        rocksdb_config_manager.put_string(topic_name, &body)?;
+        rocksdb_config_manager.set_kv_data_version(self.data_version.as_ref().clone())?;
+        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn persist_all_topics_to_rocksdb(&self) -> Result<(), rocketmq_error::RocketMQError> {
+        let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
+            return Ok(());
+        };
+        let records = self
+            .topic_config_table
+            .iter()
+            .map(|entry| serde_json::to_vec(entry.value().as_ref()).map(|body| (entry.key().as_bytes().to_vec(), body)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::storage_write_failed(
+                    "rocksdb-topic-config",
+                    format!("topic config encode failed: {error}"),
+                )
+            })?;
+        rocksdb_config_manager.batch_put_with_wal(&records)?;
+        rocksdb_config_manager.set_kv_data_version(self.data_version.as_ref().clone())?;
+        self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn flush_rocksdb_config_if_needed(
+        &self,
+        rocksdb_config_manager: &RocksDbBrokerConfigManager,
+    ) -> Result<(), rocketmq_error::RocketMQError> {
+        if self
+            .broker_runtime_inner
+            .message_store_config()
+            .real_time_persist_rocksdb_config
+        {
+            rocksdb_config_manager.flush_wal()?;
+        }
+        Ok(())
+    }
+
+    fn load_from_config_file(&self) -> bool {
+        let file_name = self.config_file_path();
+        match file_utils::file_to_string(file_name.as_str()) {
+            Ok(content) if content.is_empty() => self.load_from_backup_config_file(file_name.as_str()),
+            Ok(content) => {
+                self.decode(&content);
+                info!("load Config file: {} -----OK", file_name);
+                true
+            }
+            Err(_) => self.load_from_backup_config_file(file_name.as_str()),
+        }
+    }
+
+    fn load_from_backup_config_file(&self, file_name: &str) -> bool {
+        let backup_file_name = format!("{file_name}.bak");
+        match file_utils::file_to_string(backup_file_name.as_str()) {
+            Ok(content) if !content.is_empty() => {
+                self.decode(&content);
+                info!("load Config file: {} -----OK", backup_file_name);
+                true
+            }
+            Ok(_) => true,
+            Err(error) => {
+                error!("load Config file: {} -----Failed: {:?}", backup_file_name, error);
+                false
+            }
+        }
+    }
 }
 
 impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
+    fn load(&self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            return self.load_from_rocksdb_or_migrate_from_file();
+        }
+        self.load_from_config_file()
+    }
+
+    fn persist_with_topic(&mut self, topic_name: &str, _t: Box<dyn std::any::Any>) {
+        #[cfg(not(feature = "rocksdb_store"))]
+        let _ = topic_name;
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            if let Err(error) = self.persist_topic_to_rocksdb(topic_name) {
+                error!(
+                    "persist topic config to rocksdb failed, topic={}, error={}",
+                    topic_name, error
+                );
+            }
+            return;
+        }
+        self.persist()
+    }
+
+    fn persist(&self) {
+        #[cfg(feature = "rocksdb_store")]
+        if self.rocksdb_config_manager.is_some() {
+            if let Err(error) = self.persist_all_topics_to_rocksdb() {
+                error!("persist topic configs to rocksdb failed: {}", error);
+            }
+            return;
+        }
+
+        let json = self.encode_pretty(true);
+        if !json.is_empty() {
+            let file_name = self.config_file_path();
+            if file_utils::string_to_file(json.as_str(), file_name.as_str()).is_err() {
+                error!("persist file {} exception", file_name);
+            }
+        }
+    }
+
+    fn stop(&mut self) -> bool {
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(rocksdb_config_manager) = &self.rocksdb_config_manager {
+            rocksdb_config_manager.close();
+        }
+        true
+    }
+
     fn config_file_path(&self) -> String {
         get_topic_config_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
     }
@@ -812,5 +1087,105 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
                 self.topic_config_table.insert(key, ArcMut::new(value));
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "rocksdb_store"))]
+mod rocksdb_config_tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::config_manager::ConfigManager;
+    use rocketmq_rust::ArcMut;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use tempfile::TempDir;
+
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+    use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
+    use crate::topic::manager::topic_config_manager::TopicConfigManager;
+
+    #[tokio::test]
+    async fn topic_config_manager_persists_single_topic_to_rocksdb_and_loads_after_restart() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let mut runtime = test_runtime(&temp_dir);
+        let inner = runtime.inner_for_test().clone();
+        let rocksdb_path = temp_dir.path().join("config").join("topics");
+        let rocksdb_manager = Arc::new(
+            RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path.clone()))
+                .expect("rocksdb config manager should open"),
+        );
+        let mut topic_manager =
+            TopicConfigManager::new_with_rocksdb_config_manager(inner.clone(), false, rocksdb_manager);
+        let topic = ArcMut::new(TopicConfig::with_queues("TopicA", 4, 5));
+
+        topic_manager.put_topic_config(topic.clone());
+        topic_manager.data_version_ref_mut().next_version();
+        topic_manager.persist_with_topic("TopicA", Box::new(topic));
+        drop(topic_manager);
+
+        let restarted_rocksdb_manager = Arc::new(
+            RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path))
+                .expect("rocksdb config manager should reopen"),
+        );
+        let restarted_manager =
+            TopicConfigManager::new_with_rocksdb_config_manager(inner, false, restarted_rocksdb_manager);
+
+        assert!(restarted_manager.load());
+        let loaded = restarted_manager
+            .get_topic_config("TopicA")
+            .expect("topic config should load from rocksdb");
+        assert_eq!(loaded.read_queue_nums, 4);
+        assert_eq!(loaded.write_queue_nums, 5);
+        assert_eq!(restarted_manager.data_version_ref().counter(), 1);
+    }
+
+    #[tokio::test]
+    async fn topic_config_manager_delete_removes_topic_from_rocksdb() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let mut runtime = test_runtime(&temp_dir);
+        let inner = runtime.inner_for_test().clone();
+        let rocksdb_path = temp_dir.path().join("config").join("topics-delete");
+        let rocksdb_manager = Arc::new(
+            RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path.clone()))
+                .expect("rocksdb config manager should open"),
+        );
+        let mut topic_manager =
+            TopicConfigManager::new_with_rocksdb_config_manager(inner.clone(), false, rocksdb_manager);
+        let topic_name = CheetahString::from_static_str("TopicDelete");
+        let topic = ArcMut::new(TopicConfig::with_queues(topic_name.clone(), 1, 1));
+
+        topic_manager.put_topic_config(topic.clone());
+        topic_manager.data_version_ref_mut().next_version();
+        topic_manager.persist_with_topic(topic_name.as_str(), Box::new(topic));
+        topic_manager.delete_topic_config(&topic_name);
+        drop(topic_manager);
+
+        let restarted_rocksdb_manager = Arc::new(
+            RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::topic(rocksdb_path))
+                .expect("rocksdb config manager should reopen"),
+        );
+        let restarted_manager =
+            TopicConfigManager::new_with_rocksdb_config_manager(inner, false, restarted_rocksdb_manager);
+
+        assert!(restarted_manager.load());
+        assert!(restarted_manager.get_topic_config(topic_name.as_str()).is_none());
+    }
+
+    fn test_runtime(temp_dir: &TempDir) -> BrokerRuntime {
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        BrokerRuntime::new(
+            Arc::new(BrokerConfig {
+                store_path_root_dir: root.clone(),
+                ..BrokerConfig::default()
+            }),
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: root,
+                real_time_persist_rocksdb_config: true,
+                ..MessageStoreConfig::default()
+            }),
+        )
     }
 }
