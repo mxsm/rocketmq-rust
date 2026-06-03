@@ -21,6 +21,13 @@ pub fn get_store_path_consume_queue(root_dir: &str) -> String {
         .into_owned()
 }
 
+pub fn get_store_path_rocksdb_consume_queue(root_dir: &str) -> String {
+    PathBuf::from(root_dir)
+        .join("consumequeue_rocksdb")
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub fn get_store_path_consume_queue_ext(root_dir: &str) -> String {
     PathBuf::from(root_dir)
         .join("consumequeue_ext")
@@ -102,6 +109,13 @@ mod tests {
             get_store_path_consume_queue(root_dir),
             PathBuf::from(root_dir)
                 .join("consumequeue")
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(
+            get_store_path_rocksdb_consume_queue(root_dir),
+            PathBuf::from(root_dir)
+                .join("consumequeue_rocksdb")
                 .to_string_lossy()
                 .into_owned()
         );

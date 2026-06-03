@@ -191,6 +191,19 @@ impl RocksDbStore {
         result
     }
 
+    pub async fn prefix_scan_blocking(
+        &self,
+        options: RocksDbScanOptions,
+    ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let result = tokio::task::spawn_blocking(move || prefix_scan_on_db(&db, &options))
+            .await
+            .map_err(|error| RocketMQError::storage_read_failed("rocksdb", format!("Iterator: {error}")))?;
+        self.record_result(&result, RocksDbMetricsCollector::record_scan);
+        result
+    }
+
     pub fn range_scan(&self, options: &RocksDbRangeScanOptions) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
         self.ensure_open()?;
         let handle = self.cf_handle(&options.cf)?;
@@ -213,6 +226,19 @@ impl RocksDbStore {
             }
         }
         let result = Ok(items);
+        self.record_result(&result, RocksDbMetricsCollector::record_scan);
+        result
+    }
+
+    pub async fn range_scan_blocking(
+        &self,
+        options: RocksDbRangeScanOptions,
+    ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let result = tokio::task::spawn_blocking(move || range_scan_on_db(&db, &options))
+            .await
+            .map_err(|error| RocketMQError::storage_read_failed("rocksdb", format!("Iterator: {error}")))?;
         self.record_result(&result, RocksDbMetricsCollector::record_scan);
         result
     }
@@ -435,6 +461,26 @@ impl RocksDbStore {
         );
     }
 
+    pub fn mark_recovered(&self) -> Result<(), RocketMQError> {
+        match self.state() {
+            RocksDbStoreState::Open => Ok(()),
+            RocksDbStoreState::Closed => Err(closed_error()),
+            RocksDbStoreState::Reloading => match self.state.compare_exchange(
+                RocksDbStoreState::Reloading.as_u8(),
+                RocksDbStoreState::Open.as_u8(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => Ok(()),
+                Err(state) => match RocksDbStoreState::from_u8(state) {
+                    RocksDbStoreState::Open => Ok(()),
+                    RocksDbStoreState::Reloading => Err(reloading_error()),
+                    RocksDbStoreState::Closed => Err(closed_error()),
+                },
+            },
+        }
+    }
+
     fn cf_handle(&self, cf: &str) -> Result<Arc<::rocksdb::BoundColumnFamily<'_>>, RocketMQError> {
         let result = self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf));
         if result.is_err() {
@@ -516,6 +562,63 @@ fn compact_range_cf_on_db(
     let handle = db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))?;
     db.compact_range_cf(&handle, start, end);
     Ok(())
+}
+
+fn prefix_scan_on_db(db: &::rocksdb::DB, options: &RocksDbScanOptions) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
+    let handle = db
+        .cf_handle(&options.cf)
+        .ok_or_else(|| column_family_missing_error(&options.cf))?;
+    let iter = db.iterator_cf(
+        &handle,
+        ::rocksdb::IteratorMode::From(&options.prefix, ::rocksdb::Direction::Forward),
+    );
+    let mut items = Vec::new();
+    for item in iter {
+        let (key, value) = item.map_err(|error| map_rocksdb_error(error, RocksDbErrorKind::Iterator))?;
+        if !key.starts_with(&options.prefix) {
+            break;
+        }
+        items.push(RocksDbScanItem {
+            key: Bytes::copy_from_slice(&key),
+            value: Bytes::copy_from_slice(&value),
+        });
+        if options.limit > 0 && items.len() >= options.limit {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+fn range_scan_on_db(
+    db: &::rocksdb::DB,
+    options: &RocksDbRangeScanOptions,
+) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
+    let handle = db
+        .cf_handle(&options.cf)
+        .ok_or_else(|| column_family_missing_error(&options.cf))?;
+    let iter = db.iterator_cf(
+        &handle,
+        ::rocksdb::IteratorMode::From(&options.start, ::rocksdb::Direction::Forward),
+    );
+    let mut items = Vec::new();
+    for item in iter {
+        let (key, value) = item.map_err(|error| map_rocksdb_error(error, RocksDbErrorKind::Iterator))?;
+        if !options.end.is_empty() && key.as_ref() >= options.end.as_slice() {
+            break;
+        }
+        items.push(RocksDbScanItem {
+            key: Bytes::copy_from_slice(&key),
+            value: Bytes::copy_from_slice(&value),
+        });
+        if options.limit > 0 && items.len() >= options.limit {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+fn map_rocksdb_error(error: ::rocksdb::Error, kind: RocksDbErrorKind) -> RocketMQError {
+    Err::<(), _>(error).map_rocksdb(kind).unwrap_err()
 }
 
 impl KeyValueStore for RocksDbStore {

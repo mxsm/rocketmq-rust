@@ -21,6 +21,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_store::rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store::rocksdb::config::RocksDbColumnFamilyConfig;
 use rocketmq_store::rocksdb::config::RocksDbConfig;
+use rocketmq_store::rocksdb::config::RocksDbWalRecoveryMode;
 use rocketmq_store::rocksdb::error::codec_error;
 use rocketmq_store::rocksdb::iterator::RocksDbRangeScanOptions;
 use rocketmq_store::rocksdb::store::KeyValueStore;
@@ -29,6 +30,8 @@ use rocketmq_store::rocksdb::store::RocksDbStore;
 const DEFAULT_COLUMN_FAMILY: &str = "default";
 const KV_DATA_VERSION_COLUMN_FAMILY: &str = "kvDataVersion";
 const KV_DATA_VERSION_KEY: &[u8] = b"kvDataVersionKey";
+const MB: usize = 1024 * 1024;
+const MB_U64: u64 = 1024 * 1024;
 
 type ConfigRecords = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -310,6 +313,13 @@ fn build_rocksdb_config(config: &RocksDbBrokerConfigManagerConfig) -> RocksDbCon
         sync_write: false,
         write_buffer_size: config.write_buffer_size,
         block_cache_size: config.block_cache_size,
+        db_write_buffer_size: Some(128 * MB),
+        wal_bytes_per_sync: Some(MB_U64),
+        wal_recovery_mode: RocksDbWalRecoveryMode::SkipAnyCorruptedRecord,
+        stats_dump_period_sec: 600,
+        max_subcompactions: 4,
+        use_direct_io_for_flush_and_compaction: true,
+        use_direct_reads: true,
         column_families: column_family_names
             .into_iter()
             .map(|name| config_column_family(&name, config.block_cache_size, config.write_buffer_size))
@@ -346,6 +356,13 @@ fn build_shared_rocksdb_config(configs: &[RocksDbBrokerConfigManagerConfig]) -> 
         sync_write: false,
         write_buffer_size: first.write_buffer_size,
         block_cache_size: first.block_cache_size,
+        db_write_buffer_size: Some(128 * MB),
+        wal_bytes_per_sync: Some(MB_U64),
+        wal_recovery_mode: RocksDbWalRecoveryMode::SkipAnyCorruptedRecord,
+        stats_dump_period_sec: 600,
+        max_subcompactions: 4,
+        use_direct_io_for_flush_and_compaction: true,
+        use_direct_reads: true,
         column_families: column_family_names
             .into_iter()
             .map(|name| config_column_family(&name, first.block_cache_size, first.write_buffer_size))
@@ -355,10 +372,5 @@ fn build_shared_rocksdb_config(configs: &[RocksDbBrokerConfigManagerConfig]) -> 
 }
 
 fn config_column_family(name: &str, block_cache_size: usize, write_buffer_size: usize) -> RocksDbColumnFamilyConfig {
-    RocksDbColumnFamilyConfig {
-        name: name.to_string(),
-        block_cache_size,
-        write_buffer_size,
-        ..RocksDbColumnFamilyConfig::consume_queue_default()
-    }
+    RocksDbColumnFamilyConfig::broker_config(name, block_cache_size, write_buffer_size)
 }

@@ -263,14 +263,26 @@ impl MessageRocksDbStorage {
             .put_cf(RocksDbColumnFamily::Timer.name(), key, &encode_i64(value))
     }
 
+    pub fn write_timeline_checkpoint_for_timer(&self, value: i64) -> Result<(), RocketMQError> {
+        self.write_checkpoint_for_timer(TIMER_TIMELINE_CHECKPOINT, value)
+    }
+
     pub fn get_checkpoint_for_timer(&self, key: &[u8]) -> Result<i64, RocketMQError> {
         validate_timer_checkpoint_key(key)?;
         self.get_i64_special_key(RocksDbColumnFamily::Timer.name(), key)
     }
 
+    pub fn get_timeline_checkpoint_for_timer(&self) -> Result<i64, RocketMQError> {
+        self.get_checkpoint_for_timer(TIMER_TIMELINE_CHECKPOINT)
+    }
+
     pub fn delete_checkpoint_for_timer(&self, key: &[u8]) -> Result<(), RocketMQError> {
         validate_timer_checkpoint_key(key)?;
         self.store.delete_cf(RocksDbColumnFamily::Timer.name(), key)
+    }
+
+    pub fn delete_timeline_checkpoint_for_timer(&self) -> Result<(), RocketMQError> {
+        self.delete_checkpoint_for_timer(TIMER_TIMELINE_CHECKPOINT)
     }
 
     pub fn write_records_for_trans(&self, records: &[TransRocksDbRecord]) -> Result<(), RocketMQError> {

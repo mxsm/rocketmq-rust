@@ -18,6 +18,11 @@ pub(crate) fn get_store_path_consume_queue(root_dir: &str) -> String {
 }
 
 #[inline]
+pub(crate) fn get_store_path_rocksdb_consume_queue(root_dir: &str) -> String {
+    format!("{}{}consumequeue_rocksdb", root_dir, std::path::MAIN_SEPARATOR,)
+}
+
+#[inline]
 pub(crate) fn get_store_path_consume_queue_ext(root_dir: &str) -> String {
     format!("{}{}consumequeue_ext", root_dir, std::path::MAIN_SEPARATOR,)
 }
@@ -86,6 +91,13 @@ mod tests {
         let root_dir = "/path/to/root";
         let expected_path = format!("{}{}consumequeue", root_dir, std::path::MAIN_SEPARATOR);
         assert_eq!(get_store_path_consume_queue(root_dir), expected_path);
+    }
+
+    #[test]
+    fn test_get_store_path_rocksdb_consume_queue() {
+        let root_dir = "/path/to/root";
+        let expected_path = format!("{}{}consumequeue_rocksdb", root_dir, std::path::MAIN_SEPARATOR);
+        assert_eq!(get_store_path_rocksdb_consume_queue(root_dir), expected_path);
     }
 
     #[test]
