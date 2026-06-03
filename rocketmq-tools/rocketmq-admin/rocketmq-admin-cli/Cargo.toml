@@ -47,7 +47,7 @@ regex = "1.12.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = "0.9"
-tabled = { version = "0.20.0", features = ["derive"] }
+tabled = { version = "0.21.0", features = ["derive"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
