@@ -26,11 +26,15 @@ pub enum RocksDbErrorKind {
     Batch,
     Iterator,
     Snapshot,
+    Property,
     Flush,
     Compaction,
     Checkpoint,
+    Backup,
+    Restore,
     Codec,
     Corruption,
+    Reloading,
     Closed,
     InvalidConfig,
 }
@@ -48,9 +52,10 @@ pub trait RocksDbResultExt<T> {
 impl<T> RocksDbResultExt<T> for Result<T, ::rocksdb::Error> {
     fn map_rocksdb(self, kind: RocksDbErrorKind) -> Result<T, RocketMQError> {
         self.map_err(|error| match kind {
-            RocksDbErrorKind::Read | RocksDbErrorKind::Iterator | RocksDbErrorKind::Snapshot => {
-                RocketMQError::storage_read_failed("rocksdb", format!("{kind}: {error}"))
-            }
+            RocksDbErrorKind::Read
+            | RocksDbErrorKind::Iterator
+            | RocksDbErrorKind::Snapshot
+            | RocksDbErrorKind::Property => RocketMQError::storage_read_failed("rocksdb", format!("{kind}: {error}")),
             RocksDbErrorKind::Corruption => RocketMQError::StorageCorrupted {
                 path: "rocksdb".to_string(),
             },
@@ -66,6 +71,10 @@ impl<T> RocksDbResultExt<T> for Result<T, ::rocksdb::Error> {
 
 pub fn closed_error() -> RocketMQError {
     RocketMQError::storage_write_failed("rocksdb", "store is closed")
+}
+
+pub fn reloading_error() -> RocketMQError {
+    RocketMQError::storage_write_failed("rocksdb", "store is reloading")
 }
 
 pub fn column_family_missing_error(name: &str) -> RocketMQError {

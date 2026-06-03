@@ -1052,7 +1052,6 @@ mod tests {
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::protocol::LanguageCode;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
@@ -1085,9 +1084,7 @@ mod tests {
         runtime
     }
 
-    fn new_processor(
-        inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
-    ) -> PullMessageProcessor<LocalFileMessageStore> {
+    fn new_processor<MS: MessageStore>(inner: ArcMut<BrokerRuntimeInner<MS>>) -> PullMessageProcessor<MS> {
         let handler = ArcMut::new(DefaultPullMessageResultHandler::new(Arc::new(vec![]), inner.clone()));
         PullMessageProcessor::new(handler, inner)
     }
@@ -1144,8 +1141,8 @@ mod tests {
         ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
     }
 
-    async fn register_consumer_group_without_subscriptions(
-        inner: &ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
+    async fn register_consumer_group_without_subscriptions<MS: MessageStore>(
+        inner: &ArcMut<BrokerRuntimeInner<MS>>,
         group: &str,
         client_id: &str,
     ) {
@@ -1159,8 +1156,8 @@ mod tests {
         );
     }
 
-    fn inject_subscription(
-        inner: &ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
+    fn inject_subscription<MS: MessageStore>(
+        inner: &ArcMut<BrokerRuntimeInner<MS>>,
         group: &str,
         topic: &str,
         expression: &str,

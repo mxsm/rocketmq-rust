@@ -102,6 +102,18 @@ mod defaults {
         2
     }
 
+    pub fn max_rocksdb_index_query_days() -> usize {
+        7
+    }
+
+    pub fn pop_rocksdb_block_cache_size() -> usize {
+        256 * 1024 * 1024
+    }
+
+    pub fn pop_rocksdb_write_buffer_size() -> usize {
+        32 * 1024 * 1024
+    }
+
     pub fn timer_recall_to_time_wheel_enable() -> bool {
         true
     }
@@ -410,6 +422,18 @@ pub struct MessageStoreConfig {
 
     #[serde(default = "defaults::timer_rocksdb_roll_range_hours")]
     pub timer_rocksdb_roll_range_hours: usize,
+
+    #[serde(default)]
+    pub trans_rocksdb_enable: bool,
+
+    #[serde(default = "defaults::max_rocksdb_index_query_days")]
+    pub max_rocksdb_index_query_days: usize,
+
+    #[serde(default = "defaults::pop_rocksdb_block_cache_size")]
+    pub pop_rocksdb_block_cache_size: usize,
+
+    #[serde(default = "defaults::pop_rocksdb_write_buffer_size")]
+    pub pop_rocksdb_write_buffer_size: usize,
 
     #[serde(default = "defaults::timer_recall_to_time_wheel_enable")]
     pub timer_recall_to_time_wheel_enable: bool,
@@ -862,6 +886,15 @@ pub struct MessageStoreConfig {
     pub mem_table_flush_interval_ms: usize,
 
     #[serde(default)]
+    pub rocksdb_checkpoint_interval_ms: usize,
+
+    #[serde(default)]
+    pub rocksdb_backup_interval_ms: usize,
+
+    #[serde(default)]
+    pub rocksdb_backup_dir: Option<CheetahString>,
+
+    #[serde(default)]
     pub real_time_persist_rocksdb_config: bool,
 
     #[serde(default)]
@@ -925,6 +958,10 @@ impl Default for MessageStoreConfig {
             timer_rocksdb_time_expired_max_tps: 200000.0,
             timer_rocksdb_roll_interval_hours: 1,
             timer_rocksdb_roll_range_hours: 2,
+            trans_rocksdb_enable: false,
+            max_rocksdb_index_query_days: 7,
+            pop_rocksdb_block_cache_size: defaults::pop_rocksdb_block_cache_size(),
+            pop_rocksdb_write_buffer_size: defaults::pop_rocksdb_write_buffer_size(),
             timer_recall_to_time_wheel_enable: true,
             timer_recall_to_timeline_enable: true,
             timer_enable_check_metrics: false,
@@ -1075,6 +1112,9 @@ impl Default for MessageStoreConfig {
             clean_rocksdb_dirty_cq_interval_min: 0,
             stat_rocksdb_cq_interval_sec: 0,
             mem_table_flush_interval_ms: 0,
+            rocksdb_checkpoint_interval_ms: 0,
+            rocksdb_backup_interval_ms: 0,
+            rocksdb_backup_dir: None,
             real_time_persist_rocksdb_config: false,
             enable_rocksdb_log: false,
             topic_queue_lock_num: 32,
@@ -1215,6 +1255,19 @@ impl MessageStoreConfig {
         properties.insert(
             "timerRocksDBRollRangeHours".to_string(),
             self.timer_rocksdb_roll_range_hours.to_string(),
+        );
+        properties.insert("transRocksDBEnable".to_string(), self.trans_rocksdb_enable.to_string());
+        properties.insert(
+            "maxRocksDBIndexQueryDays".to_string(),
+            self.max_rocksdb_index_query_days.to_string(),
+        );
+        properties.insert(
+            "popRocksdbBlockCacheSize".to_string(),
+            self.pop_rocksdb_block_cache_size.to_string(),
+        );
+        properties.insert(
+            "popRocksdbWriteBufferSize".to_string(),
+            self.pop_rocksdb_write_buffer_size.to_string(),
         );
         properties.insert(
             "timerRecallToTimeWheelEnable".to_string(),
@@ -1688,6 +1741,20 @@ impl MessageStoreConfig {
             self.mem_table_flush_interval_ms.to_string(),
         );
         properties.insert(
+            "rocksdbCheckpointIntervalMs".into(),
+            self.rocksdb_checkpoint_interval_ms.to_string(),
+        );
+        properties.insert(
+            "rocksdbBackupIntervalMs".into(),
+            self.rocksdb_backup_interval_ms.to_string(),
+        );
+        properties.insert(
+            "rocksdbBackupDir".into(),
+            self.rocksdb_backup_dir
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string),
+        );
+        properties.insert(
             "realTimePersistRocksdbConfig".into(),
             self.real_time_persist_rocksdb_config.to_string(),
         );
@@ -1749,6 +1816,66 @@ mod tests {
         assert_eq!(properties["timerRocksDBRollRangeHours"], "2");
         assert_eq!(properties["timerRecallToTimeWheelEnable"], "true");
         assert_eq!(properties["timerRecallToTimelineEnable"], "true");
+    }
+
+    #[test]
+    fn default_message_rocksdb_config_matches_java_defaults() {
+        let config = MessageStoreConfig::default();
+
+        assert!(!config.trans_rocksdb_enable);
+        assert_eq!(config.max_rocksdb_index_query_days, 7);
+        assert_eq!(config.pop_rocksdb_block_cache_size, 256 * 1024 * 1024);
+        assert_eq!(config.pop_rocksdb_write_buffer_size, 32 * 1024 * 1024);
+
+        let properties = config.get_properties();
+        assert_eq!(properties["transRocksDBEnable"], "false");
+        assert_eq!(properties["maxRocksDBIndexQueryDays"], "7");
+        assert_eq!(properties["popRocksdbBlockCacheSize"], (256 * 1024 * 1024).to_string());
+        assert_eq!(properties["popRocksdbWriteBufferSize"], (32 * 1024 * 1024).to_string());
+    }
+
+    #[test]
+    fn serde_defaults_keep_message_rocksdb_java_defaults() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str("{}")?;
+
+        assert!(!config.trans_rocksdb_enable);
+        assert_eq!(config.max_rocksdb_index_query_days, 7);
+        assert_eq!(config.pop_rocksdb_block_cache_size, 256 * 1024 * 1024);
+        assert_eq!(config.pop_rocksdb_write_buffer_size, 32 * 1024 * 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn default_rocksdb_operational_config_is_disabled_until_explicitly_set() {
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.rocksdb_checkpoint_interval_ms, 0);
+        assert_eq!(config.rocksdb_backup_interval_ms, 0);
+        assert!(config.rocksdb_backup_dir.is_none());
+
+        let properties = config.get_properties();
+        assert_eq!(properties["rocksdbCheckpointIntervalMs"], "0");
+        assert_eq!(properties["rocksdbBackupIntervalMs"], "0");
+        assert_eq!(properties["rocksdbBackupDir"], "");
+    }
+
+    #[test]
+    fn serde_loads_rocksdb_operational_config() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "rocksdbCheckpointIntervalMs": 60000,
+                "rocksdbBackupIntervalMs": 3600000,
+                "rocksdbBackupDir": "store/backup"
+            }"#,
+        )?;
+
+        assert_eq!(config.rocksdb_checkpoint_interval_ms, 60_000);
+        assert_eq!(config.rocksdb_backup_interval_ms, 3_600_000);
+        assert_eq!(
+            config.rocksdb_backup_dir.as_ref().map(|path| path.as_str()),
+            Some("store/backup")
+        );
+        Ok(())
     }
 
     #[test]

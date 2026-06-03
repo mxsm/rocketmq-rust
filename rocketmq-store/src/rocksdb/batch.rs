@@ -14,8 +14,20 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RocksDbBatchOperation {
-    Put { cf: String, key: Vec<u8>, value: Vec<u8> },
-    Delete { cf: String, key: Vec<u8> },
+    Put {
+        cf: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+    Delete {
+        cf: String,
+        key: Vec<u8>,
+    },
+    DeleteRange {
+        cf: String,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -42,6 +54,19 @@ impl RocksDbWriteBatch {
         self.operations.push(RocksDbBatchOperation::Delete {
             cf: cf.into(),
             key: key.into(),
+        });
+    }
+
+    pub fn delete_range_cf(
+        &mut self,
+        cf: impl Into<String>,
+        start_key: impl Into<Vec<u8>>,
+        end_key: impl Into<Vec<u8>>,
+    ) {
+        self.operations.push(RocksDbBatchOperation::DeleteRange {
+            cf: cf.into(),
+            start_key: start_key.into(),
+            end_key: end_key.into(),
         });
     }
 

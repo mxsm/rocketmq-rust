@@ -31,6 +31,8 @@ rust-version.workspace = true
 [features]
 default          = ["local_file_store"]
 local_file_store = ["rocketmq-store/local_file_store"]
+rocksdb_store    = ["rocketmq-store/rocksdb_store"]
+rocksdb-store    = ["rocksdb_store"]
 tieredstore      = ["local_file_store", "rocketmq-store/tieredstore"]
 
 [dependencies]
@@ -86,6 +88,7 @@ opentelemetry_sdk = { workspace = true }
 criterion            = { version = "0.8", features = ["html_reports"] }
 rocketmq-controller  = { workspace = true }
 rocketmq-namesrv     = { workspace = true }
+tempfile             = "3.27.0"
 
 [[bin]]
 name = "rocketmq-broker-rust"

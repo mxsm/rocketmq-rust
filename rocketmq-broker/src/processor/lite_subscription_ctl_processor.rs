@@ -446,12 +446,8 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
-    fn seed_group_config(
-        inner: &mut ArcMut<
-            crate::broker_runtime::BrokerRuntimeInner<
-                rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore,
-            >,
-        >,
+    fn seed_group_config<MS: MessageStore>(
+        inner: &mut ArcMut<crate::broker_runtime::BrokerRuntimeInner<MS>>,
         group: &str,
         attributes: HashMap<CheetahString, CheetahString>,
     ) {

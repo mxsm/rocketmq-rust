@@ -20,14 +20,17 @@ use rocketmq_error::RocketMQError;
 use crate::rocksdb::store::RocksDbStore;
 
 pub async fn create_checkpoint(store: Arc<RocksDbStore>, target_dir: PathBuf) -> Result<(), RocketMQError> {
-    tokio::task::spawn_blocking(move || {
-        let db = store.db();
-        let checkpoint = ::rocksdb::checkpoint::Checkpoint::new(&db)
-            .map_err(|error| RocketMQError::storage_write_failed("rocksdb", error.to_string()))?;
-        checkpoint
-            .create_checkpoint(target_dir)
-            .map_err(|error| RocketMQError::storage_write_failed("rocksdb", error.to_string()))
-    })
-    .await
-    .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("checkpoint task failed: {error}")))?
+    store.create_checkpoint(target_dir).await
+}
+
+pub async fn create_backup(store: Arc<RocksDbStore>, backup_dir: PathBuf) -> Result<(), RocketMQError> {
+    store.create_backup(backup_dir).await
+}
+
+pub async fn restore_latest_backup(
+    backup_dir: PathBuf,
+    db_dir: PathBuf,
+    wal_dir: Option<PathBuf>,
+) -> Result<(), RocketMQError> {
+    RocksDbStore::restore_latest_backup(backup_dir, db_dir, wal_dir).await
 }

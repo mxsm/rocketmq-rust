@@ -32,6 +32,8 @@ use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
+#[cfg(feature = "rocksdb_store")]
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::current_millis;
@@ -52,6 +54,12 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+#[cfg(feature = "rocksdb_store")]
+use crate::pop::rocksdb_store::PopConsumerRecord;
+#[cfg(feature = "rocksdb_store")]
+use crate::pop::rocksdb_store::PopConsumerRetryType;
+#[cfg(feature = "rocksdb_store")]
+use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 
@@ -73,6 +81,8 @@ pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     shutdown: Arc<Notify>,
     start_time: Instant,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    #[cfg(feature = "rocksdb_store")]
+    pop_consumer_store: Option<Arc<PopConsumerRocksDbStore>>,
 }
 
 impl<MS: MessageStore> PopBufferMergeService<MS> {
@@ -80,6 +90,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        #[cfg(feature = "rocksdb_store")] pop_consumer_store: Option<Arc<PopConsumerRocksDbStore>>,
     ) -> Self {
         let interval = 5;
         Self {
@@ -100,7 +111,14 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             shutdown: Arc::new(Notify::new()),
             start_time: Instant::now(),
             broker_runtime_inner,
+            #[cfg(feature = "rocksdb_store")]
+            pop_consumer_store,
         }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub(crate) fn pop_consumer_store(&self) -> Option<&Arc<PopConsumerRocksDbStore>> {
+        self.pop_consumer_store.as_ref()
     }
 }
 
@@ -189,6 +207,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             });
         }
 
+        self.write_pop_records_for_checkpoint(point_wrapper.get_ck())?;
         self.put_offset_queue(point_wrapper.clone()).await?;
 
         if broker_config.enable_pop_log {
@@ -342,6 +361,10 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 );
                 return false;
             }
+        }
+        if let Err(error) = self.delete_pop_records_for_ack(point, ack_msg) {
+            error!("[PopBuffer]delete Pop KV record for ack failed: {}", error);
+            return false;
         }
         true
     }
@@ -501,6 +524,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         for key in remove_keys {
             if let Some((_, point_wrapper)) = self.buffer.remove(&key) {
+                if let Err(error) = self.delete_pop_records_for_checkpoint(point_wrapper.get_ck()) {
+                    warn!(
+                        "[PopBuffer]delete Pop KV records for removed checkpoint failed: {}",
+                        error
+                    );
+                }
                 let _ = self.commit_offsets.remove(point_wrapper.as_ref().get_lock_key());
                 self.counter.fetch_sub(1, Ordering::AcqRel);
             }
@@ -944,6 +973,110 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 | PutMessageStatus::SlaveNotAvailable
         )
     }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn write_pop_records_for_checkpoint(&self, point: &PopCheckPoint) -> RocketMQResult<()> {
+        let Some(store) = &self.pop_consumer_store else {
+            return Ok(());
+        };
+        let records = pop_consumer_records_from_checkpoint(point);
+        if records.is_empty() {
+            return Ok(());
+        }
+        store.write_records(&records)
+    }
+
+    #[cfg(not(feature = "rocksdb_store"))]
+    fn write_pop_records_for_checkpoint(&self, _point: &PopCheckPoint) -> RocketMQResult<()> {
+        Ok(())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn delete_pop_records_for_ack(&self, point: &PopCheckPoint, ack_msg: &dyn AckMessage) -> RocketMQResult<()> {
+        let Some(store) = &self.pop_consumer_store else {
+            return Ok(());
+        };
+        let records = pop_consumer_records_from_ack(point, ack_msg);
+        if records.is_empty() {
+            return Ok(());
+        }
+        store.delete_records(&records)
+    }
+
+    #[cfg(not(feature = "rocksdb_store"))]
+    fn delete_pop_records_for_ack(&self, _point: &PopCheckPoint, _ack_msg: &dyn AckMessage) -> RocketMQResult<()> {
+        Ok(())
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn delete_pop_records_for_checkpoint(&self, point: &PopCheckPoint) -> RocketMQResult<()> {
+        let Some(store) = &self.pop_consumer_store else {
+            return Ok(());
+        };
+        let records = pop_consumer_records_from_checkpoint(point);
+        if records.is_empty() {
+            return Ok(());
+        }
+        store.delete_records(&records)
+    }
+
+    #[cfg(not(feature = "rocksdb_store"))]
+    fn delete_pop_records_for_checkpoint(&self, _point: &PopCheckPoint) -> RocketMQResult<()> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn pop_consumer_records_from_checkpoint(point: &PopCheckPoint) -> Vec<PopConsumerRecord> {
+    (0..point.num)
+        .map(|index| pop_consumer_record_for_offset(point, point.ack_offset_by_index(index)))
+        .collect()
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn pop_consumer_records_from_ack(point: &PopCheckPoint, ack_msg: &dyn AckMessage) -> Vec<PopConsumerRecord> {
+    if let Some(batch_ack_msg) = ack_msg.as_any().downcast_ref::<BatchAckMsg>() {
+        return batch_ack_msg
+            .ack_offset_list
+            .iter()
+            .copied()
+            .filter(|offset| point.index_of_ack(*offset) > -1)
+            .map(|offset| pop_consumer_record_for_offset(point, offset))
+            .collect();
+    }
+
+    let offset = ack_msg.ack_offset();
+    if point.index_of_ack(offset) < 0 {
+        return Vec::new();
+    }
+    vec![pop_consumer_record_for_offset(point, offset)]
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn pop_consumer_record_for_offset(point: &PopCheckPoint, offset: i64) -> PopConsumerRecord {
+    PopConsumerRecord {
+        pop_time: point.pop_time,
+        group_id: point.cid.to_string(),
+        topic_id: point.topic.to_string(),
+        queue_id: point.queue_id,
+        retry_flag: pop_consumer_retry_type(&point.topic).code(),
+        invisible_time: point.invisible_time,
+        offset,
+        attempt_times: point.parse_re_put_times(),
+        attempt_id: String::new(),
+        suspend: false,
+    }
+}
+
+#[cfg(feature = "rocksdb_store")]
+fn pop_consumer_retry_type(topic: &CheetahString) -> PopConsumerRetryType {
+    if KeyBuilder::is_pop_retry_topic_v2(topic.as_str()) {
+        return PopConsumerRetryType::RetryTopicV2;
+    }
+    if topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
+        return PopConsumerRetryType::RetryTopicV1;
+    }
+    PopConsumerRetryType::NormalTopic
 }
 
 fn is_ck_done(point_wrapper: &PopCheckPointWrapper) -> bool {
@@ -1226,6 +1359,83 @@ mod tests {
         let wrapper = PopCheckPointWrapper::new(1, 100, ck, 200);
         let display = format!("{}", wrapper);
         assert!(display.contains("CkWrap{rq=1, rqo=100"));
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[test]
+    fn pop_consumer_records_from_checkpoint_match_java_record_fields() {
+        let checkpoint = PopCheckPoint {
+            start_offset: 100,
+            pop_time: 1_000,
+            invisible_time: 30_000,
+            num: 3,
+            queue_id: 2,
+            topic: CheetahString::from_static_str("TopicTest"),
+            cid: CheetahString::from_static_str("GroupTest"),
+            queue_offset_diff: vec![0, 1, 2],
+            re_put_times: Some(CheetahString::from_static_str("2")),
+            ..Default::default()
+        };
+
+        let records = pop_consumer_records_from_checkpoint(&checkpoint);
+
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].pop_time, 1_000);
+        assert_eq!(records[0].group_id, "GroupTest");
+        assert_eq!(records[0].topic_id, "TopicTest");
+        assert_eq!(records[0].queue_id, 2);
+        assert_eq!(records[0].retry_flag, PopConsumerRetryType::NormalTopic.code());
+        assert_eq!(records[0].invisible_time, 30_000);
+        assert_eq!(records[0].attempt_times, 2);
+        assert_eq!(
+            records.iter().map(|record| record.offset).collect::<Vec<_>>(),
+            vec![100, 101, 102]
+        );
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[test]
+    fn pop_consumer_records_from_ack_select_single_and_batch_offsets() {
+        let checkpoint = PopCheckPoint {
+            start_offset: 100,
+            pop_time: 1_000,
+            invisible_time: 30_000,
+            num: 3,
+            queue_id: 2,
+            topic: CheetahString::from_static_str("TopicTest"),
+            cid: CheetahString::from_static_str("GroupTest"),
+            queue_offset_diff: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let ack_msg = AckMsg {
+            ack_offset: 101,
+            start_offset: 100,
+            consumer_group: CheetahString::from_static_str("GroupTest"),
+            topic: CheetahString::from_static_str("TopicTest"),
+            queue_id: 2,
+            pop_time: 1_000,
+            ..Default::default()
+        };
+        let batch_ack_msg = BatchAckMsg {
+            ack_msg: AckMsg {
+                start_offset: 100,
+                consumer_group: CheetahString::from_static_str("GroupTest"),
+                topic: CheetahString::from_static_str("TopicTest"),
+                queue_id: 2,
+                pop_time: 1_000,
+                ..Default::default()
+            },
+            ack_offset_list: vec![100, 102, 999],
+        };
+
+        let single = pop_consumer_records_from_ack(&checkpoint, &ack_msg);
+        let batch = pop_consumer_records_from_ack(&checkpoint, &batch_ack_msg);
+
+        assert_eq!(single.iter().map(|record| record.offset).collect::<Vec<_>>(), vec![101]);
+        assert_eq!(
+            batch.iter().map(|record| record.offset).collect::<Vec<_>>(),
+            vec![100, 102]
+        );
     }
 
     #[tokio::test]

@@ -30,6 +30,28 @@ pub struct ConsumeQueueOffsetValue {
     pub consume_queue_offset: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxPhysicalOffsetCheckpointValue {
+    pub max_physical_offset: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexRocksDbValue {
+    pub store_time: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimerRocksDbValue {
+    pub size_py: i32,
+    pub offset_py: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransRocksDbValue {
+    pub check_times: i32,
+    pub size_py: i32,
+}
+
 impl ConsumeQueueOffsetValue {
     pub const ENCODED_LEN: usize = 16;
 
@@ -52,6 +74,30 @@ impl ConsumeQueueOffsetValue {
         Ok(Self {
             commit_log_offset: read_i64(src, 0)?,
             consume_queue_offset: read_i64(src, 8)?,
+        })
+    }
+}
+
+impl MaxPhysicalOffsetCheckpointValue {
+    pub const ENCODED_LEN: usize = 8;
+
+    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+        dst.reserve(Self::ENCODED_LEN);
+        dst.extend_from_slice(&self.max_physical_offset.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+        if src.len() != Self::ENCODED_LEN {
+            return Err(codec_error(format!(
+                "max physical offset checkpoint value must be {} bytes, got {}",
+                Self::ENCODED_LEN,
+                src.len()
+            )));
+        }
+
+        Ok(Self {
+            max_physical_offset: read_i64(src, 0)?,
         })
     }
 }
@@ -82,6 +128,114 @@ impl ConsumeQueueValue {
             body_size: read_i32(src, 8)?,
             tag_hash_code: read_i64(src, 12)?,
             msg_store_time: read_i64(src, 20)?,
+        })
+    }
+}
+
+impl IndexRocksDbValue {
+    pub const ENCODED_LEN: usize = 8;
+
+    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+        if self.store_time <= 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.index.store_time",
+                value: self.store_time.to_string(),
+                reason: "store time must be greater than zero".to_string(),
+            });
+        }
+        dst.reserve(Self::ENCODED_LEN);
+        dst.extend_from_slice(&self.store_time.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+        if src.len() != Self::ENCODED_LEN {
+            return Err(codec_error(format!(
+                "index value must be {} bytes, got {}",
+                Self::ENCODED_LEN,
+                src.len()
+            )));
+        }
+        Ok(Self {
+            store_time: read_i64(src, 0)?,
+        })
+    }
+}
+
+impl TimerRocksDbValue {
+    pub const ENCODED_LEN: usize = 12;
+
+    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+        if self.size_py <= 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.timer.size_py",
+                value: self.size_py.to_string(),
+                reason: "message size must be greater than zero".to_string(),
+            });
+        }
+        if self.offset_py < 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.timer.offset_py",
+                value: self.offset_py.to_string(),
+                reason: "physical offset must be non-negative".to_string(),
+            });
+        }
+        dst.reserve(Self::ENCODED_LEN);
+        dst.extend_from_slice(&self.size_py.to_be_bytes());
+        dst.extend_from_slice(&self.offset_py.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+        if src.len() != Self::ENCODED_LEN {
+            return Err(codec_error(format!(
+                "timer value must be {} bytes, got {}",
+                Self::ENCODED_LEN,
+                src.len()
+            )));
+        }
+        Ok(Self {
+            size_py: read_i32(src, 0)?,
+            offset_py: read_i64(src, 4)?,
+        })
+    }
+}
+
+impl TransRocksDbValue {
+    pub const ENCODED_LEN: usize = 8;
+
+    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+        if self.check_times < 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.trans.check_times",
+                value: self.check_times.to_string(),
+                reason: "check times must be non-negative".to_string(),
+            });
+        }
+        if self.size_py <= 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.trans.size_py",
+                value: self.size_py.to_string(),
+                reason: "message size must be greater than zero".to_string(),
+            });
+        }
+        dst.reserve(Self::ENCODED_LEN);
+        dst.extend_from_slice(&self.check_times.to_be_bytes());
+        dst.extend_from_slice(&self.size_py.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+        if src.len() != Self::ENCODED_LEN {
+            return Err(codec_error(format!(
+                "trans value must be {} bytes, got {}",
+                Self::ENCODED_LEN,
+                src.len()
+            )));
+        }
+        Ok(Self {
+            check_times: read_i32(src, 0)?,
+            size_py: read_i32(src, 4)?,
         })
     }
 }

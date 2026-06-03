@@ -74,6 +74,10 @@ use crate::filter::expression_message_filter::ExpressionMessageFilter;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
+#[cfg(feature = "rocksdb_store")]
+use crate::pop::rocksdb_store::pop_rocksdb_path;
+#[cfg(feature = "rocksdb_store")]
+use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 
 const BORN_TIME: &str = "bornTime";
@@ -100,11 +104,11 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         PopMessageProcessor {
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
-            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
+            pop_buffer_merge_service: Self::new_pop_buffer_merge_service(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
                 broker_runtime_inner.clone(),
-            )),
+            ),
 
             queue_lock_manager,
             revive_topic,
@@ -125,11 +129,11 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         let processor = PopMessageProcessor {
             ck_message_number: Default::default(),
             pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
-            pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
+            pop_buffer_merge_service: Self::new_pop_buffer_merge_service(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
                 broker_runtime_inner.clone(),
-            )),
+            ),
 
             queue_lock_manager,
             revive_topic,
@@ -146,6 +150,63 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         PopLongPollingService::start(self.pop_long_polling_service.clone());
         PopBufferMergeService::start(self.pop_buffer_merge_service.clone());
         self.queue_lock_manager.start();
+    }
+
+    fn new_pop_buffer_merge_service(
+        revive_topic: CheetahString,
+        queue_lock_manager: QueueLockManager,
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    ) -> ArcMut<PopBufferMergeService<MS>> {
+        #[cfg(feature = "rocksdb_store")]
+        {
+            let pop_consumer_store = Self::open_pop_consumer_rocksdb_store(&broker_runtime_inner);
+            ArcMut::new(PopBufferMergeService::new(
+                revive_topic,
+                queue_lock_manager,
+                broker_runtime_inner,
+                pop_consumer_store,
+            ))
+        }
+
+        #[cfg(not(feature = "rocksdb_store"))]
+        {
+            ArcMut::new(PopBufferMergeService::new(
+                revive_topic,
+                queue_lock_manager,
+                broker_runtime_inner,
+            ))
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn open_pop_consumer_rocksdb_store(
+        broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
+    ) -> Option<Arc<PopConsumerRocksDbStore>> {
+        let broker_config = broker_runtime_inner.broker_config();
+        if !broker_config.pop_consumer_kv_service_init && !broker_config.pop_consumer_kv_service_enable {
+            return None;
+        }
+
+        let message_store_config = broker_runtime_inner.message_store_config();
+        let path = pop_rocksdb_path(message_store_config.store_path_root_dir.as_str());
+        match PopConsumerRocksDbStore::open(
+            path.clone(),
+            message_store_config.pop_rocksdb_block_cache_size,
+            message_store_config.pop_rocksdb_write_buffer_size,
+        ) {
+            Ok(store) => {
+                info!("Pop consumer RocksDB KV store opened at {}", path.display());
+                Some(Arc::new(store))
+            }
+            Err(error) => {
+                warn!(
+                    "Open Pop consumer RocksDB KV store failed at {}: {}",
+                    path.display(),
+                    error
+                );
+                None
+            }
+        }
     }
 }
 
@@ -1650,8 +1711,8 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
-    fn seed_topic_and_group(
-        inner: &mut ArcMut<crate::broker_runtime::BrokerRuntimeInner<LocalFileMessageStore>>,
+    fn seed_topic_and_group<MS: MessageStore>(
+        inner: &mut ArcMut<crate::broker_runtime::BrokerRuntimeInner<MS>>,
         topic: &str,
         group: &str,
     ) {
