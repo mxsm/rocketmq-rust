@@ -5069,7 +5069,7 @@ accounts:
         let GenericMessageStore::RocksDBStore(rocksdb_owner) = message_store.as_ref() else {
             panic!("RocksDB store type should initialize the broker main store as GenericMessageStore::RocksDBStore");
         };
-        assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue"));
+        assert!(rocksdb_owner.rocksdb_config().path.ends_with("consumequeue_rocksdb"));
 
         if let Some(message_store) = runtime.inner.message_store.as_mut() {
             message_store.shutdown().await;

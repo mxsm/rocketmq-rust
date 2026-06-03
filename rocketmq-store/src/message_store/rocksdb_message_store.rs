@@ -129,6 +129,7 @@ impl RocksDBMessageStore {
                 "RocksDBMessageStore requires store_type=RocksDB".to_string(),
             ));
         }
+        validate_rocksdb_consume_queue_store_path(message_store_config.as_ref())?;
 
         let message_store_config_for_index = Arc::clone(&message_store_config);
         let message_store_config_for_timer = Arc::clone(&message_store_config);
@@ -591,6 +592,18 @@ impl RocksDBMessageStore {
             .map(|value| ConsumeQueueValue::decode(value.as_ref()).map_err(rocksdb_store_error))
             .transpose()
     }
+}
+
+fn validate_rocksdb_consume_queue_store_path(message_store_config: &MessageStoreConfig) -> Result<(), StoreError> {
+    let conflict_path = RocksDbConfig::consume_queue_conflict_path_from_message_store_config(message_store_config);
+    if conflict_path.join("CURRENT").is_file() {
+        return Err(StoreError::General(format!(
+            "found RocksDB consume queue in incompatible path: {}, maybe incompatible \
+             use_separate_store_path_for_rocksdb_cq config",
+            conflict_path.display()
+        )));
+    }
+    Ok(())
 }
 
 fn rocksdb_store_error(error: rocketmq_error::RocketMQError) -> StoreError {

@@ -19,8 +19,6 @@ use rocketmq_error::RocketMQError;
 use rocketmq_store::rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store::rocksdb::column_family::RocksDbColumnFamily;
 use rocketmq_store::rocksdb::config::RocksDbColumnFamilyConfig;
-use rocketmq_store::rocksdb::config::RocksDbCompactionStyle;
-use rocketmq_store::rocksdb::config::RocksDbCompressionType;
 use rocketmq_store::rocksdb::config::RocksDbConfig;
 use rocketmq_store::rocksdb::error::codec_error;
 use rocketmq_store::rocksdb::iterator::RocksDbRangeScanOptions;
@@ -194,17 +192,7 @@ fn pop_column_family_config(
     block_cache_size: usize,
     write_buffer_size: usize,
 ) -> RocksDbColumnFamilyConfig {
-    RocksDbColumnFamilyConfig {
-        name: name.to_string(),
-        write_buffer_size,
-        max_write_buffer_number: 4,
-        block_cache_size,
-        block_size: 32 * 1024,
-        bloom_filter_bits: 16.0,
-        compression_type: RocksDbCompressionType::Lz4,
-        bottommost_compression_type: RocksDbCompressionType::Lz4,
-        compaction_style: RocksDbCompactionStyle::Universal,
-    }
+    RocksDbColumnFamilyConfig::pop(name, block_cache_size, write_buffer_size)
 }
 
 fn validate_key_component(field: &'static str, value: &str) -> Result<(), RocketMQError> {

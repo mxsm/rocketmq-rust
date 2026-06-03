@@ -34,8 +34,10 @@ impl<'a> RocksDbSnapshot<'a> {
 
     pub fn get_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Bytes>, RocketMQError> {
         let handle = self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))?;
-        self.snapshot
-            .get_cf(&handle, key)
+        let mut read_options = ::rocksdb::ReadOptions::default();
+        read_options.set_snapshot(&self.snapshot);
+        self.db
+            .get_cf_opt(&handle, key, &read_options)
             .map(|value| value.map(Bytes::from))
             .map_rocksdb(RocksDbErrorKind::Snapshot)
     }

@@ -142,6 +142,10 @@ mod defaults {
         StoreType::default()
     }
 
+    pub fn use_separate_store_path_for_rocksdb_cq() -> bool {
+        true
+    }
+
     pub fn mapped_file_size_consume_queue() -> usize {
         300000 * 20
     }
@@ -912,6 +916,13 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub rocksdb_cq_double_write_enable: bool,
 
+    #[serde(
+        default = "defaults::use_separate_store_path_for_rocksdb_cq",
+        alias = "useSeparateStorePathForRocksdbCQ",
+        alias = "useSeparateStorePathForRocksDBCQ"
+    )]
+    pub use_separate_store_path_for_rocksdb_cq: bool,
+
     #[serde(default)]
     pub read_uncommitted: bool,
 
@@ -1121,6 +1132,7 @@ impl Default for MessageStoreConfig {
             max_filter_message_size: 16000,
             enable_dleger_commit_log: false,
             rocksdb_cq_double_write_enable: false,
+            use_separate_store_path_for_rocksdb_cq: true,
             read_uncommitted: false,
             enable_controller_mode: false,
             #[cfg(feature = "tieredstore")]
@@ -1761,6 +1773,10 @@ impl MessageStoreConfig {
         properties.insert("enableRocksdbLog".into(), self.enable_rocksdb_log.to_string());
         properties.insert("topicQueueLockNum".into(), self.topic_queue_lock_num.to_string());
         properties.insert("maxFilterMessageSize".into(), self.max_filter_message_size.to_string());
+        properties.insert(
+            "useSeparateStorePathForRocksdbCQ".into(),
+            self.use_separate_store_path_for_rocksdb_cq.to_string(),
+        );
         properties
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
@@ -1826,12 +1842,14 @@ mod tests {
         assert_eq!(config.max_rocksdb_index_query_days, 7);
         assert_eq!(config.pop_rocksdb_block_cache_size, 256 * 1024 * 1024);
         assert_eq!(config.pop_rocksdb_write_buffer_size, 32 * 1024 * 1024);
+        assert!(config.use_separate_store_path_for_rocksdb_cq);
 
         let properties = config.get_properties();
         assert_eq!(properties["transRocksDBEnable"], "false");
         assert_eq!(properties["maxRocksDBIndexQueryDays"], "7");
         assert_eq!(properties["popRocksdbBlockCacheSize"], (256 * 1024 * 1024).to_string());
         assert_eq!(properties["popRocksdbWriteBufferSize"], (32 * 1024 * 1024).to_string());
+        assert_eq!(properties["useSeparateStorePathForRocksdbCQ"], "true");
     }
 
     #[test]
@@ -1842,6 +1860,19 @@ mod tests {
         assert_eq!(config.max_rocksdb_index_query_days, 7);
         assert_eq!(config.pop_rocksdb_block_cache_size, 256 * 1024 * 1024);
         assert_eq!(config.pop_rocksdb_write_buffer_size, 32 * 1024 * 1024);
+        assert!(config.use_separate_store_path_for_rocksdb_cq);
+        Ok(())
+    }
+
+    #[test]
+    fn serde_loads_java_rocksdb_cq_separate_path_alias() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "useSeparateStorePathForRocksdbCQ": false
+            }"#,
+        )?;
+
+        assert!(!config.use_separate_store_path_for_rocksdb_cq);
         Ok(())
     }
 

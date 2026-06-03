@@ -19,8 +19,15 @@ use rocketmq_error::RocketMQError;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::rocksdb::options::RocksDbWriteProfile;
 use crate::store_path_config_helper::get_store_path_consume_queue;
+use crate::store_path_config_helper::get_store_path_rocksdb_consume_queue;
 
 const ROCKSDB_MESSAGE_DIRECTORY: &str = "rocksdbstore";
+const KB: usize = 1024;
+const MB: usize = 1024 * KB;
+const GB: usize = 1024 * MB;
+const KB_U64: u64 = 1024;
+const MB_U64: u64 = 1024 * KB_U64;
+const GB_U64: u64 = 1024 * MB_U64;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum RocksDbCompressionType {
@@ -39,6 +46,30 @@ pub enum RocksDbCompactionStyle {
     Fifo,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RocksDbWalRecoveryMode {
+    TolerateCorruptedTailRecords,
+    AbsoluteConsistency,
+    #[default]
+    PointInTime,
+    SkipAnyCorruptedRecord,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RocksDbBlockBasedIndexType {
+    #[default]
+    BinarySearch,
+    HashSearch,
+    TwoLevelIndexSearch,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RocksDbDataBlockIndexType {
+    #[default]
+    BinarySearch,
+    BinaryAndHash,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RocksDbColumnFamilyConfig {
     pub name: String,
@@ -46,73 +77,234 @@ pub struct RocksDbColumnFamilyConfig {
     pub max_write_buffer_number: i32,
     pub block_cache_size: usize,
     pub block_size: usize,
+    pub metadata_block_size: Option<usize>,
     pub bloom_filter_bits: f64,
+    pub format_version: i32,
+    pub index_type: RocksDbBlockBasedIndexType,
+    pub data_block_index_type: RocksDbDataBlockIndexType,
+    pub data_block_hash_ratio: Option<f64>,
+    pub whole_key_filtering: bool,
     pub compression_type: RocksDbCompressionType,
     pub bottommost_compression_type: RocksDbCompressionType,
     pub compaction_style: RocksDbCompactionStyle,
+    pub min_write_buffer_number_to_merge: i32,
+    pub num_levels: i32,
+    pub level_zero_file_num_compaction_trigger: i32,
+    pub level_zero_slowdown_writes_trigger: i32,
+    pub level_zero_stop_writes_trigger: i32,
+    pub target_file_size_base: u64,
+    pub target_file_size_multiplier: i32,
+    pub max_bytes_for_level_base: Option<u64>,
+    pub max_bytes_for_level_multiplier: Option<f64>,
+    pub max_compaction_bytes: Option<u64>,
+    pub soft_pending_compaction_bytes_limit: Option<usize>,
+    pub hard_pending_compaction_bytes_limit: Option<usize>,
+    pub report_bg_io_stats: bool,
+    pub optimize_filters_for_hits: bool,
+    pub optimize_filters_for_memory: bool,
+    pub cache_index_and_filter_blocks: bool,
+    pub pin_l0_filter_and_index_blocks_in_cache: bool,
+    pub pin_top_level_index_and_filter: bool,
+    pub inplace_update_support: bool,
 }
 
 impl RocksDbColumnFamilyConfig {
     pub fn consume_queue_default() -> Self {
-        Self {
-            name: "default".to_string(),
-            write_buffer_size: 128 * 1024 * 1024,
-            max_write_buffer_number: 4,
-            block_cache_size: 1024 * 1024 * 1024,
-            block_size: 32 * 1024,
-            bloom_filter_bits: 16.0,
-            compression_type: RocksDbCompressionType::Lz4,
-            bottommost_compression_type: RocksDbCompressionType::Lz4,
-            compaction_style: RocksDbCompactionStyle::Universal,
-        }
+        let mut config = Self::java_cf_base(
+            "default",
+            128 * MB,
+            4,
+            1024 * MB,
+            32 * KB,
+            RocksDbCompressionType::Lz4,
+            RocksDbCompressionType::Lz4,
+            RocksDbCompactionStyle::Universal,
+        );
+        config.max_compaction_bytes = Some(100 * GB_U64);
+        config.soft_pending_compaction_bytes_limit = Some(100 * GB);
+        config.hard_pending_compaction_bytes_limit = Some(256 * GB);
+        config.use_data_block_hash_index();
+        config.report_bg_io_stats = true;
+        config.optimize_filters_for_hits = true;
+        config
     }
 
     pub fn consume_queue_offset() -> Self {
-        Self {
-            name: "offset".to_string(),
-            write_buffer_size: 64 * 1024 * 1024,
-            max_write_buffer_number: 4,
-            block_cache_size: 128 * 1024 * 1024,
-            block_size: 32 * 1024,
-            bloom_filter_bits: 16.0,
-            compression_type: RocksDbCompressionType::None,
-            bottommost_compression_type: RocksDbCompressionType::None,
-            compaction_style: RocksDbCompactionStyle::Level,
-        }
+        let mut config = Self::java_cf_base(
+            "offset",
+            64 * MB,
+            4,
+            128 * MB,
+            32 * KB,
+            RocksDbCompressionType::None,
+            RocksDbCompressionType::None,
+            RocksDbCompactionStyle::Level,
+        );
+        config.target_file_size_base = 64 * MB_U64;
+        config.max_bytes_for_level_base = Some(256 * MB_U64);
+        config.max_bytes_for_level_multiplier = Some(2.0);
+        config.metadata_block_size = None;
+        config.inplace_update_support = true;
+        config
     }
 
     pub fn message_index_default() -> Self {
-        Self {
-            name: "default".to_string(),
-            ..Self::consume_queue_default()
-        }
+        let mut config = Self::java_cf_base(
+            "default",
+            128 * MB,
+            6,
+            1024 * MB,
+            128 * KB,
+            RocksDbCompressionType::None,
+            RocksDbCompressionType::None,
+            RocksDbCompactionStyle::Universal,
+        );
+        config.max_compaction_bytes = Some(256 * MB_U64);
+        config.soft_pending_compaction_bytes_limit = Some(100 * GB);
+        config.hard_pending_compaction_bytes_limit = Some(256 * GB);
+        config.level_zero_file_num_compaction_trigger = 8;
+        config.level_zero_slowdown_writes_trigger = 8;
+        config.level_zero_stop_writes_trigger = 20;
+        config.use_data_block_hash_index();
+        config.report_bg_io_stats = true;
+        config.optimize_filters_for_hits = true;
+        config
     }
 
     pub fn message_timer() -> Self {
-        Self {
-            name: "timer".to_string(),
-            write_buffer_size: 128 * 1024 * 1024,
-            max_write_buffer_number: 4,
-            block_cache_size: 512 * 1024 * 1024,
-            block_size: 32 * 1024,
-            bloom_filter_bits: 16.0,
-            compression_type: RocksDbCompressionType::Lz4,
-            bottommost_compression_type: RocksDbCompressionType::Lz4,
-            compaction_style: RocksDbCompactionStyle::Universal,
-        }
+        let mut config = Self::java_cf_base(
+            "timer",
+            256 * MB,
+            6,
+            2048 * MB,
+            128 * KB,
+            RocksDbCompressionType::Zstd,
+            RocksDbCompressionType::None,
+            RocksDbCompactionStyle::Level,
+        );
+        config.max_compaction_bytes = Some(256 * MB_U64);
+        config.soft_pending_compaction_bytes_limit = Some(100 * GB);
+        config.hard_pending_compaction_bytes_limit = Some(256 * GB);
+        config.max_bytes_for_level_base = Some(512 * MB_U64);
+        config.use_data_block_hash_index();
+        config.report_bg_io_stats = true;
+        config.optimize_filters_for_hits = true;
+        config
     }
 
     pub fn message_transaction() -> Self {
+        let mut config = Self::java_cf_base(
+            "trans",
+            128 * MB,
+            6,
+            1024 * MB,
+            128 * KB,
+            RocksDbCompressionType::None,
+            RocksDbCompressionType::None,
+            RocksDbCompactionStyle::Universal,
+        );
+        config.max_compaction_bytes = Some(100 * GB_U64);
+        config.soft_pending_compaction_bytes_limit = Some(100 * GB);
+        config.hard_pending_compaction_bytes_limit = Some(256 * GB);
+        config.use_data_block_hash_index();
+        config.report_bg_io_stats = true;
+        config.optimize_filters_for_hits = true;
+        config
+    }
+
+    pub fn pop(name: &str, block_cache_size: usize, write_buffer_size: usize) -> Self {
+        let mut config = Self::java_cf_base(
+            name,
+            write_buffer_size,
+            4,
+            block_cache_size,
+            32 * KB,
+            RocksDbCompressionType::None,
+            RocksDbCompressionType::None,
+            RocksDbCompactionStyle::Universal,
+        );
+        config.max_compaction_bytes = Some(100 * GB_U64);
+        config.soft_pending_compaction_bytes_limit = Some(100 * GB);
+        config.hard_pending_compaction_bytes_limit = Some(256 * GB);
+        config.use_data_block_hash_index();
+        config.report_bg_io_stats = true;
+        config.optimize_filters_for_hits = true;
+        config
+    }
+
+    pub fn broker_config(name: &str, block_cache_size: usize, write_buffer_size: usize) -> Self {
+        let mut config = Self::java_cf_base(
+            name,
+            write_buffer_size,
+            4,
+            block_cache_size,
+            32 * KB,
+            RocksDbCompressionType::None,
+            RocksDbCompressionType::None,
+            RocksDbCompactionStyle::Level,
+        );
+        config.level_zero_file_num_compaction_trigger = 4;
+        config.level_zero_slowdown_writes_trigger = 8;
+        config.level_zero_stop_writes_trigger = 12;
+        config.target_file_size_base = 64 * MB_U64;
+        config.max_bytes_for_level_base = Some(256 * MB_U64);
+        config.max_bytes_for_level_multiplier = Some(2.0);
+        config.metadata_block_size = None;
+        config.cache_index_and_filter_blocks = true;
+        config.inplace_update_support = true;
+        config
+    }
+
+    fn use_data_block_hash_index(&mut self) {
+        self.data_block_index_type = RocksDbDataBlockIndexType::BinaryAndHash;
+        self.data_block_hash_ratio = Some(0.75);
+    }
+
+    fn java_cf_base(
+        name: &str,
+        write_buffer_size: usize,
+        max_write_buffer_number: i32,
+        block_cache_size: usize,
+        block_size: usize,
+        compression_type: RocksDbCompressionType,
+        bottommost_compression_type: RocksDbCompressionType,
+        compaction_style: RocksDbCompactionStyle,
+    ) -> Self {
         Self {
-            name: "trans".to_string(),
-            write_buffer_size: 64 * 1024 * 1024,
-            max_write_buffer_number: 4,
-            block_cache_size: 256 * 1024 * 1024,
-            block_size: 32 * 1024,
+            name: name.to_string(),
+            write_buffer_size,
+            max_write_buffer_number,
+            block_cache_size,
+            block_size,
+            metadata_block_size: Some(4 * KB),
             bloom_filter_bits: 16.0,
-            compression_type: RocksDbCompressionType::Lz4,
-            bottommost_compression_type: RocksDbCompressionType::Lz4,
-            compaction_style: RocksDbCompactionStyle::Level,
+            format_version: 5,
+            index_type: RocksDbBlockBasedIndexType::BinarySearch,
+            data_block_index_type: RocksDbDataBlockIndexType::BinarySearch,
+            data_block_hash_ratio: None,
+            whole_key_filtering: true,
+            compression_type,
+            bottommost_compression_type,
+            compaction_style,
+            min_write_buffer_number_to_merge: 1,
+            num_levels: 7,
+            level_zero_file_num_compaction_trigger: 2,
+            level_zero_slowdown_writes_trigger: 8,
+            level_zero_stop_writes_trigger: 10,
+            target_file_size_base: 256 * MB_U64,
+            target_file_size_multiplier: 2,
+            max_bytes_for_level_base: None,
+            max_bytes_for_level_multiplier: None,
+            max_compaction_bytes: None,
+            soft_pending_compaction_bytes_limit: None,
+            hard_pending_compaction_bytes_limit: None,
+            report_bg_io_stats: false,
+            optimize_filters_for_hits: false,
+            optimize_filters_for_memory: false,
+            cache_index_and_filter_blocks: false,
+            pin_l0_filter_and_index_blocks_in_cache: false,
+            pin_top_level_index_and_filter: true,
+            inplace_update_support: false,
         }
     }
 
@@ -157,6 +349,19 @@ pub struct RocksDbConfig {
     pub compression_type: RocksDbCompressionType,
     pub bottommost_compression_type: RocksDbCompressionType,
     pub compaction_style: RocksDbCompactionStyle,
+    pub db_write_buffer_size: Option<usize>,
+    pub bytes_per_sync: u64,
+    pub wal_bytes_per_sync: Option<u64>,
+    pub max_log_file_size: usize,
+    pub keep_log_file_num: usize,
+    pub max_manifest_file_size: usize,
+    pub allow_concurrent_memtable_write: bool,
+    pub paranoid_checks: bool,
+    pub compaction_readahead_size: usize,
+    pub use_direct_io_for_flush_and_compaction: bool,
+    pub use_direct_reads: bool,
+    pub wal_recovery_mode: RocksDbWalRecoveryMode,
+    pub stats_dump_period_sec: u32,
     pub max_background_jobs: i32,
     pub max_subcompactions: u32,
     pub max_open_files: i32,
@@ -186,6 +391,19 @@ impl Default for RocksDbConfig {
             compression_type: RocksDbCompressionType::Lz4,
             bottommost_compression_type: RocksDbCompressionType::Lz4,
             compaction_style: RocksDbCompactionStyle::Universal,
+            db_write_buffer_size: None,
+            bytes_per_sync: MB_U64,
+            wal_bytes_per_sync: None,
+            max_log_file_size: GB,
+            keep_log_file_num: 5,
+            max_manifest_file_size: GB,
+            allow_concurrent_memtable_write: false,
+            paranoid_checks: true,
+            compaction_readahead_size: 4 * MB,
+            use_direct_io_for_flush_and_compaction: false,
+            use_direct_reads: false,
+            wal_recovery_mode: RocksDbWalRecoveryMode::PointInTime,
+            stats_dump_period_sec: 0,
             max_background_jobs: 32,
             max_subcompactions: 8,
             max_open_files: -1,
@@ -205,12 +423,28 @@ impl Default for RocksDbConfig {
 }
 
 impl RocksDbConfig {
+    pub fn consume_queue_path_from_message_store_config(message_store_config: &MessageStoreConfig) -> PathBuf {
+        let root_dir = message_store_config.store_path_root_dir.as_str();
+        if message_store_config.use_separate_store_path_for_rocksdb_cq {
+            PathBuf::from(get_store_path_rocksdb_consume_queue(root_dir))
+        } else {
+            PathBuf::from(get_store_path_consume_queue(root_dir))
+        }
+    }
+
+    pub fn consume_queue_conflict_path_from_message_store_config(message_store_config: &MessageStoreConfig) -> PathBuf {
+        let root_dir = message_store_config.store_path_root_dir.as_str();
+        if message_store_config.use_separate_store_path_for_rocksdb_cq {
+            PathBuf::from(get_store_path_consume_queue(root_dir))
+        } else {
+            PathBuf::from(get_store_path_rocksdb_consume_queue(root_dir))
+        }
+    }
+
     pub fn consume_queue_from_message_store_config(message_store_config: &MessageStoreConfig) -> Self {
         Self {
             enabled: message_store_config.is_enable_rocksdb_store(),
-            path: PathBuf::from(get_store_path_consume_queue(
-                message_store_config.store_path_root_dir.as_str(),
-            )),
+            path: Self::consume_queue_path_from_message_store_config(message_store_config),
             wal_enabled: false,
             sync_write: false,
             column_families: vec![

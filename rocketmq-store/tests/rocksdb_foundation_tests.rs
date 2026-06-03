@@ -33,6 +33,7 @@ use rocketmq_store::rocksdb::config::RocksDbColumnFamilyConfig;
 use rocketmq_store::rocksdb::config::RocksDbCompactionStyle;
 use rocketmq_store::rocksdb::config::RocksDbCompressionType;
 use rocketmq_store::rocksdb::config::RocksDbConfig;
+use rocketmq_store::rocksdb::config::RocksDbDataBlockIndexType;
 use rocketmq_store::rocksdb::consume_queue::CommitLogDispatcherBuildRocksDbConsumeQueue;
 use rocketmq_store::rocksdb::consume_queue::ConsumeQueueBatchEntry;
 use rocketmq_store::rocksdb::consume_queue::ConsumeQueueBatchWriteRequest;
@@ -58,6 +59,7 @@ use rocketmq_store::rocksdb::message::MessageRocksDbStorage;
 use rocketmq_store::rocksdb::message::TimerRocksDbAction;
 use rocketmq_store::rocksdb::message::TimerRocksDbRecord;
 use rocketmq_store::rocksdb::message::TransRocksDbRecord;
+use rocketmq_store::rocksdb::options::RocksDbOptionsFactory;
 use rocketmq_store::rocksdb::options::RocksDbWriteProfile;
 use rocketmq_store::rocksdb::store::KeyValueStore;
 use rocketmq_store::rocksdb::store::RocksDbStore;
@@ -84,6 +86,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 
+const KB: usize = 1024;
+const MB: usize = 1024 * KB;
+const GB: usize = 1024 * MB;
+const MB_U64: u64 = 1024 * 1024;
+const GB_U64: u64 = 1024 * MB_U64;
+
 #[test]
 fn rocksdb_config_defaults_match_java_baseline() {
     let config = RocksDbConfig::default();
@@ -94,11 +102,20 @@ fn rocksdb_config_defaults_match_java_baseline() {
     assert_eq!(config.max_background_jobs, 32);
     assert_eq!(config.max_subcompactions, 8);
     assert_eq!(config.max_open_files, -1);
-    assert_eq!(config.write_buffer_size, 128 * 1024 * 1024);
+    assert_eq!(config.write_buffer_size, 128 * MB);
     assert_eq!(config.max_write_buffer_number, 4);
-    assert_eq!(config.block_size, 32 * 1024);
+    assert_eq!(config.block_size, 32 * KB);
     assert_eq!(config.compression_type, RocksDbCompressionType::Lz4);
     assert_eq!(config.compaction_style, RocksDbCompactionStyle::Universal);
+    assert_eq!(config.bytes_per_sync, MB_U64);
+    assert_eq!(config.max_log_file_size, GB);
+    assert_eq!(config.keep_log_file_num, 5);
+    assert_eq!(config.max_manifest_file_size, GB);
+    assert!(!config.allow_concurrent_memtable_write);
+    assert!(config.paranoid_checks);
+    assert_eq!(config.compaction_readahead_size, 4 * MB);
+    assert!(!config.use_direct_io_for_flush_and_compaction);
+    assert!(!config.use_direct_reads);
     assert_eq!(config.flush_interval_ms, 0);
     assert_eq!(config.compaction_interval_ms, 0);
     assert_eq!(config.checkpoint_interval_ms, 0);
@@ -118,7 +135,7 @@ fn rocksdb_consume_queue_config_from_message_store_config_uses_java_default_path
     let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(&store_config);
 
     assert!(rocksdb_config.enabled);
-    assert_eq!(rocksdb_config.path, temp_dir.path().join("consumequeue"));
+    assert_eq!(rocksdb_config.path, temp_dir.path().join("consumequeue_rocksdb"));
     assert_eq!(rocksdb_config.column_families.len(), 2);
     assert_eq!(
         rocksdb_config.column_families[0].name,
@@ -131,6 +148,25 @@ fn rocksdb_consume_queue_config_from_message_store_config_uses_java_default_path
     assert!(rocksdb_config.manual_wal_flush);
     assert!(!rocksdb_config.wal_enabled);
     assert_eq!(rocksdb_config.write_profile(), RocksDbWriteProfile::DisableWal);
+}
+
+#[test]
+fn rocksdb_consume_queue_config_can_use_legacy_consumequeue_path() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let store_config = MessageStoreConfig {
+        store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+        store_type: StoreType::RocksDB,
+        use_separate_store_path_for_rocksdb_cq: false,
+        ..MessageStoreConfig::default()
+    };
+
+    let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(&store_config);
+
+    assert_eq!(rocksdb_config.path, temp_dir.path().join("consumequeue"));
+    assert_eq!(
+        RocksDbConfig::consume_queue_conflict_path_from_message_store_config(&store_config),
+        temp_dir.path().join("consumequeue_rocksdb")
+    );
 }
 
 #[test]
@@ -188,6 +224,142 @@ fn rocksdb_message_config_from_message_store_config_uses_java_cf_layout() {
 }
 
 #[test]
+fn rocksdb_column_family_configs_match_java_options_baseline() {
+    let cq_default = RocksDbColumnFamilyConfig::consume_queue_default();
+    assert_eq!(cq_default.name, RocksDbColumnFamily::Default.name());
+    assert_eq!(cq_default.write_buffer_size, 128 * MB);
+    assert_eq!(cq_default.max_write_buffer_number, 4);
+    assert_eq!(cq_default.block_cache_size, 1024 * MB);
+    assert_eq!(cq_default.block_size, 32 * KB);
+    assert_eq!(cq_default.metadata_block_size, Some(4 * KB));
+    assert_eq!(cq_default.format_version, 5);
+    assert_eq!(
+        cq_default.data_block_index_type,
+        RocksDbDataBlockIndexType::BinaryAndHash
+    );
+    assert_eq!(cq_default.data_block_hash_ratio, Some(0.75));
+    assert!(cq_default.whole_key_filtering);
+    assert!(cq_default.pin_top_level_index_and_filter);
+    assert_eq!(cq_default.compression_type, RocksDbCompressionType::Lz4);
+    assert_eq!(cq_default.bottommost_compression_type, RocksDbCompressionType::Lz4);
+    assert_eq!(cq_default.compaction_style, RocksDbCompactionStyle::Universal);
+    assert_eq!(cq_default.max_compaction_bytes, Some(100 * GB_U64));
+    assert_eq!(cq_default.soft_pending_compaction_bytes_limit, Some(100 * GB));
+    assert_eq!(cq_default.hard_pending_compaction_bytes_limit, Some(256 * GB));
+    assert_eq!(cq_default.level_zero_file_num_compaction_trigger, 2);
+    assert_eq!(cq_default.level_zero_slowdown_writes_trigger, 8);
+    assert_eq!(cq_default.level_zero_stop_writes_trigger, 10);
+    assert_eq!(cq_default.target_file_size_base, 256 * MB_U64);
+    assert_eq!(cq_default.target_file_size_multiplier, 2);
+    assert!(cq_default.report_bg_io_stats);
+    assert!(cq_default.optimize_filters_for_hits);
+
+    let offset = RocksDbColumnFamilyConfig::consume_queue_offset();
+    assert_eq!(offset.name, RocksDbColumnFamily::ConsumeQueueOffset.name());
+    assert_eq!(offset.write_buffer_size, 64 * MB);
+    assert_eq!(offset.block_cache_size, 128 * MB);
+    assert_eq!(offset.metadata_block_size, None);
+    assert_eq!(offset.data_block_index_type, RocksDbDataBlockIndexType::BinarySearch);
+    assert_eq!(offset.data_block_hash_ratio, None);
+    assert_eq!(offset.compression_type, RocksDbCompressionType::None);
+    assert_eq!(offset.compaction_style, RocksDbCompactionStyle::Level);
+    assert_eq!(offset.target_file_size_base, 64 * MB_U64);
+    assert_eq!(offset.max_bytes_for_level_base, Some(256 * MB_U64));
+    assert_eq!(offset.max_bytes_for_level_multiplier, Some(2.0));
+    assert!(offset.inplace_update_support);
+
+    let index = RocksDbColumnFamilyConfig::message_index_default();
+    assert_eq!(index.write_buffer_size, 128 * MB);
+    assert_eq!(index.max_write_buffer_number, 6);
+    assert_eq!(index.block_size, 128 * KB);
+    assert_eq!(index.metadata_block_size, Some(4 * KB));
+    assert_eq!(index.data_block_index_type, RocksDbDataBlockIndexType::BinaryAndHash);
+    assert_eq!(index.data_block_hash_ratio, Some(0.75));
+    assert_eq!(index.compression_type, RocksDbCompressionType::None);
+    assert_eq!(index.compaction_style, RocksDbCompactionStyle::Universal);
+    assert_eq!(index.max_compaction_bytes, Some(256 * MB_U64));
+    assert_eq!(index.level_zero_file_num_compaction_trigger, 8);
+    assert_eq!(index.level_zero_slowdown_writes_trigger, 8);
+    assert_eq!(index.level_zero_stop_writes_trigger, 20);
+
+    let timer = RocksDbColumnFamilyConfig::message_timer();
+    assert_eq!(timer.name, RocksDbColumnFamily::Timer.name());
+    assert_eq!(timer.write_buffer_size, 256 * MB);
+    assert_eq!(timer.max_write_buffer_number, 6);
+    assert_eq!(timer.block_cache_size, 2048 * MB);
+    assert_eq!(timer.block_size, 128 * KB);
+    assert_eq!(timer.metadata_block_size, Some(4 * KB));
+    assert_eq!(timer.data_block_index_type, RocksDbDataBlockIndexType::BinaryAndHash);
+    assert_eq!(timer.data_block_hash_ratio, Some(0.75));
+    assert_eq!(timer.compression_type, RocksDbCompressionType::Zstd);
+    assert_eq!(timer.bottommost_compression_type, RocksDbCompressionType::None);
+    assert_eq!(timer.compaction_style, RocksDbCompactionStyle::Level);
+    assert_eq!(timer.max_compaction_bytes, Some(256 * MB_U64));
+    assert_eq!(timer.max_bytes_for_level_base, Some(512 * MB_U64));
+
+    let trans = RocksDbColumnFamilyConfig::message_transaction();
+    assert_eq!(trans.name, RocksDbColumnFamily::Transaction.name());
+    assert_eq!(trans.write_buffer_size, 128 * MB);
+    assert_eq!(trans.max_write_buffer_number, 6);
+    assert_eq!(trans.block_cache_size, 1024 * MB);
+    assert_eq!(trans.block_size, 128 * KB);
+    assert_eq!(trans.metadata_block_size, Some(4 * KB));
+    assert_eq!(trans.data_block_index_type, RocksDbDataBlockIndexType::BinaryAndHash);
+    assert_eq!(trans.data_block_hash_ratio, Some(0.75));
+    assert_eq!(trans.compression_type, RocksDbCompressionType::None);
+    assert_eq!(trans.compaction_style, RocksDbCompactionStyle::Universal);
+    assert_eq!(trans.max_compaction_bytes, Some(100 * GB_U64));
+
+    let pop = RocksDbColumnFamilyConfig::pop(RocksDbColumnFamily::PopState.name(), 256 * MB, 32 * MB);
+    assert_eq!(pop.name, RocksDbColumnFamily::PopState.name());
+    assert_eq!(pop.write_buffer_size, 32 * MB);
+    assert_eq!(pop.block_cache_size, 256 * MB);
+    assert_eq!(pop.metadata_block_size, Some(4 * KB));
+    assert_eq!(pop.data_block_index_type, RocksDbDataBlockIndexType::BinaryAndHash);
+    assert_eq!(pop.data_block_hash_ratio, Some(0.75));
+    assert_eq!(pop.compression_type, RocksDbCompressionType::None);
+    assert_eq!(pop.bottommost_compression_type, RocksDbCompressionType::None);
+    assert_eq!(pop.compaction_style, RocksDbCompactionStyle::Universal);
+    assert_eq!(pop.max_compaction_bytes, Some(100 * GB_U64));
+
+    let broker_config = RocksDbColumnFamilyConfig::broker_config("topic", 4 * MB, 64 * MB);
+    assert_eq!(broker_config.write_buffer_size, 64 * MB);
+    assert_eq!(broker_config.block_cache_size, 4 * MB);
+    assert_eq!(broker_config.metadata_block_size, None);
+    assert_eq!(
+        broker_config.data_block_index_type,
+        RocksDbDataBlockIndexType::BinarySearch
+    );
+    assert_eq!(broker_config.data_block_hash_ratio, None);
+    assert_eq!(broker_config.compression_type, RocksDbCompressionType::None);
+    assert_eq!(broker_config.compaction_style, RocksDbCompactionStyle::Level);
+    assert_eq!(broker_config.level_zero_file_num_compaction_trigger, 4);
+    assert_eq!(broker_config.level_zero_stop_writes_trigger, 12);
+    assert_eq!(broker_config.target_file_size_base, 64 * MB_U64);
+    assert_eq!(broker_config.max_bytes_for_level_base, Some(256 * MB_U64));
+    assert!(broker_config.cache_index_and_filter_blocks);
+    assert!(broker_config.inplace_update_support);
+}
+
+#[test]
+fn rocksdb_options_factory_accepts_java_aligned_db_and_cf_options() {
+    let db_config = RocksDbConfig::default();
+    RocksDbOptionsFactory::db_options(&db_config).expect("db options should build");
+
+    for cf_config in [
+        RocksDbColumnFamilyConfig::consume_queue_default(),
+        RocksDbColumnFamilyConfig::consume_queue_offset(),
+        RocksDbColumnFamilyConfig::message_index_default(),
+        RocksDbColumnFamilyConfig::message_timer(),
+        RocksDbColumnFamilyConfig::message_transaction(),
+        RocksDbColumnFamilyConfig::pop(RocksDbColumnFamily::PopState.name(), 256 * MB, 32 * MB),
+        RocksDbColumnFamilyConfig::broker_config("topic", 4 * MB, 64 * MB),
+    ] {
+        RocksDbOptionsFactory::cf_options(&cf_config).expect("cf options should build");
+    }
+}
+
+#[test]
 fn rocksdb_consume_queue_config_is_disabled_for_local_file_store_type() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let store_config = MessageStoreConfig {
@@ -199,7 +371,7 @@ fn rocksdb_consume_queue_config_is_disabled_for_local_file_store_type() {
     let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(&store_config);
 
     assert!(!rocksdb_config.enabled);
-    assert_eq!(rocksdb_config.path, temp_dir.path().join("consumequeue"));
+    assert_eq!(rocksdb_config.path, temp_dir.path().join("consumequeue_rocksdb"));
 }
 
 #[test]
@@ -223,7 +395,7 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
     assert!(message_store.rocksdb_config().enabled);
     assert_eq!(
         message_store.rocksdb_config().path,
-        temp_dir.path().join("consumequeue")
+        temp_dir.path().join("consumequeue_rocksdb")
     );
     assert_eq!(
         message_store.message_rocksdb_config().path,
@@ -261,6 +433,31 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
             .expect("index last offset should read"),
         700
     );
+}
+
+#[test]
+fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let conflict_dir = temp_dir.path().join("consumequeue");
+    std::fs::create_dir_all(&conflict_dir).expect("conflict dir should be created");
+    std::fs::write(conflict_dir.join("CURRENT"), b"MANIFEST-000001\n").expect("CURRENT marker should be written");
+    let message_store_config = Arc::new(MessageStoreConfig {
+        store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+        store_type: StoreType::RocksDB,
+        ..MessageStoreConfig::default()
+    });
+
+    let error = RocksDBMessageStore::try_new(
+        message_store_config,
+        Arc::new(BrokerConfig::default()),
+        Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+        None,
+        true,
+    )
+    .expect_err("conflicting consume queue rocksdb path should be rejected");
+
+    assert!(error.to_string().contains("incompatible path"));
+    assert!(error.to_string().contains("consumequeue"));
 }
 
 #[test]
@@ -761,6 +958,34 @@ fn message_rocksdb_storage_scans_and_deletes_timer_records_with_java_range_bound
         vec![(2_000, "uniqB", 200)]
     );
 
+    let first_page = storage
+        .scan_records_for_timer(1_000, 4_000, 2, None)
+        .expect("timer first page should read");
+    assert_eq!(
+        first_page
+            .iter()
+            .map(|record| (record.delay_time, record.uniq_key.as_str(), record.offset_py))
+            .collect::<Vec<_>>(),
+        vec![(1_000, "uniqA", 100), (2_000, "uniqB", 200)]
+    );
+    let mut last_page_key = Vec::new();
+    TimerRocksDbKey {
+        delay_time: first_page[1].delay_time,
+        uniq_key: first_page[1].uniq_key.clone(),
+    }
+    .encode(&mut last_page_key)
+    .expect("timer page key should encode");
+    let second_page = storage
+        .scan_records_for_timer(1_000, 4_000, 2, Some(&last_page_key))
+        .expect("timer second page should read");
+    assert_eq!(
+        second_page
+            .iter()
+            .map(|record| (record.delay_time, record.uniq_key.as_str(), record.offset_py))
+            .collect::<Vec<_>>(),
+        vec![(3_000, "uniqC", 300)]
+    );
+
     storage
         .delete_records_for_timer(1_000, 2_000)
         .expect("timer range delete should include upper delay time");
@@ -787,6 +1012,43 @@ fn message_rocksdb_storage_scans_and_deletes_timer_records_with_java_range_bound
             .expect("timer third read should succeed")
             .map(|record| record.offset_py),
         Some(300)
+    );
+}
+
+#[test]
+fn message_rocksdb_storage_persists_timeline_checkpoint() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let store_config = MessageStoreConfig {
+        store_path_root_dir: CheetahString::from_string(temp_dir.path().to_string_lossy().to_string()),
+        store_type: StoreType::RocksDB,
+        ..MessageStoreConfig::default()
+    };
+    let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
+        .expect("message rocksdb storage should open");
+
+    assert_eq!(
+        storage
+            .get_timeline_checkpoint_for_timer()
+            .expect("empty timeline checkpoint should read"),
+        0
+    );
+    storage
+        .write_timeline_checkpoint_for_timer(1_700_000_123_000)
+        .expect("timeline checkpoint should write");
+    assert_eq!(
+        storage
+            .get_timeline_checkpoint_for_timer()
+            .expect("timeline checkpoint should read"),
+        1_700_000_123_000
+    );
+    storage
+        .delete_timeline_checkpoint_for_timer()
+        .expect("timeline checkpoint should delete");
+    assert_eq!(
+        storage
+            .get_timeline_checkpoint_for_timer()
+            .expect("deleted timeline checkpoint should read"),
+        0
     );
 }
 
@@ -1649,10 +1911,60 @@ fn rocksdb_store_prefix_and_range_scan_return_bounded_results() {
     );
 }
 
+#[tokio::test]
+async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+
+    for (key, value) in [
+        (&b"timer:0001"[..], &b"a"[..]),
+        (&b"timer:0002"[..], &b"b"[..]),
+        (&b"timer:0003"[..], &b"c"[..]),
+        (&b"other:0001"[..], &b"d"[..]),
+    ] {
+        store
+            .put_cf(RocksDbColumnFamily::Default.name(), key, value)
+            .expect("seed put should succeed");
+    }
+
+    let prefix_items = store
+        .prefix_scan_blocking(RocksDbScanOptions::prefix(
+            RocksDbColumnFamily::Default.name(),
+            b"timer:",
+            2,
+        ))
+        .await
+        .expect("blocking prefix scan should succeed");
+    assert_eq!(
+        prefix_items.iter().map(|item| item.key.as_ref()).collect::<Vec<_>>(),
+        vec![&b"timer:0001"[..], &b"timer:0002"[..]]
+    );
+
+    let range_items = store
+        .range_scan_blocking(RocksDbRangeScanOptions::new(
+            RocksDbColumnFamily::Default.name(),
+            b"timer:0002",
+            b"timer:0004",
+            10,
+        ))
+        .await
+        .expect("blocking range scan should succeed");
+    assert_eq!(
+        range_items.iter().map(|item| item.key.as_ref()).collect::<Vec<_>>(),
+        vec![&b"timer:0002"[..], &b"timer:0003"[..]]
+    );
+
+    assert_eq!(store.metrics().scan_count, 2);
+}
+
 #[test]
 fn rocksdb_snapshot_keeps_consistent_read_view() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(RocksDbConfig {
+        column_families: vec![RocksDbColumnFamilyConfig::consume_queue_default()],
+        ..test_config(&temp_dir)
+    })
+    .expect("rocksdb store should open");
 
     store
         .put_cf(RocksDbColumnFamily::Default.name(), b"snapshot-key", b"before")
@@ -1743,6 +2055,29 @@ fn rocksdb_store_reloading_state_rejects_new_operations() {
         .put_cf(RocksDbColumnFamily::Default.name(), b"reloading-key", b"value")
         .expect_err("reloading store should reject writes");
     assert!(error.to_string().contains("reloading"));
+
+    store
+        .mark_recovered()
+        .expect("recovered store should reopen operations");
+    assert_eq!(store.state(), RocksDbStoreState::Open);
+    store
+        .put_cf(RocksDbColumnFamily::Default.name(), b"recovered-key", b"value")
+        .expect("recovered store should accept writes");
+}
+
+#[test]
+fn rocksdb_store_closed_state_cannot_be_marked_recovered() {
+    let temp_dir = TempDir::new().expect("temp dir should be created");
+    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+
+    store.mark_reloading();
+    store.close();
+
+    let error = store
+        .mark_recovered()
+        .expect_err("closed store should not be marked recovered");
+    assert!(error.to_string().contains("closed"));
+    assert_eq!(store.state(), RocksDbStoreState::Closed);
 }
 
 #[test]

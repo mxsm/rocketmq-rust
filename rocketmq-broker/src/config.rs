@@ -22,9 +22,14 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
+    use rocketmq_store::rocksdb::config::RocksDbWalRecoveryMode;
+
     use super::rocksdb_manager::RocksDbBrokerConfigManager;
     use super::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
     use super::rocksdb_manager::RocksDbBrokerConfigStorageLayout;
+
+    const MB: usize = 1024 * 1024;
+    const MB_U64: u64 = 1024 * 1024;
 
     #[test]
     fn rocksdb_config_storage_paths_match_java_single_and_separate_layouts() {
@@ -64,6 +69,16 @@ mod tests {
 
         assert!(manager.rocksdb_config().wal_enabled);
         assert!(!manager.rocksdb_config().sync_write);
+        assert_eq!(manager.rocksdb_config().db_write_buffer_size, Some(128 * MB));
+        assert_eq!(manager.rocksdb_config().wal_bytes_per_sync, Some(MB_U64));
+        assert_eq!(
+            manager.rocksdb_config().wal_recovery_mode,
+            RocksDbWalRecoveryMode::SkipAnyCorruptedRecord
+        );
+        assert_eq!(manager.rocksdb_config().stats_dump_period_sec, 600);
+        assert_eq!(manager.rocksdb_config().max_subcompactions, 4);
+        assert!(manager.rocksdb_config().use_direct_io_for_flush_and_compaction);
+        assert!(manager.rocksdb_config().use_direct_reads);
         assert_eq!(manager.default_cf(), "topic");
         assert_eq!(manager.version_cf(), "topicVersion");
 
