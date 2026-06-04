@@ -40,7 +40,7 @@ cheetah-string = { workspace = true }
 serde          = { workspace = true }
 serde_json     = { workspace = true }
 serde_yaml     = { workspace = true }
-chrono         = { version = "0.4.44", default-features = false, features = ["std"] }
+chrono         = { version = "0.4.45", default-features = false, features = ["std"] }
 
 
 tracing = { workspace = true }
