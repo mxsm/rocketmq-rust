@@ -746,9 +746,9 @@ impl ExportService {
         #[cfg(not(feature = "rocksdb-export"))]
         {
             let _ = config_type;
-            return Err(RocketMQError::Internal(
+            Err(RocketMQError::Internal(
                 "ExportService: RocksDB metadata export requires the rocksdb-export feature".to_string(),
-            ));
+            ))
         }
 
         #[cfg(feature = "rocksdb-export")]
