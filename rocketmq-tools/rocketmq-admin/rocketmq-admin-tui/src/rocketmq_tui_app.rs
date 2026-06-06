@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use ratatui::crossterm::event::Event;
-use ratatui::crossterm::event::EventStream;
-use ratatui::crossterm::event::KeyCode;
-use ratatui::crossterm::event::KeyEvent;
-use ratatui::crossterm::event::KeyEventKind;
+use crossterm::event::Event;
+use crossterm::event::EventStream;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use tokio::sync::mpsc;
