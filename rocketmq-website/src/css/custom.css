@@ -34,7 +34,7 @@
   --ifm-heading-margin-bottom: 1rem;
 
   /* Homepage background for light mode */
-  --homepage-bg: #f8fafc;
+  --homepage-bg: #f8f5ff;
 }
 
 /* Dark mode overrides */
@@ -53,7 +53,7 @@
   --ifm-table-stripe-background: #334155;
 
   /* Homepage background for dark mode */
-  --homepage-bg: #0f172a;
+  --homepage-bg: #07030f;
 
   --ifm-code-background: #1e293b;
   --ifm-menu-color-active: #c084fc;

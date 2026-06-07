@@ -17,6 +17,8 @@
 //! This crate provides shared functionality, data models, and business logic
 //! that can be reused across different dashboard implementations (GPUI, Tauri, etc.)
 
+#[cfg(feature = "admin")]
+pub mod admin;
 pub mod api;
 pub mod cluster;
 pub mod consumer;
@@ -29,6 +31,8 @@ pub mod proxy;
 pub mod service;
 pub mod topic;
 
+#[cfg(feature = "admin")]
+pub use admin::*;
 pub use api::*;
 pub use cluster::*;
 pub use consumer::*;

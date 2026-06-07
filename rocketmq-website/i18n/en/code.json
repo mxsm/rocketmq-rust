@@ -38,26 +38,35 @@
   "homepage.features.rust.title": {
     "message": "Rust Language Advantages"
   },
+  "homepage.features.rust.badge": {
+    "message": "memory safe core"
+  },
   "homepage.features.rust.description": {
-    "message": "Memory safety, zero-cost abstractions, and high concurrency performance. Leverages Rust's ownership model for enterprise-grade reliability and efficiency."
+    "message": "RocketMQ-Rust uses Rust's ownership model and zero-cost abstractions to implement brokers, clients, remoting, and storage with predictable performance."
   },
   "homepage.features.async.title": {
     "message": "Async Non-blocking Design"
   },
+  "homepage.features.async.badge": {
+    "message": "tokio async I/O"
+  },
   "homepage.features.async.description": {
-    "message": "Fully asynchronous architecture using Rust's async capabilities. Non-blocking design supports high-concurrency message processing with optimal resource utilization."
+    "message": "Producer, consumer, remoting, and broker services are designed around asynchronous I/O so high-concurrency message traffic does not block worker threads."
   },
   "homepage.features.crossPlatform.title": {
     "message": "Cross-platform Support"
   },
+  "homepage.features.crossPlatform.badge": {
+    "message": "cargo ready"
+  },
   "homepage.features.crossPlatform.description": {
-    "message": "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior."
+    "message": "Run and develop RocketMQ-Rust across Linux, Windows, and macOS with Cargo, examples, and documentation aligned for the Rust ecosystem."
   },
   "homepage.hero.subtitle": {
     "message": ""
   },
   "homepage.hero.description": {
-    "message": "A high-performance, memory-safe Apache RocketMQ implementation built with Rust for modern distributed systems."
+    "message": "RocketMQ-Rust brings Apache RocketMQ's proven messaging model to Rust: producers send messages to brokers, NameServer provides routing, CommitLog persists data, and consumers process messages through async, type-safe APIs."
   },
   "homepage.hero.getStarted": {
     "message": "Get Started"
@@ -70,5 +79,89 @@
   },
   "homepage.announcement.link": {
     "message": "See what's new →"
+  },
+  "homepage.features.eyebrow": {
+    "message": "ROCKETMQ-RUST CORE"
+  },
+  "homepage.features.title": {
+    "message": "A Rust implementation of Apache RocketMQ's messaging architecture"
+  },
+  "homepage.motion.title": {
+    "message": "RocketMQ message flow in Rust"
+  },
+  "homepage.motion.nameserver.title": {
+    "message": "NameServer Routing"
+  },
+  "homepage.motion.nameserver.detail": {
+    "message": "Producers and consumers resolve broker routes through NameServer before sending or pulling messages."
+  },
+  "homepage.motion.broker.title": {
+    "message": "Broker Storage"
+  },
+  "homepage.motion.broker.detail": {
+    "message": "Messages are appended to CommitLog and dispatched to queues for reliable delivery."
+  },
+  "homepage.motion.producer.title": {
+    "message": "Producer APIs"
+  },
+  "homepage.motion.producer.detail": {
+    "message": "Client APIs support topic messages, queue selection, batch sending, and transactional messaging flows."
+  },
+  "homepage.motion.consumer.title": {
+    "message": "Consumer Delivery"
+  },
+  "homepage.motion.consumer.detail": {
+    "message": "Consumers process messages in push or pull mode and keep progress through offsets."
+  },
+  "homepage.hero.pill": {
+    "message": "APACHE ROCKETMQ ARCHITECTURE - RUST IMPLEMENTATION - ASYNC RUNTIME"
+  },
+  "homepage.hero.subheadline": {
+    "message": "High-performance messaging middleware built with Rust"
+  },
+  "homepage.hero.motionSpec": {
+    "message": "Architecture flow"
+  },
+  "homepage.hero.stage.route": {
+    "message": "Route Lookup"
+  },
+  "homepage.hero.stage.produce": {
+    "message": "Producer Send"
+  },
+  "homepage.hero.stage.append": {
+    "message": "Broker Append"
+  },
+  "homepage.hero.stage.commitlog": {
+    "message": "CommitLog Flush"
+  },
+  "homepage.hero.stage.consume": {
+    "message": "Consumer Pull"
+  },
+  "homepage.hero.stage.offset": {
+    "message": "Offset Commit"
+  },
+  "homepage.hero.status.nameserver.title": {
+    "message": "NameServer"
+  },
+  "homepage.hero.status.nameserver.detail": {
+    "message": "route discovery"
+  },
+  "homepage.hero.status.broker.title": {
+    "message": "Broker"
+  },
+  "homepage.hero.status.broker.detail": {
+    "message": "commit + dispatch"
+  },
+  "homepage.hero.status.storage.title": {
+    "message": "CommitLog"
+  },
+  "homepage.hero.status.storage.detail": {
+    "message": "durable storage"
+  },
+  "homepage.hero.status.client.title": {
+    "message": "Rust Client"
+  },
+  "homepage.hero.status.client.detail": {
+    "message": "producer + consumer"
   }
 }

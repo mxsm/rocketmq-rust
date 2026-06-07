@@ -1,0 +1,11 @@
+backend/target/
+backend/data/
+backend/*.log
+backend/logs/
+
+frontend/node_modules/
+frontend/dist/
+frontend/*.log
+frontend/logs/
+
+!frontend/package-lock.json

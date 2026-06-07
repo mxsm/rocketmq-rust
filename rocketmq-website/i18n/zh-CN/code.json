@@ -38,26 +38,35 @@
   "homepage.features.rust.title": {
     "message": "Rust 语言优势"
   },
+  "homepage.features.rust.badge": {
+    "message": "内存安全核心"
+  },
   "homepage.features.rust.description": {
-    "message": "内存安全、零成本抽象和高并发性能。利用 Rust 的所有权模型实现企业级可靠性和效率。"
+    "message": "RocketMQ-Rust 利用 Rust 的所有权模型和零成本抽象实现 Broker、客户端、远程通信和存储，在保持安全性的同时提供可预期的性能。"
   },
   "homepage.features.async.title": {
     "message": "异步非阻塞设计"
   },
+  "homepage.features.async.badge": {
+    "message": "Tokio 异步 I/O"
+  },
   "homepage.features.async.description": {
-    "message": "使用 Rust 异步能力的完全异步架构。非阻塞设计支持高并发消息处理，实现最佳资源利用率。"
+    "message": "Producer、Consumer、Remoting 和 Broker 服务围绕异步 I/O 设计，让高并发消息流量不会阻塞工作线程。"
   },
   "homepage.features.crossPlatform.title": {
     "message": "跨平台支持"
   },
+  "homepage.features.crossPlatform.badge": {
+    "message": "Cargo 就绪"
+  },
   "homepage.features.crossPlatform.description": {
-    "message": "支持包括 Linux、Windows 和 macOS 在内的多种平台。在不同环境中便捷部署，具有一致的性能和行为。"
+    "message": "可在 Linux、Windows 和 macOS 上运行和开发 RocketMQ-Rust，配合 Cargo、示例和文档融入 Rust 生态。"
   },
   "homepage.hero.subtitle": {
     "message": "// 高性能 & 更快 & 更安全"
   },
   "homepage.hero.description": {
-    "message": "一个高性能、内存安全的 Apache RocketMQ 实现，使用 Rust 构建，为现代分布式系统提供支持。"
+    "message": "RocketMQ-Rust 将 Apache RocketMQ 成熟的消息模型带到 Rust：Producer 发送消息到 Broker，NameServer 提供路由，CommitLog 持久化数据，Consumer 通过异步、类型安全的 API 处理消息。"
   },
   "homepage.hero.getStarted": {
     "message": "开始使用"
@@ -628,5 +637,89 @@
   "theme.tags.tagsPageTitle": {
     "message": "标签",
     "description": "The title of the tag list page"
+  },
+  "homepage.features.eyebrow": {
+    "message": "ROCKETMQ-RUST 核心能力"
+  },
+  "homepage.features.title": {
+    "message": "Apache RocketMQ 消息架构的 Rust 实现"
+  },
+  "homepage.motion.title": {
+    "message": "Rust 中的 RocketMQ 消息流"
+  },
+  "homepage.motion.nameserver.title": {
+    "message": "NameServer 路由"
+  },
+  "homepage.motion.nameserver.detail": {
+    "message": "Producer 和 Consumer 在发送或拉取消息前，通过 NameServer 解析 Broker 路由。"
+  },
+  "homepage.motion.broker.title": {
+    "message": "Broker 存储"
+  },
+  "homepage.motion.broker.detail": {
+    "message": "消息写入 CommitLog，并分发到消费队列，支撑可靠投递。"
+  },
+  "homepage.motion.producer.title": {
+    "message": "Producer API"
+  },
+  "homepage.motion.producer.detail": {
+    "message": "客户端 API 支持 Topic 消息、队列选择、批量发送和事务消息流程。"
+  },
+  "homepage.motion.consumer.title": {
+    "message": "Consumer 投递"
+  },
+  "homepage.motion.consumer.detail": {
+    "message": "Consumer 以 Push 或 Pull 模式处理消息，并通过 Offset 维护消费进度。"
+  },
+  "homepage.hero.pill": {
+    "message": "APACHE ROCKETMQ 架构 - RUST 实现 - 异步运行时"
+  },
+  "homepage.hero.subheadline": {
+    "message": "使用 Rust 构建的高性能分布式消息中间件"
+  },
+  "homepage.hero.motionSpec": {
+    "message": "架构流程"
+  },
+  "homepage.hero.stage.route": {
+    "message": "路由查找"
+  },
+  "homepage.hero.stage.produce": {
+    "message": "Producer 发送"
+  },
+  "homepage.hero.stage.append": {
+    "message": "Broker 写入"
+  },
+  "homepage.hero.stage.commitlog": {
+    "message": "CommitLog 刷盘"
+  },
+  "homepage.hero.stage.consume": {
+    "message": "Consumer 拉取"
+  },
+  "homepage.hero.stage.offset": {
+    "message": "Offset 提交"
+  },
+  "homepage.hero.status.nameserver.title": {
+    "message": "NameServer"
+  },
+  "homepage.hero.status.nameserver.detail": {
+    "message": "路由发现"
+  },
+  "homepage.hero.status.broker.title": {
+    "message": "Broker"
+  },
+  "homepage.hero.status.broker.detail": {
+    "message": "写入与分发"
+  },
+  "homepage.hero.status.storage.title": {
+    "message": "CommitLog"
+  },
+  "homepage.hero.status.storage.detail": {
+    "message": "持久化存储"
+  },
+  "homepage.hero.status.client.title": {
+    "message": "Rust Client"
+  },
+  "homepage.hero.status.client.detail": {
+    "message": "生产与消费"
   }
 }
