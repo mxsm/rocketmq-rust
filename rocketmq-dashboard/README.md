@@ -116,6 +116,45 @@ cargo test
 - [Common Library](./rocketmq-dashboard-common/README.md)
 - [GPUI Implementation](./rocketmq-dashboard-gpui/README.md)
 - [Tauri Implementation](./rocketmq-dashboard-tauri/README.md)
+- [Web Implementation](./rocketmq-dashboard-web/README.md)
+
+## Web Dashboard
+
+`rocketmq-dashboard-web` is the browser-based Dashboard implementation. It is split into:
+
+- `rocketmq-dashboard-web/backend`: standalone Rust 2024 + Axum HTTP API project
+- `rocketmq-dashboard-web/frontend`: React + TypeScript + Vite frontend project
+
+The Web backend is intentionally not added to the root Cargo workspace, matching the standalone project model already used by GPUI and Tauri desktop implementations.
+
+Backend development:
+
+```bash
+cd rocketmq-dashboard/rocketmq-dashboard-web/backend
+cargo run
+```
+
+Frontend development:
+
+```bash
+cd rocketmq-dashboard/rocketmq-dashboard-web/frontend
+npm install
+npm run dev
+```
+
+Configuration can be provided with:
+
+```bash
+DASHBOARD_WEB_HOST=127.0.0.1
+DASHBOARD_WEB_PORT=8082
+NAMESRV_ADDR=127.0.0.1:9876
+DASHBOARD_WEB_STORAGE_BACKEND=file
+DASHBOARD_WEB_STORAGE_PATH=data/dashboard-config.json
+```
+
+Use `DASHBOARD_WEB_STORAGE_BACKEND=sqlite` with a `.db` storage path to persist configuration in SQLite.
+
+Current Web capabilities include health/config APIs, optional auth/session APIs with protected API middleware, file or SQLite config persistence, live RocketMQ Admin queries for Dashboard overview, Topic, Broker, Consumer, Producer, Message lookup, message trace, ACL user/policy read workflows, Topic create/update/delete for explicit cluster or broker targets, Broker config update for explicit broker names or addresses, Consumer reset offset by topic and timestamp, Message resend through direct consume, ACL user create/update/delete, ACL policy create/update/delete, DLQ key/messageId query plus bounded page scan with batch resend/export payloads, local Monitor rule persistence, in-memory Dashboard history collection, a feature-gated common `DashboardAdminFacade` adapter for core Web admin services, plus a Vite UI for Dashboard, Topic, Consumer, Producer, Broker, Message, DLQ, ACL, Monitor, Login, and Config routes. Remaining hardening work is deeper Tauri Admin Manager extraction into common and browser E2E coverage.
 
 ## License
 

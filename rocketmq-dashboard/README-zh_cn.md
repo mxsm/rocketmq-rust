@@ -137,3 +137,58 @@ cargo test
 
 - Apache License 2.0
 - MIT License
+
+## Web Dashboard
+
+当前补充：`rocketmq-dashboard-web` 已包含独立 Rust Axum 后端和 React/Vite 前端。后端不加入根 Cargo workspace，避免影响现有 GPUI 与 Tauri 构建。当前已完成健康检查、配置管理、可选 auth/session API 与受保护 API 中间件、文件/SQLite 持久化、Dashboard 首页 `DOWN` 降级、Dashboard history 内存采集、Topic/Broker/Consumer/Producer/Message 只读 RocketMQ Admin 查询、Message trace 查询、Topic create/update/delete 写操作、Broker config update 写操作、Consumer reset offset 写操作、Message direct consume resend、ACL user create/update/delete、ACL policy create/update/delete、DLQ key/messageId 查询、DLQ 分页扫描查询与批量重发/导出 payload、Monitor 本地 JSON 存储，以及面向核心 Web admin service 的 common `DashboardAdminFacade` adapter。剩余硬化工作包括将 Tauri Admin Manager 内部实现进一步上移为 common 可复用模块和补充浏览器 E2E 测试。
+
+`rocketmq-dashboard-web` 是新增的浏览器 Web 版本 Dashboard，目录结构为：
+
+```text
+rocketmq-dashboard-web/
+  backend/   # Rust 2024 + Axum HTTP API
+  frontend/  # React + TypeScript + Vite 前端
+```
+
+模块定位：
+
+- `rocketmq-dashboard-common`：共享模型与可复用配置逻辑。
+- `rocketmq-dashboard-gpui`：GPUI 原生桌面版本。
+- `rocketmq-dashboard-tauri`：Tauri 桌面版本。
+- `rocketmq-dashboard-web`：Web 浏览器版本。
+
+Web 后端保持独立 Cargo 项目，不加入根 workspace，避免影响现有 GPUI / Tauri 构建。
+
+后端启动：
+
+```bash
+cd rocketmq-dashboard/rocketmq-dashboard-web/backend
+cargo run
+```
+
+前端启动：
+
+```bash
+cd rocketmq-dashboard/rocketmq-dashboard-web/frontend
+npm install
+npm run dev
+```
+
+NameServer 与持久化配置：
+
+```bash
+NAMESRV_ADDR=127.0.0.1:9876
+DASHBOARD_WEB_STORAGE_BACKEND=file
+DASHBOARD_WEB_STORAGE_PATH=data/dashboard-config.json
+```
+
+如需 SQLite：
+
+```bash
+DASHBOARD_WEB_STORAGE_BACKEND=sqlite
+DASHBOARD_WEB_STORAGE_PATH=data/dashboard.db
+```
+
+当前已完成：健康检查、配置管理、统一响应结构、REST API 路由表、React/Vite 运维界面骨架、表格搜索分页、loading/error/empty 状态、危险操作确认和消息详情 Drawer。
+
+当前 TODO：将 Tauri 中成熟的 RocketMQ Admin Manager 内部实现进一步上移为可复用模块，并补充浏览器 E2E 测试。

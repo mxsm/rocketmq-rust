@@ -106,6 +106,7 @@ use rocketmq_remoting::protocol::header::consume_message_directly_result_request
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_remoting::protocol::header::create_acl_request_header::CreateAclRequestHeader;
 use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
@@ -169,6 +170,7 @@ use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_remoting::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_remoting::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
@@ -381,6 +383,62 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) async fn create_acl(
+        &self,
+        broker_address: CheetahString,
+        acl_info: &AclInfo,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let subject = acl_info
+            .subject
+            .clone()
+            .ok_or_else(|| mq_client_err!(-1, "ACL subject is required".to_string()))?;
+        let request_header = CreateAclRequestHeader { subject };
+        let request = RemotingCommand::create_request_command(RequestCode::AuthCreateAcl, request_header)
+            .set_body(acl_info.encode()?);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn update_acl(
+        &self,
+        broker_address: CheetahString,
+        acl_info: &AclInfo,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let subject = acl_info
+            .subject
+            .clone()
+            .ok_or_else(|| mq_client_err!(-1, "ACL subject is required".to_string()))?;
+        let request_header = UpdateAclRequestHeader { subject };
+        let request = RemotingCommand::create_request_command(RequestCode::AuthUpdateAcl, request_header)
+            .set_body(acl_info.encode()?);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     pub(crate) async fn delete_acl(

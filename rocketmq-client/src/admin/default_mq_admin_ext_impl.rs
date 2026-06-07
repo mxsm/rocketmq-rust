@@ -65,6 +65,8 @@ use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+use rocketmq_remoting::protocol::body::acl_info::PolicyEntryInfo;
+use rocketmq_remoting::protocol::body::acl_info::PolicyInfo;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
@@ -206,51 +208,20 @@ impl DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         acl_info: AclInfo,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let subject = acl_info
-            .subject
-            .clone()
-            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("ACL subject is required".into()))?;
-
-        if let Some(ref policies) = acl_info.policies {
-            for policy in policies {
-                if let Some(ref entries) = policy.entries {
-                    for entry in entries {
-                        let resources: Vec<CheetahString> =
-                            entry.resource.as_ref().map(|r| vec![r.clone()]).unwrap_or_default();
-
-                        let actions: Vec<CheetahString> = entry
-                            .actions
-                            .as_ref()
-                            .map(|actions| {
-                                actions
-                                    .iter()
-                                    .flat_map(|action| action.as_str().split(','))
-                                    .map(str::trim)
-                                    .filter(|action| !action.is_empty())
-                                    .map(CheetahString::from)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        let source_ips: Vec<CheetahString> = entry.source_ips.clone().unwrap_or_default();
-
-                        let decision: CheetahString = entry.decision.clone().unwrap_or_default();
-
-                        self.create_acl(
-                            broker_addr.clone(),
-                            subject.clone(),
-                            resources,
-                            actions,
-                            source_ips,
-                            decision,
-                        )
-                        .await?;
-                    }
-                }
-            }
+        if acl_info.subject.as_ref().is_none_or(|subject| subject.is_empty()) {
+            return Err(rocketmq_error::RocketMQError::IllegalArgument(
+                "ACL subject is required".into(),
+            ));
         }
 
-        Ok(())
+        if let Some(ref client_instance) = self.client_instance {
+            client_instance
+                .get_mq_client_api_impl()
+                .create_acl(broker_addr, &acl_info, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     pub async fn update_acl_with_acl_info(
@@ -258,51 +229,20 @@ impl DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         acl_info: AclInfo,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let subject = acl_info
-            .subject
-            .clone()
-            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("ACL subject is required".into()))?;
-
-        if let Some(ref policies) = acl_info.policies {
-            for policy in policies {
-                if let Some(ref entries) = policy.entries {
-                    for entry in entries {
-                        let resources: Vec<CheetahString> =
-                            entry.resource.as_ref().map(|r| vec![r.clone()]).unwrap_or_default();
-
-                        let actions: Vec<CheetahString> = entry
-                            .actions
-                            .as_ref()
-                            .map(|actions| {
-                                actions
-                                    .iter()
-                                    .flat_map(|action| action.as_str().split(','))
-                                    .map(str::trim)
-                                    .filter(|action| !action.is_empty())
-                                    .map(CheetahString::from)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        let source_ips: Vec<CheetahString> = entry.source_ips.clone().unwrap_or_default();
-
-                        let decision: CheetahString = entry.decision.clone().unwrap_or_default();
-
-                        self.update_acl(
-                            broker_addr.clone(),
-                            subject.clone(),
-                            resources,
-                            actions,
-                            source_ips,
-                            decision,
-                        )
-                        .await?;
-                    }
-                }
-            }
+        if acl_info.subject.as_ref().is_none_or(|subject| subject.is_empty()) {
+            return Err(rocketmq_error::RocketMQError::IllegalArgument(
+                "ACL subject is required".into(),
+            ));
         }
 
-        Ok(())
+        if let Some(ref client_instance) = self.client_instance {
+            client_instance
+                .get_mq_client_api_impl()
+                .update_acl(broker_addr, &acl_info, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     pub async fn create_user_with_user_info(
@@ -1901,7 +1841,15 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let acl_info = build_acl_info(subject, resources, actions, source_ips, decision);
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .create_acl(broker_addr, &acl_info, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn update_acl(
@@ -1913,7 +1861,15 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let acl_info = build_acl_info(subject, resources, actions, source_ips, decision);
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .update_acl(broker_addr, &acl_info, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn delete_acl(
@@ -2934,6 +2890,45 @@ fn select_consumer_direct_connection(
         })?;
 
     Ok((connection.get_client_id(), connection.get_client_addr()))
+}
+
+fn build_acl_info(
+    subject: CheetahString,
+    resources: Vec<CheetahString>,
+    actions: Vec<CheetahString>,
+    source_ips: Vec<CheetahString>,
+    decision: CheetahString,
+) -> AclInfo {
+    let entries = if resources.is_empty() {
+        vec![PolicyEntryInfo {
+            resource: None,
+            actions: Some(actions),
+            source_ips: Some(source_ips),
+            decision: if decision.is_empty() { None } else { Some(decision) },
+        }]
+    } else {
+        resources
+            .into_iter()
+            .map(|resource| PolicyEntryInfo {
+                resource: Some(resource),
+                actions: Some(actions.clone()),
+                source_ips: Some(source_ips.clone()),
+                decision: if decision.is_empty() {
+                    None
+                } else {
+                    Some(decision.clone())
+                },
+            })
+            .collect()
+    };
+
+    AclInfo {
+        subject: Some(subject),
+        policies: Some(vec![PolicyInfo {
+            policy_type: Some(CheetahString::from_static_str("Custom")),
+            entries: Some(entries),
+        }]),
+    }
 }
 
 #[allow(deprecated)]

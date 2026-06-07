@@ -1,583 +1,306 @@
-/**
- * Developer Style Hero - Inspired by modern developer portfolios
- * Features: Grid background, purple/cyan theme, code syntax elements
- * Supports light/dark theme switching
- */
-
 import React from 'react';
 import Link from '@docusaurus/Link';
-import {useColorMode} from '@docusaurus/theme-common';
 import {translate} from '@docusaurus/Translate';
+import clsx from 'clsx';
+import styles from './DeveloperStyleHero.module.css';
+
+const statusItems = [
+  {
+    titleId: 'homepage.hero.status.nameserver.title',
+    title: 'NameServer',
+    detailId: 'homepage.hero.status.nameserver.detail',
+    detail: 'route discovery',
+  },
+  {
+    titleId: 'homepage.hero.status.broker.title',
+    title: 'Broker',
+    detailId: 'homepage.hero.status.broker.detail',
+    detail: 'commit + dispatch',
+  },
+  {
+    titleId: 'homepage.hero.status.storage.title',
+    title: 'CommitLog',
+    detailId: 'homepage.hero.status.storage.detail',
+    detail: 'durable storage',
+  },
+  {
+    titleId: 'homepage.hero.status.client.title',
+    title: 'Rust Client',
+    detailId: 'homepage.hero.status.client.detail',
+    detail: 'producer + consumer',
+  },
+];
+
+const motionStages = [
+  {
+    id: 'homepage.hero.stage.route',
+    message: 'Route Lookup',
+  },
+  {
+    id: 'homepage.hero.stage.produce',
+    message: 'Producer Send',
+  },
+  {
+    id: 'homepage.hero.stage.append',
+    message: 'Broker Append',
+  },
+  {
+    id: 'homepage.hero.stage.commitlog',
+    message: 'CommitLog Flush',
+  },
+  {
+    id: 'homepage.hero.stage.consume',
+    message: 'Consumer Pull',
+  },
+  {
+    id: 'homepage.hero.stage.offset',
+    message: 'Offset Commit',
+  },
+];
+
+function ParticleField(): React.JSX.Element {
+  return (
+    <div className={styles.particleField} aria-hidden="true">
+      <span className={clsx(styles.particleNode, styles.particleOne)} />
+      <span className={clsx(styles.particleNode, styles.particleTwo)} />
+      <span className={clsx(styles.particleNode, styles.particleThree)} />
+      <span className={clsx(styles.particleNode, styles.particleFour)} />
+      <span className={clsx(styles.particleNode, styles.particleFive)} />
+      <span className={clsx(styles.particleLink, styles.linkOne)} />
+      <span className={clsx(styles.particleLink, styles.linkTwo)} />
+      <span className={clsx(styles.particleLink, styles.linkThree)} />
+      <span className={clsx(styles.particleLink, styles.linkFour)} />
+      <span className={clsx(styles.particleLink, styles.linkFive)} />
+      <span className={clsx(styles.particleLink, styles.linkSix)} />
+    </div>
+  );
+}
+
+function RuntimeVisual(): React.JSX.Element {
+  const instanceId = React.useId().replace(/:/g, '');
+  const gradientId = `mq-core-gradient-${instanceId}`;
+  const producePathId = `mq-produce-path-${instanceId}`;
+  const routePathId = `mq-route-path-${instanceId}`;
+  const commitPathId = `mq-commit-path-${instanceId}`;
+  const deliverPathId = `mq-deliver-path-${instanceId}`;
+
+  return (
+    <div className={styles.runtimeVisual} aria-label="RocketMQ-Rust runtime topology">
+      <div className={styles.runtimeChrome} aria-hidden="true">
+        <div className={styles.windowControls}>
+          <span />
+          <span />
+          <span />
+        </div>
+        <span className={styles.runtimeTitle}>rocketmq-rust / broker topology</span>
+        <span className={styles.runtimeBadge}>message flow</span>
+      </div>
+
+      <div className={styles.runtimeCanvas}>
+        <svg className={styles.runtimeSvg} viewBox="0 0 720 390" role="presentation">
+          <defs>
+            <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#9b6cff" />
+              <stop offset="52%" stopColor="#d858b8" />
+              <stop offset="100%" stopColor="#ff7a1a" />
+            </linearGradient>
+          </defs>
+
+          <g className={styles.runtimeGrid}>
+            <path d="M70 70H650" />
+            <path d="M70 150H650" />
+            <path d="M70 230H650" />
+            <path d="M70 310H650" />
+            <path d="M140 38V360" />
+            <path d="M280 38V360" />
+            <path d="M420 38V360" />
+            <path d="M560 38V360" />
+          </g>
+
+          <g className={styles.runtimeOrbits}>
+            <ellipse cx="360" cy="205" rx="158" ry="128" />
+            <ellipse cx="360" cy="205" rx="102" ry="82" />
+            <path d="M234 118C288 68 433 67 492 121" />
+            <path d="M226 296C291 358 459 350 513 281" />
+          </g>
+
+          <path id={producePathId} className={clsx(styles.flowTrack, styles.flowProduce)} d="M170 168C232 167 272 182 310 204" />
+          <path id={routePathId} className={clsx(styles.flowTrack, styles.flowRoute)} d="M364 93C344 121 337 153 346 180" />
+          <path id={commitPathId} className={clsx(styles.flowTrack, styles.flowCommit)} d="M374 244C407 275 444 293 493 301" />
+          <path id={deliverPathId} className={clsx(styles.flowTrack, styles.flowDelivery)} d="M426 206C479 188 518 171 582 166" />
+
+          <g className={clsx(styles.svgNode, styles.producerNode)} transform="translate(58 128)">
+            <rect width="152" height="74" rx="16" />
+            <text x="20" y="31">Producer</text>
+            <text className={styles.svgNodeMeta} x="20" y="53">batch send</text>
+          </g>
+
+          <g className={clsx(styles.svgNode, styles.nameServerNode)} transform="translate(288 50)">
+            <rect width="168" height="76" rx="16" />
+            <text x="20" y="32">NameServer</text>
+            <text className={styles.svgNodeMeta} x="20" y="54">route table</text>
+          </g>
+
+          <g className={clsx(styles.svgNode, styles.consumerNode)} transform="translate(538 128)">
+            <rect width="154" height="74" rx="16" />
+            <text x="20" y="31">Consumer</text>
+            <text className={styles.svgNodeMeta} x="20" y="53">pull consume</text>
+          </g>
+
+          <g className={clsx(styles.svgNode, styles.storageNode)} transform="translate(98 286)">
+            <rect width="166" height="74" rx="16" />
+            <text x="20" y="31">CommitLog</text>
+            <text className={styles.svgNodeMeta} x="20" y="53">durable store</text>
+          </g>
+
+          <g className={clsx(styles.svgNode, styles.brokerNode)} transform="translate(468 286)">
+            <rect width="168" height="74" rx="16" />
+            <text x="20" y="31">Broker</text>
+            <text className={styles.svgNodeMeta} x="20" y="53">dispatch queue</text>
+          </g>
+
+          <g className={styles.coreNode} transform="translate(292 154)">
+            <rect width="136" height="136" rx="34" fill={`url(#${gradientId})`} />
+            <text x="68" y="79">MQ</text>
+            <text className={styles.coreCaption} x="68" y="102">rust core</text>
+          </g>
+
+          <g className={styles.flowPackets}>
+            <circle className={clsx(styles.flowOrb, styles.produceOrb)} r="6">
+              <animateMotion dur="4.8s" repeatCount="indefinite" begin="0s">
+                <mpath href={`#${producePathId}`} />
+              </animateMotion>
+            </circle>
+            <circle className={clsx(styles.flowOrb, styles.routeOrb)} r="5">
+              <animateMotion dur="5.6s" repeatCount="indefinite" begin="-1.4s">
+                <mpath href={`#${routePathId}`} />
+              </animateMotion>
+            </circle>
+            <circle className={clsx(styles.flowOrb, styles.commitOrb)} r="5">
+              <animateMotion dur="5.2s" repeatCount="indefinite" begin="-2.2s">
+                <mpath href={`#${commitPathId}`} />
+              </animateMotion>
+            </circle>
+            <circle className={clsx(styles.flowOrb, styles.deliverOrb)} r="6">
+              <animateMotion dur="4.6s" repeatCount="indefinite" begin="-3s">
+                <mpath href={`#${deliverPathId}`} />
+              </animateMotion>
+            </circle>
+          </g>
+        </svg>
+
+        <div className={styles.runtimeReadout} aria-hidden="true">
+          <span className={styles.promptDot} />
+          <code>broker.append_commit_log(message)</code>
+          <span className={styles.readoutPulse}>committed</span>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+function StageTimeline(): React.JSX.Element {
+  return (
+    <div className={styles.stageTimeline} aria-label="RocketMQ message lifecycle">
+      {motionStages.map((stage, index) => (
+        <div key={stage.id} className={styles.stageItem}>
+          <span>{String(index).padStart(2, '0')}</span>
+          <strong>
+            {translate({
+              id: stage.id,
+              message: stage.message,
+            })}
+          </strong>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function DeveloperStyleHero(): React.JSX.Element {
-    const {colorMode} = useColorMode();
-    const isDark = colorMode === 'dark';
+  return (
+    <header className={styles.hero}>
+      <ParticleField />
 
-    // Generate random gradient colors
-    const [gradientColors] = React.useState(() => {
-        const colors = [];
-        for (let i = 0; i < 5; i++) {
-            const hue = Math.floor(Math.random() * 360);
-            const saturation = 70 + Math.floor(Math.random() * 20); // 70-90%
-            const lightness = 55 + Math.floor(Math.random() * 15); // 55-70%
-            colors.push(`hsl(${hue}, ${saturation}%, ${lightness}%)`);
-        }
-        return colors;
-    });
-
-    const gradientString = `linear-gradient(135deg, ${gradientColors[0]} 0%, ${gradientColors[1]} 25%, ${gradientColors[2]} 50%, ${gradientColors[3]} 75%, ${gradientColors[4]} 100%)`;
-
-    // Random rocket movement state with direction and natural trajectory
-    const [rocketPosition, setRocketPosition] = React.useState({x: 50, y: 50, angle: 45, speed: 2});
-    const [isAnimating, setIsAnimating] = React.useState(false);
-
-    React.useEffect(() => {
-        const moveRocket = () => {
-            setRocketPosition(prev => {
-                // Generate a new target with more constrained, natural movement
-                // Use previous position to maintain momentum-like behavior
-                const angleVariation = (Math.random() - 0.5) * 120; // -60 to +60 degrees variation
-                const currentAngle = (prev.angle + 45) * (Math.PI / 180); // Convert back to radians
-                const newAngle = currentAngle + angleVariation * (Math.PI / 180);
-
-                // Distance varies from 20-40% for smoother, more noticeable movement
-                const distance = 20 + Math.random() * 20;
-
-                let newX = prev.x + Math.cos(newAngle) * distance;
-                let newY = prev.y + Math.sin(newAngle) * distance;
-
-                // Bounce off edges with some randomness for more natural behavior
-                if (newX < 5) {
-                    newX = 5 + Math.random() * 10;
-                } else if (newX > 95) {
-                    newX = 95 - Math.random() * 10;
-                }
-
-                if (newY < 5) {
-                    newY = 5 + Math.random() * 10;
-                } else if (newY > 95) {
-                    newY = 95 - Math.random() * 10;
-                }
-
-                // Calculate angle based on actual movement direction
-                const deltaX = newX - prev.x;
-                const deltaY = newY - prev.y;
-                const movementAngle = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
-
-                // Adjust angle so rocket points in the direction of movement
-                const adjustedAngle = movementAngle - 45;
-
-                // Variable speed with slight variations for organic feel
-                const speed = 2 + Math.random() * 1; // 2s to 3s
-
-                return {x: newX, y: newY, angle: adjustedAngle, speed};
-            });
-        };
-
-        // Initial movement after a short delay
-        const initialDelay = setTimeout(() => {
-            moveRocket();
-            const interval = setInterval(moveRocket, 3000);
-            return () => clearInterval(interval);
-        }, 800);
-
-        return () => clearTimeout(initialDelay);
-    }, []);
-
-    return (
-        <div style={{
-            position: 'relative',
-            minHeight: '60vh',
-            background: isDark ? '#0f172a' : '#f8fafc',
-            overflow: 'hidden',
-        }}>
-            {/* Add keyframes animation */}
-            <style>
-                {`
-          @keyframes gradientFlow {
-            0% {
-              background-position: 0% 50%;
-            }
-            50% {
-              background-position: 100% 50%;
-            }
-            100% {
-              background-position: 0% 50%;
-            }
-          }
-          @keyframes pulse {
-            0%, 100% {
-              opacity: 1;
-            }
-            50% {
-              opacity: 0.8;
-            }
-          }
-          @keyframes wave {
-            0%, 100% {
-              transform: translateY(0);
-            }
-            50% {
-              transform: translateY(-10px);
-            }
-          }
-          @keyframes shine {
-            0% {
-              left: -100%;
-            }
-            20%, 100% {
-              left: 100%;
-            }
-          }
-        `}
-            </style>
-            {/* Grid Background */}
-            <div style={{
-                position: 'absolute',
-                inset: 0,
-                backgroundImage: `
-          linear-gradient(${isDark ? 'rgba(168, 85, 247, 0.03)' : 'rgba(168, 85, 247, 0.06)'} 1px, transparent 1px),
-          linear-gradient(90deg, ${isDark ? 'rgba(168, 85, 247, 0.03)' : 'rgba(168, 85, 247, 0.06)'} 1px, transparent 1px)
-        `,
-                backgroundSize: '50px 50px',
-                opacity: isDark ? 0.5 : 0.8,
-            }}/>
-
-            {/* Purple Glow Orbs */}
-            <div style={{
-                position: 'absolute',
-                top: '20%',
-                right: '15%',
-                width: '400px',
-                height: '400px',
-                borderRadius: '50%',
-                background: `radial-gradient(circle, ${isDark ? 'rgba(168, 85, 247, 0.15)' : 'rgba(168, 85, 247, 0.08)'} 0%, transparent 70%)`,
-                filter: 'blur(80px)',
-                animation: 'floatOrb1 8s ease-in-out infinite',
-            }}/>
-
-            <div style={{
-                position: 'absolute',
-                bottom: '20%',
-                left: '10%',
-                width: '300px',
-                height: '300px',
-                borderRadius: '50%',
-                background: `radial-gradient(circle, ${isDark ? 'rgba(6, 182, 212, 0.1)' : 'rgba(6, 182, 212, 0.05)'} 0%, transparent 70%)`,
-                filter: 'blur(60px)',
-                animation: 'floatOrb2 10s ease-in-out infinite',
-            }}/>
-
-            {/* Main Content */}
-            <div style={{
-                position: 'relative',
-                maxWidth: '1200px',
-                margin: '0 auto',
-                padding: '40px 24px 30px',
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: '50px',
-                alignItems: 'center',
-                zIndex: 1,
-            }}>
-                {/* Left Column - Content */}
-                <div>
-                    {/* Main heading */}
-                    <h1 style={{
-                        fontSize: '72px',
-                        fontWeight: 800,
-                        lineHeight: 1.1,
-                        margin: '0 0 4px 0',
-                        letterSpacing: '-1px',
-                    }}>
-                        {'RocketMQ-Rust'.split('').map((char, index) => (
-                            <span
-                                key={index}
-                                style={{
-                                    display: 'inline-block',
-                                    background: gradientString,
-                                    backgroundSize: '200% 200%',
-                                    WebkitBackgroundClip: 'text',
-                                    WebkitTextFillColor: 'transparent',
-                                    backgroundClip: 'text',
-                                    animation: 'wave 2s ease-in-out infinite, gradientFlow 4s ease infinite',
-                                    animationDelay: `${index * 0.1}s, 0s`,
-                                }}
-                            >
-                {char === '-' ? '\u2011' : char}
-              </span>
-                        ))}
-                    </h1>
-
-                    {/* Subtitle with code comment style */}
-                    <div style={{
-                        fontFamily: 'monospace',
-                        fontSize: '18px',
-                        color: '#06b6d4',
-                        marginBottom: '16px',
-                        opacity: 0.9,
-                        fontWeight: 500,
-                    }}>
-                        {translate({
-                            id: 'homepage.hero.subtitle',
-                            message: '',
-                        })}
-                    </div>
-
-                    {/* Description */}
-                    <p style={{
-                        fontSize: '18px',
-                        lineHeight: 1.6,
-                        color: isDark ? '#94a3b8' : '#475569',
-                        margin: '0 0 32px 0',
-                        maxWidth: '520px',
-                    }}>
-                        {translate({
-                            id: 'homepage.hero.description',
-                            message: 'A high-performance, memory-safe Apache RocketMQ implementation built with Rust for modern distributed systems.',
-                        })}
-                    </p>
-
-                    {/* Buttons */}
-                    <div style={{display: 'flex', gap: '16px', flexWrap: 'wrap'}}>
-                        <Link
-                            to="/docs/introduction"
-                            style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                                padding: '14px 32px',
-                                background: 'linear-gradient(135deg, #a855f7 0%, #06b6d4 100%)',
-                                color: '#fff',
-                                textDecoration: 'none',
-                                borderRadius: '12px',
-                                fontWeight: 600,
-                                fontSize: '16px',
-                                transition: 'all 0.3s ease',
-                                boxShadow: '0 4px 14px rgba(168, 85, 247, 0.4)',
-                                border: 'none',
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                                e.currentTarget.style.boxShadow = '0 6px 20px rgba(168, 85, 247, 0.5)';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = '0 4px 14px rgba(168, 85, 247, 0.4)';
-                            }}
-                        >
-                            {translate({
-                                id: 'homepage.hero.getStarted',
-                                message: 'Get Started',
-                            })}
-                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M6 3L11 8L6 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            </svg>
-                        </Link>
-
-                        <Link
-                            to="https://github.com/mxsm/rocketmq-rust"
-                            style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                                padding: '14px 32px',
-                                background: 'transparent',
-                                color: '#a855f7',
-                                textDecoration: 'none',
-                                borderRadius: '12px',
-                                fontWeight: 600,
-                                fontSize: '16px',
-                                border: '2px solid #a855f7',
-                                transition: 'all 0.3s ease',
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.background = 'rgba(168, 85, 247, 0.1)';
-                                e.currentTarget.style.transform = 'translateY(-2px)';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.background = 'transparent';
-                                e.currentTarget.style.transform = 'translateY(0)';
-                            }}
-                        >
-                            {translate({
-                                id: 'homepage.hero.github',
-                                message: 'GitHub',
-                            })} {"</>"}
-                        </Link>
-                    </div>
-
-                    {/* Announcement Banner */}
-                    <Link
-                        to="/releases"
-                        style={{
-                            marginTop: '32px',
-                            padding: '12px 20px',
-                            background: isDark ? 'rgba(30, 27, 75, 0.6)' : 'rgba(248, 249, 250, 0.6)',
-                            border: isDark ? '1px solid rgba(168, 85, 247, 0.2)' : '1px solid rgba(168, 85, 247, 0.15)',
-                            borderRadius: '12px',
-                            backdropFilter: 'blur(10px)',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '10px',
-                            textDecoration: 'none',
-                            cursor: 'pointer',
-                            transition: 'all 0.3s ease',
-                        }}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.background = isDark ? 'rgba(30, 27, 75, 0.8)' : 'rgba(248, 249, 250, 0.8)';
-                            e.currentTarget.style.transform = 'translateY(-2px) scale(1.05)';
-                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(168, 85, 247, 0.3)';
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.background = isDark ? 'rgba(30, 27, 75, 0.6)' : 'rgba(248, 249, 250, 0.6)';
-                            e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                            e.currentTarget.style.boxShadow = 'none';
-                        }}
-                    >
-                        <span style={{fontSize: '18px'}}>🎉</span>
-                        <span style={{
-                            fontSize: '15px',
-                            fontWeight: 700,
-                            background: 'linear-gradient(135deg, #a855f7 0%, #06b6d4 25%, #f59e0b 50%, #ec4899 75%, #a855f7 100%)',
-                            backgroundSize: '200% 200%',
-                            WebkitBackgroundClip: 'text',
-                            WebkitTextFillColor: 'transparent',
-                            backgroundClip: 'text',
-                            animation: 'gradientFlow 3s ease infinite',
-                        }}>
-              {translate({
-                  id: 'homepage.announcement.title',
-                  message: 'RocketMQ-Rust v0.8.0 is out!',
-              })}
-            </span>
-                        <span style={{fontSize: '18px', animation: 'pulse 2s ease-in-out infinite'}}>🚀</span>
-                    </Link>
-                </div>
-
-                {/* Right Column - Visual Element */}
-                <div style={{position: 'relative', height: '450px'}}>
-                    {/* Main Circle with Glow */}
-                    <div style={{
-                        position: 'absolute',
-                        top: '50%',
-                        left: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        width: '320px',
-                        height: '320px',
-                        borderRadius: '50%',
-                        background: isDark
-                            ? 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)'
-                            : 'linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%)',
-                        border: `2px solid ${isDark ? 'rgba(168, 85, 247, 0.2)' : 'rgba(168, 85, 247, 0.3)'}`,
-                        boxShadow: isDark
-                            ? `0 0 80px rgba(168, 85, 247, 0.4), inset 0 0 80px rgba(168, 85, 247, 0.15)`
-                            : `0 0 60px rgba(168, 85, 247, 0.2), inset 0 0 60px rgba(168, 85, 247, 0.05)`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        animation: 'pulseGlow 4s ease-in-out infinite',
-                    }}>
-                        {/* MQ Logo in center */}
-                        <svg viewBox="0 0 200 200" style={{width: '180px', height: '180px'}}>
-                            <defs>
-                                <linearGradient id="purpleGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                                    <stop offset="0%" style={{stopColor: '#a855f7', stopOpacity: 1}}/>
-                                    <stop offset="100%" style={{stopColor: '#06b6d4', stopOpacity: 1}}/>
-                                </linearGradient>
-                            </defs>
-                            <circle cx="100" cy="100" r="80" fill="none" stroke="url(#purpleGradient)" strokeWidth="2" opacity="0.3"/>
-                            <circle cx="100" cy="100" r="60" fill="none" stroke="url(#purpleGradient)" strokeWidth="2" opacity="0.5"/>
-                            <circle cx="100" cy="100" r="40" fill="url(#purpleGradient)" opacity="0.2"/>
-                            <path d="M100 50 L100 150 M50 100 L150 100" stroke="url(#purpleGradient)" strokeWidth="2" opacity="0.5"/>
-                            <circle cx="100" cy="100" r="30" fill="url(#purpleGradient)"/>
-                            <text x="100" y="108" textAnchor="middle" fill="#fff" fontSize="24" fontWeight="bold">MQ</text>
-                        </svg>
-                    </div>
-
-                    {/* Floating Tech Cards */}
-                    <div style={{
-                        position: 'absolute',
-                        top: '5%',
-                        right: '-20px',
-                        padding: '20px 24px',
-                        background: isDark ? '#1e293b' : '#ffffff',
-                        borderRadius: '16px',
-                        border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.2)' : 'rgba(168, 85, 247, 0.2)'}`,
-                        boxShadow: isDark ? '0 6px 30px rgba(0, 0, 0, 0.4)' : '0 6px 30px rgba(0, 0, 0, 0.1)',
-                        animation: 'floatCard1 6s ease-in-out infinite',
-                    }}>
-                        <div style={{display: 'flex', alignItems: 'center', gap: '16px'}}>
-                            <div style={{
-                                width: '52px',
-                                height: '52px',
-                                borderRadius: '12px',
-                                background: 'linear-gradient(135deg, #a855f7 0%, #06b6d4 100%)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}>
-                                <span style={{color: '#fff', fontSize: '20px', fontWeight: 'bold', fontFamily: 'monospace'}}>🦀</span>
-                            </div>
-                            <div>
-                                <div style={{color: isDark ? '#fff' : '#0f172a', fontSize: '18px', fontWeight: 600}}>Rust</div>
-                                <div style={{color: isDark ? '#64748b' : '#64748b', fontSize: '14px'}}>Memory safety & Fast</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style={{
-                        position: 'absolute',
-                        bottom: '10%',
-                        left: '-80px',
-                        padding: '20px 24px',
-                        background: isDark ? '#1e293b' : '#ffffff',
-                        borderRadius: '16px',
-                        border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.2)' : 'rgba(168, 85, 247, 0.2)'}`,
-                        boxShadow: isDark ? '0 6px 30px rgba(0, 0, 0, 0.4)' : '0 6px 30px rgba(0, 0, 0, 0.1)',
-                        animation: 'floatCard2 7s ease-in-out infinite',
-                    }}>
-                        <div style={{display: 'flex', alignItems: 'center', gap: '16px'}}>
-                            <div style={{
-                                width: '52px',
-                                height: '52px',
-                                borderRadius: '12px',
-                                background: 'linear-gradient(135deg, #a855f7 0%, #06b6d4 100%)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}>
-                                <span style={{color: '#fff', fontSize: '20px', fontWeight: 'bold'}}>⚡</span>
-                            </div>
-                            <div>
-                                <div style={{color: isDark ? '#fff' : '#0f172a', fontSize: '18px', fontWeight: 600}}>High Performance</div>
-                                <div style={{color: isDark ? '#64748b' : '#64748b', fontSize: '14px'}}>Async & Zero-Copy</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style={{
-                        position: 'absolute',
-                        top: '55%',
-                        right: '-100px',
-                        padding: '20px 24px',
-                        background: isDark ? '#1e293b' : '#ffffff',
-                        borderRadius: '16px',
-                        border: `1px solid ${isDark ? 'rgba(168, 85, 247, 0.2)' : 'rgba(168, 85, 247, 0.2)'}`,
-                        boxShadow: isDark ? '0 6px 30px rgba(0, 0, 0, 0.4)' : '0 6px 30px rgba(0, 0, 0, 0.1)',
-                        animation: 'floatCard3 8s ease-in-out infinite',
-                    }}>
-                        <div style={{display: 'flex', alignItems: 'center', gap: '16px'}}>
-                            <div style={{
-                                width: '52px',
-                                height: '52px',
-                                borderRadius: '12px',
-                                background: 'linear-gradient(135deg, #a855f7 0%, #06b6d4 100%)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                            }}>
-                                <span style={{color: '#fff', fontSize: '20px', fontWeight: 'bold'}}>🛡️</span>
-                            </div>
-                            <div>
-                                <div style={{color: isDark ? '#fff' : '#0f172a', fontSize: '18px', fontWeight: 600}}>High Availability</div>
-                                <div style={{color: isDark ? '#64748b' : '#64748b', fontSize: '14px'}}>Master-Slave & Controller</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Random Moving Rocket */}
-                    <div style={{
-                        position: 'absolute',
-                        top: `${rocketPosition.y}%`,
-                        left: `${rocketPosition.x}%`,
-                        fontSize: '48px',
-                        transition: `all ${rocketPosition.speed}s cubic-bezier(0.25, 0.46, 0.45, 0.94)`,
-                        transform: `rotate(${rocketPosition.angle}deg) scale(1)`,
-                        filter: 'drop-shadow(0 4px 12px rgba(168, 85, 247, 0.4))',
-                        zIndex: 10,
-                        willChange: 'transform, top, left',
-                        transformOrigin: 'center center',
-                    }}>
-                        🚀
-                    </div>
-                </div>
-            </div>
-
-            {/* Animation Styles */}
-            <style>{`
-        @keyframes floatOrb1 {
-          0%, 100% { transform: translate(0, 0); }
-          50% { transform: translate(30px, -30px); }
-        }
-
-        @keyframes floatOrb2 {
-          0%, 100% { transform: translate(0, 0); }
-          50% { transform: translate(-20px, 20px); }
-        }
-
-        @keyframes pulseGlow {
-          0%, 100% {
-            box-shadow: 0 0 60px rgba(168, 85, 247, 0.3), inset 0 0 60px rgba(168, 85, 247, 0.1);
-          }
-          50% {
-            box-shadow: 0 0 80px rgba(168, 85, 247, 0.5), inset 0 0 80px rgba(168, 85, 247, 0.2);
-          }
-        }
-
-        @keyframes floatCard1 {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-20px); }
-        }
-
-        @keyframes floatCard2 {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(20px); }
-        }
-
-        @keyframes floatCard3 {
-          0%, 100% { transform: translateX(0); }
-          50% { transform: translateX(20px); }
-        }
-
-        @media (max-width: 996px) {
-          /* Stack content on tablet/mobile */
-          div[style*="gridTemplateColumns: 1fr 1fr"] {
-            grid-template-columns: 1fr !important;
-            text-align: center;
-            padding: 60px 24px 40px !important;
-          }
-
-          h1[style*="fontSize"] {
-            font-size: 52px !important;
-          }
-
-          div[style*="height: 450px"] {
-            height: 380px !important;
-            marginTop: 40px;
-          }
-
-          div[style*="width: 320px"] {
-            width: 280px !important;
-            height: 280px !important;
-          }
-        }
-
-        @media (max-width: 768px) {
-          h1[style*="fontSize"] {
-            font-size: 42px !important;
-          }
-
-          div[style*="height: 450px"] {
-            height: 320px !important;
-          }
-
-          div[style*="width: 320px"] {
-            width: 240px !important;
-            height: 240px !important;
-          }
-        }
-      `}</style>
+      <div className={styles.heroInner}>
+        <div className={styles.livePill}>
+          <span className={styles.liveDot} />
+          <span>
+            {translate({
+              id: 'homepage.hero.pill',
+              message: 'APACHE ROCKETMQ ARCHITECTURE - RUST IMPLEMENTATION - ASYNC RUNTIME',
+            })}
+          </span>
         </div>
-    );
+
+        <h1 className={styles.title}>
+          <span>Rocket</span>
+          <span className={styles.titleMq}>MQ</span>
+          <span>-Rust</span>
+        </h1>
+
+        <p className={styles.subheadline}>
+          {translate({
+            id: 'homepage.hero.subheadline',
+            message: 'High-performance messaging middleware built with Rust',
+          })}
+        </p>
+
+        <p className={styles.description}>
+          {translate({
+            id: 'homepage.hero.description',
+            message:
+              "RocketMQ-Rust brings Apache RocketMQ's proven messaging model to Rust: producers send messages to brokers, NameServer provides routing, CommitLog persists data, and consumers process messages through async, type-safe APIs.",
+          })}
+        </p>
+
+        <div className={styles.ctaRow}>
+          <Link className={clsx(styles.button, styles.buttonPrimary)} to="/docs/introduction">
+            {translate({
+              id: 'homepage.hero.getStarted',
+              message: 'Get Started',
+            })}
+            <span aria-hidden="true">-&gt;</span>
+          </Link>
+          <Link className={clsx(styles.button, styles.buttonSecondary)} to="https://github.com/mxsm/rocketmq-rust">
+            {translate({
+              id: 'homepage.hero.github',
+              message: 'GitHub',
+            })}
+            <span aria-hidden="true">-&gt;</span>
+          </Link>
+          <a className={clsx(styles.button, styles.buttonGhost)} href="#motion-system">
+            {translate({
+              id: 'homepage.hero.motionSpec',
+              message: 'Architecture flow',
+            })}
+            <span aria-hidden="true">-&gt;</span>
+          </a>
+        </div>
+
+        <RuntimeVisual />
+        <StageTimeline />
+
+        <div className={styles.statusStrip} aria-label="RocketMQ-Rust runtime modules">
+          {statusItems.map((item) => (
+            <div key={item.title} className={styles.statusItem}>
+              <strong>
+                {translate({
+                  id: item.titleId,
+                  message: item.title,
+                })}
+              </strong>
+              <span>
+                {translate({
+                  id: item.detailId,
+                  message: item.detail,
+                })}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </header>
+  );
 }

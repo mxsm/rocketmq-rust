@@ -1,0 +1,127 @@
+name: RocketMQ-RustDashboard Web CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'rocketmq-dashboard/rocketmq-dashboard-web/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-common/**'
+      - 'rocketmq-client/**'
+      - 'rocketmq-common/**'
+      - 'rocketmq-remoting/**'
+      - 'rocketmq-tools/rocketmq-admin/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - '.clippy.toml'
+      - '.github/workflows/dashboard-web-ci.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'rocketmq-dashboard/rocketmq-dashboard-web/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-common/**'
+      - 'rocketmq-client/**'
+      - 'rocketmq-common/**'
+      - 'rocketmq-remoting/**'
+      - 'rocketmq-tools/rocketmq-admin/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - '.clippy.toml'
+      - '.github/workflows/dashboard-web-ci.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  CI: true
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_TEST_DEBUG: "false"
+  CARGO_PROFILE_DEV_OPT_LEVEL: 1
+  CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
+  ROCKSDB_DISABLE_JEMALLOC: 1
+
+jobs:
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-web/frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: rocketmq-dashboard/rocketmq-dashboard-web/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript Check & Build
+        run: npm run build
+
+  backend-build:
+    name: Backend Build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-web/backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang llvm libclang-dev \
+            cmake make ninja-build pkg-config \
+            protobuf-compiler \
+            libssl-dev
+
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+
+          if command -v llvm-config >/dev/null 2>&1; then
+            LIBCLANG_PATH=$(llvm-config --libdir)
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH" >> $GITHUB_ENV
+            echo "Found libclang using llvm-config at: $LIBCLANG_PATH"
+          fi
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-dashboard/rocketmq-dashboard-web/backend
+          shared-key: dashboard-web-backend-ubuntu
+          env-vars: |
+            CC
+            CXX
+            LIBCLANG_PATH
+            ROCKSDB_DISABLE_JEMALLOC
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Build backend
+        run: cargo build --all-targets --all-features
+
+      - name: Clippy check
+        run: cargo clippy --all-targets --all-features -- -D warnings
