@@ -371,6 +371,7 @@ pub struct AppState {
     pub confirm_input: String,
     pub result_scroll: u16,
     pub result_horizontal_scroll: u16,
+    animation_tick: u64,
     next_execution_id: u64,
 }
 
@@ -395,6 +396,7 @@ impl AppState {
             confirm_input: String::new(),
             result_scroll: 0,
             result_horizontal_scroll: 0,
+            animation_tick: 0,
             next_execution_id: 1,
         };
         state.align_tree_cursor_to_selected_command();
@@ -411,6 +413,14 @@ impl AppState {
 
     pub fn selected_command_index(&self) -> usize {
         self.selected_command_index
+    }
+
+    pub fn animation_tick(&self) -> u64 {
+        self.animation_tick
+    }
+
+    pub fn advance_animation(&mut self) {
+        self.animation_tick = self.animation_tick.wrapping_add(1);
     }
 
     pub fn visible_command_indices(&self) -> Vec<usize> {
@@ -731,5 +741,17 @@ mod tests {
             state.focused_tree_item(),
             Some(CommandTreeItem::Command(index)) if index == state.selected_command_index()
         ));
+    }
+
+    #[test]
+    fn animation_tick_advances_without_changing_command_state() {
+        let mut state = AppState::new(None);
+        let selected = state.selected_command_index();
+
+        state.advance_animation();
+        state.advance_animation();
+
+        assert_eq!(state.animation_tick(), 2);
+        assert_eq!(state.selected_command_index(), selected);
     }
 }
