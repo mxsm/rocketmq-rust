@@ -51,6 +51,6 @@ tracing              = { workspace = true }
 
 cheetah-string = { workspace = true }
 futures        = "0.3.32"
-regex          = "1.12.3"
+regex          = "1.12.4"
 bytes          = { workspace = true }
 rocksdb        = { workspace = true, optional = true }
