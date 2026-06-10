@@ -18,11 +18,14 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::openraft::StateMachine;
 use rocketmq_controller::openraft::Store;
+use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
+use rocketmq_controller::typ::BrokerLiveInfoSnapshot;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
@@ -47,6 +50,29 @@ fn persistent_test_config(port: u16, storage_path: &Path) -> ArcMut<ControllerCo
             .with_storage_backend(StorageBackendType::File)
             .with_storage_path(storage_path.to_string_lossy().into_owned()),
     )
+}
+
+fn broker_heartbeat_request(
+    cluster_name: &str,
+    broker_name: &str,
+    broker_addr: &str,
+    broker_id: u64,
+) -> ControllerRequest {
+    ControllerRequest::BrokerHeartbeat {
+        broker_identity: BrokerIdentityInfoSnapshot::new(cluster_name, broker_name, Some(broker_id)),
+        broker_live_info: BrokerLiveInfoSnapshot {
+            cluster_name: cluster_name.to_string(),
+            broker_name: broker_name.to_string(),
+            broker_addr: broker_addr.to_string(),
+            broker_id,
+            last_update_timestamp: current_millis(),
+            heartbeat_timeout_millis: 60_000,
+            epoch: 1,
+            max_offset: 100,
+            confirm_offset: 80,
+            election_priority: Some(1),
+        },
+    }
 }
 
 #[tokio::test]
@@ -170,6 +196,14 @@ async fn test_client_write_updates_replicas_info_manager() {
         "RegisterBroker failed: {:?}",
         register_result.err()
     );
+    node.client_write(broker_heartbeat_request(
+        "test-cluster",
+        "test-broker",
+        "127.0.0.1:10911",
+        1,
+    ))
+    .await
+    .expect("replicate broker heartbeat");
 
     let next_broker_id = node
         .store()
@@ -250,6 +284,23 @@ async fn test_single_node_restart_recovers_state_from_file_storage() {
         .await
         .expect("register replica broker before restart");
     assert_eq!(register_replica.data.response_code, ResponseCode::Success as i32);
+
+    node.client_write(broker_heartbeat_request(
+        "test-cluster",
+        "restart-broker",
+        "127.0.0.1:10911",
+        1,
+    ))
+    .await
+    .expect("replicate master heartbeat before restart");
+    node.client_write(broker_heartbeat_request(
+        "test-cluster",
+        "restart-broker",
+        "127.0.0.1:10912",
+        2,
+    ))
+    .await
+    .expect("replicate replica heartbeat before restart");
 
     let elect_response = node
         .client_write(ControllerRequest::ElectMaster {

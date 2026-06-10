@@ -85,10 +85,15 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::manager::ControllerManager;
+use crate::metrics::ControllerMetricsManager;
+use crate::metrics::RequestHandleStatus;
+use crate::metrics::RequestType as MetricsRequestType;
 use crate::Controller;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
@@ -338,6 +343,20 @@ impl ControllerRequestProcessor {
             .elect_master(&request_header)
             .await?;
 
+        if let Some(response_command) = response.as_ref() {
+            if response_command.code() == ResponseCode::Success as i32
+                && self.controller_manager.controller_config().notify_broker_role_changed
+            {
+                if let Err(error) = self
+                    .controller_manager
+                    .notify_broker_role_changed(response_command.clone())
+                    .await
+                {
+                    warn!("Failed to notify brokers after elect-master request: {}", error);
+                }
+            }
+        }
+
         Ok(response)
     }
 
@@ -435,10 +454,10 @@ impl ControllerRequestProcessor {
                 request_header.confirm_offset,
                 request_header.election_priority,
             );
-            Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::Success,
-                "Heart beat success",
-            )))
+            self.controller_manager
+                .controller()
+                .record_broker_heartbeat(&request_header)
+                .await
         } else {
             Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
@@ -888,7 +907,51 @@ impl RequestProcessor for ControllerRequestProcessor {
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        self.handle_request(channel, ctx, request).await
+        let request_code = RequestCode::from(request.code());
+        let request_name = request_code.get_controller_request_name();
+        let start = Instant::now();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(WAIT_TIMEOUT_SECONDS),
+            self.handle_request(channel, ctx, request),
+        )
+        .await;
+
+        let latency_us = start.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+        match result {
+            Ok(Ok(response)) => {
+                if let Some(name) = request_name {
+                    let status = if response
+                        .as_ref()
+                        .is_none_or(|command| command.code() == ResponseCode::Success as i32)
+                    {
+                        RequestHandleStatus::Success
+                    } else {
+                        RequestHandleStatus::Failed
+                    };
+                    ControllerMetricsManager::inc_request_total_static(name, status);
+                    ControllerMetricsManager::record_request_latency_static(name, latency_us);
+                }
+                Ok(response)
+            }
+            Ok(Err(error)) => {
+                if let Some(name) = request_name {
+                    ControllerMetricsManager::inc_request_total_static(name, RequestHandleStatus::Failed);
+                    ControllerMetricsManager::record_request_latency_static(name, latency_us);
+                }
+                Err(error)
+            }
+            Err(_) => {
+                if let Some(name) = request_name {
+                    ControllerMetricsManager::inc_request_total_static(name, RequestHandleStatus::Timeout);
+                    ControllerMetricsManager::record_request_latency_static(name, latency_us);
+                }
+                Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "Controller request timed out",
+                )))
+            }
+        }
     }
 }
 

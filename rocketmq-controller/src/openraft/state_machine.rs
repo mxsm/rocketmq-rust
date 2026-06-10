@@ -14,119 +14,29 @@
 
 //! Raft state machine implementation backed by `ReplicasInfoManager`.
 
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use openraft::storage::RaftStateMachine;
-use openraft::storage::Snapshot;
 use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
-use openraft::SnapshotMeta;
-use openraft::StoredMembership;
 use rocketmq_rust::ArcMut;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::config::ControllerConfig;
-use crate::elect::elect_policy::ElectPolicy;
 use crate::event::controller_result::ControllerResult;
-use crate::helper::broker_valid_predicate::BrokerValidPredicate;
 use crate::manager::replicas_info_manager::ReplicasInfoManager;
 use crate::storage::SharedStorageBackend;
-use crate::typ::BrokerLiveInfoSnapshot;
 use crate::typ::ControllerRequest;
 use crate::typ::ControllerResponse;
 use crate::typ::ControllerResponseHeader;
 use crate::typ::LogId;
+use crate::typ::Snapshot;
+use crate::typ::SnapshotMeta;
+use crate::typ::StoredMembership;
 use crate::typ::TypeConfig;
-
-#[derive(Clone)]
-struct SnapshotBrokerValidPredicate {
-    alive_broker_ids: HashSet<u64>,
-}
-
-impl BrokerValidPredicate for SnapshotBrokerValidPredicate {
-    fn check(&self, _cluster_name: &str, _broker_name: &str, broker_id: Option<i64>) -> bool {
-        broker_id
-            .map(|id| id >= 0 && self.alive_broker_ids.contains(&(id as u64)))
-            .unwrap_or(false)
-    }
-}
-
-#[derive(Clone)]
-struct SnapshotElectPolicy {
-    alive_broker_ids: HashSet<u64>,
-    live_broker_infos: HashMap<u64, BrokerLiveInfoSnapshot>,
-}
-
-impl SnapshotElectPolicy {
-    fn try_elect(&self, brokers: &HashSet<i64>, old_master: Option<i64>, prefer_broker_id: Option<i64>) -> Option<i64> {
-        let valid_brokers: HashSet<i64> = brokers
-            .iter()
-            .copied()
-            .filter(|broker_id| *broker_id >= 0 && self.alive_broker_ids.contains(&(*broker_id as u64)))
-            .collect();
-
-        if valid_brokers.is_empty() {
-            return None;
-        }
-
-        if let Some(old_master_id) = old_master {
-            if valid_brokers.contains(&old_master_id)
-                && (prefer_broker_id.is_none() || prefer_broker_id == Some(old_master_id))
-            {
-                return Some(old_master_id);
-            }
-        }
-
-        if let Some(preferred_id) = prefer_broker_id {
-            return valid_brokers.contains(&preferred_id).then_some(preferred_id);
-        }
-
-        let mut broker_infos: Vec<&BrokerLiveInfoSnapshot> = valid_brokers
-            .iter()
-            .filter_map(|broker_id| self.live_broker_infos.get(&(*broker_id as u64)))
-            .collect();
-        broker_infos.sort_by(|left, right| compare_live_info(left, right));
-
-        broker_infos
-            .first()
-            .map(|broker| broker.broker_id as i64)
-            .or_else(|| valid_brokers.iter().next().copied())
-    }
-}
-
-impl ElectPolicy for SnapshotElectPolicy {
-    fn elect(
-        &self,
-        _cluster_name: &str,
-        _broker_name: &str,
-        sync_state_brokers: &HashSet<i64>,
-        all_replica_brokers: &HashSet<i64>,
-        old_master: Option<i64>,
-        broker_id: Option<i64>,
-    ) -> Option<i64> {
-        self.try_elect(sync_state_brokers, old_master, broker_id)
-            .or_else(|| self.try_elect(all_replica_brokers, old_master, broker_id))
-    }
-}
-
-fn compare_live_info(left: &BrokerLiveInfoSnapshot, right: &BrokerLiveInfoSnapshot) -> Ordering {
-    match right.epoch.cmp(&left.epoch) {
-        Ordering::Equal => match right.max_offset.cmp(&left.max_offset) {
-            Ordering::Equal => left
-                .election_priority
-                .unwrap_or(i32::MAX)
-                .cmp(&right.election_priority.unwrap_or(i32::MAX)),
-            other => other,
-        },
-        other => other,
-    }
-}
 
 const SNAPSHOT_META_KEY: &str = "openraft/state_machine/current_snapshot_meta";
 const SNAPSHOT_DATA_KEY: &str = "openraft/state_machine/current_snapshot_data";
@@ -163,19 +73,19 @@ async fn persist_json<T: Serialize>(
 pub struct SnapshotData {
     pub replicas_info_manager_state: Vec<u8>,
     pub last_applied: Option<LogId>,
-    pub last_membership: Option<StoredMembership<TypeConfig>>,
+    pub last_membership: Option<StoredMembership>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct PersistedSnapshotMeta {
     last_log_id: Option<LogId>,
-    last_membership: StoredMembership<TypeConfig>,
+    last_membership: StoredMembership,
     snapshot_id: String,
 }
 
 #[derive(Clone)]
 struct CurrentSnapshot {
-    meta: SnapshotMeta<TypeConfig>,
+    meta: SnapshotMeta,
     data: Vec<u8>,
 }
 
@@ -183,7 +93,7 @@ struct CurrentSnapshot {
 pub struct StateMachine {
     replicas_info_manager: Arc<ReplicasInfoManager>,
     last_applied: Arc<RwLock<Option<LogId>>>,
-    last_membership: Arc<RwLock<StoredMembership<TypeConfig>>>,
+    last_membership: Arc<RwLock<StoredMembership>>,
     current_snapshot: Arc<RwLock<Option<CurrentSnapshot>>>,
     backend: Option<SharedStorageBackend>,
 }
@@ -296,17 +206,14 @@ impl StateMachine {
                 broker_name,
                 broker_address,
                 broker_id,
-                alive_broker_ids,
+                alive_broker_ids: _,
             } => {
-                let alive_predicate = SnapshotBrokerValidPredicate {
-                    alive_broker_ids: alive_broker_ids.clone(),
-                };
                 let result = self.replicas_info_manager.register_broker(
                     cluster_name,
                     broker_name,
                     broker_address,
                     *broker_id,
-                    &alive_predicate,
+                    self.replicas_info_manager.as_ref(),
                 );
                 self.response_from_result(result, ControllerResponseHeader::RegisterBroker)
             }
@@ -317,18 +224,15 @@ impl StateMachine {
                 master_epoch,
                 new_sync_state_set,
                 sync_state_set_epoch,
-                alive_broker_ids,
+                alive_broker_ids: _,
             } => {
-                let alive_predicate = SnapshotBrokerValidPredicate {
-                    alive_broker_ids: alive_broker_ids.clone(),
-                };
                 let result = self.replicas_info_manager.alter_sync_state_set(
                     broker_name,
                     *master_broker_id,
                     *master_epoch,
                     new_sync_state_set.clone(),
                     *sync_state_set_epoch,
-                    &alive_predicate,
+                    self.replicas_info_manager.as_ref(),
                 );
                 self.response_from_result(result, ControllerResponseHeader::AlterSyncStateSet)
             }
@@ -337,16 +241,15 @@ impl StateMachine {
                 broker_name,
                 broker_id,
                 designate_elect,
-                alive_broker_ids,
-                live_broker_infos,
+                alive_broker_ids: _,
+                live_broker_infos: _,
             } => {
-                let elect_policy = SnapshotElectPolicy {
-                    alive_broker_ids: alive_broker_ids.clone(),
-                    live_broker_infos: live_broker_infos.clone(),
-                };
-                let result =
-                    self.replicas_info_manager
-                        .elect_master(broker_name, *broker_id, *designate_elect, &elect_policy);
+                let result = self.replicas_info_manager.elect_master(
+                    broker_name,
+                    *broker_id,
+                    *designate_elect,
+                    self.replicas_info_manager.as_ref(),
+                );
                 self.response_from_result(result, ControllerResponseHeader::ElectMaster)
             }
             ControllerRequest::CleanBrokerData {
@@ -354,19 +257,43 @@ impl StateMachine {
                 broker_name,
                 broker_controller_ids_to_clean,
                 clean_living_broker,
-                alive_broker_ids,
+                alive_broker_ids: _,
             } => {
-                let alive_predicate = SnapshotBrokerValidPredicate {
-                    alive_broker_ids: alive_broker_ids.clone(),
-                };
                 let result = self.replicas_info_manager.clean_broker_data(
                     cluster_name,
                     broker_name,
                     broker_controller_ids_to_clean.as_deref(),
                     *clean_living_broker,
-                    &alive_predicate,
+                    self.replicas_info_manager.as_ref(),
                 );
                 self.response_from_result_without_header(result)
+            }
+            ControllerRequest::BrokerHeartbeat {
+                broker_identity,
+                broker_live_info,
+            } => {
+                self.replicas_info_manager
+                    .on_broker_heartbeat(broker_identity.clone(), broker_live_info.clone());
+                ControllerResponse::new(
+                    rocketmq_remoting::code::response_code::ResponseCode::Success.into(),
+                    Some("Heart beat success".to_string()),
+                    None,
+                    None,
+                )
+            }
+            ControllerRequest::BrokerChannelClose { broker_identity } => {
+                self.replicas_info_manager.on_broker_channel_close(broker_identity);
+                ControllerResponse::success()
+            }
+            ControllerRequest::CheckNotActiveBroker { check_time_millis } => {
+                let inactive_brokers = self.replicas_info_manager.check_not_active_broker(*check_time_millis);
+                let body = serde_json::to_vec(&inactive_brokers).ok();
+                ControllerResponse::new(
+                    rocketmq_remoting::code::response_code::ResponseCode::Success.into(),
+                    None,
+                    None,
+                    body,
+                )
             }
         }
     }
@@ -444,14 +371,14 @@ impl StateMachine {
 }
 
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
-    async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, std::io::Error> {
+    async fn build_snapshot(&mut self) -> Result<Snapshot, std::io::Error> {
         let data = self.build_snapshot_data().await?;
         let last_applied = data.last_applied;
         let last_membership = data.last_membership.clone().unwrap_or_default();
         let snapshot_data = serde_json::to_vec(&data)
             .map_err(|error| std::io::Error::other(format!("Failed to serialize snapshot: {}", error)))?;
         let current_snapshot = CurrentSnapshot {
-            meta: openraft::SnapshotMeta {
+            meta: SnapshotMeta {
                 last_log_id: last_applied,
                 last_membership,
                 snapshot_id: format!("snapshot-{}", last_applied.map_or(0, |log_id| log_id.index)),
@@ -471,7 +398,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
 impl RaftStateMachine<TypeConfig> for StateMachine {
     type SnapshotBuilder = Self;
 
-    async fn applied_state(&mut self) -> Result<(Option<LogId>, StoredMembership<TypeConfig>), std::io::Error> {
+    async fn applied_state(&mut self) -> Result<(Option<LogId>, StoredMembership), std::io::Error> {
         let last_applied = *self.last_applied.read().await;
         let last_membership = self.last_membership.read().await.clone();
         Ok((last_applied, last_membership))
@@ -528,7 +455,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
 
     async fn install_snapshot(
         &mut self,
-        meta: &openraft::SnapshotMeta<TypeConfig>,
+        meta: &SnapshotMeta,
         snapshot: std::io::Cursor<Vec<u8>>,
     ) -> Result<(), std::io::Error> {
         let snapshot_data: SnapshotData = serde_json::from_slice(snapshot.get_ref()).map_err(|error| {
@@ -549,7 +476,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         Ok(())
     }
 
-    async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TypeConfig>>, std::io::Error> {
+    async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot>, std::io::Error> {
         Ok(self.current_snapshot.read().await.clone().map(|snapshot| Snapshot {
             meta: snapshot.meta,
             snapshot: std::io::Cursor::new(snapshot.data),
@@ -561,12 +488,32 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
 mod tests {
     use super::*;
     use crate::config::ControllerConfig;
+    use crate::typ::BrokerIdentityInfoSnapshot;
+    use crate::typ::BrokerLiveInfoSnapshot;
     use rocketmq_remoting::code::response_code::ResponseCode;
 
     fn new_state_machine() -> StateMachine {
         let config =
             ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:39876".parse().expect("valid addr")));
         StateMachine::new(config)
+    }
+
+    fn heartbeat_request(last_update_timestamp: u64, heartbeat_timeout_millis: u64) -> ControllerRequest {
+        ControllerRequest::BrokerHeartbeat {
+            broker_identity: BrokerIdentityInfoSnapshot::new("test-cluster", "broker-a", Some(1)),
+            broker_live_info: BrokerLiveInfoSnapshot {
+                cluster_name: "test-cluster".to_string(),
+                broker_name: "broker-a".to_string(),
+                broker_addr: "127.0.0.1:10911".to_string(),
+                broker_id: 1,
+                last_update_timestamp,
+                heartbeat_timeout_millis,
+                epoch: 1,
+                max_offset: 100,
+                confirm_offset: 80,
+                election_priority: Some(1),
+            },
+        }
     }
 
     #[test]
@@ -602,6 +549,7 @@ mod tests {
             applied_broker_id: 1,
             register_check_code: "code-1".to_string(),
         });
+        state_machine.apply_request(&heartbeat_request(1_000, 60_000));
 
         let snapshot = state_machine.build_snapshot().await.expect("snapshot");
 
@@ -618,5 +566,44 @@ mod tests {
             .and_then(|header| header.next_broker_id)
             .expect("next broker id");
         assert_eq!(next_broker_id, 2);
+        assert!(restored
+            .replicas_info_manager()
+            .is_broker_active_at("test-cluster", "broker-a", 1, 2_000));
+    }
+
+    #[test]
+    fn broker_heartbeat_updates_replicated_live_table() {
+        let state_machine = new_state_machine();
+
+        let response = state_machine.apply_request(&heartbeat_request(1_000, 3_000));
+
+        assert_eq!(response.response_code, ResponseCode::Success.to_i32());
+        assert!(state_machine
+            .replicas_info_manager()
+            .is_broker_active_at("test-cluster", "broker-a", 1, 3_999));
+        assert!(!state_machine
+            .replicas_info_manager()
+            .is_broker_active_at("test-cluster", "broker-a", 1, 4_001));
+    }
+
+    #[test]
+    fn check_not_active_broker_removes_expired_live_info() {
+        let state_machine = new_state_machine();
+        state_machine.apply_request(&heartbeat_request(1_000, 3_000));
+
+        let response = state_machine.apply_request(&ControllerRequest::CheckNotActiveBroker {
+            check_time_millis: 4_001,
+        });
+
+        assert_eq!(response.response_code, ResponseCode::Success.to_i32());
+        let inactive_brokers: Vec<BrokerIdentityInfoSnapshot> =
+            serde_json::from_slice(response.body.as_deref().expect("inactive broker body")).expect("decode body");
+        assert_eq!(
+            inactive_brokers,
+            vec![BrokerIdentityInfoSnapshot::new("test-cluster", "broker-a", Some(1))]
+        );
+        assert!(!state_machine
+            .replicas_info_manager()
+            .is_broker_active_at("test-cluster", "broker-a", 1, 4_001));
     }
 }

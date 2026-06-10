@@ -43,7 +43,7 @@ tokio-util = { workspace = true }
 raft     = { version = "0.7.0", git = "https://github.com/tikv/raft-rs.git", rev = "1fd05e0" }
 protobuf = "2.28"
 # New openraft implementation
-openraft = { version = "0.10.0", git = "https://github.com/databendlabs/openraft.git", rev = "a90c841", features = [
+openraft = { version = "=0.10.0-alpha.21", features = [
   "serde",
   "tokio-rt",
 ] }

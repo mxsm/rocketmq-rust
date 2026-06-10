@@ -25,10 +25,12 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
-use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
 use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
@@ -38,14 +40,18 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::RaftNodeManager;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+use crate::typ::BrokerIdentityInfoSnapshot;
 use crate::typ::BrokerLiveInfoSnapshot;
 use crate::typ::ControllerRequest;
+use crate::typ::ControllerResponse;
 use crate::typ::Node;
 use crate::typ::NodeId;
 use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
@@ -58,6 +64,7 @@ use rocketmq_remoting::protocol::header::controller::get_replica_info_request_he
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::CommandCustomHeader;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -87,6 +94,8 @@ pub struct OpenRaftController {
     heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
+    first_received_heartbeat_time: Arc<AtomicU64>,
+    scan_task_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl OpenRaftController {
@@ -107,6 +116,8 @@ impl OpenRaftController {
             heartbeat_manager,
             lifecycle_listeners: Arc::new(RwLock::new(Vec::new())),
             scheduling: Arc::new(AtomicBool::new(false)),
+            first_received_heartbeat_time: Arc::new(AtomicU64::new(0)),
+            scan_task_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -172,16 +183,7 @@ impl OpenRaftController {
 
     fn snapshot_alive_broker_ids(&self, cluster_name: &str, broker_name: &str) -> HashSet<u64> {
         self.replicas_info_manager()
-            .map(|manager| {
-                manager
-                    .broker_ids(broker_name)
-                    .into_iter()
-                    .filter(|broker_id| {
-                        self.heartbeat_manager
-                            .is_broker_active(cluster_name, broker_name, *broker_id as i64)
-                    })
-                    .collect()
-            })
+            .map(|manager| manager.active_broker_ids(cluster_name, broker_name))
             .unwrap_or_default()
     }
 
@@ -194,19 +196,9 @@ impl OpenRaftController {
         alive_broker_ids
             .iter()
             .filter_map(|broker_id| {
-                self.heartbeat_manager
-                    .get_broker_live_info(cluster_name, broker_name, *broker_id as i64)
-                    .map(|live_info| {
-                        (
-                            *broker_id,
-                            BrokerLiveInfoSnapshot {
-                                broker_id: *broker_id,
-                                epoch: live_info.epoch(),
-                                max_offset: live_info.max_offset(),
-                                election_priority: live_info.election_priority(),
-                            },
-                        )
-                    })
+                self.replicas_info_manager()
+                    .and_then(|manager| manager.get_broker_live_info(cluster_name, broker_name, *broker_id as i64))
+                    .map(|live_info| (*broker_id, live_info))
             })
             .collect()
     }
@@ -222,6 +214,122 @@ impl OpenRaftController {
 
         let response = node.client_write(request).await?;
         Ok(Some(response.data.into_remoting_command()))
+    }
+
+    async fn write_internal_request(&self, request: ControllerRequest) -> RocketMQResult<Option<ControllerResponse>> {
+        if !self.is_current_leader() {
+            return Ok(None);
+        }
+
+        let Some(node) = &self.node else {
+            return Ok(None);
+        };
+
+        let response = node.client_write(request).await?;
+        Ok(Some(response.data))
+    }
+
+    pub async fn record_broker_heartbeat(
+        &self,
+        request: &BrokerHeartbeatRequestHeader,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let Some(broker_id) = request.broker_id else {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "Heart beat with empty brokerId",
+            )));
+        };
+
+        if broker_id < 0 {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "Heart beat with invalid brokerId",
+            )));
+        }
+
+        let now_millis = current_millis();
+        let _ = self
+            .first_received_heartbeat_time
+            .compare_exchange(0, now_millis, Ordering::AcqRel, Ordering::Acquire);
+
+        let heartbeat_timeout_millis = request
+            .heartbeat_timeout_mills
+            .and_then(|timeout| u64::try_from(timeout).ok())
+            .unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
+        let broker_id = broker_id as u64;
+        let broker_identity = BrokerIdentityInfoSnapshot::new(
+            request.cluster_name.to_string(),
+            request.broker_name.to_string(),
+            Some(broker_id),
+        );
+        let broker_live_info = BrokerLiveInfoSnapshot {
+            cluster_name: request.cluster_name.to_string(),
+            broker_name: request.broker_name.to_string(),
+            broker_addr: request.broker_addr.to_string(),
+            broker_id,
+            last_update_timestamp: now_millis,
+            heartbeat_timeout_millis,
+            epoch: request.epoch.unwrap_or(-1),
+            max_offset: request.max_offset.unwrap_or(-1),
+            confirm_offset: request.confirm_offset.unwrap_or(-1),
+            election_priority: request.election_priority.or(Some(i32::MAX)),
+        };
+
+        match self
+            .write_internal_request(ControllerRequest::BrokerHeartbeat {
+                broker_identity,
+                broker_live_info,
+            })
+            .await?
+        {
+            Some(response) => Ok(Some(response.into_remoting_command())),
+            None => Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::Success,
+                "Heart beat success",
+            ))),
+        }
+    }
+
+    pub async fn remove_broker_live_info(
+        &self,
+        cluster_name: Option<&str>,
+        broker_name: &str,
+        broker_id: Option<i64>,
+    ) -> RocketMQResult<()> {
+        let Some(broker_id) = broker_id else {
+            return Ok(());
+        };
+        if broker_id < 0 {
+            return Ok(());
+        }
+
+        let broker_identity = BrokerIdentityInfoSnapshot::new(
+            cluster_name.unwrap_or_default().to_string(),
+            broker_name.to_string(),
+            Some(broker_id as u64),
+        );
+        let _ = self
+            .write_internal_request(ControllerRequest::BrokerChannelClose { broker_identity })
+            .await?;
+        Ok(())
+    }
+
+    async fn scan_not_active_broker_once(
+        node: Arc<RaftNodeManager>,
+        check_time_millis: u64,
+    ) -> RocketMQResult<Vec<BrokerIdentityInfoSnapshot>> {
+        let response = node
+            .client_write(ControllerRequest::CheckNotActiveBroker { check_time_millis })
+            .await?;
+        let Some(body) = response.data.body else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_slice(&body).map_err(|error| {
+            rocketmq_error::RocketMQError::Internal(format!(
+                "Failed to decode replicated inactive broker scan response: {}",
+                error
+            ))
+        })
     }
 
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
@@ -341,6 +449,11 @@ impl Controller for OpenRaftController {
     async fn shutdown(&mut self) -> RocketMQResult<()> {
         info!("Shutting down OpenRaft controller");
 
+        self.scheduling.store(false, Ordering::Release);
+        if let Some(handle) = self.scan_task_handle.lock().take() {
+            handle.abort();
+        }
+
         // Take and send shutdown signal to gRPC server
         if let Some(tx) = self.shutdown_tx.take() {
             if tx.send(()).is_err() {
@@ -379,12 +492,70 @@ impl Controller for OpenRaftController {
     }
 
     async fn start_scheduling(&self) -> RocketMQResult<()> {
-        self.scheduling.store(true, Ordering::Release);
+        if self.scheduling.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let Some(node) = self.node.clone() else {
+            return Ok(());
+        };
+
+        let config = self.config.clone();
+        let listeners = self.lifecycle_listeners.clone();
+        let scheduling = self.scheduling.clone();
+        let first_received_heartbeat_time = self.first_received_heartbeat_time.clone();
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+            let mut interval =
+                tokio::time::interval(Duration::from_millis(config.scan_not_active_broker_interval.max(1)));
+
+            loop {
+                interval.tick().await;
+                if !scheduling.load(Ordering::Acquire) {
+                    break;
+                }
+
+                use openraft::async_runtime::WatchReceiver;
+                let metrics = node.raft().metrics().borrow_watched().clone();
+                if metrics.current_leader != Some(config.node_id) {
+                    continue;
+                }
+
+                let first_heartbeat = first_received_heartbeat_time.load(Ordering::Acquire);
+                let now_millis = current_millis();
+                if first_heartbeat == 0 || now_millis < first_heartbeat.saturating_add(config.raft_scan_wait_timeout_ms)
+                {
+                    continue;
+                }
+
+                match Self::scan_not_active_broker_once(node.clone(), now_millis).await {
+                    Ok(inactive_brokers) => {
+                        for broker_identity in inactive_brokers {
+                            for listener in listeners.read().iter() {
+                                listener.on_broker_inactive(
+                                    Some(broker_identity.cluster_name.as_str()),
+                                    broker_identity.broker_name.as_str(),
+                                    broker_identity.broker_id.map(|broker_id| broker_id as i64),
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!("Failed to run replicated broker inactive scan: {}", error);
+                    }
+                }
+            }
+        });
+
+        *self.scan_task_handle.lock() = Some(handle);
         Ok(())
     }
 
     async fn stop_scheduling(&self) -> RocketMQResult<()> {
         self.scheduling.store(false, Ordering::Release);
+        if let Some(handle) = self.scan_task_handle.lock().take() {
+            handle.abort();
+        }
         Ok(())
     }
 
@@ -434,11 +605,8 @@ impl Controller for OpenRaftController {
 
         if let Some(replica_header) = replica_info.response() {
             if let Some(master_broker_id) = replica_header.master_broker_id {
-                if self.heartbeat_manager.is_broker_active(
-                    cluster_name.as_str(),
-                    broker_name.as_str(),
-                    master_broker_id,
-                ) {
+                if replicas_info_manager.is_broker_active(cluster_name.as_str(), broker_name.as_str(), master_broker_id)
+                {
                     register_header.master_broker_id = Some(master_broker_id);
                     register_header.master_address =
                         replica_header.master_address.clone().map(CheetahString::from_string);
@@ -627,7 +795,7 @@ impl Controller for OpenRaftController {
         };
 
         let broker_names_str: Vec<String> = broker_names.iter().map(|s| s.to_string()).collect();
-        let result = replicas_info_manager.get_sync_state_data(&broker_names_str, self.heartbeat_manager.as_ref());
+        let result = replicas_info_manager.get_sync_state_data(&broker_names_str, replicas_info_manager.as_ref());
 
         Ok(Some(self.command_from_result_without_header(result)))
     }

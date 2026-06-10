@@ -29,8 +29,6 @@ use openraft::raft::SnapshotResponse;
 use openraft::raft::VoteRequest;
 use openraft::raft::VoteResponse;
 use openraft::OptionalSend;
-use openraft::Snapshot;
-use openraft::Vote;
 use tonic::transport::Channel;
 use tonic::Request;
 use tracing::debug;
@@ -41,7 +39,9 @@ use crate::protobuf::openraft::OpenRaftAppendRequest;
 use crate::protobuf::openraft::OpenRaftVote as ProtoVote;
 use crate::protobuf::openraft::OpenRaftVoteRequest as ProtoVoteRequest;
 use crate::typ::NodeId;
+use crate::typ::Snapshot;
 use crate::typ::TypeConfig;
+use crate::typ::Vote;
 
 /// gRPC-based network client for OpenRaft
 #[derive(Clone)]
@@ -106,7 +106,7 @@ impl GrpcNetworkClient {
     }
 }
 
-fn decode_vote(vote: ProtoVote) -> Vote<TypeConfig> {
+fn decode_vote(vote: ProtoVote) -> Vote {
     if vote.committed {
         Vote::new_committed(vote.term, crate::typ::NodeId::from(vote.node_id))
     } else {
@@ -199,8 +199,8 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
 
     async fn full_snapshot(
         &mut self,
-        vote: Vote<TypeConfig>,
-        snapshot: Snapshot<TypeConfig>,
+        vote: Vote,
+        snapshot: Snapshot,
         _cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
         _option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {

@@ -29,6 +29,7 @@ use rocketmq_remoting::protocol::header::controller::elect_master_request_header
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
@@ -152,6 +153,35 @@ impl RaftController {
         match self {
             Self::OpenRaft(controller) => controller.scheduling_enabled(),
             Self::RaftRs(_) => false,
+        }
+    }
+
+    pub async fn record_broker_heartbeat(
+        &self,
+        request: &BrokerHeartbeatRequestHeader,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        match self {
+            Self::OpenRaft(controller) => controller.record_broker_heartbeat(request).await,
+            Self::RaftRs(_) => Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                rocketmq_remoting::code::response_code::ResponseCode::Success,
+                "Heart beat success",
+            ))),
+        }
+    }
+
+    pub async fn remove_broker_live_info(
+        &self,
+        cluster_name: Option<&str>,
+        broker_name: &str,
+        broker_id: Option<i64>,
+    ) -> RocketMQResult<()> {
+        match self {
+            Self::OpenRaft(controller) => {
+                controller
+                    .remove_broker_live_info(cluster_name, broker_name, broker_id)
+                    .await
+            }
+            Self::RaftRs(_) => Ok(()),
         }
     }
 }

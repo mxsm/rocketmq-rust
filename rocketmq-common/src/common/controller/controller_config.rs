@@ -138,6 +138,11 @@ pub struct ControllerConfig {
     /// Default: 5000 (5 seconds)
     pub scan_inactive_master_interval: u64,
 
+    /// Wait time after the first broker heartbeat before OpenRaft inactive scanning starts.
+    ///
+    /// Default: 1000 (1 second), matching Java jRaftScanWaitTimeoutMs.
+    pub raft_scan_wait_timeout_ms: u64,
+
     /// Metrics exporter type
     ///
     /// Default: Disable
@@ -234,6 +239,7 @@ impl Clone for ControllerConfig {
             is_process_read_event: self.is_process_read_event,
             notify_broker_role_changed: self.notify_broker_role_changed,
             scan_inactive_master_interval: self.scan_inactive_master_interval,
+            raft_scan_wait_timeout_ms: self.raft_scan_wait_timeout_ms,
             metrics_exporter_type: self.metrics_exporter_type,
             metrics_grpc_exporter_target: self.metrics_grpc_exporter_target.clone(),
             metrics_grpc_exporter_header: self.metrics_grpc_exporter_header.clone(),
@@ -289,6 +295,7 @@ impl Default for ControllerConfig {
             is_process_read_event: false,
             notify_broker_role_changed: true,
             scan_inactive_master_interval: 5 * 1000,
+            raft_scan_wait_timeout_ms: 1000,
             metrics_exporter_type: MetricsExporterType::Disable,
             metrics_grpc_exporter_target: String::new(),
             metrics_grpc_exporter_header: String::new(),
@@ -395,6 +402,12 @@ impl ControllerConfig {
     /// Set scan inactive master interval
     pub fn with_scan_inactive_master_interval(mut self, interval_ms: u64) -> Self {
         self.scan_inactive_master_interval = interval_ms;
+        self
+    }
+
+    /// Set OpenRaft inactive-scan wait timeout.
+    pub fn with_raft_scan_wait_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.raft_scan_wait_timeout_ms = timeout_ms;
         self
     }
 
@@ -599,6 +612,7 @@ impl ControllerConfig {
             self.scan_inactive_master_interval
         )
         .unwrap();
+        writeln!(result, "raftScanWaitTimeoutMs={}", self.raft_scan_wait_timeout_ms).unwrap();
         writeln!(result, "metricsExporterType={}", self.metrics_exporter_type).unwrap();
         writeln!(
             result,
@@ -728,6 +742,11 @@ impl ControllerConfig {
 
                 "scanInactiveMasterInterval" => {
                     self.scan_inactive_master_interval =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "raftScanWaitTimeoutMs" | "jRaftScanWaitTimeoutMs" => {
+                    self.raft_scan_wait_timeout_ms =
                         serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
                 }
 
