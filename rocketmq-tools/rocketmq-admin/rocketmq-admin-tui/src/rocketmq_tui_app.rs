@@ -83,7 +83,10 @@ impl RocketmqTuiApp {
         let mut events = EventStream::new();
         while !self.should_quit() {
             tokio::select! {
-                _ = interval.tick() => { terminal.draw(|frame| self.draw(frame))?; },
+                _ = interval.tick() => {
+                    self.state.advance_animation();
+                    terminal.draw(|frame| self.draw(frame))?;
+                },
                 Some(Ok(event)) = events.next() => self.handle_event(&event),
                 Some(action) = self.action_rx.recv() => self.apply_action(action),
             }

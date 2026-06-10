@@ -515,7 +515,6 @@ pub fn record_pop_buffer_scan_time_consume(time_ms: u64) {
 
 #[cfg(test)]
 mod tests {
-    use opentelemetry::metrics::MeterProvider as _;
     use opentelemetry_sdk::metrics::SdkMeterProvider;
 
     use super::*;
