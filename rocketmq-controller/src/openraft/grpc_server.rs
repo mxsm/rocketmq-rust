@@ -96,10 +96,9 @@ impl OpenRaftService for GrpcRaftService {
                 let log_id = entry
                     .log_id
                     .ok_or_else(|| Status::invalid_argument("Missing append entry log id"))?;
-                let payload: openraft::EntryPayload<crate::typ::TypeConfig> = serde_json::from_slice(&entry.payload)
-                    .map_err(|e| {
-                        Status::invalid_argument(format!("Failed to deserialize append entry payload: {}", e))
-                    })?;
+                let payload: crate::typ::EntryPayload = serde_json::from_slice(&entry.payload).map_err(|e| {
+                    Status::invalid_argument(format!("Failed to deserialize append entry payload: {}", e))
+                })?;
                 Ok(openraft::Entry {
                     log_id: crate::typ::LogId {
                         leader_id: crate::typ::Vote::new(log_id.term, log_id.node_id).leader_id,
@@ -208,7 +207,7 @@ impl OpenRaftService for GrpcRaftService {
         let mut stream = request.into_inner();
 
         let mut vote: Option<crate::typ::Vote> = None;
-        let mut snapshot_meta: Option<openraft::SnapshotMeta<crate::typ::TypeConfig>> = None;
+        let mut snapshot_meta: Option<crate::typ::SnapshotMeta> = None;
         let mut snapshot_data = Vec::new();
 
         // Receive all chunks
@@ -224,12 +223,12 @@ impl OpenRaftService for GrpcRaftService {
 
             if snapshot_meta.is_none() {
                 if let Some(meta) = chunk.meta {
-                    let last_membership: openraft::StoredMembership<crate::typ::TypeConfig> =
-                        serde_json::from_slice(&meta.last_membership).map_err(|e| {
-                            Status::invalid_argument(format!("Failed to deserialize membership: {}", e))
-                        })?;
+                    let last_membership: crate::typ::StoredMembership = serde_json::from_slice(&meta.last_membership)
+                        .map_err(|e| {
+                        Status::invalid_argument(format!("Failed to deserialize membership: {}", e))
+                    })?;
 
-                    snapshot_meta = Some(openraft::SnapshotMeta {
+                    snapshot_meta = Some(crate::typ::SnapshotMeta {
                         last_log_id: meta.last_log_id.map(|id| crate::typ::LogId {
                             leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
                             index: id.index,
@@ -258,7 +257,7 @@ impl OpenRaftService for GrpcRaftService {
         );
 
         // Create snapshot with Cursor wrapper
-        let snapshot = openraft::Snapshot {
+        let snapshot = crate::typ::Snapshot {
             meta,
             snapshot: std::io::Cursor::new(snapshot_data),
         };

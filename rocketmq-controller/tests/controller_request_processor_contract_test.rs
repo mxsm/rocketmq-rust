@@ -492,10 +492,10 @@ async fn controller_request_contract_elect_master() {
     let body = ElectMasterResponseBody::decode(response.body().expect("elect master response body").as_ref())
         .expect("decode elect master body");
     assert_eq!(body.sync_state_set, HashSet::from([seed.master_broker_id]));
-    let broker_member_group = body
-        .broker_member_group
-        .expect("elect master body should include broker member group");
-    assert_eq!(broker_member_group.broker_addrs.len(), 2);
+    assert!(
+        body.broker_member_group.is_none(),
+        "master-still-exists response should match Java and omit broker member group"
+    );
 
     harness.shutdown().await;
 }

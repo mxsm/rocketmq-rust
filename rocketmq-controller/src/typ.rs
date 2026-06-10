@@ -57,13 +57,59 @@ impl From<Node> for protobuf::Node {
     }
 }
 
-/// Serializable subset of heartbeat state needed for master election.
+/// Serializable broker identity used by replicated heartbeat state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct BrokerIdentityInfoSnapshot {
+    pub cluster_name: String,
+    pub broker_name: String,
+    pub broker_id: Option<u64>,
+}
+
+impl BrokerIdentityInfoSnapshot {
+    pub fn new(cluster_name: impl Into<String>, broker_name: impl Into<String>, broker_id: Option<u64>) -> Self {
+        Self {
+            cluster_name: cluster_name.into(),
+            broker_name: broker_name.into(),
+            broker_id,
+        }
+    }
+}
+
+impl std::fmt::Display for BrokerIdentityInfoSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BrokerIdentityInfo{{clusterName='{}', brokerName='{}', brokerId={:?}}}",
+            self.cluster_name, self.broker_name, self.broker_id
+        )
+    }
+}
+
+/// Serializable heartbeat state needed for replicated liveness and master election.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BrokerLiveInfoSnapshot {
+    pub cluster_name: String,
+    pub broker_name: String,
+    pub broker_addr: String,
     pub broker_id: u64,
+    pub last_update_timestamp: u64,
+    pub heartbeat_timeout_millis: u64,
     pub epoch: i32,
     pub max_offset: i64,
+    pub confirm_offset: i64,
     pub election_priority: Option<i32>,
+}
+
+impl BrokerLiveInfoSnapshot {
+    pub fn identity(&self) -> BrokerIdentityInfoSnapshot {
+        BrokerIdentityInfoSnapshot::new(&self.cluster_name, &self.broker_name, Some(self.broker_id))
+    }
+
+    pub fn is_active_at(&self, timestamp_millis: u64) -> bool {
+        self.last_update_timestamp
+            .checked_add(self.heartbeat_timeout_millis)
+            .is_some_and(|expires_at| expires_at >= timestamp_millis)
+    }
 }
 
 /// Controller write requests that must be replicated through OpenRaft.
@@ -107,6 +153,16 @@ pub enum ControllerRequest {
         clean_living_broker: bool,
         alive_broker_ids: HashSet<u64>,
     },
+    BrokerHeartbeat {
+        broker_identity: BrokerIdentityInfoSnapshot,
+        broker_live_info: BrokerLiveInfoSnapshot,
+    },
+    BrokerChannelClose {
+        broker_identity: BrokerIdentityInfoSnapshot,
+    },
+    CheckNotActiveBroker {
+        check_time_millis: u64,
+    },
 }
 
 impl std::fmt::Display for ControllerRequest {
@@ -125,6 +181,19 @@ impl std::fmt::Display for ControllerRequest {
                 broker_name, broker_id, ..
             } => write!(f, "ElectMaster({}, broker_id={:?})", broker_name, broker_id),
             Self::CleanBrokerData { broker_name, .. } => write!(f, "CleanBrokerData({})", broker_name),
+            Self::BrokerHeartbeat { broker_identity, .. } => write!(
+                f,
+                "BrokerHeartbeat({}, id={:?})",
+                broker_identity.broker_name, broker_identity.broker_id
+            ),
+            Self::BrokerChannelClose { broker_identity } => write!(
+                f,
+                "BrokerChannelClose({}, id={:?})",
+                broker_identity.broker_name, broker_identity.broker_id
+            ),
+            Self::CheckNotActiveBroker { check_time_millis } => {
+                write!(f, "CheckNotActiveBroker({check_time_millis})")
+            }
         }
     }
 }
@@ -199,12 +268,16 @@ openraft::declare_raft_types!(
         SnapshotData = std::io::Cursor<Vec<u8>>,
 );
 
-pub type Raft = openraft::Raft<TypeConfig>;
+pub type Raft = openraft::Raft<TypeConfig, crate::openraft::StateMachine>;
 pub type RaftConfig = openraft::Config;
-pub type LogId = openraft::LogId<TypeConfig>;
-pub type LogEntry = openraft::Entry<TypeConfig>;
-pub type CommittedLogEntry = openraft::entry::Entry<TypeConfig>;
-pub type Vote = openraft::Vote<TypeConfig>;
+pub type LogId = openraft::type_config::alias::LogIdOf<TypeConfig>;
+pub type LogEntry = openraft::type_config::alias::EntryOf<TypeConfig>;
+pub type CommittedLogEntry = openraft::type_config::alias::EntryOf<TypeConfig>;
+pub type Vote = openraft::type_config::alias::VoteOf<TypeConfig>;
+pub type EntryPayload = openraft::type_config::alias::EntryPayloadOf<TypeConfig>;
+pub type SnapshotMeta = openraft::type_config::alias::SnapshotMetaOf<TypeConfig>;
+pub type Snapshot = openraft::type_config::alias::SnapshotOf<TypeConfig>;
+pub type StoredMembership = openraft::type_config::alias::StoredMembershipOf<TypeConfig>;
 pub type RaftMetrics = openraft::metrics::RaftMetrics<TypeConfig>;
 pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<TypeConfig>;
 pub type AppendEntriesRequest = openraft::raft::AppendEntriesRequest<TypeConfig>;

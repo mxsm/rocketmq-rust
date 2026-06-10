@@ -20,8 +20,8 @@ pub trait BrokerLifecycleListener: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `cluster_name` - The cluster name of the broker
+    /// * `cluster_name` - The cluster name of the broker, or None for broker-set-level reelection
     /// * `broker_name` - The broker name
-    /// * `broker_id` - The broker ID
-    fn on_broker_inactive(&self, cluster_name: &str, broker_name: &str, broker_id: i64);
+    /// * `broker_id` - The broker ID, or None for broker-set-level reelection
+    fn on_broker_inactive(&self, cluster_name: Option<&str>, broker_name: &str, broker_id: Option<i64>);
 }

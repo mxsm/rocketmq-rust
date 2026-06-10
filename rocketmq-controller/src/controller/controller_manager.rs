@@ -46,6 +46,8 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::elect_master_response_body::ElectMasterResponseBody;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -134,67 +136,172 @@ impl BrokerInactiveListener {
 }
 
 impl BrokerLifecycleListener for BrokerInactiveListener {
-    fn on_broker_inactive(&self, cluster_name: &str, broker_name: &str, broker_id: i64) {
+    fn on_broker_inactive(&self, cluster_name: Option<&str>, broker_name: &str, broker_id: Option<i64>) {
         let Some(controller_manager) = self.controller_manager.upgrade() else {
             return;
         };
 
-        let cluster_name = CheetahString::from_string(cluster_name.to_owned());
+        let cluster_name = cluster_name.map(str::to_owned);
         let broker_name = CheetahString::from_string(broker_name.to_owned());
 
         tokio::spawn(async move {
             if !controller_manager.is_leader() {
                 warn!(
-                    "Broker inactive event ignored on follower controller, cluster={}, broker={}, broker_id={}",
+                    "Broker inactive event ignored on follower controller, cluster={:?}, broker={}, broker_id={:?}",
                     cluster_name, broker_name, broker_id
                 );
                 return;
             }
 
-            let request =
-                ElectMasterRequestHeader::new(cluster_name.clone(), broker_name.clone(), -1, false, current_millis());
+            if let Err(error) = controller_manager
+                .controller()
+                .remove_broker_live_info(cluster_name.as_deref(), broker_name.as_str(), broker_id)
+                .await
+            {
+                warn!(
+                    "Failed to remove inactive broker live state, cluster={:?}, broker={}, broker_id={:?}, error={}",
+                    cluster_name, broker_name, broker_id, error
+                );
+            }
 
-            match controller_manager.controller().elect_master(&request).await {
-                Ok(Some(response)) if response.code() == ResponseCode::Success as i32 => {
-                    info!(
-                        "Triggered controller-side elect-master after broker inactive, cluster={}, broker={}, \
-                         broker_id={}",
-                        cluster_name, broker_name, broker_id
-                    );
-
-                    if controller_manager.controller_config().notify_broker_role_changed {
-                        if let Err(error) = controller_manager.notify_broker_role_changed(response).await {
-                            warn!(
-                                "Failed to notify brokers after role change, cluster={}, broker={}, error={}",
-                                cluster_name, broker_name, error
-                            );
-                        }
+            if let Some(inactive_broker_id) = broker_id {
+                let replica_request = GetReplicaInfoRequestHeader {
+                    broker_name: broker_name.clone(),
+                };
+                let should_elect = match controller_manager.controller().get_replica_info(&replica_request).await {
+                    Ok(Some(response)) if response.code() == ResponseCode::Success as i32 => {
+                        response
+                            .decode_command_custom_header::<GetReplicaInfoResponseHeader>()
+                            .ok()
+                            .and_then(|header| header.master_broker_id)
+                            == Some(inactive_broker_id)
                     }
-                }
-                Ok(Some(response)) => {
-                    warn!(
-                        "Elect-master after broker inactive did not succeed, cluster={}, broker={}, broker_id={}, \
-                         code={}, remark={:?}",
-                        cluster_name,
-                        broker_name,
-                        broker_id,
-                        response.code(),
-                        response.remark()
+                    Ok(Some(response)) => {
+                        warn!(
+                            "Skip inactive broker election because replica info query failed, broker={}, code={}, \
+                             remark={:?}",
+                            broker_name,
+                            response.code(),
+                            response.remark()
+                        );
+                        false
+                    }
+                    Ok(None) => {
+                        warn!(
+                            "Skip inactive broker election because replica info query returned no response, broker={}",
+                            broker_name
+                        );
+                        false
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Skip inactive broker election because replica info query errored, broker={}, error={}",
+                            broker_name, error
+                        );
+                        false
+                    }
+                };
+
+                if !should_elect {
+                    info!(
+                        "Inactive broker is not current master, skip election, cluster={:?}, broker={}, broker_id={}",
+                        cluster_name, broker_name, inactive_broker_id
                     );
-                }
-                Ok(None) => {
-                    warn!(
-                        "Elect-master after broker inactive returned no response, cluster={}, broker={}, broker_id={}",
-                        cluster_name, broker_name, broker_id
-                    );
-                }
-                Err(error) => {
-                    error!(
-                        "Elect-master after broker inactive failed, cluster={}, broker={}, broker_id={}, error={}",
-                        cluster_name, broker_name, broker_id, error
-                    );
+                    return;
                 }
             }
+
+            let request = ElectMasterRequestHeader::new(
+                cluster_name.as_deref().unwrap_or_default(),
+                broker_name.clone(),
+                -1,
+                false,
+                current_millis(),
+            );
+
+            let max_retry = controller_manager.controller_config().elect_master_max_retry_count;
+            for attempt in 0..max_retry {
+                let elect_result = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    controller_manager.controller().elect_master(&request),
+                )
+                .await;
+
+                match elect_result {
+                    Ok(Ok(Some(response))) if response.code() == ResponseCode::Success as i32 => {
+                        info!(
+                            "Triggered controller-side elect-master after broker inactive, cluster={:?}, broker={}, \
+                             broker_id={:?}, attempt={}",
+                            cluster_name,
+                            broker_name,
+                            broker_id,
+                            attempt + 1
+                        );
+
+                        if controller_manager.controller_config().notify_broker_role_changed {
+                            if let Err(error) = controller_manager.notify_broker_role_changed(response).await {
+                                warn!(
+                                    "Failed to notify brokers after role change, cluster={:?}, broker={}, error={}",
+                                    cluster_name, broker_name, error
+                                );
+                            }
+                        }
+                        return;
+                    }
+                    Ok(Ok(Some(response))) => {
+                        warn!(
+                            "Elect-master after broker inactive did not succeed, cluster={:?}, broker={}, \
+                             broker_id={:?}, attempt={}, code={}, remark={:?}",
+                            cluster_name,
+                            broker_name,
+                            broker_id,
+                            attempt + 1,
+                            response.code(),
+                            response.remark()
+                        );
+                    }
+                    Ok(Ok(None)) => {
+                        warn!(
+                            "Elect-master after broker inactive returned no response, cluster={:?}, broker={}, \
+                             broker_id={:?}, attempt={}",
+                            cluster_name,
+                            broker_name,
+                            broker_id,
+                            attempt + 1
+                        );
+                    }
+                    Ok(Err(error)) => {
+                        error!(
+                            "Elect-master after broker inactive failed, cluster={:?}, broker={}, broker_id={:?}, \
+                             attempt={}, error={}",
+                            cluster_name,
+                            broker_name,
+                            broker_id,
+                            attempt + 1,
+                            error
+                        );
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Elect-master after broker inactive timed out, cluster={:?}, broker={}, broker_id={:?}, \
+                             attempt={}",
+                            cluster_name,
+                            broker_name,
+                            broker_id,
+                            attempt + 1
+                        );
+                    }
+                }
+
+                if attempt + 1 < max_retry {
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+
+            warn!(
+                "Elect-master after broker inactive exhausted retries, cluster={:?}, broker={}, broker_id={:?}",
+                cluster_name, broker_name, broker_id
+            );
         });
     }
 }
@@ -1078,7 +1185,8 @@ impl ControllerManager {
         *self.notify_worker_task.lock() = Some(handle);
     }
 
-    async fn notify_broker_role_changed(&self, response: RemotingCommand) -> Result<()> {
+    pub async fn notify_broker_role_changed(&self, mut response: RemotingCommand) -> Result<()> {
+        response.make_custom_header_to_net();
         let response_header = response
             .decode_command_custom_header::<ElectMasterResponseHeader>()
             .map_err(|error| {
@@ -1244,10 +1352,54 @@ impl Drop for ControllerManager {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::net::SocketAddr;
 
     use super::*;
     use crate::typ::Node;
+    use rocketmq_remoting::base::response_future::ResponseFuture;
+    use rocketmq_remoting::connection::Connection;
+    use rocketmq_remoting::net::channel::Channel;
+    use rocketmq_remoting::net::channel::ChannelInner;
+    use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+    use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
+    use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+    use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+    use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
+    use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_remoting::runtime::processor::RequestProcessor;
+
+    async fn wait_until<F>(timeout: Duration, mut predicate: F, context: &str)
+    where
+        F: FnMut() -> bool,
+    {
+        let start = current_millis();
+        loop {
+            if predicate() {
+                return;
+            }
+            assert!(
+                current_millis().saturating_sub(start) < timeout.as_millis() as u64,
+                "timed out waiting for {context}"
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn create_test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let std_stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        std_stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
+        let connection = Connection::new(tcp_stream);
+        let response_table = ArcMut::new(HashMap::<i32, ResponseFuture>::new());
+        let inner = ArcMut::new(ChannelInner::new(connection, response_table));
+        Channel::new(inner, local_addr, local_addr)
+    }
 
     #[tokio::test]
     async fn test_manager_lifecycle() {
@@ -1471,6 +1623,358 @@ mod tests {
         );
 
         manager.shutdown().await.expect("shutdown manager");
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn inactive_slave_does_not_elect_but_inactive_master_does() {
+        let port = 9886;
+        let config = ControllerConfig::default()
+            .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
+            .with_heartbeat_interval_ms(100)
+            .with_election_timeout_ms(300)
+            .with_notify_broker_role_changed(false);
+
+        let manager = ArcMut::new(ControllerManager::new(config).await.expect("create manager"));
+        manager.clone().initialize().await.expect("initialize manager");
+        manager.clone().start().await.expect("start manager");
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            1,
+            Node {
+                node_id: 1,
+                rpc_addr: format!("127.0.0.1:{port}"),
+            },
+        );
+        manager
+            .controller()
+            .initialize_cluster(nodes)
+            .await
+            .expect("initialize cluster");
+        wait_until(Duration::from_secs(5), || manager.is_leader(), "controller leader").await;
+
+        for (broker_id, addr, check_code) in [
+            (1_i64, "127.0.0.1:10911", "master-check"),
+            (2_i64, "127.0.0.1:10912", "slave-check"),
+        ] {
+            let apply_header = ApplyBrokerIdRequestHeader {
+                cluster_name: CheetahString::from_static_str("test-cluster"),
+                broker_name: CheetahString::from_static_str("broker-a"),
+                applied_broker_id: broker_id,
+                register_check_code: CheetahString::from_string(format!("{addr};{check_code}")),
+            };
+            let apply_response = manager
+                .controller()
+                .apply_broker_id(&apply_header)
+                .await
+                .expect("apply broker id")
+                .expect("apply response");
+            assert_eq!(apply_response.code(), ResponseCode::Success as i32);
+
+            let register_header = RegisterBrokerToControllerRequestHeader {
+                cluster_name: Some(CheetahString::from_static_str("test-cluster")),
+                broker_name: Some(CheetahString::from_static_str("broker-a")),
+                broker_id: Some(broker_id),
+                broker_address: Some(CheetahString::from_static_str(addr)),
+                ..Default::default()
+            };
+            let register_response = manager
+                .controller()
+                .register_broker(&register_header)
+                .await
+                .expect("register broker")
+                .expect("register response");
+            assert_eq!(register_response.code(), ResponseCode::Success as i32);
+
+            let heartbeat_header = BrokerHeartbeatRequestHeader {
+                cluster_name: CheetahString::from_static_str("test-cluster"),
+                broker_addr: CheetahString::from_static_str(addr),
+                broker_name: CheetahString::from_static_str("broker-a"),
+                broker_id: Some(broker_id),
+                epoch: Some(1),
+                max_offset: Some(100),
+                confirm_offset: Some(80),
+                heartbeat_timeout_mills: Some(60_000),
+                election_priority: Some(1),
+            };
+            let heartbeat_response = manager
+                .controller()
+                .record_broker_heartbeat(&heartbeat_header)
+                .await
+                .expect("record heartbeat")
+                .expect("heartbeat response");
+            assert_eq!(heartbeat_response.code(), ResponseCode::Success as i32);
+        }
+
+        let elect_header = ElectMasterRequestHeader::new("test-cluster", "broker-a", 1, false, current_millis());
+        let mut elect_response = manager
+            .controller()
+            .elect_master(&elect_header)
+            .await
+            .expect("elect master")
+            .expect("elect response");
+        assert_eq!(elect_response.code(), ResponseCode::Success as i32);
+        elect_response.make_custom_header_to_net();
+        let elect_response_header = elect_response
+            .decode_command_custom_header::<ElectMasterResponseHeader>()
+            .expect("decode elect response");
+        let alter_header = AlterSyncStateSetRequestHeader {
+            broker_name: CheetahString::from_static_str("broker-a"),
+            master_broker_id: 1,
+            master_epoch: elect_response_header.master_epoch.expect("master epoch"),
+        };
+        let alter_body = SyncStateSet::with_values(
+            HashSet::from([1_i64, 2_i64]),
+            elect_response_header
+                .sync_state_set_epoch
+                .expect("sync state set epoch"),
+        );
+        let alter_response = manager
+            .controller()
+            .alter_sync_state_set(&alter_header, alter_body)
+            .await
+            .expect("alter sync state")
+            .expect("alter response");
+        assert_eq!(alter_response.code(), ResponseCode::Success as i32);
+
+        let listener = BrokerInactiveListener::new(ArcMut::downgrade(&manager));
+        listener.on_broker_inactive(Some("test-cluster"), "broker-a", Some(2));
+        sleep(Duration::from_millis(300)).await;
+
+        let replica_header = GetReplicaInfoRequestHeader {
+            broker_name: CheetahString::from_static_str("broker-a"),
+        };
+        let mut replica_response = manager
+            .controller()
+            .get_replica_info(&replica_header)
+            .await
+            .expect("get replica info after inactive slave")
+            .expect("replica response");
+        replica_response.make_custom_header_to_net();
+        let replica_info = replica_response
+            .decode_command_custom_header::<GetReplicaInfoResponseHeader>()
+            .expect("decode replica info");
+        assert_eq!(replica_info.master_broker_id, Some(1));
+
+        let slave_heartbeat_header = BrokerHeartbeatRequestHeader {
+            cluster_name: CheetahString::from_static_str("test-cluster"),
+            broker_addr: CheetahString::from_static_str("127.0.0.1:10912"),
+            broker_name: CheetahString::from_static_str("broker-a"),
+            broker_id: Some(2),
+            epoch: Some(1),
+            max_offset: Some(100),
+            confirm_offset: Some(80),
+            heartbeat_timeout_mills: Some(60_000),
+            election_priority: Some(1),
+        };
+        let slave_heartbeat_response = manager
+            .controller()
+            .record_broker_heartbeat(&slave_heartbeat_header)
+            .await
+            .expect("record slave heartbeat before master inactive")
+            .expect("heartbeat response");
+        assert_eq!(slave_heartbeat_response.code(), ResponseCode::Success as i32);
+
+        listener.on_broker_inactive(Some("test-cluster"), "broker-a", Some(1));
+        let start = current_millis();
+        loop {
+            let mut replica_response = manager
+                .controller()
+                .get_replica_info(&replica_header)
+                .await
+                .expect("get replica info after inactive master")
+                .expect("replica response");
+            replica_response.make_custom_header_to_net();
+            let replica_info = replica_response
+                .decode_command_custom_header::<GetReplicaInfoResponseHeader>()
+                .expect("decode replica info");
+            if replica_info.master_broker_id == Some(2) {
+                break;
+            }
+            assert!(
+                current_millis().saturating_sub(start) < 5_000,
+                "timed out waiting for master reelection after inactive master"
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        manager.shutdown().await.expect("shutdown manager");
+        std::mem::forget(manager);
+    }
+
+    #[tokio::test]
+    async fn processor_successful_manual_election_records_role_change_notification() {
+        let port = 9887;
+        let config = ControllerConfig::default()
+            .with_node_info(1, format!("127.0.0.1:{port}").parse::<SocketAddr>().unwrap())
+            .with_heartbeat_interval_ms(100)
+            .with_election_timeout_ms(300)
+            .with_notify_broker_role_changed(true);
+
+        let manager = ArcMut::new(ControllerManager::new(config).await.expect("create manager"));
+        manager.clone().initialize().await.expect("initialize manager");
+        manager.clone().start().await.expect("start manager");
+
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            1,
+            Node {
+                node_id: 1,
+                rpc_addr: format!("127.0.0.1:{port}"),
+            },
+        );
+        manager
+            .controller()
+            .initialize_cluster(nodes)
+            .await
+            .expect("initialize cluster");
+        wait_until(Duration::from_secs(5), || manager.is_leader(), "controller leader").await;
+
+        let channel = create_test_channel().await;
+        for (broker_id, addr, check_code) in [
+            (1_i64, "127.0.0.1:10911", "master-check"),
+            (2_i64, "127.0.0.1:10912", "slave-check"),
+        ] {
+            let apply_header = ApplyBrokerIdRequestHeader {
+                cluster_name: CheetahString::from_static_str("test-cluster"),
+                broker_name: CheetahString::from_static_str("broker-a"),
+                applied_broker_id: broker_id,
+                register_check_code: CheetahString::from_string(format!("{addr};{check_code}")),
+            };
+            let apply_response = manager
+                .controller()
+                .apply_broker_id(&apply_header)
+                .await
+                .expect("apply broker id")
+                .expect("apply response");
+            assert_eq!(apply_response.code(), ResponseCode::Success as i32);
+
+            let register_header = RegisterBrokerToControllerRequestHeader {
+                cluster_name: Some(CheetahString::from_static_str("test-cluster")),
+                broker_name: Some(CheetahString::from_static_str("broker-a")),
+                broker_id: Some(broker_id),
+                broker_address: Some(CheetahString::from_static_str(addr)),
+                ..Default::default()
+            };
+            let register_response = manager
+                .controller()
+                .register_broker(&register_header)
+                .await
+                .expect("register broker")
+                .expect("register response");
+            assert_eq!(register_response.code(), ResponseCode::Success as i32);
+
+            let heartbeat_header = BrokerHeartbeatRequestHeader {
+                cluster_name: CheetahString::from_static_str("test-cluster"),
+                broker_addr: CheetahString::from_static_str(addr),
+                broker_name: CheetahString::from_static_str("broker-a"),
+                broker_id: Some(broker_id),
+                epoch: Some(1),
+                max_offset: Some(100),
+                confirm_offset: Some(80),
+                heartbeat_timeout_mills: Some(60_000),
+                election_priority: Some(1),
+            };
+            let heartbeat_response = manager
+                .controller()
+                .record_broker_heartbeat(&heartbeat_header)
+                .await
+                .expect("record replicated heartbeat")
+                .expect("heartbeat response");
+            assert_eq!(heartbeat_response.code(), ResponseCode::Success as i32);
+            manager.heartbeat_manager().on_broker_heartbeat(
+                "test-cluster",
+                "broker-a",
+                addr,
+                broker_id,
+                Some(60_000),
+                channel.clone(),
+                Some(1),
+                Some(100),
+                Some(80),
+                Some(1),
+            );
+        }
+
+        let initial_elect_header =
+            ElectMasterRequestHeader::new("test-cluster", "broker-a", 1, false, current_millis());
+        let mut initial_elect_response = manager
+            .controller()
+            .elect_master(&initial_elect_header)
+            .await
+            .expect("elect initial master")
+            .expect("initial elect response");
+        assert_eq!(initial_elect_response.code(), ResponseCode::Success as i32);
+        initial_elect_response.make_custom_header_to_net();
+        let initial_header = initial_elect_response
+            .decode_command_custom_header::<ElectMasterResponseHeader>()
+            .expect("decode initial elect response");
+
+        let alter_header = AlterSyncStateSetRequestHeader {
+            broker_name: CheetahString::from_static_str("broker-a"),
+            master_broker_id: 1,
+            master_epoch: initial_header.master_epoch.expect("master epoch"),
+        };
+        let alter_body = SyncStateSet::with_values(
+            HashSet::from([1_i64, 2_i64]),
+            initial_header.sync_state_set_epoch.expect("sync state set epoch"),
+        );
+        let alter_response = manager
+            .controller()
+            .alter_sync_state_set(&alter_header, alter_body)
+            .await
+            .expect("alter sync state")
+            .expect("alter response");
+        assert_eq!(alter_response.code(), ResponseCode::Success as i32);
+        assert!(
+            manager
+                .heartbeat_manager()
+                .is_broker_active("test-cluster", "broker-a", 2),
+            "local heartbeat manager must consider target broker active for role-change notification"
+        );
+
+        let mut processor = ControllerRequestProcessor::new(manager.clone());
+        let ctx = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ControllerElectMaster,
+            ElectMasterRequestHeader::new("test-cluster", "broker-a", 2, true, current_millis()),
+        );
+        request.make_custom_header_to_net();
+        let mut response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor elect request")
+            .expect("processor elect response");
+        response.make_custom_header_to_net();
+        assert_eq!(response.code(), ResponseCode::Success as i32);
+        let response_header = response
+            .decode_command_custom_header::<ElectMasterResponseHeader>()
+            .expect("decode processor elect response");
+        assert_eq!(response_header.master_broker_id, Some(2));
+        let response_body = ElectMasterResponseBody::decode(response.body().expect("elect response body").as_ref())
+            .expect("decode processor elect response body");
+        assert!(
+            response_body.broker_member_group.is_some(),
+            "successful manual election must carry broker member group for role-change notification"
+        );
+
+        wait_until(
+            Duration::from_secs(2),
+            || {
+                let key = NotifyCacheKey {
+                    cluster_name: "test-cluster".to_string(),
+                    broker_name: "broker-a".to_string(),
+                    broker_id: 2,
+                };
+                manager.notify_cache.read().contains_key(&key) || manager.pending_notify_state.read().contains_key(&key)
+            },
+            "processor elect-master to record broker role notification",
+        )
+        .await;
+
+        manager.shutdown().await.expect("shutdown manager");
+        std::mem::forget(processor);
         std::mem::forget(manager);
     }
 }

@@ -26,12 +26,15 @@ use std::time::Duration;
 
 use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::openraft::GrpcRaftService;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+use rocketmq_controller::typ::BrokerIdentityInfoSnapshot;
+use rocketmq_controller::typ::BrokerLiveInfoSnapshot;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::ControllerResponseHeader;
 use rocketmq_controller::typ::Node;
@@ -57,6 +60,29 @@ fn raft_node(node_id: u64, base_port: u16) -> Node {
     Node {
         node_id,
         rpc_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
+    }
+}
+
+fn broker_heartbeat_request(
+    cluster_name: &str,
+    broker_name: &str,
+    broker_addr: &str,
+    broker_id: u64,
+) -> ControllerRequest {
+    ControllerRequest::BrokerHeartbeat {
+        broker_identity: BrokerIdentityInfoSnapshot::new(cluster_name, broker_name, Some(broker_id)),
+        broker_live_info: BrokerLiveInfoSnapshot {
+            cluster_name: cluster_name.to_string(),
+            broker_name: broker_name.to_string(),
+            broker_addr: broker_addr.to_string(),
+            broker_id,
+            last_update_timestamp: current_millis(),
+            heartbeat_timeout_millis: 60_000,
+            epoch: 1,
+            max_offset: 100,
+            confirm_offset: 80,
+            election_priority: Some(1),
+        },
     }
 }
 
@@ -319,6 +345,18 @@ async fn seed_replica_group_state(
         .await
         .expect("register replica broker");
     assert_eq!(register_replica.data.response_code, ResponseCode::Success as i32);
+
+    node.client_write(broker_heartbeat_request("test-cluster", broker_name, master_address, 1))
+        .await
+        .expect("replicate master heartbeat");
+    node.client_write(broker_heartbeat_request(
+        "test-cluster",
+        broker_name,
+        replica_address,
+        2,
+    ))
+    .await
+    .expect("replicate replica heartbeat");
 
     let elect_master = node
         .client_write(ControllerRequest::ElectMaster {

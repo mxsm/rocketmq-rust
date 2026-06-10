@@ -33,6 +33,7 @@
 //! Upper layer components must call methods sequentially to update the state machine.
 //! Methods return `ControllerResult` containing events that should be applied via `apply_event`.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -41,6 +42,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
@@ -54,6 +56,7 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response
 use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
@@ -74,12 +77,16 @@ use crate::event::update_broker_address_event::UpdateBrokerAddressEvent;
 use crate::helper::broker_valid_predicate::BrokerValidPredicate;
 use crate::manager::broker_replica_info::BrokerReplicaInfo;
 use crate::manager::sync_state_info::SyncStateInfo;
+use crate::typ::BrokerIdentityInfoSnapshot;
+use crate::typ::BrokerLiveInfoSnapshot;
 
 /// Serialization structure for state machine persistence
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SerializedState {
     replica_info_table: HashMap<String, BrokerReplicaInfo>,
     sync_state_set_info_table: HashMap<String, SyncStateInfo>,
+    #[serde(default)]
+    broker_live_table: Vec<(BrokerIdentityInfoSnapshot, BrokerLiveInfoSnapshot)>,
 }
 
 /// The manager that manages the replicas info for all brokers.
@@ -101,6 +108,10 @@ pub struct ReplicasInfoManager {
     /// Sync state set information table: broker_name -> SyncStateInfo
     /// Thread-safe concurrent map
     sync_state_set_info_table: Arc<DashMap<CheetahString, SyncStateInfo>>,
+
+    /// Replicated broker liveness table, equivalent to Java RaftReplicasInfoManager
+    /// brokerLiveTable.
+    broker_live_table: Arc<DashMap<BrokerIdentityInfoSnapshot, BrokerLiveInfoSnapshot>>,
 }
 
 impl ReplicasInfoManager {
@@ -110,6 +121,7 @@ impl ReplicasInfoManager {
             config,
             replica_info_table: Arc::new(DashMap::new()),
             sync_state_set_info_table: Arc::new(DashMap::new()),
+            broker_live_table: Arc::new(DashMap::new()),
         }
     }
 
@@ -250,7 +262,7 @@ impl ReplicasInfoManager {
         // Encode sync state set
         let sync_state_set_i64: HashSet<i64> = new_sync_state_set.iter().map(|&id| id as i64).collect();
         let sync_state_set_data = SyncStateSet::with_values(sync_state_set_i64, new_epoch);
-        result.set_body(Bytes::from(serde_json::to_vec(&sync_state_set_data).unwrap()));
+        result.set_body(Bytes::from(sync_state_set_data.encode().unwrap()));
 
         let event = AlterSyncStateSetEvent::new(broker_name, new_sync_state_set);
         result.add_event(Arc::new(event));
@@ -360,9 +372,9 @@ impl ReplicasInfoManager {
                     sync_state_set.iter().map(|&id| id as i64).collect();
                 let body = ElectMasterResponseBody {
                     sync_state_set: sync_state_set_i64,
-                    broker_member_group: Some(self.build_broker_member_group(&broker_replica_info)),
+                    broker_member_group: None,
                 };
-                result.set_body(Bytes::from(serde_json::to_vec(&body).unwrap()));
+                result.set_body(Bytes::from(body.encode().unwrap()));
                 result.set_code_and_remark(ResponseCode::ControllerMasterStillExist, &err);
                 return result;
             }
@@ -388,7 +400,7 @@ impl ReplicasInfoManager {
                 sync_state_set: sync_state_set_i64,
                 broker_member_group: Some(self.build_broker_member_group(&broker_replica_info)),
             };
-            result.set_body(Bytes::from(serde_json::to_vec(&body).unwrap()));
+            result.set_body(Bytes::from(body.encode().unwrap()));
 
             let event = ElectMasterEvent::with_new_master(broker_name, new_m);
             result.add_event(Arc::new(event));
@@ -558,7 +570,7 @@ impl ReplicasInfoManager {
 
         let sync_state_set_i64: HashSet<i64> = sync_state_info.sync_state_set().iter().map(|&id| id as i64).collect();
         let sync_state_set_data = SyncStateSet::with_values(sync_state_set_i64, sync_state_info.sync_state_set_epoch());
-        result.set_body(Bytes::from(serde_json::to_vec(&sync_state_set_data).unwrap()));
+        result.set_body(Bytes::from(sync_state_set_data.encode().unwrap()));
 
         // If this broker's address has been changed, we need to update it
         if let Some(current_addr) = broker_replica_info.get_broker_address(broker_id) {
@@ -598,7 +610,7 @@ impl ReplicasInfoManager {
                 sync_state_info.sync_state_set().iter().map(|&id| id as i64).collect();
             let sync_state_set_data =
                 SyncStateSet::with_values(sync_state_set_i64, sync_state_info.sync_state_set_epoch());
-            result.set_body(Bytes::from(serde_json::to_vec(&sync_state_set_data).unwrap()));
+            result.set_body(Bytes::from(sync_state_set_data.encode().unwrap()));
         } else {
             result.set_code_and_remark(
                 ResponseCode::ControllerBrokerMetadataNotExist,
@@ -675,7 +687,7 @@ impl ReplicasInfoManager {
             broker_replicas_info.add_replica_info(CheetahString::from_string(broker_name.to_string()), replicas_info);
         }
 
-        result.set_body(Bytes::from(serde_json::to_vec(&broker_replicas_info).unwrap()));
+        result.set_body(Bytes::from(broker_replicas_info.encode().unwrap()));
         result
     }
 
@@ -789,6 +801,132 @@ impl ReplicasInfoManager {
         need_reelect_broker_sets
     }
 
+    /// Apply a replicated broker heartbeat.
+    ///
+    /// This mirrors Java RaftReplicasInfoManager: timestamps, timeout and election priority
+    /// are always refreshed, while epoch/offset state only moves forward.
+    pub fn on_broker_heartbeat(
+        &self,
+        broker_identity: BrokerIdentityInfoSnapshot,
+        broker_live_info: BrokerLiveInfoSnapshot,
+    ) {
+        let broker_identity = BrokerIdentityInfoSnapshot::new(
+            broker_identity.cluster_name,
+            broker_identity.broker_name,
+            Some(broker_live_info.broker_id),
+        );
+
+        if let Some(mut prev) = self.broker_live_table.get_mut(&broker_identity) {
+            prev.broker_addr = broker_live_info.broker_addr;
+            prev.last_update_timestamp = broker_live_info.last_update_timestamp;
+            prev.heartbeat_timeout_millis = broker_live_info.heartbeat_timeout_millis;
+            prev.election_priority = broker_live_info.election_priority;
+
+            if broker_live_info.epoch > prev.epoch
+                || (broker_live_info.epoch == prev.epoch && broker_live_info.max_offset > prev.max_offset)
+            {
+                prev.epoch = broker_live_info.epoch;
+                prev.max_offset = broker_live_info.max_offset;
+                prev.confirm_offset = broker_live_info.confirm_offset;
+            }
+        } else {
+            info!(
+                "new broker live info replicated, {}, brokerId:{}",
+                broker_identity, broker_live_info.broker_id
+            );
+            self.broker_live_table.insert(broker_identity, broker_live_info);
+        }
+    }
+
+    /// Remove a broker from the replicated live table after a channel close event.
+    pub fn on_broker_channel_close(
+        &self,
+        broker_identity: &BrokerIdentityInfoSnapshot,
+    ) -> Option<BrokerIdentityInfoSnapshot> {
+        self.broker_live_table
+            .remove(broker_identity)
+            .map(|(identity, _)| identity)
+    }
+
+    /// Remove expired brokers and return broker inactive events to notify.
+    pub fn check_not_active_broker(&self, check_time_millis: u64) -> Vec<BrokerIdentityInfoSnapshot> {
+        let mut inactive_brokers = Vec::new();
+
+        for entry in self.broker_live_table.iter() {
+            let live_info = entry.value();
+            if !live_info.is_active_at(check_time_millis) {
+                inactive_brokers.push(entry.key().clone());
+            }
+        }
+
+        for broker_identity in &inactive_brokers {
+            self.broker_live_table.remove(broker_identity);
+            warn!(
+                "The broker channel expired, brokerInfo {}, checkTime={}",
+                broker_identity, check_time_millis
+            );
+        }
+
+        let mut broker_sets_already_reported: HashSet<String> = inactive_brokers
+            .iter()
+            .map(|identity| identity.broker_name.clone())
+            .collect();
+        for broker_name in self.scan_need_reelect_broker_sets(self) {
+            if !broker_sets_already_reported.insert(broker_name.clone()) {
+                continue;
+            }
+            inactive_brokers.push(BrokerIdentityInfoSnapshot::new(
+                self.cluster_name(&broker_name).unwrap_or_default(),
+                broker_name,
+                None,
+            ));
+        }
+
+        inactive_brokers
+    }
+
+    pub fn is_broker_active_at(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        broker_id: i64,
+        check_time_millis: u64,
+    ) -> bool {
+        if broker_id < 0 {
+            return false;
+        }
+
+        let identity = BrokerIdentityInfoSnapshot::new(cluster_name, broker_name, Some(broker_id as u64));
+        self.broker_live_table
+            .get(&identity)
+            .is_some_and(|live_info| live_info.is_active_at(check_time_millis))
+    }
+
+    pub fn is_broker_active(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> bool {
+        self.is_broker_active_at(cluster_name, broker_name, broker_id, current_millis())
+    }
+
+    pub fn get_broker_live_info(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        broker_id: i64,
+    ) -> Option<BrokerLiveInfoSnapshot> {
+        if broker_id < 0 {
+            return None;
+        }
+
+        let identity = BrokerIdentityInfoSnapshot::new(cluster_name, broker_name, Some(broker_id as u64));
+        self.broker_live_table.get(&identity).map(|entry| entry.clone())
+    }
+
+    pub fn active_broker_ids(&self, cluster_name: &str, broker_name: &str) -> HashSet<u64> {
+        self.broker_ids(broker_name)
+            .into_iter()
+            .filter(|broker_id| self.is_broker_active(cluster_name, broker_name, *broker_id as i64))
+            .collect()
+    }
+
     /// Apply events to memory state machine
     ///
     /// # Thread Safety
@@ -838,6 +976,11 @@ impl ReplicasInfoManager {
                 .iter()
                 .map(|entry| (entry.key().to_string(), entry.value().clone()))
                 .collect(),
+            broker_live_table: self
+                .broker_live_table
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect(),
         };
 
         serde_json::to_vec(&state).map_err(|e| ControllerError::SerializationError(e.to_string()))
@@ -850,6 +993,7 @@ impl ReplicasInfoManager {
 
         self.replica_info_table.clear();
         self.sync_state_set_info_table.clear();
+        self.broker_live_table.clear();
 
         for (key, value) in state.replica_info_table {
             self.replica_info_table.insert(CheetahString::from_string(key), value);
@@ -858,6 +1002,10 @@ impl ReplicasInfoManager {
         for (key, value) in state.sync_state_set_info_table {
             self.sync_state_set_info_table
                 .insert(CheetahString::from_string(key), value);
+        }
+
+        for (key, value) in state.broker_live_table {
+            self.broker_live_table.insert(key, value);
         }
 
         Ok(())
@@ -1013,6 +1161,86 @@ impl ReplicasInfoManager {
             self.replica_info_table.remove(broker_name);
             self.sync_state_set_info_table.remove(broker_name);
         }
+    }
+}
+
+fn compare_live_info(left: &BrokerLiveInfoSnapshot, right: &BrokerLiveInfoSnapshot) -> Ordering {
+    match right.epoch.cmp(&left.epoch) {
+        Ordering::Equal => match right.max_offset.cmp(&left.max_offset) {
+            Ordering::Equal => left
+                .election_priority
+                .unwrap_or(i32::MAX)
+                .cmp(&right.election_priority.unwrap_or(i32::MAX)),
+            other => other,
+        },
+        other => other,
+    }
+}
+
+impl BrokerValidPredicate for ReplicasInfoManager {
+    fn check(&self, cluster_name: &str, broker_name: &str, broker_id: Option<i64>) -> bool {
+        broker_id.is_some_and(|broker_id| self.is_broker_active(cluster_name, broker_name, broker_id))
+    }
+}
+
+impl ReplicasInfoManager {
+    fn try_elect_from_live_table(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        brokers: &HashSet<i64>,
+        old_master: Option<i64>,
+        prefer_broker_id: Option<i64>,
+    ) -> Option<i64> {
+        let valid_brokers: HashSet<i64> = brokers
+            .iter()
+            .copied()
+            .filter(|broker_id| self.is_broker_active(cluster_name, broker_name, *broker_id))
+            .collect();
+
+        if valid_brokers.is_empty() {
+            return None;
+        }
+
+        if let Some(old_master_id) = old_master {
+            if valid_brokers.contains(&old_master_id)
+                && (prefer_broker_id.is_none() || prefer_broker_id == Some(old_master_id))
+            {
+                return Some(old_master_id);
+            }
+        }
+
+        if let Some(preferred_id) = prefer_broker_id {
+            return valid_brokers.contains(&preferred_id).then_some(preferred_id);
+        }
+
+        let mut broker_infos: Vec<BrokerLiveInfoSnapshot> = valid_brokers
+            .iter()
+            .filter_map(|broker_id| self.get_broker_live_info(cluster_name, broker_name, *broker_id))
+            .collect();
+        broker_infos.sort_by(compare_live_info);
+
+        broker_infos
+            .first()
+            .map(|broker| broker.broker_id as i64)
+            .or_else(|| valid_brokers.iter().min().copied())
+    }
+}
+
+impl ElectPolicy for ReplicasInfoManager {
+    fn elect(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        sync_state_brokers: &HashSet<i64>,
+        all_replica_brokers: &HashSet<i64>,
+        old_master: Option<i64>,
+        broker_id: Option<i64>,
+    ) -> Option<i64> {
+        self.try_elect_from_live_table(cluster_name, broker_name, sync_state_brokers, old_master, broker_id)
+            .or_else(|| {
+                self.try_elect_from_live_table(cluster_name, broker_name, all_replica_brokers, old_master, broker_id)
+            })
     }
 }
 

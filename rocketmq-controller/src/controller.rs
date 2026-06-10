@@ -473,8 +473,8 @@ pub trait Controller: Send + Sync {
     /// struct MyListener;
     ///
     /// impl BrokerLifecycleListener for MyListener {
-    ///     fn on_broker_inactive(&self, cluster: &str, broker: &str, id: i64) {
-    ///         log::warn!("Broker {}/{}/{} is now inactive", cluster, broker, id);
+    ///     fn on_broker_inactive(&self, cluster: Option<&str>, broker: &str, id: Option<i64>) {
+    ///         log::warn!("Broker {:?}/{}/ {:?} is now inactive", cluster, broker, id);
     ///     }
     /// }
     ///

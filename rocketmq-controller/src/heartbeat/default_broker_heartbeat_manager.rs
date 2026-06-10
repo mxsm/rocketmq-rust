@@ -83,12 +83,13 @@ impl DefaultBrokerHeartbeatManager {
     ///
     /// * `config` - Controller configuration
     pub fn new(config: ArcMut<ControllerConfig>) -> Self {
+        let scan_interval_ms = config.scan_not_active_broker_interval.max(1);
         Self {
             config,
             broker_live_table: Arc::new(DashMap::with_capacity(256)),
             lifecycle_listeners: Vec::new(),
             scan_task_handle: None,
-            scan_interval_ms: 2000, // Default: scan every 2 seconds
+            scan_interval_ms,
         }
     }
 
@@ -144,7 +145,11 @@ impl DefaultBrokerHeartbeatManager {
 
             // Notify all listeners
             for listener in listeners.iter() {
-                listener.on_broker_inactive(&identity.cluster_name, &identity.broker_name, broker_id);
+                listener.on_broker_inactive(
+                    Some(identity.cluster_name.as_str()),
+                    identity.broker_name.as_str(),
+                    Some(broker_id),
+                );
             }
         }
     }
@@ -157,7 +162,7 @@ impl DefaultBrokerHeartbeatManager {
         broker_id: i64,
     ) {
         for listener in listeners.iter() {
-            listener.on_broker_inactive(cluster_name, broker_name, broker_id);
+            listener.on_broker_inactive(Some(cluster_name), broker_name, Some(broker_id));
         }
     }
 }
@@ -267,16 +272,11 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
     fn on_broker_channel_close(&self, channel: &Channel) {
         let mut broker_identity_to_remove = None;
         let mut broker_info_for_notify = None;
-        let mut should_remove = false;
-        let now_millis = current_millis();
-
         // Find the broker with this channel
         for entry in self.broker_live_table.iter() {
             if entry.value().channel() == channel {
                 let identity = entry.key().clone();
                 let live_info = entry.value();
-                let last_update_timestamp = live_info.last_update_timestamp();
-                let timeout_millis = live_info.heartbeat_timeout_millis();
 
                 info!(
                     "Channel inactive, broker {}, addr:{}, id:{}",
@@ -285,39 +285,25 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
                     live_info.broker_id()
                 );
 
-                if now_millis > last_update_timestamp + timeout_millis {
-                    broker_identity_to_remove = Some(identity.clone());
-                    broker_info_for_notify = Some((
-                        identity.cluster_name.to_string(),
-                        live_info.broker_name().to_string(),
-                        live_info.broker_id(),
-                    ));
-                    should_remove = true;
-                } else {
-                    info!(
-                        "Ignore broker channel close before heartbeat timeout, broker={}, addr={}, id={}, \
-                         remaining={}ms",
-                        live_info.broker_name(),
-                        live_info.broker_addr(),
-                        live_info.broker_id(),
-                        last_update_timestamp + timeout_millis - now_millis
-                    );
-                }
+                broker_identity_to_remove = Some(identity.clone());
+                broker_info_for_notify = Some((
+                    identity.cluster_name.to_string(),
+                    live_info.broker_name().to_string(),
+                    live_info.broker_id(),
+                ));
                 break;
             }
         }
 
         // Remove broker and notify listeners
-        if should_remove {
-            if let Some(identity) = broker_identity_to_remove {
-                self.broker_live_table.remove(&identity);
+        if let Some(identity) = broker_identity_to_remove {
+            self.broker_live_table.remove(&identity);
 
-                if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
-                    let listeners = Arc::new(self.lifecycle_listeners.clone());
-                    tokio::spawn(async move {
-                        Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id).await;
-                    });
-                }
+            if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
+                let listeners = Arc::new(self.lifecycle_listeners.clone());
+                tokio::spawn(async move {
+                    Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id).await;
+                });
             }
         }
     }
@@ -429,6 +415,6 @@ mod tests {
     fn test_default_broker_heartbeat_manager_creation() {
         let config = ArcMut::new(ControllerConfig::test_config());
         let manager = DefaultBrokerHeartbeatManager::new(config.clone());
-        assert_eq!(manager.scan_interval_ms, 2000);
+        assert_eq!(manager.scan_interval_ms, config.scan_not_active_broker_interval);
     }
 }
