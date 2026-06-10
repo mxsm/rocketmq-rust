@@ -12,7 +12,10 @@
 - `rocketmq-dashboard/rocketmq-dashboard-gpui/` is a standalone Cargo project.
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/` is the Tauri app root, not a Cargo workspace root.
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` is the standalone Rust backend for the Tauri app.
-- Root workspace validation does not validate standalone projects.
+- `rocketmq-dashboard/rocketmq-dashboard-web/` is the Web Dashboard root, not a Cargo workspace root.
+- `rocketmq-dashboard/rocketmq-dashboard-web/backend/` is the standalone Rust backend for the Web Dashboard.
+- `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` is the standalone React + TypeScript + Vite frontend for the Web Dashboard.
+- Root workspace validation does not validate standalone projects or Node/Vite frontend projects.
 
 ## Codex workflow
 - Before editing, inspect the relevant files and check the worktree state with `git status --short`.
@@ -56,6 +59,8 @@ Root workspace commands do not cover standalone projects. If changes affect one 
 - `rocketmq-example/`
 - `rocketmq-dashboard/rocketmq-dashboard-gpui/`
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`
+- `rocketmq-dashboard/rocketmq-dashboard-web/backend/`
+- `rocketmq-dashboard/rocketmq-dashboard-web/frontend/`
 
 When no deeper instruction gives a different command, use:
 
@@ -65,6 +70,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 For `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend changes, follow the dashboard `AGENTS.md` in that directory.
+For `rocketmq-dashboard/rocketmq-dashboard-web/` changes, follow the nearest Web Dashboard `AGENTS.md`; backend validation runs from `backend/`, and frontend validation runs from `frontend/`.
 
 ## Testing policy
 - Run tests only for the modified area by default.

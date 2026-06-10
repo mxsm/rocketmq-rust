@@ -46,6 +46,7 @@ When in `rocketmq-example` or dashboard projects:
 - Change to that directory first
 - Run validation commands from there
 - Don't assume workspace commands cover these
+- For `rocketmq-dashboard-web`, choose the affected subproject: `backend/` uses Cargo validation, and `frontend/` uses npm/Vite validation
 
 ## Crate Dependencies
 

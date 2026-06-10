@@ -42,6 +42,30 @@ Running `cargo` commands from the repository root will not validate these projec
   cargo test
   ```
 
+### 4. rocketmq-dashboard-web (Backend)
+- **Location**: `rocketmq-dashboard/rocketmq-dashboard-web/backend/`
+- **Purpose**: Web Dashboard Rust 2024 + Axum HTTP API
+- **Note**: The Web Dashboard backend is NOT part of the root Cargo workspace
+- **Validation**:
+  ```bash
+  cd rocketmq-dashboard/rocketmq-dashboard-web/backend
+  cargo fmt --all
+  cargo clippy --all-targets --all-features -- -D warnings
+  cargo build --all-targets --all-features
+  cargo test
+  ```
+
+### 5. rocketmq-dashboard-web (Frontend)
+- **Location**: `rocketmq-dashboard/rocketmq-dashboard-web/frontend/`
+- **Purpose**: Web Dashboard React + TypeScript + Vite frontend
+- **Note**: Root Cargo workspace validation does not cover this Node/Vite project
+- **Validation**:
+  ```bash
+  cd rocketmq-dashboard/rocketmq-dashboard-web/frontend
+  npm ci
+  npm run build
+  ```
+
 ## Shared Code Impact Rule
 
 When you modify a shared crate that standalone projects depend on:
@@ -71,6 +95,9 @@ cargo test
 # Check if dashboard projects use it
 cd ../rocketmq-dashboard/rocketmq-dashboard-gpui
 cargo clippy -- -D warnings
+
+cd ../rocketmq-dashboard-web/backend
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ## Why This Matters

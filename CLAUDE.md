@@ -34,6 +34,8 @@ These require separate validation in their own directories:
 - `rocketmq-example` - Example applications
 - `rocketmq-dashboard/rocketmq-dashboard-gpui` - GPUI-based dashboard
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri` - Tauri app backend
+- `rocketmq-dashboard/rocketmq-dashboard-web/backend` - Web Dashboard Rust 2024 + Axum backend
+- `rocketmq-dashboard/rocketmq-dashboard-web/frontend` - Web Dashboard React + TypeScript + Vite frontend
 
 ## Validation Rules
 
@@ -62,7 +64,20 @@ Root workspace commands do NOT cover standalone projects. When modifying:
 - `rocketmq-dashboard/rocketmq-dashboard-gpui` → validate in that directory
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri` → validate in that directory
 
+- `rocketmq-dashboard/rocketmq-dashboard-web/backend` -> validate in that directory
+- `rocketmq-dashboard/rocketmq-dashboard-web/frontend` -> run frontend validation in that directory
+
 If shared crate changes affect standalone projects, validate those too.
+
+For Web Dashboard frontend changes:
+
+```bash
+cd rocketmq-dashboard/rocketmq-dashboard-web/frontend
+npm ci
+npm run build
+```
+
+For Web Dashboard backend Rust changes, follow the local instructions in `rocketmq-dashboard/rocketmq-dashboard-web/backend/`.
 
 ## Working Principles
 
