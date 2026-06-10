@@ -42,6 +42,7 @@ Root workspace commands do **NOT** cover these projects:
 - `rocketmq-example/`
 - `rocketmq-dashboard/rocketmq-dashboard-gpui/`
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`
+- `rocketmq-dashboard/rocketmq-dashboard-web/backend/`
 
 For standalone projects, **cd into the directory first**:
 
@@ -50,6 +51,8 @@ cd rocketmq-example
 cargo fmt
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+The Web Dashboard frontend is a standalone Node/Vite project, not a Rust project. Follow `rocketmq-dashboard/rocketmq-dashboard-web/frontend/AGENTS.md` for `npm ci` and `npm run build`.
 
 ## Validation Scope
 

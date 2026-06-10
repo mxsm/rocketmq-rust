@@ -80,4 +80,11 @@ For standalone projects, run tests from their directory:
 cd rocketmq-example && cargo test
 cd rocketmq-dashboard/rocketmq-dashboard-gpui && cargo test
 cd rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri && cargo test
+cd rocketmq-dashboard/rocketmq-dashboard-web/backend && cargo test
+```
+
+For `rocketmq-dashboard/rocketmq-dashboard-web/frontend`, use the frontend validation command instead of Cargo tests:
+
+```bash
+cd rocketmq-dashboard/rocketmq-dashboard-web/frontend && npm run build
 ```
