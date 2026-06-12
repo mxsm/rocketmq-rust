@@ -18,6 +18,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_auth::authentication::model::user::User;
+use rocketmq_auth::authorization::model::acl::Acl;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
@@ -25,6 +27,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::runtime::RPCHook;
 
 use crate::cluster::ClusterClient;
 use crate::config::ClusterConfig;
@@ -135,6 +138,14 @@ pub trait MetadataService: Send + Sync {
         topic: &ResourceIdentity,
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>>;
+
+    async fn user(&self, _context: &ProxyContext, _username: &str) -> ProxyResult<Option<User>> {
+        Ok(None)
+    }
+
+    async fn acl(&self, _context: &ProxyContext, _subject: &str) -> ProxyResult<Option<Acl>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -562,6 +573,14 @@ impl MetadataService for ClusterMetadataService {
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
         self.client.query_subscription_group(topic, group).await
     }
+
+    async fn user(&self, _context: &ProxyContext, username: &str) -> ProxyResult<Option<User>> {
+        self.client.query_user(username).await
+    }
+
+    async fn acl(&self, _context: &ProxyContext, subject: &str) -> ProxyResult<Option<Acl>> {
+        self.client.query_acl(subject).await
+    }
 }
 
 pub struct ClusterAssignmentService {
@@ -776,6 +795,12 @@ impl ClusterServiceManager {
 
     pub fn from_cluster_config(config: ClusterConfig) -> Self {
         Self::from_cluster_client(Arc::new(crate::cluster::RocketmqClusterClient::new(config)))
+    }
+
+    pub fn from_cluster_config_with_rpc_hook(config: ClusterConfig, rpc_hook: Option<Arc<dyn RPCHook>>) -> Self {
+        Self::from_cluster_client(Arc::new(crate::cluster::RocketmqClusterClient::with_rpc_hook(
+            config, rpc_hook,
+        )))
     }
 }
 

@@ -453,8 +453,32 @@ mod defaults {
         false
     }
 
+    pub fn authentication_provider() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn authentication_metadata_provider() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn authentication_strategy() -> CheetahString {
+        CheetahString::new()
+    }
+
     pub fn authorization_enabled() -> bool {
         false
+    }
+
+    pub fn authorization_provider() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn authorization_metadata_provider() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn authorization_strategy() -> CheetahString {
+        CheetahString::new()
     }
 
     pub fn authentication_whitelist() -> CheetahString {
@@ -479,6 +503,50 @@ mod defaults {
 
     pub fn request_timestamp_expired_millis() -> u64 {
         0
+    }
+
+    pub fn migrate_auth_from_v1_enabled() -> bool {
+        false
+    }
+
+    pub fn user_cache_max_num() -> u32 {
+        1000
+    }
+
+    pub fn user_cache_expired_second() -> u32 {
+        600
+    }
+
+    pub fn user_cache_refresh_second() -> u32 {
+        60
+    }
+
+    pub fn acl_cache_max_num() -> u32 {
+        1000
+    }
+
+    pub fn acl_cache_expired_second() -> u32 {
+        600
+    }
+
+    pub fn acl_cache_refresh_second() -> u32 {
+        60
+    }
+
+    pub fn stateful_authentication_cache_max_num() -> u32 {
+        10000
+    }
+
+    pub fn stateful_authentication_cache_expired_second() -> u32 {
+        60
+    }
+
+    pub fn stateful_authorization_cache_max_num() -> u32 {
+        10000
+    }
+
+    pub fn stateful_authorization_cache_expired_second() -> u32 {
+        60
     }
 
     pub fn transaction_check_interval() -> u64 {
@@ -1080,8 +1148,26 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::authentication_enabled")]
     pub authentication_enabled: bool,
 
+    #[serde(default = "defaults::authentication_provider")]
+    pub authentication_provider: CheetahString,
+
+    #[serde(default = "defaults::authentication_metadata_provider")]
+    pub authentication_metadata_provider: CheetahString,
+
+    #[serde(default = "defaults::authentication_strategy")]
+    pub authentication_strategy: CheetahString,
+
     #[serde(default = "defaults::authorization_enabled")]
     pub authorization_enabled: bool,
+
+    #[serde(default = "defaults::authorization_provider")]
+    pub authorization_provider: CheetahString,
+
+    #[serde(default = "defaults::authorization_metadata_provider")]
+    pub authorization_metadata_provider: CheetahString,
+
+    #[serde(default = "defaults::authorization_strategy")]
+    pub authorization_strategy: CheetahString,
 
     #[serde(default = "defaults::authentication_whitelist")]
     pub authentication_whitelist: CheetahString,
@@ -1100,6 +1186,39 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::request_timestamp_expired_millis")]
     pub request_timestamp_expired_millis: u64,
+
+    #[serde(default = "defaults::migrate_auth_from_v1_enabled")]
+    pub migrate_auth_from_v1_enabled: bool,
+
+    #[serde(default = "defaults::user_cache_max_num")]
+    pub user_cache_max_num: u32,
+
+    #[serde(default = "defaults::user_cache_expired_second")]
+    pub user_cache_expired_second: u32,
+
+    #[serde(default = "defaults::user_cache_refresh_second")]
+    pub user_cache_refresh_second: u32,
+
+    #[serde(default = "defaults::acl_cache_max_num")]
+    pub acl_cache_max_num: u32,
+
+    #[serde(default = "defaults::acl_cache_expired_second")]
+    pub acl_cache_expired_second: u32,
+
+    #[serde(default = "defaults::acl_cache_refresh_second")]
+    pub acl_cache_refresh_second: u32,
+
+    #[serde(default = "defaults::stateful_authentication_cache_max_num")]
+    pub stateful_authentication_cache_max_num: u32,
+
+    #[serde(default = "defaults::stateful_authentication_cache_expired_second")]
+    pub stateful_authentication_cache_expired_second: u32,
+
+    #[serde(default = "defaults::stateful_authorization_cache_max_num")]
+    pub stateful_authorization_cache_max_num: u32,
+
+    #[serde(default = "defaults::stateful_authorization_cache_expired_second")]
+    pub stateful_authorization_cache_expired_second: u32,
 }
 
 impl Default for BrokerConfig {
@@ -1259,13 +1378,30 @@ impl Default for BrokerConfig {
             acl_file_watch_enabled: defaults::acl_file_watch_enabled(),
             acl_file_watch_interval_millis: defaults::acl_file_watch_interval_millis(),
             authentication_enabled: defaults::authentication_enabled(),
+            authentication_provider: defaults::authentication_provider(),
+            authentication_metadata_provider: defaults::authentication_metadata_provider(),
+            authentication_strategy: defaults::authentication_strategy(),
             authorization_enabled: defaults::authorization_enabled(),
+            authorization_provider: defaults::authorization_provider(),
+            authorization_metadata_provider: defaults::authorization_metadata_provider(),
+            authorization_strategy: defaults::authorization_strategy(),
             authentication_whitelist: defaults::authentication_whitelist(),
             authorization_whitelist: defaults::authorization_whitelist(),
             init_authentication_user: defaults::init_authentication_user(),
             inner_client_authentication_credentials: defaults::inner_client_authentication_credentials(),
             signature_algorithm: defaults::signature_algorithm(),
             request_timestamp_expired_millis: defaults::request_timestamp_expired_millis(),
+            migrate_auth_from_v1_enabled: defaults::migrate_auth_from_v1_enabled(),
+            user_cache_max_num: defaults::user_cache_max_num(),
+            user_cache_expired_second: defaults::user_cache_expired_second(),
+            user_cache_refresh_second: defaults::user_cache_refresh_second(),
+            acl_cache_max_num: defaults::acl_cache_max_num(),
+            acl_cache_expired_second: defaults::acl_cache_expired_second(),
+            acl_cache_refresh_second: defaults::acl_cache_refresh_second(),
+            stateful_authentication_cache_max_num: defaults::stateful_authentication_cache_max_num(),
+            stateful_authentication_cache_expired_second: defaults::stateful_authentication_cache_expired_second(),
+            stateful_authorization_cache_max_num: defaults::stateful_authorization_cache_max_num(),
+            stateful_authorization_cache_expired_second: defaults::stateful_authorization_cache_expired_second(),
         }
     }
 }
@@ -1638,16 +1774,71 @@ impl BrokerConfig {
             "authenticationEnabled".into(),
             self.authentication_enabled.to_string().into(),
         );
+        properties.insert("authenticationProvider".into(), self.authentication_provider.clone());
+        properties.insert(
+            "authenticationMetadataProvider".into(),
+            self.authentication_metadata_provider.clone(),
+        );
+        properties.insert("authenticationStrategy".into(), self.authentication_strategy.clone());
         properties.insert(
             "authorizationEnabled".into(),
             self.authorization_enabled.to_string().into(),
         );
+        properties.insert("authorizationProvider".into(), self.authorization_provider.clone());
+        properties.insert(
+            "authorizationMetadataProvider".into(),
+            self.authorization_metadata_provider.clone(),
+        );
+        properties.insert("authorizationStrategy".into(), self.authorization_strategy.clone());
         properties.insert("authenticationWhitelist".into(), self.authentication_whitelist.clone());
         properties.insert("authorizationWhitelist".into(), self.authorization_whitelist.clone());
+        properties.insert("initAuthenticationUser".into(), self.init_authentication_user.clone());
+        properties.insert(
+            "innerClientAuthenticationCredentials".into(),
+            self.inner_client_authentication_credentials.clone(),
+        );
         properties.insert("signatureAlgorithm".into(), self.signature_algorithm.clone());
         properties.insert(
             "requestTimestampExpiredMillis".into(),
             self.request_timestamp_expired_millis.to_string().into(),
+        );
+        properties.insert(
+            "migrateAuthFromV1Enabled".into(),
+            self.migrate_auth_from_v1_enabled.to_string().into(),
+        );
+        properties.insert("userCacheMaxNum".into(), self.user_cache_max_num.to_string().into());
+        properties.insert(
+            "userCacheExpiredSecond".into(),
+            self.user_cache_expired_second.to_string().into(),
+        );
+        properties.insert(
+            "userCacheRefreshSecond".into(),
+            self.user_cache_refresh_second.to_string().into(),
+        );
+        properties.insert("aclCacheMaxNum".into(), self.acl_cache_max_num.to_string().into());
+        properties.insert(
+            "aclCacheExpiredSecond".into(),
+            self.acl_cache_expired_second.to_string().into(),
+        );
+        properties.insert(
+            "aclCacheRefreshSecond".into(),
+            self.acl_cache_refresh_second.to_string().into(),
+        );
+        properties.insert(
+            "statefulAuthenticationCacheMaxNum".into(),
+            self.stateful_authentication_cache_max_num.to_string().into(),
+        );
+        properties.insert(
+            "statefulAuthenticationCacheExpiredSecond".into(),
+            self.stateful_authentication_cache_expired_second.to_string().into(),
+        );
+        properties.insert(
+            "statefulAuthorizationCacheMaxNum".into(),
+            self.stateful_authorization_cache_max_num.to_string().into(),
+        );
+        properties.insert(
+            "statefulAuthorizationCacheExpiredSecond".into(),
+            self.stateful_authorization_cache_expired_second.to_string().into(),
         );
         properties
     }

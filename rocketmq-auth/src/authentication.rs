@@ -14,6 +14,7 @@
 
 use std::any::Any;
 
+pub mod acl_client_rpc_hook;
 pub mod builder;
 mod chain;
 pub mod context;
@@ -26,6 +27,7 @@ pub mod provider;
 pub mod strategy;
 
 // Re-export commonly used types for convenience
+pub use acl_client_rpc_hook::AclClientRpcHook;
 pub use chain::acl_signer;
 pub use evaluator::AuthenticationEvaluator;
 pub use factory::AuthenticationFactory;

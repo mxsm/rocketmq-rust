@@ -6,11 +6,14 @@ use rocketmq_auth::authentication::acl_signer;
 use rocketmq_auth::authentication::enums::subject_type::SubjectType;
 use rocketmq_auth::authentication::enums::user_status::UserStatus;
 use rocketmq_auth::authentication::enums::user_type::UserType;
+use rocketmq_auth::authentication::model::subject::Subject;
 use rocketmq_auth::authentication::model::user::User;
 use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
+use rocketmq_auth::authorization::factory::AuthorizationFactory;
 use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
 use rocketmq_auth::authorization::model::acl::Acl;
 use rocketmq_auth::authorization::model::policy::Policy;
+use rocketmq_auth::authorization::model::request_context::RequestContext;
 use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthRuntime;
@@ -495,4 +498,47 @@ accounts:
         .check_remoting_with_source_ip(&(), &bob_command, Some("172.16.0.1"), Some("channel-b"))
         .await
         .expect_err("successful reload must remove deleted ACL-file accounts and invalidate cached ACLs");
+}
+
+#[test]
+fn authorization_factory_caches_provider_by_config_name_and_builds_contexts() {
+    let config = AuthConfig {
+        config_name: CheetahString::from_static_str("factory-java-alignment"),
+        cluster_name: CheetahString::from_static_str("DefaultCluster"),
+        ..AuthConfig::default()
+    };
+
+    let provider1 = AuthorizationFactory::get_provider(&config).expect("provider should be created");
+    let provider2 = AuthorizationFactory::get_provider(&config).expect("provider should be cached");
+    assert!(Arc::ptr_eq(&provider1, &provider2));
+
+    let command = send_message_command("TopicA", Some("alice"), Some("signature"), &[], None);
+    let contexts = AuthorizationFactory::new_contexts_from_command(&config, &(), &command)
+        .expect("contexts should be built through the factory")
+        .expect("default provider should create contexts");
+
+    assert_eq!(contexts.len(), 1);
+    assert_eq!(contexts[0].subject_key(), Some("User:alice"));
+    assert_eq!(contexts[0].resource_key(), Some("Topic:TopicA".to_string()));
+    assert_eq!(contexts[0].actions(), &[Action::Pub]);
+}
+
+#[test]
+fn request_context_exposes_java_model_fields() {
+    let user = User::of("alice");
+    let resource = Resource::of_topic("TopicA");
+    let mut context = RequestContext::default();
+
+    context.set_subject(&user);
+    context.set_resource(resource.clone());
+    context.set_action(Action::Pub);
+    context.set_source_ip("192.168.0.1");
+
+    assert_eq!(
+        context.subject().map(|subject| subject.subject_key()),
+        Some(user.subject_key())
+    );
+    assert_eq!(context.resource(), Some(&resource));
+    assert_eq!(context.action(), Some(Action::Pub));
+    assert_eq!(context.source_ip(), Some("192.168.0.1"));
 }

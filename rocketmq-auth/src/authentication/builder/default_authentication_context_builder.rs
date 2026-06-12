@@ -138,7 +138,7 @@ impl DefaultAuthenticationContextBuilder {
     /// # Returns
     ///
     /// Byte vector containing the combined content
-    fn combine_request_content(
+    pub(crate) fn combine_request_content(
         request: &RemotingCommand,
         sorted_fields: &BTreeMap<CheetahString, CheetahString>,
     ) -> Vec<u8> {

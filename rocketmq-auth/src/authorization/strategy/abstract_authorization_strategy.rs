@@ -20,11 +20,15 @@
 
 use std::any::Any;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use tracing::debug;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+use crate::authorization::factory::AuthorizationFactory;
 use crate::authorization::provider::AuthorizationError;
+use crate::authorization::provider::AuthorizationProvider;
+use crate::authorization::provider::DefaultAuthorizationProvider;
 use crate::config::AuthConfig;
 
 /// Result type for authorization strategy operations.
@@ -90,6 +94,9 @@ pub struct AbstractAuthorizationStrategy {
 
     /// Set of RPC codes that bypass authorization (whitelist)
     authorization_whitelist: HashSet<String>,
+
+    /// Provider used for concrete authorization checks.
+    authorization_provider: Option<Arc<DefaultAuthorizationProvider>>,
 }
 
 impl AbstractAuthorizationStrategy {
@@ -131,9 +138,15 @@ impl AbstractAuthorizationStrategy {
             authorization_whitelist.len()
         );
 
+        let authorization_provider = Some(
+            AuthorizationFactory::get_provider(&auth_config)
+                .map_err(|error| AuthorizationError::ConfigurationError(error.to_string()))?,
+        );
+
         Ok(Self {
             auth_config,
             authorization_whitelist,
+            authorization_provider,
         })
     }
 
@@ -197,9 +210,10 @@ impl AbstractAuthorizationStrategy {
             context.actions()
         );
 
-        Err(AuthorizationError::NotInitialized(
-            "authorization strategy does not have a concrete provider".to_owned(),
-        ))
+        let provider = self.authorization_provider.as_ref().ok_or_else(|| {
+            AuthorizationError::NotInitialized("authorization strategy does not have a concrete provider".to_owned())
+        })?;
+        provider.authorize(context).await
     }
 
     /// Gets a reference to the authorization configuration.
@@ -210,6 +224,11 @@ impl AbstractAuthorizationStrategy {
     /// Gets a reference to the whitelist set.
     pub fn authorization_whitelist(&self) -> &HashSet<String> {
         &self.authorization_whitelist
+    }
+
+    /// Returns true when a concrete provider is attached.
+    pub fn has_authorization_provider(&self) -> bool {
+        self.authorization_provider.is_some()
     }
 
     /// Checks if a given RPC code is whitelisted.
@@ -312,15 +331,11 @@ mod tests {
     }
 
     #[test]
-    fn test_no_provider() {
+    fn test_provider_is_initialized() {
         let config = create_test_config(true, "");
         let strategy = AbstractAuthorizationStrategy::new(config, None).unwrap();
 
-        // Provider integration is a TODO
-        assert!(
-            !strategy.auth_config().authorization_provider.is_empty()
-                || strategy.auth_config().authorization_provider.is_empty()
-        );
+        assert!(strategy.has_authorization_provider());
     }
 
     #[tokio::test]
@@ -336,7 +351,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_do_evaluate_no_provider() {
+    async fn test_do_evaluate_delegates_to_provider() {
         let config = create_test_config(true, "");
         let strategy = AbstractAuthorizationStrategy::new(config, None).unwrap();
 
@@ -349,6 +364,6 @@ mod tests {
         );
         let result = strategy.do_evaluate(&context).await;
 
-        assert!(matches!(result, Err(AuthorizationError::NotInitialized(_))));
+        assert!(matches!(result, Err(AuthorizationError::PermissionDenied { .. })));
     }
 }

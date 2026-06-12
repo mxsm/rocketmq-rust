@@ -35,7 +35,10 @@ use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssi
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
+use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -961,6 +964,45 @@ impl MQClientInstance {
         api_impl
             .get_subscription_group_config(broker_addr, group, timeout_millis)
             .await
+    }
+
+    pub async fn get_broker_cluster_info(&self, timeout_millis: u64) -> rocketmq_error::RocketMQResult<ClusterInfo> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl.get_broker_cluster_info(timeout_millis).await
+    }
+
+    pub async fn get_user(
+        &self,
+        broker_addr: CheetahString,
+        username: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<UserInfo>> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl.get_user(broker_addr, username, timeout_millis).await
+    }
+
+    pub async fn get_acl(
+        &self,
+        broker_addr: CheetahString,
+        subject: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<AclInfo>> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        let acl_infos = api_impl
+            .list_acl(broker_addr, subject.clone(), CheetahString::default(), timeout_millis)
+            .await?;
+        Ok(acl_infos
+            .into_iter()
+            .find(|acl_info| acl_info.subject.as_ref() == Some(&subject)))
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> CheetahString {

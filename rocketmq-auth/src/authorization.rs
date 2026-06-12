@@ -17,6 +17,7 @@ pub mod chain;
 pub mod context;
 pub mod enums;
 pub mod evaluator;
+pub mod factory;
 pub mod manager;
 pub mod metadata_provider;
 pub mod model;

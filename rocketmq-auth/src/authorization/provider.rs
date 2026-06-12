@@ -479,7 +479,9 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         self.metadata_service = metadata_service;
         self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config.clone()));
 
-        self.authentication_metadata_provider = Some(Arc::new(LocalAuthenticationMetadataProvider::new()));
+        let authentication_metadata_provider = LocalAuthenticationMetadataProvider::with_config(&config)
+            .map_err(|error| AuthorizationError::ConfigurationError(error.to_string()))?;
+        self.authentication_metadata_provider = Some(Arc::new(authentication_metadata_provider));
 
         let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
         authorization_metadata_provider.initialize(config, None)?;
@@ -581,6 +583,9 @@ fn map_handler_error(
 
 #[cfg(test)]
 mod tests {
+    use cheetah_string::CheetahString;
+    use tempfile::TempDir;
+
     use super::*;
     use crate::authentication::enums::subject_type::SubjectType;
     use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
@@ -754,6 +759,36 @@ mod tests {
 
         let mut context = DefaultAuthorizationContext::default();
         context.set_subject("alice", SubjectType::User);
+        context.set_resource(Resource::of_topic("test-topic"));
+        context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
+        context.set_source_ip("127.0.0.1");
+
+        assert!(provider.authorize(&context).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn default_provider_loads_persisted_authentication_users() {
+        use crate::authentication::enums::user_status::UserStatus;
+        use crate::authentication::enums::user_type::UserType;
+        use crate::authorization::model::resource::Resource;
+
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp.path().join("auth.yml").to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+
+        let mut seed_provider = LocalAuthenticationMetadataProvider::new();
+        seed_provider.initialize(config.clone(), None).await.unwrap();
+        let mut user = crate::authentication::model::user::User::of_with_type("persisted", "secret", UserType::Super);
+        user.set_user_status(UserStatus::Enable);
+        seed_provider.create_user(user).await.unwrap();
+
+        let mut provider = DefaultAuthorizationProvider::new();
+        provider.initialize(config).unwrap();
+
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_subject("persisted", SubjectType::User);
         context.set_resource(Resource::of_topic("test-topic"));
         context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
         context.set_source_ip("127.0.0.1");

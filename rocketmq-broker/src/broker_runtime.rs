@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
@@ -167,6 +168,9 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         acl_file_watch_enabled: broker_config.acl_file_watch_enabled,
         acl_file_watch_interval_millis: broker_config.acl_file_watch_interval_millis,
         authentication_enabled: broker_config.authentication_enabled,
+        authentication_provider: broker_config.authentication_provider.clone(),
+        authentication_metadata_provider: broker_config.authentication_metadata_provider.clone(),
+        authentication_strategy: broker_config.authentication_strategy.clone(),
         authentication_whitelist: broker_config.authentication_whitelist.clone(),
         init_authentication_user: broker_config.init_authentication_user.clone(),
         inner_client_authentication_credentials: broker_config.inner_client_authentication_credentials.clone(),
@@ -174,8 +178,21 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
             .unwrap_or_default(),
         request_timestamp_expired_millis: broker_config.request_timestamp_expired_millis,
         authorization_enabled: broker_config.authorization_enabled,
+        authorization_provider: broker_config.authorization_provider.clone(),
+        authorization_metadata_provider: broker_config.authorization_metadata_provider.clone(),
+        authorization_strategy: broker_config.authorization_strategy.clone(),
         authorization_whitelist: broker_config.authorization_whitelist.clone(),
-        ..AuthConfig::default()
+        migrate_auth_from_v1_enabled: broker_config.migrate_auth_from_v1_enabled,
+        user_cache_max_num: broker_config.user_cache_max_num,
+        user_cache_expired_second: broker_config.user_cache_expired_second,
+        user_cache_refresh_second: broker_config.user_cache_refresh_second,
+        acl_cache_max_num: broker_config.acl_cache_max_num,
+        acl_cache_expired_second: broker_config.acl_cache_expired_second,
+        acl_cache_refresh_second: broker_config.acl_cache_refresh_second,
+        stateful_authentication_cache_max_num: broker_config.stateful_authentication_cache_max_num,
+        stateful_authentication_cache_expired_second: broker_config.stateful_authentication_cache_expired_second,
+        stateful_authorization_cache_max_num: broker_config.stateful_authorization_cache_max_num,
+        stateful_authorization_cache_expired_second: broker_config.stateful_authorization_cache_expired_second,
     }
 }
 
@@ -863,8 +880,10 @@ impl BrokerRuntime {
             self.initial_transaction().await;
             result &= self.initial_acl().await;
             if result {
-                self.initial_rpc_hooks();
-                self.initial_request_pipeline();
+                result &= self.initial_rpc_hooks();
+                if result {
+                    self.initial_request_pipeline();
+                }
             }
         }
         result
@@ -1343,7 +1362,20 @@ impl BrokerRuntime {
         }
     }
 
-    fn initial_rpc_hooks(&mut self) {}
+    fn initial_rpc_hooks(&mut self) -> bool {
+        let auth_config = build_auth_config(self.inner.broker_config());
+        match AclClientRpcHook::from_auth_config(&auth_config) {
+            Ok(Some(rpc_hook)) => {
+                self.inner.broker_outer_api.register_rpc_hook(rpc_hook.into_rpc_hook());
+                true
+            }
+            Ok(None) => true,
+            Err(error) => {
+                error!("Initialize broker ACL RPC hook failed: {error}");
+                false
+            }
+        }
+    }
 
     fn initial_request_pipeline(&mut self) {}
 
@@ -3771,6 +3803,100 @@ mod tests {
         assert_eq!(auth_config.request_timestamp_expired_millis, 300_000);
     }
 
+    #[test]
+    fn build_auth_config_maps_java_auth_integration_fields() {
+        let broker_config = BrokerConfig {
+            authentication_provider: CheetahString::from_static_str(
+                "org.apache.rocketmq.auth.authentication.provider.DefaultAuthenticationProvider",
+            ),
+            authentication_metadata_provider: CheetahString::from_static_str(
+                "org.apache.rocketmq.auth.authentication.provider.LocalAuthenticationMetadataProvider",
+            ),
+            authentication_strategy: CheetahString::from_static_str(
+                "org.apache.rocketmq.auth.authentication.strategy.StatefulAuthenticationStrategy",
+            ),
+            authorization_provider: CheetahString::from_static_str(
+                "org.apache.rocketmq.auth.authorization.provider.DefaultAuthorizationProvider",
+            ),
+            authorization_metadata_provider: CheetahString::from_static_str(
+                "org.apache.rocketmq.auth.authorization.provider.LocalAuthorizationMetadataProvider",
+            ),
+            authorization_strategy: CheetahString::from_static_str(
+                "org.apache.rocketmq.auth.authorization.strategy.StatefulAuthorizationStrategy",
+            ),
+            migrate_auth_from_v1_enabled: true,
+            user_cache_max_num: 11,
+            user_cache_expired_second: 12,
+            user_cache_refresh_second: 13,
+            acl_cache_max_num: 21,
+            acl_cache_expired_second: 22,
+            acl_cache_refresh_second: 23,
+            stateful_authentication_cache_max_num: 31,
+            stateful_authentication_cache_expired_second: 32,
+            stateful_authorization_cache_max_num: 41,
+            stateful_authorization_cache_expired_second: 42,
+            ..BrokerConfig::default()
+        };
+
+        let auth_config = build_auth_config(&broker_config);
+
+        assert_eq!(
+            auth_config.authentication_provider,
+            broker_config.authentication_provider
+        );
+        assert_eq!(
+            auth_config.authentication_metadata_provider,
+            broker_config.authentication_metadata_provider
+        );
+        assert_eq!(
+            auth_config.authentication_strategy,
+            broker_config.authentication_strategy
+        );
+        assert_eq!(auth_config.authorization_provider, broker_config.authorization_provider);
+        assert_eq!(
+            auth_config.authorization_metadata_provider,
+            broker_config.authorization_metadata_provider
+        );
+        assert_eq!(auth_config.authorization_strategy, broker_config.authorization_strategy);
+        assert!(auth_config.migrate_auth_from_v1_enabled);
+        assert_eq!(auth_config.user_cache_max_num, 11);
+        assert_eq!(auth_config.user_cache_expired_second, 12);
+        assert_eq!(auth_config.user_cache_refresh_second, 13);
+        assert_eq!(auth_config.acl_cache_max_num, 21);
+        assert_eq!(auth_config.acl_cache_expired_second, 22);
+        assert_eq!(auth_config.acl_cache_refresh_second, 23);
+        assert_eq!(auth_config.stateful_authentication_cache_max_num, 31);
+        assert_eq!(auth_config.stateful_authentication_cache_expired_second, 32);
+        assert_eq!(auth_config.stateful_authorization_cache_max_num, 41);
+        assert_eq!(auth_config.stateful_authorization_cache_expired_second, 42);
+    }
+
+    #[tokio::test]
+    async fn initial_rpc_hooks_accepts_java_inner_client_credentials() {
+        let broker_config = Arc::new(BrokerConfig {
+            inner_client_authentication_credentials: CheetahString::from_static_str(
+                r#"{"accessKey":"inner","secretKey":"inner-secret"}"#,
+            ),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+
+        assert!(runtime.initial_rpc_hooks());
+    }
+
+    #[tokio::test]
+    async fn initial_rpc_hooks_rejects_malformed_inner_client_credentials() {
+        let broker_config = Arc::new(BrokerConfig {
+            inner_client_authentication_credentials: CheetahString::from_static_str("{invalid-json"),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+
+        assert!(!runtime.initial_rpc_hooks());
+    }
+
     #[tokio::test]
     async fn shutdown_basic_service_stops_auth_acl_file_watcher() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-auth-shutdown-{}", current_millis()));
@@ -4995,7 +5121,10 @@ accounts:
         runtime.initialize_scheduled_tasks().await;
         runtime.initial_transaction().await;
         assert!(runtime.initial_acl().await, "{broker_label} acl init should succeed");
-        runtime.initial_rpc_hooks();
+        assert!(
+            runtime.initial_rpc_hooks(),
+            "{broker_label} rpc hooks should initialize"
+        );
         runtime.initial_request_pipeline();
     }
 

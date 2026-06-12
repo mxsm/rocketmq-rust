@@ -162,6 +162,10 @@ impl BrokerOuterAPI {
         }
     }
 
+    pub fn register_rpc_hook(&mut self, rpc_hook: Arc<dyn RPCHook>) {
+        self.remoting_client.register_rpc_hook(rpc_hook);
+    }
+
     fn create_request(broker_name: CheetahString, topic_config: ArcMut<TopicConfig>) -> RemotingCommand {
         let request_header = RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().cloned().unwrap());
         let queue_data = QueueData::new(

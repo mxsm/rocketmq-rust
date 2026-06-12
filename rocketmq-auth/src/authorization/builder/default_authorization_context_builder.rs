@@ -17,6 +17,8 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::action::Action;
+use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
+use rocketmq_common::common::resource::resource_type::ResourceType;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -83,6 +85,10 @@ impl DefaultAuthorizationContextBuilder {
             .filter(|value| !value.is_empty())
     }
 
+    fn raw_field_value<'a>(&self, fields: &'a HashMap<CheetahString, CheetahString>, key: &str) -> Option<&'a str> {
+        fields.get(&CheetahString::from(key)).map(|value| value.as_str())
+    }
+
     fn subject_key(&self, command: &RemotingCommand) -> Option<String> {
         command
             .ext_fields()
@@ -119,6 +125,339 @@ impl DefaultAuthorizationContextBuilder {
             return;
         }
         contexts.push(self.build_context(subject_key, Resource::of_topic(topic), actions, source_ip, rpc_code));
+    }
+
+    fn push_java_annotation_resource(
+        &self,
+        contexts: &mut Vec<DefaultAuthorizationContext>,
+        subject_key: Option<&str>,
+        resource_type: ResourceType,
+        resource_value: &str,
+        actions: Vec<Action>,
+        source_ip: &str,
+        rpc_code: &str,
+    ) {
+        let resource = match resource_type {
+            ResourceType::Cluster => Resource::of_cluster(resource_value),
+            ResourceType::Topic if NamespaceUtil::is_retry_topic(resource_value) => {
+                Resource::of_group(resource_value.to_string())
+            }
+            ResourceType::Topic => Resource::of(
+                ResourceType::Topic,
+                Some(resource_value.to_string()),
+                ResourcePattern::Literal,
+            ),
+            ResourceType::Group => Resource::of_group(resource_value.to_string()),
+            other => Resource::of(other, Some(resource_value.to_string()), ResourcePattern::Literal),
+        };
+        contexts.push(self.build_context(subject_key, resource, actions, source_ip, rpc_code));
+    }
+
+    fn push_java_annotation_field(
+        &self,
+        contexts: &mut Vec<DefaultAuthorizationContext>,
+        subject_key: Option<&str>,
+        fields: &HashMap<CheetahString, CheetahString>,
+        field_name: &str,
+        splitter: Option<&str>,
+        resource_type: ResourceType,
+        actions: Vec<Action>,
+        source_ip: &str,
+        rpc_code: &str,
+    ) {
+        let Some(value) = self.raw_field_value(fields, field_name) else {
+            return;
+        };
+
+        let values: Vec<&str> = match splitter {
+            Some(splitter) => value.split(splitter).filter(|value| !value.is_empty()).collect(),
+            None => vec![value],
+        };
+
+        for value in values {
+            self.push_java_annotation_resource(
+                contexts,
+                subject_key,
+                resource_type,
+                value,
+                actions.clone(),
+                source_ip,
+                rpc_code,
+            );
+        }
+    }
+
+    fn push_java_annotation_cluster_default(
+        &self,
+        contexts: &mut Vec<DefaultAuthorizationContext>,
+        subject_key: Option<&str>,
+        actions: Vec<Action>,
+        source_ip: &str,
+        rpc_code: &str,
+    ) {
+        self.push_java_annotation_resource(
+            contexts,
+            subject_key,
+            ResourceType::Cluster,
+            self.auth_config.cluster_name.as_str(),
+            actions,
+            source_ip,
+            rpc_code,
+        );
+    }
+
+    fn build_context_by_java_annotation_mapping(
+        &self,
+        contexts: &mut Vec<DefaultAuthorizationContext>,
+        subject_key: Option<&str>,
+        fields: &HashMap<CheetahString, CheetahString>,
+        source_ip: &str,
+        rpc_code: &str,
+        request_code: RequestCode,
+    ) {
+        match request_code {
+            RequestCode::UpdateAndCreateTopic => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                TOPIC,
+                None,
+                ResourceType::Topic,
+                vec![Action::Create],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::DeleteTopicInBroker => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                TOPIC,
+                None,
+                ResourceType::Topic,
+                vec![Action::Delete],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::DeleteSubscriptionGroup => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                "groupName",
+                None,
+                ResourceType::Group,
+                vec![Action::Delete],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::GetTopicConfig
+            | RequestCode::GetTopicStatsInfo
+            | RequestCode::GetMaxOffset
+            | RequestCode::GetMinOffset
+            | RequestCode::GetEarliestMsgStoreTime
+            | RequestCode::ViewMessageById
+            | RequestCode::SearchOffsetByTimestamp
+            | RequestCode::QueryTopicConsumeByWho
+            | RequestCode::CheckRocksdbCqWriteProgress => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                TOPIC,
+                None,
+                ResourceType::Topic,
+                vec![Action::Get],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::CheckTransactionState => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                TOPIC,
+                None,
+                ResourceType::Topic,
+                vec![Action::Pub],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::ResumeCheckHalfMessage => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                TOPIC,
+                None,
+                ResourceType::Topic,
+                vec![Action::Update],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::GetSubscriptionGroupConfig
+            | RequestCode::GetConsumerConnectionList
+            | RequestCode::GetConsumerRunningInfo
+            | RequestCode::QueryTopicsByConsumer => {
+                let field = match request_code {
+                    RequestCode::GetConsumerConnectionList | RequestCode::GetConsumerRunningInfo => CONSUMER_GROUP,
+                    _ => GROUP,
+                };
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    field,
+                    None,
+                    ResourceType::Group,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+            }
+            RequestCode::UpdateAndGetGroupForbidden => {
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    GROUP,
+                    None,
+                    ResourceType::Group,
+                    vec![Action::Update],
+                    source_ip,
+                    rpc_code,
+                );
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    TOPIC,
+                    None,
+                    ResourceType::Topic,
+                    vec![Action::Update],
+                    source_ip,
+                    rpc_code,
+                );
+            }
+            RequestCode::GetConsumeStats => {
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    CONSUMER_GROUP,
+                    None,
+                    ResourceType::Group,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    TOPIC,
+                    None,
+                    ResourceType::Topic,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    "topicList",
+                    Some(";"),
+                    ResourceType::Topic,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+            }
+            RequestCode::QueryCorrectionOffset => {
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    "filterGroups",
+                    Some(","),
+                    ResourceType::Group,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    "compareGroup",
+                    None,
+                    ResourceType::Group,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+                self.push_java_annotation_field(
+                    contexts,
+                    subject_key,
+                    fields,
+                    TOPIC,
+                    None,
+                    ResourceType::Topic,
+                    vec![Action::Get],
+                    source_ip,
+                    rpc_code,
+                );
+            }
+            RequestCode::AuthCreateUser
+            | RequestCode::AuthUpdateUser
+            | RequestCode::AuthDeleteUser
+            | RequestCode::AuthCreateAcl
+            | RequestCode::AuthUpdateAcl
+            | RequestCode::AuthDeleteAcl
+            | RequestCode::AddBroker
+            | RequestCode::RemoveBroker
+            | RequestCode::RegisterBroker
+            | RequestCode::UnregisterBroker
+            | RequestCode::RegisterTopicInNamesrv
+            | RequestCode::DeleteTopicInNamesrv
+            | RequestCode::UpdateBrokerConfig
+            | RequestCode::PutKvConfig
+            | RequestCode::DeleteKvConfig
+            | RequestCode::UpdateNamesrvConfig
+            | RequestCode::AddWritePermOfBroker
+            | RequestCode::WipeWritePermOfBroker
+            | RequestCode::ControllerAlterSyncStateSet
+            | RequestCode::ControllerElectMaster
+            | RequestCode::ControllerRegisterBroker
+            | RequestCode::ControllerApplyBrokerId
+            | RequestCode::BrokerHeartbeat
+            | RequestCode::NotifyBrokerRoleChanged
+            | RequestCode::NotifyMinBrokerIdChange
+            | RequestCode::ExchangeBrokerHaInfo
+            | RequestCode::ResetMasterFlushOffset
+            | RequestCode::CleanBrokerData => self.push_java_annotation_cluster_default(
+                contexts,
+                subject_key,
+                vec![Action::Update],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::AuthGetUser
+            | RequestCode::AuthListUsers
+            | RequestCode::AuthGetAcl
+            | RequestCode::AuthListAcl
+            | RequestCode::GetAllProducerInfo
+            | RequestCode::GetProducerConnectionList
+            | RequestCode::GetBrokerConsumeStats
+            | RequestCode::GetKvConfig
+            | RequestCode::GetKvlistByNamespace
+            | RequestCode::QueryDataVersion
+            | RequestCode::GetBrokerRuntimeInfo
+            | RequestCode::ViewBrokerStatsData
+            | RequestCode::ExportRocksdbConfigToJson
+            | RequestCode::ControllerGetReplicaInfo
+            | RequestCode::ControllerGetNextBrokerId
+            | RequestCode::GetBrokerHaStatus => {
+                self.push_java_annotation_cluster_default(contexts, subject_key, vec![Action::Get], source_ip, rpc_code)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -409,7 +748,14 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
                     }
                 }
             }
-            _ => {}
+            request_code => self.build_context_by_java_annotation_mapping(
+                &mut contexts,
+                subject_key,
+                fields,
+                &source_ip,
+                &rpc_code,
+                request_code,
+            ),
         }
 
         Ok(contexts)
@@ -519,5 +865,44 @@ mod tests {
         assert_eq!(contexts.len(), 2);
         assert_eq!(contexts[0].resource_key(), Some("Group:group-a".to_string()));
         assert_eq!(contexts[1].resource_key(), Some("Topic:topic-a".to_string()));
+    }
+
+    #[test]
+    fn test_build_annotation_fallback_topic_and_cluster_contexts() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig {
+            cluster_name: CheetahString::from_static_str("DefaultCluster"),
+            ..AuthConfig::default()
+        });
+
+        let topic_command = command_with_fields(
+            RequestCode::UpdateAndCreateTopic,
+            &[("AccessKey", "rocketmq"), ("topic", "topic")],
+        );
+        let topic_contexts = builder.build_from_remoting(&(), &topic_command).unwrap();
+        assert_eq!(topic_contexts.len(), 1);
+        assert_eq!(topic_contexts[0].subject_key(), Some("User:rocketmq"));
+        assert_eq!(topic_contexts[0].resource_key(), Some("Topic:topic".to_string()));
+        assert_eq!(topic_contexts[0].actions(), &[Action::Create]);
+        assert_eq!(
+            topic_contexts[0].rpc_code(),
+            Some(RequestCode::UpdateAndCreateTopic.to_i32().to_string().as_str())
+        );
+
+        let cluster_command = command_with_fields(
+            RequestCode::AuthCreateUser,
+            &[("AccessKey", "rocketmq"), ("username", "alice")],
+        );
+        let cluster_contexts = builder.build_from_remoting(&(), &cluster_command).unwrap();
+        assert_eq!(cluster_contexts.len(), 1);
+        assert_eq!(cluster_contexts[0].subject_key(), Some("User:rocketmq"));
+        assert_eq!(
+            cluster_contexts[0].resource_key(),
+            Some("Cluster:DefaultCluster".to_string())
+        );
+        assert_eq!(cluster_contexts[0].actions(), &[Action::Update]);
+        assert_eq!(
+            cluster_contexts[0].rpc_code(),
+            Some(RequestCode::AuthCreateUser.to_i32().to_string().as_str())
+        );
     }
 }

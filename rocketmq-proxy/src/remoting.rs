@@ -84,6 +84,7 @@ use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use tokio::net::TcpListener;
 
+use crate::auth::build_cluster_acl_rpc_hook;
 use crate::auth::is_auth_error;
 use crate::auth::ProxyAuthRuntime;
 use crate::cluster::initialize_client_instance;
@@ -976,7 +977,11 @@ where
             return Ok(response_body);
         }
         let (broker_name, topic_name) = single_broker_and_topic(&request_body.mq_set)?;
-        let mut client = initialize_client_instance(self.config.cluster.clone()).await?;
+        let mut client = initialize_client_instance(
+            self.config.cluster.clone(),
+            build_cluster_acl_rpc_hook(self.config.as_ref()),
+        )
+        .await?;
         let broker_addr = resolve_remoting_broker_addr(
             &mut client,
             broker_name.as_str(),
@@ -1002,7 +1007,11 @@ where
             return Ok(());
         }
         let (broker_name, topic_name) = single_broker_and_topic(&request_body.mq_set)?;
-        let mut client = initialize_client_instance(self.config.cluster.clone()).await?;
+        let mut client = initialize_client_instance(
+            self.config.cluster.clone(),
+            build_cluster_acl_rpc_hook(self.config.as_ref()),
+        )
+        .await?;
         let broker_addr = resolve_remoting_broker_addr(
             &mut client,
             broker_name.as_str(),
