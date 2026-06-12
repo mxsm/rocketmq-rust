@@ -21,6 +21,7 @@
 //! route/assignment/heartbeat slice of the Java proxy architecture.
 
 pub mod auth;
+mod auth_metadata;
 pub mod bootstrap;
 pub mod cluster;
 pub mod config;

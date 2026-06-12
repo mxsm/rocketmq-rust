@@ -110,6 +110,7 @@ impl RemotingConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct ClusterConfig {
     pub namesrv_addr: Option<String>,
+    pub broker_cluster_name: String,
     pub instance_name: String,
     pub mq_client_api_timeout_ms: u64,
     pub query_assignment_strategy_name: String,
@@ -123,6 +124,7 @@ impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
             namesrv_addr: None,
+            broker_cluster_name: "DefaultCluster".to_owned(),
             instance_name: "rocketmq-proxy-cluster".to_owned(),
             mq_client_api_timeout_ms: 3_000,
             query_assignment_strategy_name: "AVG".to_owned(),
@@ -249,6 +251,17 @@ pub struct ProxyAuthConfig {
     pub authorization_metadata_provider: String,
     pub authorization_strategy: String,
     pub authorization_whitelist: Vec<String>,
+    pub migrate_auth_from_v1_enabled: bool,
+    pub user_cache_max_num: u32,
+    pub user_cache_expired_second: u32,
+    pub user_cache_refresh_second: u32,
+    pub acl_cache_max_num: u32,
+    pub acl_cache_expired_second: u32,
+    pub acl_cache_refresh_second: u32,
+    pub stateful_authentication_cache_max_num: u32,
+    pub stateful_authentication_cache_expired_second: u32,
+    pub stateful_authorization_cache_max_num: u32,
+    pub stateful_authorization_cache_expired_second: u32,
 }
 
 impl fmt::Debug for ProxyAuthConfig {
@@ -286,6 +299,29 @@ impl fmt::Debug for ProxyAuthConfig {
             .field("authorization_metadata_provider", &self.authorization_metadata_provider)
             .field("authorization_strategy", &self.authorization_strategy)
             .field("authorization_whitelist", &self.authorization_whitelist)
+            .field("migrate_auth_from_v1_enabled", &self.migrate_auth_from_v1_enabled)
+            .field("user_cache_max_num", &self.user_cache_max_num)
+            .field("user_cache_expired_second", &self.user_cache_expired_second)
+            .field("user_cache_refresh_second", &self.user_cache_refresh_second)
+            .field("acl_cache_max_num", &self.acl_cache_max_num)
+            .field("acl_cache_expired_second", &self.acl_cache_expired_second)
+            .field("acl_cache_refresh_second", &self.acl_cache_refresh_second)
+            .field(
+                "stateful_authentication_cache_max_num",
+                &self.stateful_authentication_cache_max_num,
+            )
+            .field(
+                "stateful_authentication_cache_expired_second",
+                &self.stateful_authentication_cache_expired_second,
+            )
+            .field(
+                "stateful_authorization_cache_max_num",
+                &self.stateful_authorization_cache_max_num,
+            )
+            .field(
+                "stateful_authorization_cache_expired_second",
+                &self.stateful_authorization_cache_expired_second,
+            )
             .finish()
     }
 }
@@ -321,6 +357,17 @@ impl Default for ProxyAuthConfig {
             authorization_metadata_provider: String::new(),
             authorization_strategy: String::new(),
             authorization_whitelist: Vec::new(),
+            migrate_auth_from_v1_enabled: false,
+            user_cache_max_num: 1000,
+            user_cache_expired_second: 600,
+            user_cache_refresh_second: 60,
+            acl_cache_max_num: 1000,
+            acl_cache_expired_second: 600,
+            acl_cache_refresh_second: 60,
+            stateful_authentication_cache_max_num: 10000,
+            stateful_authentication_cache_expired_second: 60,
+            stateful_authorization_cache_max_num: 10000,
+            stateful_authorization_cache_expired_second: 60,
         }
     }
 }
@@ -354,7 +401,17 @@ impl ProxyAuthConfig {
             authorization_metadata_provider: CheetahString::from(self.authorization_metadata_provider.as_str()),
             authorization_strategy: CheetahString::from(self.authorization_strategy.as_str()),
             authorization_whitelist: CheetahString::from(self.authorization_whitelist.join(",")),
-            ..RocketmqAuthConfig::default()
+            migrate_auth_from_v1_enabled: self.migrate_auth_from_v1_enabled,
+            user_cache_max_num: self.user_cache_max_num,
+            user_cache_expired_second: self.user_cache_expired_second,
+            user_cache_refresh_second: self.user_cache_refresh_second,
+            acl_cache_max_num: self.acl_cache_max_num,
+            acl_cache_expired_second: self.acl_cache_expired_second,
+            acl_cache_refresh_second: self.acl_cache_refresh_second,
+            stateful_authentication_cache_max_num: self.stateful_authentication_cache_max_num,
+            stateful_authentication_cache_expired_second: self.stateful_authentication_cache_expired_second,
+            stateful_authorization_cache_max_num: self.stateful_authorization_cache_max_num,
+            stateful_authorization_cache_expired_second: self.stateful_authorization_cache_expired_second,
         }
     }
 }
@@ -363,6 +420,7 @@ impl ProxyAuthConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
     pub mode: ProxyMode,
+    pub enable_acl_rpc_hook_for_cluster_mode: bool,
     pub grpc: GrpcConfig,
     pub remoting: RemotingConfig,
     pub cluster: ClusterConfig,
@@ -400,8 +458,33 @@ mod tests {
             acl_file: "conf/plain_acl.yml".to_owned(),
             acl_file_watch_enabled: true,
             acl_file_watch_interval_millis: 250,
+            authentication_provider: "org.apache.rocketmq.auth.authentication.provider.DefaultAuthenticationProvider"
+                .to_owned(),
+            authentication_metadata_provider: "org.apache.rocketmq.auth.authentication.provider.\
+                                               LocalAuthenticationMetadataProvider"
+                .to_owned(),
+            authentication_strategy: "org.apache.rocketmq.auth.authentication.strategy.StatefulAuthenticationStrategy"
+                .to_owned(),
+            authorization_provider: "org.apache.rocketmq.auth.authorization.provider.DefaultAuthorizationProvider"
+                .to_owned(),
+            authorization_metadata_provider: "org.apache.rocketmq.auth.authorization.provider.\
+                                              LocalAuthorizationMetadataProvider"
+                .to_owned(),
+            authorization_strategy: "org.apache.rocketmq.auth.authorization.strategy.StatefulAuthorizationStrategy"
+                .to_owned(),
             signature_algorithm: SignatureAlgorithm::HmacSha256,
             request_timestamp_expired_millis: 300_000,
+            migrate_auth_from_v1_enabled: true,
+            user_cache_max_num: 11,
+            user_cache_expired_second: 12,
+            user_cache_refresh_second: 13,
+            acl_cache_max_num: 21,
+            acl_cache_expired_second: 22,
+            acl_cache_refresh_second: 23,
+            stateful_authentication_cache_max_num: 31,
+            stateful_authentication_cache_expired_second: 32,
+            stateful_authorization_cache_max_num: 41,
+            stateful_authorization_cache_expired_second: 42,
             ..ProxyAuthConfig::default()
         };
 
@@ -410,8 +493,43 @@ mod tests {
         assert_eq!(auth_config.acl_file.as_str(), "conf/plain_acl.yml");
         assert!(auth_config.acl_file_watch_enabled);
         assert_eq!(auth_config.acl_file_watch_interval_millis, 250);
+        assert_eq!(
+            auth_config.authentication_provider.as_str(),
+            config.authentication_provider.as_str()
+        );
+        assert_eq!(
+            auth_config.authentication_metadata_provider.as_str(),
+            config.authentication_metadata_provider.as_str()
+        );
+        assert_eq!(
+            auth_config.authentication_strategy.as_str(),
+            config.authentication_strategy.as_str()
+        );
+        assert_eq!(
+            auth_config.authorization_provider.as_str(),
+            config.authorization_provider.as_str()
+        );
+        assert_eq!(
+            auth_config.authorization_metadata_provider.as_str(),
+            config.authorization_metadata_provider.as_str()
+        );
+        assert_eq!(
+            auth_config.authorization_strategy.as_str(),
+            config.authorization_strategy.as_str()
+        );
         assert_eq!(auth_config.signature_algorithm, SignatureAlgorithm::HmacSha256);
         assert_eq!(auth_config.request_timestamp_expired_millis, 300_000);
+        assert!(auth_config.migrate_auth_from_v1_enabled);
+        assert_eq!(auth_config.user_cache_max_num, 11);
+        assert_eq!(auth_config.user_cache_expired_second, 12);
+        assert_eq!(auth_config.user_cache_refresh_second, 13);
+        assert_eq!(auth_config.acl_cache_max_num, 21);
+        assert_eq!(auth_config.acl_cache_expired_second, 22);
+        assert_eq!(auth_config.acl_cache_refresh_second, 23);
+        assert_eq!(auth_config.stateful_authentication_cache_max_num, 31);
+        assert_eq!(auth_config.stateful_authentication_cache_expired_second, 32);
+        assert_eq!(auth_config.stateful_authorization_cache_max_num, 41);
+        assert_eq!(auth_config.stateful_authorization_cache_expired_second, 42);
     }
 
     #[test]
@@ -424,6 +542,17 @@ aclFileWatchEnabled: true
 aclFileWatchIntervalMillis: 250
 signatureAlgorithm: HmacMD5
 requestTimestampExpiredMillis: 300000
+migrateAuthFromV1Enabled: true
+userCacheMaxNum: 11
+userCacheExpiredSecond: 12
+userCacheRefreshSecond: 13
+aclCacheMaxNum: 21
+aclCacheExpiredSecond: 22
+aclCacheRefreshSecond: 23
+statefulAuthenticationCacheMaxNum: 31
+statefulAuthenticationCacheExpiredSecond: 32
+statefulAuthorizationCacheMaxNum: 41
+statefulAuthorizationCacheExpiredSecond: 42
 "#,
                 config::FileFormat::Yaml,
             ))
@@ -437,6 +566,34 @@ requestTimestampExpiredMillis: 300000
         assert_eq!(config.acl_file_watch_interval_millis, 250);
         assert_eq!(config.signature_algorithm, SignatureAlgorithm::HmacMd5);
         assert_eq!(config.request_timestamp_expired_millis, 300_000);
+        assert!(config.migrate_auth_from_v1_enabled);
+        assert_eq!(config.user_cache_max_num, 11);
+        assert_eq!(config.user_cache_expired_second, 12);
+        assert_eq!(config.user_cache_refresh_second, 13);
+        assert_eq!(config.acl_cache_max_num, 21);
+        assert_eq!(config.acl_cache_expired_second, 22);
+        assert_eq!(config.acl_cache_refresh_second, 23);
+        assert_eq!(config.stateful_authentication_cache_max_num, 31);
+        assert_eq!(config.stateful_authentication_cache_expired_second, 32);
+        assert_eq!(config.stateful_authorization_cache_max_num, 41);
+        assert_eq!(config.stateful_authorization_cache_expired_second, 42);
+    }
+
+    #[test]
+    fn proxy_config_deserializes_acl_rpc_hook_flag() {
+        let config: ProxyConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                r#"
+enableAclRpcHookForClusterMode: true
+"#,
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        assert!(config.enable_acl_rpc_hook_for_cluster_mode);
     }
 
     #[test]

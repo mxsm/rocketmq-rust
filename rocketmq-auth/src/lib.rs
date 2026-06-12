@@ -37,6 +37,7 @@ pub use authentication::strategy::AuthenticationStrategy;
 // Re-export commonly used authorization types
 pub use authorization::context::default_authorization_context::DefaultAuthorizationContext;
 pub use authorization::evaluator::AuthorizationEvaluator;
+pub use authorization::factory::AuthorizationFactory;
 pub use authorization::provider::AuthorizationProvider;
 pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 pub use observability::AuthMetricSample;

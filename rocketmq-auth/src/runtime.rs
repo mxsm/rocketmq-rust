@@ -46,6 +46,7 @@ use crate::authorization::provider::DefaultAuthorizationProvider;
 use crate::config::AuthConfig;
 use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
+use crate::migration::alc::plain_permission_manager::PlainPermissionManager;
 use crate::observability::AuthMetrics;
 use crate::observability::AuthMetricsSnapshot;
 use crate::permission::Permission;
@@ -251,6 +252,13 @@ impl AuthRuntimeBuilder {
         };
 
         seed_initial_users(&provider_registry, &self.config).await?;
+        let migrated_acl_entries = migrate_auth_from_v1(&provider_registry, &self.config).await?;
+        if migrated_acl_entries > 0 {
+            info!(
+                "Migrated {} legacy ACL account(s) into auth metadata",
+                migrated_acl_entries
+            );
+        }
         let loaded_acl_entries = load_configured_acl_file(&provider_registry, &self.config, true)
             .await?
             .account_count;
@@ -335,6 +343,10 @@ impl AuthRuntime {
 
     pub fn acl_generation(&self) -> u64 {
         self.provider_registry.acl_generation()
+    }
+
+    pub fn invalidate_acl_cache(&self) -> u64 {
+        self.provider_registry.advance_acl_generation()
     }
 
     pub fn acl_generation_counter(&self) -> Arc<AtomicU64> {
@@ -564,6 +576,22 @@ async fn load_configured_acl_file(
     }
 
     result
+}
+
+async fn migrate_auth_from_v1(provider_registry: &ProviderRegistry, config: &AuthConfig) -> RocketMQResult<usize> {
+    if !config.migrate_auth_from_v1_enabled {
+        return Ok(0);
+    }
+    let plain_permission_manager = PlainPermissionManager::new();
+    migrate_auth_from_v1_manager(provider_registry, &plain_permission_manager).await
+}
+
+async fn migrate_auth_from_v1_manager(
+    provider_registry: &ProviderRegistry,
+    plain_permission_manager: &PlainPermissionManager,
+) -> RocketMQResult<usize> {
+    let acl_config = plain_permission_manager.get_all_acl_config()?;
+    apply_acl_config(provider_registry, &acl_config).await
 }
 
 fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegistry) -> Option<AclFileWatchHandle> {
@@ -1076,6 +1104,75 @@ accounts:
         let acl = authz_provider.get_acl(&User::of("alice")).await.unwrap().unwrap();
         assert!(acl.get_policy(PolicyType::Custom).is_some());
         assert!(acl.get_policy(PolicyType::Default).is_some());
+    }
+
+    #[tokio::test]
+    async fn migrate_auth_from_v1_manager_loads_legacy_plain_acl_files() {
+        let temp = TempDir::new().unwrap();
+        let auth_config = AuthConfig {
+            auth_config_path: CheetahString::from(temp.path().join("auth-store").to_string_lossy().as_ref()),
+            ..AuthConfig::default()
+        };
+        let registry = ProviderRegistry::local(&auth_config).unwrap();
+        let acl_file = temp.path().join("conf").join("acl").join("legacy.yml");
+        fs::create_dir_all(acl_file.parent().unwrap()).unwrap();
+        fs::write(
+            &acl_file,
+            r#"
+globalWhiteRemoteAddresses:
+  - 10.1.*.*
+accounts:
+  - accessKey: legacy
+    secretKey: secret
+    admin: false
+    topicPerms:
+      - TopicA=PUB
+"#,
+        )
+        .unwrap();
+        let manager = PlainPermissionManager {
+            file_home: temp.path().to_string_lossy().into_owned(),
+            default_acl_dir: temp.path().join("conf").join("acl").to_string_lossy().into_owned(),
+            default_acl_file: temp
+                .path()
+                .join("conf")
+                .join("plain_acl.yml")
+                .to_string_lossy()
+                .into_owned(),
+            file_list: vec![acl_file.to_string_lossy().into_owned()],
+        };
+
+        let migrated = migrate_auth_from_v1_manager(&registry, &manager).await.unwrap();
+
+        assert_eq!(migrated, 1);
+        let user = registry
+            .authentication_metadata_provider()
+            .get_user("legacy")
+            .await
+            .unwrap();
+        assert_eq!(user.password().map(|value| value.as_str()), Some("secret"));
+        let acl = registry
+            .authorization_metadata_provider()
+            .get_acl(&User::of("legacy"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(acl.get_policy(PolicyType::Custom).is_some());
+        assert!(registry.is_acl_white_remote_address(None, Some("10.1.2.3")).unwrap());
+    }
+
+    #[tokio::test]
+    async fn migrate_auth_from_v1_is_disabled_by_default() {
+        let temp = TempDir::new().unwrap();
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from(temp.path().join("auth-store").to_string_lossy().as_ref()),
+            ..AuthConfig::default()
+        };
+        let registry = ProviderRegistry::local(&config).unwrap();
+
+        let migrated = migrate_auth_from_v1(&registry, &config).await.unwrap();
+
+        assert_eq!(migrated, 0);
     }
 
     #[tokio::test]

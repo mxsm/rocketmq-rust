@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 
+use crate::auth::build_cluster_acl_rpc_hook;
 use crate::auth::ProxyAuthRuntime;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
@@ -33,6 +34,7 @@ use crate::processor::MessagingProcessor;
 use crate::remoting;
 use crate::remoting::ProxyRemotingBackend;
 use crate::service::ClusterServiceManager;
+use crate::service::MetadataService;
 use crate::service::ServiceManager;
 use crate::session::ClientSessionRegistry;
 
@@ -83,6 +85,7 @@ impl ProxyRuntimeBuilder {
             Some(service_manager) => (service_manager, self.remoting_backend),
             None => default_service_manager_and_backend(&self.config),
         };
+        let auth_metadata_service = Some(service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
         let processor = Arc::new(DefaultMessagingProcessor::new(service_manager));
         ProxyRuntime::from_processor_with_local_mode_support(
@@ -91,6 +94,7 @@ impl ProxyRuntimeBuilder {
             session_registry,
             local_mode_supported,
             self.auth_runtime,
+            auth_metadata_service,
             self.hooks.unwrap_or_default(),
             self.metrics.unwrap_or_default(),
             remoting_backend,
@@ -105,6 +109,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     grpc_service: ProxyGrpcService<P>,
     local_mode_supported: bool,
     auth_runtime: Option<ProxyAuthRuntime>,
+    auth_metadata_service: Option<Arc<dyn MetadataService>>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
 }
 
@@ -137,6 +142,7 @@ where
             session_registry,
             true,
             None,
+            None,
             ProxyHookChain::default(),
             ProxyMetrics::default(),
             None,
@@ -149,6 +155,7 @@ where
         session_registry: ClientSessionRegistry,
         local_mode_supported: bool,
         auth_runtime: Option<ProxyAuthRuntime>,
+        auth_metadata_service: Option<Arc<dyn MetadataService>>,
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
@@ -166,6 +173,7 @@ where
             grpc_service,
             local_mode_supported,
             auth_runtime,
+            auth_metadata_service,
             remoting_backend,
         }
     }
@@ -189,6 +197,7 @@ where
             grpc_service,
             local_mode_supported,
             auth_runtime,
+            auth_metadata_service,
             remoting_backend,
         } = self;
         if matches!(config.mode, ProxyMode::Local) && !local_mode_supported {
@@ -198,7 +207,9 @@ where
         }
         let auth_runtime = match auth_runtime {
             Some(auth_runtime) => Some(auth_runtime),
-            None => ProxyAuthRuntime::from_proxy_config(&config.auth).await?,
+            None => {
+                ProxyAuthRuntime::from_proxy_config_with_metadata_service(&config.auth, auth_metadata_service).await?
+            }
         };
         let auth_runtime_for_shutdown = auth_runtime.clone();
         let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
@@ -252,10 +263,19 @@ fn default_service_manager_and_backend(
     config: &ProxyConfig,
 ) -> (Arc<dyn ServiceManager>, Option<Arc<dyn ProxyRemotingBackend>>) {
     match config.mode {
-        ProxyMode::Cluster => (
-            Arc::new(ClusterServiceManager::from_cluster_config(config.cluster.clone())),
-            None,
-        ),
+        ProxyMode::Cluster => {
+            let mut cluster_config = config.cluster.clone();
+            if !config.auth.cluster_name.trim().is_empty() {
+                cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
+            }
+            (
+                Arc::new(ClusterServiceManager::from_cluster_config_with_rpc_hook(
+                    cluster_config,
+                    build_cluster_acl_rpc_hook(config),
+                )),
+                None,
+            )
+        }
         ProxyMode::Local => {
             let (manager, client) = local_components_from_config(
                 config.local.clone(),
