@@ -141,8 +141,9 @@ fn parse_config_file(args: &Args) -> Result<(BrokerConfig, MessageStoreConfig)> 
     if let Some(config_file) = args.get_config_file() {
         info!("Loading configuration from: {}", config_file.display());
 
-        let broker_config = ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())
+        let mut broker_config = ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())
             .with_context(|| format!("Failed to parse BrokerConfig from {:?}", config_file))?;
+        apply_tls_properties_from_file(&mut broker_config, config_file.clone())?;
 
         let message_store_config = ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file.clone())
             .with_context(|| format!("Failed to parse MessageStoreConfig from {:?}", config_file))?;
@@ -152,6 +153,16 @@ fn parse_config_file(args: &Args) -> Result<(BrokerConfig, MessageStoreConfig)> 
         info!("Using default configuration (no config file specified)");
         Ok((BrokerConfig::default(), MessageStoreConfig::default()))
     }
+}
+
+fn apply_tls_properties_from_file(broker_config: &mut BrokerConfig, config_file: PathBuf) -> Result<()> {
+    let content = std::fs::read_to_string(&config_file)
+        .with_context(|| format!("Failed to read TLS properties from {:?}", config_file))?;
+    broker_config
+        .broker_server_config
+        .tls_config
+        .apply_java_properties_str(&content);
+    Ok(())
 }
 
 /// Extract properties from BrokerConfig for system property mapping
@@ -507,6 +518,9 @@ listenPort = 11911
 storePathRootDir = "{}"
 storePathCommitLog = "{}"
 enableControllerMode = false
+tls.enable = true
+tls.server.mode = "enforcing"
+tls.server.certPath = "/certs/server.pem"
 
 [brokerServerConfig]
 listenPort = 11911
@@ -533,6 +547,20 @@ brokerId = 0
         assert_eq!(broker_config.broker_identity.broker_name.as_str(), "rust-local-broker");
         assert_eq!(broker_config.listen_port, 11911);
         assert_eq!(broker_config.broker_server_config.listen_port, 11911);
+        assert!(broker_config.broker_server_config.tls_config.enable);
+        assert_eq!(
+            broker_config.broker_server_config.tls_config.server.mode,
+            rocketmq_common::common::tls_config::TlsMode::Enforcing
+        );
+        assert_eq!(
+            broker_config
+                .broker_server_config
+                .tls_config
+                .server
+                .cert_path
+                .as_deref(),
+            Some("/certs/server.pem")
+        );
         assert_eq!(broker_config.store_path_root_dir.as_str(), store_root);
         assert_eq!(message_store_config.store_path_root_dir.as_str(), store_root);
         assert_eq!(

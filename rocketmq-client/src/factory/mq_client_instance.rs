@@ -2135,6 +2135,7 @@ mod tests {
     async fn mq_client_api_impl_inherits_tls_flag_from_client_config() {
         let mut client_config = ClientConfig::default();
         client_config.set_use_tls(true);
+        client_config.set_tls_client_trust_cert_path("/certs/ca.pem");
 
         let instance = MQClientInstance::new_arc(client_config, 0, "test-client-tls", None);
         let api_impl = instance
@@ -2142,6 +2143,15 @@ mod tests {
             .expect("MQClientInstance should initialize MQClientAPIImpl");
 
         assert!(api_impl.is_use_tls());
+        assert_eq!(
+            api_impl
+                .get_remoting_client()
+                .tls_config()
+                .client
+                .trust_cert_path
+                .as_deref(),
+            Some("/certs/ca.pem")
+        );
     }
 
     #[test]

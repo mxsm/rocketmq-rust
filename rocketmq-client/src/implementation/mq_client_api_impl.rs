@@ -2067,6 +2067,8 @@ impl MQClientAPIImpl {
 
         let mut remoting_config = (*tokio_client_config).clone();
         remoting_config.use_tls = client_config.use_tls;
+        remoting_config.tls_config = client_config.tls_config.clone();
+        remoting_config.tls_config.enable = client_config.use_tls;
         let mut default_client =
             RocketmqDefaultClient::new_with_cl(Arc::new(remoting_config), client_remoting_processor, tx);
         if let Some(hook) = rpc_hook {

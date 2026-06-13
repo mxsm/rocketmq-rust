@@ -63,6 +63,7 @@ pub mod metrics;
 pub mod resource;
 pub mod system_clock;
 pub mod thread;
+pub mod tls_config;
 pub mod tools;
 pub mod topic;
 

@@ -18,6 +18,7 @@
 //! making configuration more readable and allowing for validation before building.
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::LanguageCode;
 
@@ -211,6 +212,42 @@ impl ClientConfigBuilder {
         self
     }
 
+    /// Sets the complete TLS configuration while preserving the builder's enable_tls flag.
+    pub fn tls_config(mut self, tls_config: TlsConfig) -> Self {
+        self.config.set_tls_config(tls_config);
+        self
+    }
+
+    /// Enables RocketMQ Java-compatible TLS test mode.
+    pub fn tls_test_mode_enable(mut self, enabled: bool) -> Self {
+        self.config.set_tls_test_mode_enable(enabled);
+        self
+    }
+
+    /// Controls whether the client verifies the server certificate.
+    pub fn tls_client_auth_server(mut self, enabled: bool) -> Self {
+        self.config.set_tls_client_auth_server(enabled);
+        self
+    }
+
+    /// Sets the PEM trust certificate path for server verification.
+    pub fn tls_client_trust_cert_path(mut self, path: impl Into<String>) -> Self {
+        self.config.set_tls_client_trust_cert_path(path);
+        self
+    }
+
+    /// Sets the PEM client certificate path for mTLS.
+    pub fn tls_client_cert_path(mut self, path: impl Into<String>) -> Self {
+        self.config.set_tls_client_cert_path(path);
+        self
+    }
+
+    /// Sets the PEM client private key path for mTLS.
+    pub fn tls_client_key_path(mut self, path: impl Into<String>) -> Self {
+        self.config.set_tls_client_key_path(path);
+        self
+    }
+
     /// Sets decode read body enabled
     pub fn enable_decode_read_body(mut self, enabled: bool) -> Self {
         self.config.set_decode_read_body(enabled);
@@ -383,8 +420,31 @@ mod tests {
         assert_eq!(config.poll_name_server_interval, 60_000);
         assert_eq!(config.heartbeat_broker_interval, 30_000);
         assert!(config.use_tls);
+        assert!(config.tls_config.enable);
         assert!(config.enable_concurrent_heartbeat);
         assert_eq!(config.concurrent_heartbeat_thread_pool_size, 4);
+    }
+
+    #[test]
+    fn builder_sets_tls_certificate_fields() {
+        let config = ClientConfig::builder()
+            .enable_tls(true)
+            .tls_client_auth_server(false)
+            .tls_client_trust_cert_path("/certs/ca.pem")
+            .tls_client_cert_path("/certs/client.pem")
+            .tls_client_key_path("/certs/client.key")
+            .build()
+            .unwrap();
+
+        assert!(config.use_tls);
+        assert!(config.tls_config.enable);
+        assert!(!config.tls_config.client.auth_server);
+        assert_eq!(
+            config.tls_config.client.trust_cert_path.as_deref(),
+            Some("/certs/ca.pem")
+        );
+        assert_eq!(config.tls_config.client.cert_path.as_deref(), Some("/certs/client.pem"));
+        assert_eq!(config.tls_config.client.key_path.as_deref(), Some("/certs/client.key"));
     }
 
     #[test]

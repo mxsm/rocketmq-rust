@@ -77,17 +77,21 @@ simd-json = { version = "0.17", optional = true }
 
 # TLS transport for client connections. Enabled by default so `ClientConfig::use_tls`
 # can be honored without requiring downstream feature wiring.
+arc-swap            = { version = "1.9", optional = true }
+rcgen               = { version = "0.13", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
+rustls-pemfile      = { version = "2.2", optional = true }
 tokio-rustls        = { version = "0.26", optional = true }
 
 [features]
 default = ["tls"]
 simd    = ["simd-json"]
-tls     = ["rustls-native-certs", "tokio-rustls"]
+tls     = ["arc-swap", "rcgen", "rustls-native-certs", "rustls-pemfile", "tokio-rustls"]
 
 [dev-dependencies]
 bytes     = "1.11.1"
 criterion = { version = "0.8", features = ["html_reports"] }
+tempfile  = "3.27.0"
 
 [[bench]]
 name    = "encode_decode_bench"

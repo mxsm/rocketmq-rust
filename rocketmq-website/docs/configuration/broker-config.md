@@ -169,14 +169,41 @@ aclEnable = true
 
 ### TLS
 
+Broker and NameServer remoting servers use the same Java-compatible `tls.server.*` keys.
+
 ```toml
-# Enable TLS
-tlsEnable = true
-tlsTestModeEnable = false
-tlsServerCert = /path/to/server.pem
-tlsServerKey = /path/to/server.key
-tlsServerAuthClient = true
+# Enable TLS on the remoting server.
+tls.enable = true
+tls.server.mode = "enforcing"      # disabled, permissive, enforcing
+tls.test.mode.enable = false
+tls.server.certPath = "/path/to/server.pem"
+tls.server.keyPath = "/path/to/server.key"
+
+# Require client certificates for mTLS.
+tls.server.need.client.auth = "require"
+tls.server.authClient = true
+tls.server.trustCertPath = "/path/to/ca.pem"
+
+# Rust client-side TLS options use the same Java-compatible keys.
+tls.client.authServer = true
+tls.client.trustCertPath = "/path/to/ca.pem"
+tls.client.certPath = "/path/to/client.pem"
+tls.client.keyPath = "/path/to/client.key"
+tls.protocols = "TLSv1.3,TLSv1.2"
 ```
+
+Optional Java client -> Rust broker/NameServer TLS smoke:
+
+```bash
+export NAMESRV_ADDR=127.0.0.1:9876
+export JAVA_OPT="${JAVA_OPT} -Dtls.enable=true -Dtls.client.authServer=true -Dtls.client.trustCertPath=/path/to/ca.pem"
+
+# From a RocketMQ Java distribution.
+sh bin/mqadmin clusterList -n 127.0.0.1:9876
+```
+
+For Java mTLS smoke, add `-Dtls.client.certPath=/path/to/client.pem` and
+`-Dtls.client.keyPath=/path/to/client.key` to `JAVA_OPT`.
 
 ## Monitoring Configuration
 

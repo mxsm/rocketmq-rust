@@ -4327,6 +4327,7 @@ accounts:
             broker_server_config: ServerConfig {
                 listen_port: listen_port as u32,
                 bind_address: "127.0.0.1".to_owned(),
+                ..ServerConfig::default()
             },
             broker_ip1: CheetahString::from_static_str("127.0.0.1"),
             listen_port: listen_port as u32,
@@ -4541,6 +4542,7 @@ accounts:
         let server_config = ServerConfig {
             bind_address: "127.0.0.1".to_string(),
             listen_port: port as u32,
+            ..ServerConfig::default()
         };
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let handle = tokio::spawn(async move {

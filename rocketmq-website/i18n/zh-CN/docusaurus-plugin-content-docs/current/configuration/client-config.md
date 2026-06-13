@@ -93,6 +93,23 @@ let consumer = DefaultLitePullConsumer::builder()
     .build();
 ```
 
+## TLS / mTLS Configuration
+
+```rust
+use rocketmq_client_rust::base::client_config::ClientConfig;
+
+let client_config = ClientConfig::builder()
+    .namesrv_addr("localhost:9876")
+    .enable_tls(true)
+    .tls_client_auth_server(true)
+    .tls_client_trust_cert_path("/path/to/ca.pem")
+    // Optional client certificate and key for mTLS.
+    .tls_client_cert_path("/path/to/client.pem")
+    .tls_client_key_path("/path/to/client.key")
+    .build()?;
+# Ok::<(), rocketmq_error::RocketMQError>(())
+```
+
 ## 配置项速查
 
 ### Producer Builder

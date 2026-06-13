@@ -34,6 +34,7 @@ pub mod remoting_server;
 pub mod request_processor;
 pub mod rpc;
 pub mod runtime;
+pub mod tls;
 
 // Error helpers for unified error system
 pub mod connection_v2;

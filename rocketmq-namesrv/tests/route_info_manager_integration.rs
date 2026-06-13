@@ -82,6 +82,7 @@ impl NamesrvHarness {
             let server_config = ServerConfig {
                 listen_port: port as u32,
                 bind_address: "127.0.0.1".to_string(),
+                ..ServerConfig::default()
             };
             let bootstrap = Builder::new()
                 .set_name_server_config(namesrv_config.clone())

@@ -1837,6 +1837,9 @@ impl BrokerConfig {
             "statefulAuthorizationCacheExpiredSecond".into(),
             self.stateful_authorization_cache_expired_second.to_string().into(),
         );
+        for (key, value) in self.broker_server_config.tls_config.java_property_entries() {
+            properties.insert(key.into(), value.into());
+        }
         properties
     }
 }
@@ -2008,6 +2011,25 @@ mod tests {
         assert_eq!(
             properties.get("liteLagLatencyTopK").map(|value| value.as_str()),
             Some("50")
+        );
+    }
+
+    #[test]
+    fn get_properties_contains_java_tls_keys() {
+        let mut config = BrokerConfig::default();
+        config.broker_server_config.tls_config.enable = true;
+        config.broker_server_config.tls_config.server.cert_path = Some("/certs/server.pem".to_string());
+
+        let properties = config.get_properties();
+
+        assert_eq!(properties.get("tls.enable").map(|value| value.as_str()), Some("true"));
+        assert_eq!(
+            properties.get("tls.server.mode").map(|value| value.as_str()),
+            Some("permissive")
+        );
+        assert_eq!(
+            properties.get("tls.server.certPath").map(|value| value.as_str()),
+            Some("/certs/server.pem")
         );
     }
 

@@ -15,6 +15,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::common::tls_config::TlsConfig;
+
 /// Default value functions for Serde deserialization
 mod defaults {
     pub fn listen_port() -> u32 {
@@ -34,6 +36,9 @@ pub struct ServerConfig {
 
     #[serde(default = "defaults::bind_address")]
     pub bind_address: String,
+
+    #[serde(default, alias = "tls")]
+    pub tls_config: TlsConfig,
 }
 
 impl Default for ServerConfig {
@@ -41,6 +46,7 @@ impl Default for ServerConfig {
         ServerConfig {
             listen_port: defaults::listen_port(),
             bind_address: defaults::bind_address(),
+            tls_config: TlsConfig::default(),
         }
     }
 }
@@ -52,6 +58,10 @@ impl ServerConfig {
 
     pub fn listen_port(&self) -> u32 {
         self.listen_port
+    }
+
+    pub fn tls_config(&self) -> &TlsConfig {
+        &self.tls_config
     }
 }
 
@@ -66,5 +76,10 @@ mod tests {
         assert_eq!(config.listen_port(), 10911);
 
         assert_eq!(config.bind_address(), "0.0.0.0".to_string());
+
+        assert_eq!(
+            config.tls_config().server.mode,
+            crate::common::tls_config::TlsMode::Permissive
+        );
     }
 }
