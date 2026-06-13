@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
 use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_common::TimeUtils::current_nano;
@@ -51,6 +52,7 @@ pub struct ClientConfig {
     pub use_heartbeat_v2: bool,
     pub enable_concurrent_heartbeat: bool,
     pub use_tls: bool,
+    pub tls_config: TlsConfig,
     pub socks_proxy_config: CheetahString,
     pub mq_client_api_timeout: u64,
     pub detect_timeout: u32,
@@ -126,6 +128,7 @@ impl ClientConfig {
                 .parse::<bool>()
                 .unwrap_or(false),
             use_tls: false,
+            tls_config: TlsConfig::default(),
             socks_proxy_config: env::var(Self::SOCKS_PROXY_CONFIG)
                 .unwrap_or_else(|_| "{}".to_string())
                 .into(),
@@ -447,6 +450,43 @@ impl ClientConfig {
     #[inline]
     pub fn set_use_tls(&mut self, use_tls: bool) {
         self.use_tls = use_tls;
+        self.tls_config.enable = use_tls;
+    }
+
+    #[inline]
+    pub fn tls_config(&self) -> &TlsConfig {
+        &self.tls_config
+    }
+
+    #[inline]
+    pub fn set_tls_config(&mut self, mut tls_config: TlsConfig) {
+        tls_config.enable = self.use_tls;
+        self.tls_config = tls_config;
+    }
+
+    #[inline]
+    pub fn set_tls_test_mode_enable(&mut self, enabled: bool) {
+        self.tls_config.test_mode_enable = enabled;
+    }
+
+    #[inline]
+    pub fn set_tls_client_auth_server(&mut self, enabled: bool) {
+        self.tls_config.client.auth_server = enabled;
+    }
+
+    #[inline]
+    pub fn set_tls_client_trust_cert_path(&mut self, path: impl Into<String>) {
+        self.tls_config.client.trust_cert_path = Some(path.into());
+    }
+
+    #[inline]
+    pub fn set_tls_client_cert_path(&mut self, path: impl Into<String>) {
+        self.tls_config.client.cert_path = Some(path.into());
+    }
+
+    #[inline]
+    pub fn set_tls_client_key_path(&mut self, path: impl Into<String>) {
+        self.tls_config.client.key_path = Some(path.into());
     }
 
     #[inline]
@@ -627,6 +667,7 @@ impl ClientConfig {
         self.vip_channel_enabled = other.vip_channel_enabled;
         self.use_heartbeat_v2 = other.use_heartbeat_v2;
         self.use_tls = other.use_tls;
+        self.tls_config = other.tls_config.clone();
         self.socks_proxy_config = other.socks_proxy_config.clone();
         self.language = other.language;
         self.mq_client_api_timeout = other.mq_client_api_timeout;
@@ -767,6 +808,7 @@ mod tests {
         target.reset_client_config(&source);
 
         assert!(target.is_use_tls());
+        assert!(target.tls_config().enable);
         assert!(target.is_enable_trace());
         assert_eq!(
             target.get_trace_topic().map(|topic| topic.as_str()),

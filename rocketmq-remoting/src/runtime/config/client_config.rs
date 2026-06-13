@@ -14,6 +14,8 @@
 
 use std::sync::LazyLock;
 
+use rocketmq_common::common::tls_config::TlsConfig;
+
 use crate::runtime::config::net_system_config::NetSystemConfig;
 
 static NET_SYSTEM_CONFIG: LazyLock<NetSystemConfig> = LazyLock::new(NetSystemConfig::new);
@@ -33,6 +35,7 @@ pub struct TokioClientConfig {
     pub client_pooled_byte_buf_allocator_enable: bool,
     pub client_close_socket_if_timeout: bool,
     pub use_tls: bool,
+    pub tls_config: TlsConfig,
     pub socks_proxy_config: String,
     pub write_buffer_high_water_mark: i32,
     pub write_buffer_low_water_mark: i32,
@@ -58,6 +61,7 @@ impl Default for TokioClientConfig {
             client_pooled_byte_buf_allocator_enable: false,
             client_close_socket_if_timeout: NET_SYSTEM_CONFIG.client_close_socket_if_timeout,
             use_tls: false,
+            tls_config: TlsConfig::default(),
             socks_proxy_config: "{}".to_string(),
             write_buffer_high_water_mark: NET_SYSTEM_CONFIG.write_buffer_high_water_mark_value,
             write_buffer_low_water_mark: NET_SYSTEM_CONFIG.write_buffer_low_water_mark,

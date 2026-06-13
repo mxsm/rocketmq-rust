@@ -93,6 +93,38 @@ let consumer = DefaultLitePullConsumer::builder()
     .build();
 ```
 
+## TLS / mTLS Configuration
+
+```rust
+use rocketmq_client_rust::base::client_config::ClientConfig;
+
+let client_config = ClientConfig::builder()
+    .namesrv_addr("localhost:9876")
+    .enable_tls(true)
+    .tls_client_auth_server(true)
+    .tls_client_trust_cert_path("/path/to/ca.pem")
+    // Optional client certificate and key for mTLS.
+    .tls_client_cert_path("/path/to/client.pem")
+    .tls_client_key_path("/path/to/client.key")
+    .build()?;
+# Ok::<(), rocketmq_error::RocketMQError>(())
+```
+
+Broker-backed TLS smoke tests reuse `ROCKETMQ_ENABLE_TLS_SMOKE=true`.
+When the Java broker uses a private CA or mTLS, set the optional companion variables:
+
+```bash
+ROCKETMQ_NAMESRV_ADDR=127.0.0.1:9876
+ROCKETMQ_ENABLE_TLS_SMOKE=true
+ROCKETMQ_TLS_CLIENT_AUTH_SERVER=true
+ROCKETMQ_TLS_CLIENT_TRUST_CERT_PATH=/path/to/ca.pem
+ROCKETMQ_TLS_CLIENT_CERT_PATH=/path/to/client.pem
+ROCKETMQ_TLS_CLIENT_KEY_PATH=/path/to/client.key
+```
+
+For local test-mode brokers, use `ROCKETMQ_TLS_TEST_MODE_ENABLE=true` or
+`ROCKETMQ_TLS_CLIENT_AUTH_SERVER=false` to skip server certificate verification.
+
 ## Configuration Options Reference
 
 ### Producer Builder Options

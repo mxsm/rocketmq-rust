@@ -20,6 +20,13 @@
 //! production-readiness runs to fail instead of silently skipping missing
 //! broker/ACL/TLS/Trace/Recall scenarios. Keep each scenario small and explicit
 //! so it can be mirrored by the Java client during parity runs.
+//!
+//! TLS smoke extras:
+//! - `ROCKETMQ_TLS_TEST_MODE_ENABLE=true` skips server certificate verification.
+//! - `ROCKETMQ_TLS_CLIENT_AUTH_SERVER=false` skips server certificate verification.
+//! - `ROCKETMQ_TLS_CLIENT_TRUST_CERT_PATH=/path/ca.pem` trusts a custom CA.
+//! - `ROCKETMQ_TLS_CLIENT_CERT_PATH=/path/client.pem` and
+//!   `ROCKETMQ_TLS_CLIENT_KEY_PATH=/path/client.key` enable mTLS.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -108,6 +115,68 @@ fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+fn env_optional_bool(name: &str) -> RocketMQResult<Option<bool>> {
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(error) => {
+            return Err(RocketMQError::illegal_argument(format!(
+                "failed to read {name} for TLS smoke test: {error}"
+            )));
+        }
+    };
+
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "1" | "true" | "yes" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "off" => Ok(Some(false)),
+        _ => Err(RocketMQError::illegal_argument(format!(
+            "{name} must be one of true/false/1/0/yes/no/on/off"
+        ))),
+    }
+}
+
+fn env_optional_string(name: &str) -> RocketMQResult<Option<String>> {
+    match std::env::var(name) {
+        Ok(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(value.to_string()))
+            }
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(RocketMQError::illegal_argument(format!(
+            "failed to read {name} for TLS smoke test: {error}"
+        ))),
+    }
+}
+
+fn tls_smoke_client_config(env: &BrokerEnv) -> RocketMQResult<ClientConfig> {
+    let mut builder = ClientConfig::builder()
+        .namesrv_addr(env.namesrv_addr.clone())
+        .enable_tls(true);
+
+    if let Some(enabled) = env_optional_bool("ROCKETMQ_TLS_TEST_MODE_ENABLE")? {
+        builder = builder.tls_test_mode_enable(enabled);
+    }
+    if let Some(enabled) = env_optional_bool("ROCKETMQ_TLS_CLIENT_AUTH_SERVER")? {
+        builder = builder.tls_client_auth_server(enabled);
+    }
+    if let Some(path) = env_optional_string("ROCKETMQ_TLS_CLIENT_TRUST_CERT_PATH")? {
+        builder = builder.tls_client_trust_cert_path(path);
+    }
+    if let Some(path) = env_optional_string("ROCKETMQ_TLS_CLIENT_CERT_PATH")? {
+        builder = builder.tls_client_cert_path(path);
+    }
+    if let Some(path) = env_optional_string("ROCKETMQ_TLS_CLIENT_KEY_PATH")? {
+        builder = builder.tls_client_key_path(path);
+    }
+
+    builder.build()
 }
 
 fn strict_skip_error(reason: &str, strict: bool) -> RocketMQResult<()> {
@@ -661,10 +730,7 @@ async fn broker_backed_tls_producer_send_smoke() -> RocketMQResult<()> {
         return Ok(());
     }
 
-    let client_config = ClientConfig::builder()
-        .namesrv_addr(env.namesrv_addr)
-        .enable_tls(true)
-        .build()?;
+    let client_config = tls_smoke_client_config(&env)?;
     let mut producer = DefaultMQProducer::builder()
         .client_config(client_config)
         .producer_group(unique_group("tls-producer"))

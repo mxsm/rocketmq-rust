@@ -35,7 +35,6 @@ use tracing::warn;
 use crate::base::channel_event_listener::ChannelEventListener;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::tokio_event::TokioEvent;
-use crate::connection::Connection;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::remoting::inner::RemotingGeneralHandler;
@@ -43,6 +42,7 @@ use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
+use crate::tls::TlsServerRuntime;
 
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;
@@ -268,6 +268,9 @@ struct ConnectionListener<RP> {
     /// Contains request processor, RPC hooks, and response routing table.
     /// Arc-wrapped to share across all connection handlers efficiently.
     cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
+
+    /// TLS mode and acceptor state for newly accepted connections.
+    tls_runtime: TlsServerRuntime,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -346,37 +349,45 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let local_addr = socket.local_addr()?;
             info!("Accepted connection: {} → {}", remote_addr, local_addr);
 
-            // Create connection channel wrapper
-            let channel_inner = ArcMut::new(ChannelInner::new(
-                Connection::new(socket),
-                self.cmd_handler.response_table.clone(),
-            ));
-            let channel = Channel::new(channel_inner, local_addr, remote_addr);
-
-            // Notify CONNECTED event
-            let _ = event_tx.send(TokioEvent::new(
-                ConnectionNetEvent::CONNECTED(remote_addr),
-                remote_addr,
-                channel.clone(),
-            ));
-
-            // Build connection handler
-            let idle_timeout = Duration::from_secs(DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS);
-            let handler = ConnectionHandler {
-                connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
-                    channel: channel.clone(),
-                }),
-                shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
-                _shutdown_complete: self.shutdown_complete_tx.clone(),
-                conn_disconnect_notify: self.conn_disconnect_notify.clone(),
-                cmd_handler: self.cmd_handler.clone(),
-                event_tx: Some(event_tx.clone()),
-                idle_timeout,
-            };
+            let tls_runtime = self.tls_runtime.clone();
+            let cmd_handler = self.cmd_handler.clone();
+            let notify_shutdown = self.notify_shutdown.subscribe();
+            let shutdown_complete_tx = self.shutdown_complete_tx.clone();
+            let conn_disconnect_notify = self.conn_disconnect_notify.clone();
+            let event_tx_clone = event_tx.clone();
 
             // Spawn dedicated task for this connection
-            let event_tx_clone = event_tx.clone();
             tokio::spawn(async move {
+                let Some(connection) = tls_runtime.into_connection(socket, remote_addr).await else {
+                    drop(permit);
+                    return;
+                };
+
+                // Create connection channel wrapper
+                let channel_inner = ArcMut::new(ChannelInner::new(connection, cmd_handler.response_table.clone()));
+                let channel = Channel::new(channel_inner, local_addr, remote_addr);
+
+                // Notify CONNECTED event after plaintext/TLS negotiation succeeds
+                let _ = event_tx_clone.send(TokioEvent::new(
+                    ConnectionNetEvent::CONNECTED(remote_addr),
+                    remote_addr,
+                    channel.clone(),
+                ));
+
+                // Build connection handler
+                let idle_timeout = Duration::from_secs(DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS);
+                let handler_event_tx = event_tx_clone.clone();
+                let handler = ConnectionHandler {
+                    connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
+                        channel: channel.clone(),
+                    }),
+                    shutdown: Shutdown::new(notify_shutdown),
+                    _shutdown_complete: shutdown_complete_tx,
+                    conn_disconnect_notify,
+                    cmd_handler,
+                    event_tx: Some(handler_event_tx),
+                    idle_timeout,
+                };
                 let mut handler = handler;
 
                 // Run handler until completion
@@ -510,15 +521,17 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             }
         };
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
+        let tls_runtime = TlsServerRuntime::new(self.config.tls_config.clone());
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
-        run(
+        run_with_tls_config(
             listener,
             shutdown,
             request_processor,
             Some(notify_conn_disconnect),
             rpc_hooks,
             channel_event_listener,
+            tls_runtime,
         )
         .await;
     }
@@ -531,6 +544,27 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+) {
+    run_with_tls_config(
+        listener,
+        shutdown,
+        request_processor,
+        conn_disconnect_notify,
+        rpc_hooks,
+        channel_event_listener,
+        TlsServerRuntime::new(Default::default()),
+    )
+    .await;
+}
+
+async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
+    listener: TcpListener,
+    shutdown: impl Future,
+    request_processor: RP,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Vec<Arc<dyn RPCHook>>,
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+    tls_runtime: TlsServerRuntime,
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
@@ -549,6 +583,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
         channel_event_listener,
         cmd_handler: ArcMut::new(handler),
+        tls_runtime,
     };
 
     tokio::select! {
@@ -646,6 +681,7 @@ mod tests {
         let config = Arc::new(ServerConfig {
             bind_address: "127.0.0.1".to_string(),
             listen_port: 70000,
+            ..ServerConfig::default()
         });
         let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
 

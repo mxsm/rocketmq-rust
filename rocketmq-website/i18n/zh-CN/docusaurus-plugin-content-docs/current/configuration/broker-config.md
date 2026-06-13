@@ -169,13 +169,23 @@ aclEnable = true
 
 ### TLS
 
+Broker and NameServer remoting servers use the same Java-compatible `tls.server.*` keys.
+
 ```toml
 # 启用 TLS
-tlsEnable = true
-tlsTestModeEnable = false
-tlsServerCert = /path/to/server.pem
-tlsServerKey = /path/to/server.key
-tlsServerAuthClient = true
+tls.enable = true
+tls.server.mode = "enforcing"      # disabled, permissive, enforcing
+tls.test.mode.enable = false
+tls.server.certPath = "/path/to/server.pem"
+tls.server.keyPath = "/path/to/server.key"
+tls.server.need.client.auth = "require"
+tls.server.authClient = true
+tls.server.trustCertPath = "/path/to/ca.pem"
+tls.client.authServer = true
+tls.client.trustCertPath = "/path/to/ca.pem"
+tls.client.certPath = "/path/to/client.pem"
+tls.client.keyPath = "/path/to/client.key"
+tls.protocols = "TLSv1.3,TLSv1.2"
 ```
 
 ## 监控配置

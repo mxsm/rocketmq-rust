@@ -41,6 +41,7 @@ use crate::request_processor::default_request_processor::DefaultRemotingRequestP
 use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
+use crate::tls::TlsConfig;
 
 /// High-performance async RocketMQ client with connection pooling and auto-reconnection.
 ///
@@ -231,6 +232,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     #[inline]
     pub fn is_use_tls(&self) -> bool {
         self.tokio_client_config.use_tls
+    }
+
+    /// Returns the TLS configuration used when creating new outbound connections.
+    #[inline]
+    pub fn tls_config(&self) -> &TlsConfig {
+        &self.tokio_client_config.tls_config
     }
 }
 
@@ -510,10 +517,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
 
         let addr_inner = addr.to_string();
-        let use_tls = self.tokio_client_config.use_tls;
+        let mut tls_config = self.tokio_client_config.tls_config.clone();
+        tls_config.enable = self.tokio_client_config.use_tls;
 
         let connect_result = time::timeout(duration, async {
-            Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), use_tls).await
+            Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), tls_config).await
         })
         .await;
 
@@ -1191,11 +1199,16 @@ mod tests {
     fn is_use_tls_reflects_client_config() {
         let config = TokioClientConfig {
             use_tls: true,
+            tls_config: TlsConfig {
+                enable: true,
+                ..TlsConfig::default()
+            },
             ..Default::default()
         };
         let client = RocketmqDefaultClient::new(Arc::new(config), DefaultRemotingRequestProcessor);
 
         assert!(client.is_use_tls());
+        assert!(client.tls_config().enable);
     }
 
     #[tokio::test]

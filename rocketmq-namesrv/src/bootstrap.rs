@@ -1017,6 +1017,9 @@ impl NameServerRuntimeInner {
 
         push_config_entry(&mut entries, "listenPort", self.server_config.listen_port);
         push_config_entry(&mut entries, "bindAddress", &self.server_config.bind_address);
+        for (key, value) in self.server_config.tls_config.java_property_entries() {
+            push_config_entry(&mut entries, key, value);
+        }
 
         push_config_entry(
             &mut entries,
@@ -1171,6 +1174,9 @@ impl NameServerRuntimeInner {
                 "bindAddress" => {
                     self.server_config.bind_address = value.to_string();
                 }
+                key if is_tls_config_key(key) => {
+                    self.server_config.tls_config.apply_java_property(key, value.as_str());
+                }
                 "clientWorkerThreads" => {
                     self.tokio_client_config.client_worker_threads = parse_config_value(&key, &value)?;
                 }
@@ -1314,6 +1320,29 @@ fn push_config_entry(entries: &mut Vec<(&'static str, String)>, key: &'static st
     entries.push((key, value.to_string()));
 }
 
+fn is_tls_config_key(key: &str) -> bool {
+    matches!(
+        key,
+        "tls.enable"
+            | "tls.test.mode.enable"
+            | "tls.config.file"
+            | "tls.server.mode"
+            | "tls.server.need.client.auth"
+            | "tls.server.keyPath"
+            | "tls.server.keyPassword"
+            | "tls.server.certPath"
+            | "tls.server.authClient"
+            | "tls.server.trustCertPath"
+            | "tls.client.keyPath"
+            | "tls.client.keyPassword"
+            | "tls.client.certPath"
+            | "tls.client.authServer"
+            | "tls.client.trustCertPath"
+            | "tls.ciphers"
+            | "tls.protocols"
+    )
+}
+
 fn parse_config_value<T>(key: &str, value: &CheetahString) -> Result<T, String>
 where
     T: std::str::FromStr,
@@ -1340,6 +1369,7 @@ mod tests {
     use rocketmq_common::common::mq_version::RocketMqVersion;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
+    use rocketmq_common::common::tls_config::TlsMode;
     use rocketmq_common::common::TopicSysFlag;
     use rocketmq_common::CRC32Utils;
     use rocketmq_remoting::code::request_code::RequestCode;
@@ -1412,6 +1442,7 @@ mod tests {
         ServerConfig {
             listen_port: reserve_local_port() as u32,
             bind_address: "127.0.0.1".to_string(),
+            ..ServerConfig::default()
         }
     }
 
@@ -2998,6 +3029,7 @@ mod tests {
         let server_config = ServerConfig {
             listen_port: 19876,
             bind_address: "127.0.0.2".to_string(),
+            ..ServerConfig::default()
         };
         let bootstrap = Builder::new()
             .set_name_server_config(namesrv_config)
@@ -3039,6 +3071,14 @@ mod tests {
             properties.get("useRouteInfoManagerV2").map(|value| value.as_str()),
             Some("true")
         );
+        assert_eq!(
+            properties.get("tls.server.mode").map(|value| value.as_str()),
+            Some("permissive")
+        );
+        assert_eq!(
+            properties.get("tls.client.authServer").map(|value| value.as_str()),
+            Some("true")
+        );
     }
 
     #[tokio::test]
@@ -3046,7 +3086,7 @@ mod tests {
         let bootstrap = build_bootstrap_with_default_v2();
         let harness = LocalRequestHarness::new().await.unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
-            b"listenPort=19876\nbindAddress=127.0.0.2\nclientWorkerThreads=9\nenableTopicList=false\nunknownKey=42"
+            b"listenPort=19876\nbindAddress=127.0.0.2\nclientWorkerThreads=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
                 .as_slice(),
         );
 
@@ -3072,6 +3112,27 @@ mod tests {
                 .inner
                 .name_server_config()
                 .enable_topic_list
+        );
+        assert_eq!(
+            bootstrap
+                .name_server_runtime
+                .inner
+                .server_config()
+                .tls_config
+                .server
+                .mode,
+            TlsMode::Enforcing
+        );
+        assert_eq!(
+            bootstrap
+                .name_server_runtime
+                .inner
+                .server_config()
+                .tls_config
+                .server
+                .cert_path
+                .as_deref(),
+            Some("/certs/server.pem")
         );
     }
 

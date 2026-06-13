@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::bail;
+use anyhow::Context;
 use clap::Parser;
 use config::Config;
 use rocketmq_common::common::controller::controller_config::RaftPeer;
@@ -134,10 +135,14 @@ fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig, O
         namesrv_config.kv_config_path = kv_path.to_string_lossy().to_string();
     }
 
-    let server_config = ServerConfig {
+    let mut server_config = ServerConfig {
         listen_port: args.listen_port.unwrap_or(9876),
         bind_address: args.bind_address.clone().unwrap_or_else(|| "0.0.0.0".to_string()),
+        ..ServerConfig::default()
     };
+    if let Some(config_file) = args.config_file.clone() {
+        apply_tls_properties_from_file(&mut server_config, config_file)?;
+    }
 
     let controller_config = if namesrv_config.enable_controller_in_namesrv {
         Some(load_controller_config(args.config_file.clone(), &namesrv_config)?)
@@ -146,6 +151,13 @@ fn parse_and_merge_config(args: &Args) -> Result<(NamesrvConfig, ServerConfig, O
     };
 
     Ok((namesrv_config, server_config, controller_config))
+}
+
+fn apply_tls_properties_from_file(server_config: &mut ServerConfig, config_file: PathBuf) -> Result<()> {
+    let content = std::fs::read_to_string(&config_file)
+        .with_context(|| format!("Failed to read TLS properties from {:?}", config_file))?;
+    server_config.tls_config.apply_java_properties_str(&content);
+    Ok(())
 }
 
 /// Print all configuration items and exit

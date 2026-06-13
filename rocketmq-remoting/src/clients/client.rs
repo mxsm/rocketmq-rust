@@ -12,20 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::IpAddr;
 use std::net::SocketAddr;
-#[cfg(feature = "tls")]
-use std::sync::Arc as StdArc;
 
+use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
-#[cfg(feature = "tls")]
-use tokio_rustls::rustls::pki_types::ServerName;
-#[cfg(feature = "tls")]
-use tokio_rustls::TlsConnector;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
@@ -42,6 +36,10 @@ use crate::remoting_server::rocketmq_tokio_server::Shutdown;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
+#[cfg(feature = "tls")]
+use crate::tls::connect_tls_stream;
+#[cfg(not(feature = "tls"))]
+use crate::tls::tls_disabled_error;
 
 #[derive(Clone)]
 pub struct Client<PR> {
@@ -79,16 +77,16 @@ where
         cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         notify: broadcast::Receiver<()>,
-        use_tls: bool,
+        tls_config: TlsConfig,
     ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner<PR>>)> {
         let stream = TcpStream::connect(addr.as_str()).await.map_err(io_error)?;
         let local_addr = stream.local_addr()?;
         let remote_address = stream.peer_addr()?;
-        let connection = if use_tls {
+        let connection = if tls_config.enable {
             #[cfg(feature = "tls")]
             {
                 let server_name = server_name_from_addr(addr.as_str());
-                let tls_stream = connect_tls_stream(stream, &server_name).await?;
+                let tls_stream = connect_tls_stream(stream, &server_name, &tls_config).await?;
                 Connection::new_with_stream(tls_stream)
             }
             #[cfg(not(feature = "tls"))]
@@ -203,11 +201,11 @@ where
         addr: String,
         cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        use_tls: bool,
+        tls_config: TlsConfig,
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
-        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver, use_tls).await?;
+        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver, tls_config).await?;
         Ok(Client {
             inner,
             notify_shutdown,
@@ -426,76 +424,6 @@ fn server_name_from_addr(addr: &str) -> String {
     match addr.rsplit_once(':') {
         Some((host, _)) if !host.contains(':') => host.to_string(),
         _ => addr.to_string(),
-    }
-}
-
-#[cfg(feature = "tls")]
-async fn connect_tls_stream(
-    stream: TcpStream,
-    server_name: &str,
-) -> RocketMQResult<tokio_rustls::client::TlsStream<TcpStream>> {
-    let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
-    let cert_result = rustls_native_certs::load_native_certs();
-    let mut added_roots = 0usize;
-
-    for cert in cert_result.certs {
-        root_store
-            .add(cert)
-            .map_err(|error| rocketmq_error::RocketMQError::ConfigInvalidValue {
-                key: "tls.root_certificates",
-                value: "native-certs".to_string(),
-                reason: format!("failed to add native root certificate: {error}"),
-            })?;
-        added_roots += 1;
-    }
-
-    for error in cert_result.errors {
-        tracing::warn!("failed to load a native TLS root certificate: {error}");
-    }
-
-    if added_roots == 0 {
-        return Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
-            key: "tls.root_certificates",
-            value: "native-certs".to_string(),
-            reason: "no native root certificates were loaded".to_string(),
-        });
-    }
-
-    let config = tokio_rustls::rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-    let connector = TlsConnector::from(StdArc::new(config));
-    connector
-        .connect(parse_server_name(server_name)?, stream)
-        .await
-        .map_err(|error| {
-            rocketmq_error::RocketMQError::network_connection_failed(
-                server_name,
-                format!("TLS handshake failed: {error}"),
-            )
-        })
-}
-
-#[cfg(feature = "tls")]
-fn parse_server_name(server_name: &str) -> RocketMQResult<ServerName<'static>> {
-    let value = server_name.trim_matches(['[', ']']);
-    if let Ok(ip_addr) = value.parse::<IpAddr>() {
-        return Ok(ServerName::IpAddress(ip_addr.into()));
-    }
-
-    ServerName::try_from(value.to_string()).map_err(|error| rocketmq_error::RocketMQError::ConfigInvalidValue {
-        key: "tls.server_name",
-        value: server_name.to_string(),
-        reason: error.to_string(),
-    })
-}
-
-#[cfg(not(feature = "tls"))]
-fn tls_disabled_error() -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::ConfigInvalidValue {
-        key: "use_tls",
-        value: "true".to_string(),
-        reason: "rocketmq-remoting was compiled without the tls feature".to_string(),
     }
 }
 
