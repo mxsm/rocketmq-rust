@@ -24,6 +24,7 @@ use rocketmq_rust::WeakArcMut;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
+use rocketmq_remoting::protocol::body::cm_result::CMResult;
 
 pub struct ConsumeMessageServiceGeneral<T, K> {
     consume_message_concurrently_service: Option<ArcMut<T>>,
@@ -40,8 +41,10 @@ impl<T, K> ConsumeMessageServiceGeneral<T, K> {
         }
     }
 
-    pub fn get_consume_message_concurrently_service_weak(&self) -> WeakArcMut<T> {
-        ArcMut::downgrade(self.consume_message_concurrently_service.as_ref().unwrap())
+    pub fn get_consume_message_concurrently_service_weak(&self) -> Option<WeakArcMut<T>> {
+        self.consume_message_concurrently_service
+            .as_ref()
+            .map(ArcMut::downgrade)
     }
 }
 
@@ -63,23 +66,57 @@ where
     }
 
     pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        todo!()
+        if let Some(consume_message_concurrently_service) = &mut self.consume_message_concurrently_service {
+            consume_message_concurrently_service
+                .shutdown(await_terminate_millis)
+                .await;
+        }
+
+        if let Some(consume_message_orderly_service) = &mut self.consume_message_orderly_service {
+            consume_message_orderly_service.shutdown(await_terminate_millis).await;
+        }
     }
 
     pub fn update_core_pool_size(&self, core_pool_size: usize) {
-        todo!()
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
+            consume_message_concurrently_service.update_core_pool_size(core_pool_size);
+        }
+
+        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
+            consume_message_orderly_service.update_core_pool_size(core_pool_size);
+        }
     }
 
     pub fn inc_core_pool_size(&self) {
-        todo!()
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
+            consume_message_concurrently_service.inc_core_pool_size();
+        }
+
+        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
+            consume_message_orderly_service.inc_core_pool_size();
+        }
     }
 
     pub fn dec_core_pool_size(&self) {
-        todo!()
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
+            consume_message_concurrently_service.dec_core_pool_size();
+        }
+
+        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
+            consume_message_orderly_service.dec_core_pool_size();
+        }
     }
 
     pub fn get_core_pool_size(&self) -> usize {
-        todo!()
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
+            return consume_message_concurrently_service.get_core_pool_size();
+        }
+
+        if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
+            return consume_message_orderly_service.get_core_pool_size();
+        }
+
+        num_cpus::get()
     }
 
     pub async fn consume_message_directly(
@@ -98,7 +135,13 @@ where
                 .consume_message_directly(msg, broker_name)
                 .await
         } else {
-            unimplemented!("ConsumeMessageServiceGeneral not support consume_message_directly")
+            ConsumeMessageDirectlyResult::new(
+                false,
+                true,
+                CMResult::CRThrowException,
+                CheetahString::from_static_str("ConsumeMessageServiceGeneral has no direct-consume service"),
+                0,
+            )
         }
     }
 
@@ -128,11 +171,11 @@ where
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        unimplemented!("ConsumeMessageServiceGeneral not support submit_pop_consume_request")
+        let _ = (msgs, process_queue, message_queue);
     }
 
-    pub fn get_consume_message_concurrently_service(&self) -> ArcMut<T> {
-        self.consume_message_concurrently_service.as_ref().unwrap().clone()
+    pub fn get_consume_message_concurrently_service(&self) -> Option<ArcMut<T>> {
+        self.consume_message_concurrently_service.as_ref().cloned()
     }
 }
 
@@ -171,23 +214,59 @@ where
     }
 
     pub async fn shutdown(&mut self, await_terminate_millis: u64) {
-        todo!()
+        if let Some(consume_message_pop_concurrently_service) = &mut self.consume_message_pop_concurrently_service {
+            consume_message_pop_concurrently_service
+                .shutdown(await_terminate_millis)
+                .await;
+        }
+
+        if let Some(consume_message_pop_orderly_service) = &mut self.consume_message_pop_orderly_service {
+            consume_message_pop_orderly_service
+                .shutdown(await_terminate_millis)
+                .await;
+        }
     }
 
-    fn update_core_pool_size(&self, core_pool_size: usize) {
-        todo!()
+    pub fn update_core_pool_size(&self, core_pool_size: usize) {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
+            consume_message_pop_concurrently_service.update_core_pool_size(core_pool_size);
+        }
+
+        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
+            consume_message_pop_orderly_service.update_core_pool_size(core_pool_size);
+        }
     }
 
-    fn inc_core_pool_size(&self) {
-        todo!()
+    pub fn inc_core_pool_size(&self) {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
+            consume_message_pop_concurrently_service.inc_core_pool_size();
+        }
+
+        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
+            consume_message_pop_orderly_service.inc_core_pool_size();
+        }
     }
 
-    fn dec_core_pool_size(&self) {
-        todo!()
+    pub fn dec_core_pool_size(&self) {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
+            consume_message_pop_concurrently_service.dec_core_pool_size();
+        }
+
+        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
+            consume_message_pop_orderly_service.dec_core_pool_size();
+        }
     }
 
-    fn get_core_pool_size(&self) -> usize {
-        todo!()
+    pub fn get_core_pool_size(&self) -> usize {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
+            return consume_message_pop_concurrently_service.get_core_pool_size();
+        }
+
+        if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
+            return consume_message_pop_orderly_service.get_core_pool_size();
+        }
+
+        num_cpus::get()
     }
 
     pub(crate) async fn consume_message_directly(
@@ -206,7 +285,13 @@ where
                 .consume_message_directly(msg, broker_name)
                 .await
         } else {
-            unimplemented!("ConsumeMessagePopServiceGeneral not support consume_message_directly")
+            ConsumeMessageDirectlyResult::new(
+                false,
+                true,
+                CMResult::CRThrowException,
+                CheetahString::from_static_str("ConsumeMessagePopServiceGeneral has no direct-consume service"),
+                0,
+            )
         }
     }
 
@@ -217,7 +302,7 @@ where
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        unimplemented!("ConsumeMessagePopServiceGeneral not support submit_consume_request")
+        let _ = (msgs, process_queue, message_queue, dispatch_to_consume);
     }
 
     pub async fn submit_pop_consume_request(
@@ -241,6 +326,7 @@ where
 }
 
 /// Trait defining the behavior of a message consumption service.
+#[allow(async_fn_in_trait)]
 pub trait ConsumeMessageServiceTrait {
     /// Starts the message consumption service.
     ///
@@ -326,4 +412,60 @@ pub trait ConsumeMessageServiceTrait {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     );
+}
+
+/// Java-compatible public name for message consumption services.
+///
+/// Java exposes this contract as `ConsumeMessageService`. The original Rust
+/// implementation used `ConsumeMessageServiceTrait`; this blanket trait keeps
+/// existing implementors working while exposing the Java-equivalent API name.
+pub trait ConsumeMessageService: ConsumeMessageServiceTrait {}
+
+impl<T> ConsumeMessageService for T where T: ConsumeMessageServiceTrait + ?Sized {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoopConsumeMessageService;
+
+    impl ConsumeMessageServiceTrait for NoopConsumeMessageService {
+        fn start(&mut self, _this: ArcMut<Self>) {}
+
+        async fn shutdown(&mut self, _await_terminate_millis: u64) {}
+
+        async fn consume_message_directly(
+            &self,
+            _msg: MessageExt,
+            _broker_name: Option<CheetahString>,
+        ) -> ConsumeMessageDirectlyResult {
+            ConsumeMessageDirectlyResult::default()
+        }
+
+        async fn submit_consume_request(
+            &self,
+            _this: ArcMut<Self>,
+            _msgs: Vec<ArcMut<MessageExt>>,
+            _process_queue: Arc<ProcessQueue>,
+            _message_queue: MessageQueue,
+            _dispatch_to_consume: bool,
+        ) {
+        }
+
+        async fn submit_pop_consume_request(
+            &self,
+            _this: ArcMut<Self>,
+            _msgs: Vec<MessageExt>,
+            _process_queue: &PopProcessQueue,
+            _message_queue: &MessageQueue,
+        ) {
+        }
+    }
+
+    fn assert_consume_message_service<T: ConsumeMessageService>() {}
+
+    #[test]
+    fn consume_message_service_java_name_is_blanket_implemented() {
+        assert_consume_message_service::<NoopConsumeMessageService>();
+    }
 }

@@ -58,6 +58,24 @@ const motionStages = [
   },
 ];
 
+const heroMetrics = [
+  {
+    value: 'Tokio',
+    labelId: 'homepage.hero.metric.runtime',
+    label: 'async runtime',
+  },
+  {
+    value: 'CommitLog',
+    labelId: 'homepage.hero.metric.storage',
+    label: 'durable storage',
+  },
+  {
+    value: '5.x',
+    labelId: 'homepage.hero.metric.model',
+    label: 'RocketMQ model',
+  },
+];
+
 function ParticleField(): React.JSX.Element {
   return (
     <div className={styles.particleField} aria-hidden="true">
@@ -72,6 +90,138 @@ function ParticleField(): React.JSX.Element {
       <span className={clsx(styles.particleLink, styles.linkFour)} />
       <span className={clsx(styles.particleLink, styles.linkFive)} />
       <span className={clsx(styles.particleLink, styles.linkSix)} />
+    </div>
+  );
+}
+
+function LaunchArtwork(): React.JSX.Element {
+  const streamInstanceId = React.useId().replace(/:/g, '');
+  const streamGradientId = `stream-core-gradient-${streamInstanceId}`;
+  const streamRoutePrimaryId = `stream-route-primary-${streamInstanceId}`;
+  const streamRouteSecondaryId = `stream-route-secondary-${streamInstanceId}`;
+  const streamRouteTertiaryId = `stream-route-tertiary-${streamInstanceId}`;
+
+  return (
+    <div className={styles.launchArtwork} aria-hidden="true">
+      <div className={clsx(styles.launchPanel, styles.launchPanelLeft, styles.streamPanel)}>
+        <svg className={styles.streamSvg} viewBox="0 0 420 520" role="presentation">
+          <defs>
+            <linearGradient id={streamGradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#18d7f5" />
+              <stop offset="48%" stopColor="#9b6cff" />
+              <stop offset="100%" stopColor="#ff7a1a" />
+            </linearGradient>
+          </defs>
+
+          <g className={styles.streamBackplane}>
+            <path d="M78 132H312" />
+            <path d="M54 214H352" />
+            <path d="M82 296H322" />
+            <path d="M112 88V372" />
+            <path d="M210 66V424" />
+            <path d="M308 104V396" />
+          </g>
+
+          <g className={styles.streamHalo}>
+            <ellipse cx="210" cy="258" rx="142" ry="92" />
+            <ellipse cx="210" cy="258" rx="92" ry="58" />
+          </g>
+
+          <path
+            id={streamRoutePrimaryId}
+            className={clsx(styles.streamRoute, styles.streamRoutePrimary)}
+            d="M46 162C104 126 154 154 187 205C207 236 234 252 286 236C322 225 350 236 374 262"
+          />
+          <path
+            id={streamRouteSecondaryId}
+            className={clsx(styles.streamRoute, styles.streamRouteSecondary)}
+            d="M42 302C98 330 149 323 181 286C213 248 248 224 314 192C338 180 358 160 376 130"
+          />
+          <path
+            id={streamRouteTertiaryId}
+            className={clsx(styles.streamRoute, styles.streamRouteTertiary)}
+            d="M70 244C120 244 151 244 183 244C217 244 248 272 276 318C296 350 322 364 358 360"
+          />
+
+          <g className={styles.streamCore}>
+            <rect x="165" y="214" width="96" height="96" rx="24" fill={`url(#${streamGradientId})`} />
+            <path d="M190 242H236M190 262H222M190 282H238" />
+          </g>
+
+          <g className={styles.streamEndpoints}>
+            <circle cx="46" cy="162" r="5" />
+            <circle cx="42" cy="302" r="5" />
+            <circle cx="358" cy="360" r="5" />
+            <circle cx="376" cy="130" r="4" />
+          </g>
+
+          <g className={styles.streamPackets}>
+            <circle className={clsx(styles.streamPacket, styles.streamPacketPrimary)} r="5">
+              <animateMotion dur="5.4s" repeatCount="indefinite" begin="0s">
+                <mpath href={`#${streamRoutePrimaryId}`} />
+              </animateMotion>
+            </circle>
+            <circle className={clsx(styles.streamPacket, styles.streamPacketSecondary)} r="4">
+              <animateMotion dur="6.2s" repeatCount="indefinite" begin="-1.8s">
+                <mpath href={`#${streamRouteSecondaryId}`} />
+              </animateMotion>
+            </circle>
+            <circle className={clsx(styles.streamPacket, styles.streamPacketTertiary)} r="4">
+              <animateMotion dur="5.8s" repeatCount="indefinite" begin="-3s">
+                <mpath href={`#${streamRouteTertiaryId}`} />
+              </animateMotion>
+            </circle>
+          </g>
+        </svg>
+      </div>
+      <div className={clsx(styles.launchPanel, styles.launchPanelRight, styles.orbitPanel)}>
+        <span className={styles.orbitHorizon} />
+        <span className={styles.orbitArc} />
+        <span className={styles.orbitArcSecondary} />
+        <span className={styles.orbitPacketOne} />
+        <span className={styles.orbitPacketTwo} />
+        <span className={styles.orbitPacketThree} />
+      </div>
+    </div>
+  );
+}
+
+function HeroMetrics(): React.JSX.Element {
+  return (
+    <div className={styles.heroMetrics} aria-label="RocketMQ-Rust implementation highlights">
+      {heroMetrics.map((metric) => (
+        <div key={metric.value} className={styles.heroMetric}>
+          <strong>{metric.value}</strong>
+          <span>
+            {translate({
+              id: metric.labelId,
+              message: metric.label,
+            })}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SignalRail(): React.JSX.Element {
+  return (
+    <div className={styles.signalRail} aria-hidden="true">
+      <div className={styles.signalHeader}>
+        <span>topic: orders.created</span>
+        <strong>live flow</strong>
+      </div>
+      <div className={styles.signalRows}>
+        <span style={{'--delay': '0s'} as React.CSSProperties} />
+        <span style={{'--delay': '-0.7s'} as React.CSSProperties} />
+        <span style={{'--delay': '-1.4s'} as React.CSSProperties} />
+        <span style={{'--delay': '-2.1s'} as React.CSSProperties} />
+      </div>
+      <div className={styles.signalFooter}>
+        <span>route</span>
+        <span>append</span>
+        <span>dispatch</span>
+      </div>
     </div>
   );
 }
@@ -221,65 +371,78 @@ function StageTimeline(): React.JSX.Element {
 export default function DeveloperStyleHero(): React.JSX.Element {
   return (
     <header className={styles.hero}>
+      <LaunchArtwork />
       <ParticleField />
 
       <div className={styles.heroInner}>
-        <div className={styles.livePill}>
-          <span className={styles.liveDot} />
-          <span>
-            {translate({
-              id: 'homepage.hero.pill',
-              message: 'APACHE ROCKETMQ ARCHITECTURE - RUST IMPLEMENTATION - ASYNC RUNTIME',
-            })}
-          </span>
+        <div className={styles.heroBody}>
+          <div className={styles.heroCopy}>
+            <div className={styles.livePill}>
+              <span className={styles.liveDot} />
+              <span>
+                {translate({
+                  id: 'homepage.hero.pill',
+                  message: 'APACHE ROCKETMQ ARCHITECTURE - RUST IMPLEMENTATION - ASYNC RUNTIME',
+                })}
+              </span>
+            </div>
+
+            <h1 className={styles.title}>
+              <span className={styles.titleBrand}>
+                <span>Rocket</span>
+                <span className={styles.titleMq}>MQ</span>
+              </span>
+              <span className={styles.titleRust}>-Rust</span>
+            </h1>
+
+            <p className={styles.subheadline}>
+              {translate({
+                id: 'homepage.hero.subheadline',
+                message: 'High-performance messaging middleware built with Rust',
+              })}
+            </p>
+
+            <p className={styles.description}>
+              {translate({
+                id: 'homepage.hero.description',
+                message:
+                  "RocketMQ-Rust brings Apache RocketMQ's proven messaging model to Rust: producers send messages to brokers, NameServer provides routing, CommitLog persists data, and consumers process messages through async, type-safe APIs.",
+              })}
+            </p>
+
+            <div className={styles.ctaRow}>
+              <Link className={clsx(styles.button, styles.buttonPrimary)} to="/docs/introduction">
+                {translate({
+                  id: 'homepage.hero.getStarted',
+                  message: 'Get Started',
+                })}
+                <span aria-hidden="true">-&gt;</span>
+              </Link>
+              <Link className={clsx(styles.button, styles.buttonSecondary)} to="https://github.com/mxsm/rocketmq-rust">
+                {translate({
+                  id: 'homepage.hero.github',
+                  message: 'GitHub',
+                })}
+                <span aria-hidden="true">-&gt;</span>
+              </Link>
+              <a className={clsx(styles.button, styles.buttonGhost)} href="#motion-system">
+                {translate({
+                  id: 'homepage.hero.motionSpec',
+                  message: 'Architecture flow',
+                })}
+                <span aria-hidden="true">-&gt;</span>
+              </a>
+            </div>
+
+            <HeroMetrics />
+          </div>
+
+          <div className={styles.heroVisualColumn}>
+            <RuntimeVisual />
+            <SignalRail />
+          </div>
         </div>
 
-        <h1 className={styles.title}>
-          <span>Rocket</span>
-          <span className={styles.titleMq}>MQ</span>
-          <span>-Rust</span>
-        </h1>
-
-        <p className={styles.subheadline}>
-          {translate({
-            id: 'homepage.hero.subheadline',
-            message: 'High-performance messaging middleware built with Rust',
-          })}
-        </p>
-
-        <p className={styles.description}>
-          {translate({
-            id: 'homepage.hero.description',
-            message:
-              "RocketMQ-Rust brings Apache RocketMQ's proven messaging model to Rust: producers send messages to brokers, NameServer provides routing, CommitLog persists data, and consumers process messages through async, type-safe APIs.",
-          })}
-        </p>
-
-        <div className={styles.ctaRow}>
-          <Link className={clsx(styles.button, styles.buttonPrimary)} to="/docs/introduction">
-            {translate({
-              id: 'homepage.hero.getStarted',
-              message: 'Get Started',
-            })}
-            <span aria-hidden="true">-&gt;</span>
-          </Link>
-          <Link className={clsx(styles.button, styles.buttonSecondary)} to="https://github.com/mxsm/rocketmq-rust">
-            {translate({
-              id: 'homepage.hero.github',
-              message: 'GitHub',
-            })}
-            <span aria-hidden="true">-&gt;</span>
-          </Link>
-          <a className={clsx(styles.button, styles.buttonGhost)} href="#motion-system">
-            {translate({
-              id: 'homepage.hero.motionSpec',
-              message: 'Architecture flow',
-            })}
-            <span aria-hidden="true">-&gt;</span>
-          </a>
-        </div>
-
-        <RuntimeVisual />
         <StageTimeline />
 
         <div className={styles.statusStrip} aria-label="RocketMQ-Rust runtime modules">

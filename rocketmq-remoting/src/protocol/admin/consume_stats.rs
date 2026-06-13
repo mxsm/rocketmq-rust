@@ -192,7 +192,7 @@ fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, u
                 '{' => {
                     let object_end = consume_balanced_object_end(chars, index);
                     let raw_key = chars[index..=object_end].iter().collect::<String>();
-                    output.push_str(&serde_json::to_string(&raw_key).expect("stringify object key"));
+                    append_json_string(&mut output, &raw_key);
                     index = object_end + 1;
                     expecting_key = false;
                 }
@@ -248,6 +248,30 @@ fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, u
     }
 
     (output, index)
+}
+
+fn append_json_string(output: &mut String, value: &str) {
+    output.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\u{08}' => output.push_str("\\b"),
+            '\u{0C}' => output.push_str("\\f"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if ch <= '\u{1F}' => {
+                output.push_str("\\u00");
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let byte = ch as u8;
+                output.push(HEX[(byte >> 4) as usize] as char);
+                output.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+            ch => output.push(ch),
+        }
+    }
+    output.push('"');
 }
 
 fn consume_string_end(chars: &[char], start: usize) -> usize {
@@ -413,6 +437,20 @@ mod tests {
         assert_eq!(
             normalized,
             r#"{"offsetTable":{"{\"topic\":\"TopicTest\",\"brokerName\":\"broker-a\",\"queueId\":1}":{"brokerOffset":120}},"consumeTps":1.5}"#
+        );
+    }
+
+    #[test]
+    fn normalize_nonstandard_offset_table_keys_escapes_object_key_strings() {
+        let input = r#"{"offsetTable":{{"topic":"Topic\"Quoted","brokerName":"broker\\one","queueId":1}:{"brokerOffset":120}},"consumeTps":1.5}"#;
+        let normalized = normalize_nonstandard_offset_table_keys(input);
+        let value: serde_json::Value = serde_json::from_str(&normalized).expect("normalized JSON should parse");
+        let offset_table = value["offsetTable"].as_object().expect("offsetTable object");
+        let key = offset_table.keys().next().expect("one queue key");
+
+        assert_eq!(
+            key,
+            r#"{"topic":"Topic\"Quoted","brokerName":"broker\\one","queueId":1}"#
         );
     }
 

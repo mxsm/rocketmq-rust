@@ -47,6 +47,9 @@ pub struct AckMessageRequestHeader {
     #[required]
     pub offset: i64,
 
+    #[serde(rename = "liteTopic", skip_serializing_if = "Option::is_none")]
+    pub lite_topic: Option<CheetahString>,
+
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -57,6 +60,8 @@ mod tests {
     use serde_json;
 
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn serialize_ack_message_request_header() {
@@ -66,22 +71,24 @@ mod tests {
             queue_id: 1,
             extra_info: CheetahString::from("extra_info"),
             offset: 12345,
+            lite_topic: Some(CheetahString::from("lite_topic")),
             topic_request_header: None,
         };
         let json = serde_json::to_string(&header).unwrap();
-        let expected = r#"{"consumerGroup":"test_group","topic":"test_topic","queueId":1,"extraInfo":"extra_info","offset":12345}"#;
+        let expected = r#"{"consumerGroup":"test_group","topic":"test_topic","queueId":1,"extraInfo":"extra_info","offset":12345,"liteTopic":"lite_topic"}"#;
         assert_eq!(json, expected);
     }
 
     #[test]
     fn deserialize_ack_message_request_header() {
-        let json = r#"{"consumerGroup":"test_group","topic":"test_topic","queueId":1,"extraInfo":"extra_info","offset":12345}"#;
+        let json = r#"{"consumerGroup":"test_group","topic":"test_topic","queueId":1,"extraInfo":"extra_info","offset":12345,"liteTopic":"lite_topic"}"#;
         let header: AckMessageRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.consumer_group, CheetahString::from("test_group"));
         assert_eq!(header.topic, CheetahString::from("test_topic"));
         assert_eq!(header.queue_id, 1);
         assert_eq!(header.extra_info, CheetahString::from("extra_info"));
         assert_eq!(header.offset, 12345);
+        assert_eq!(header.lite_topic.as_deref(), Some("lite_topic"));
         assert!(header.topic_request_header.is_some());
     }
 
@@ -94,6 +101,7 @@ mod tests {
         assert_eq!(header.queue_id, 1);
         assert_eq!(header.extra_info, CheetahString::from("extra_info"));
         assert_eq!(header.offset, 12345);
+        assert!(header.lite_topic.is_none());
         assert!(header.topic_request_header.is_some());
     }
 
@@ -105,10 +113,30 @@ mod tests {
             queue_id: 1,
             extra_info: CheetahString::from("extra_info"),
             offset: 12345,
+            lite_topic: None,
             topic_request_header: None,
         };
         let json = serde_json::to_string(&header).unwrap();
         let expected = r#"{"consumerGroup":"test_group","topic":"test_topic","queueId":1,"extraInfo":"extra_info","offset":12345}"#;
         assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn ack_message_request_header_maps_lite_topic_like_java_header() {
+        let header = AckMessageRequestHeader {
+            consumer_group: CheetahString::from("test_group"),
+            topic: CheetahString::from("test_topic"),
+            queue_id: 1,
+            extra_info: CheetahString::from("extra_info"),
+            offset: 12345,
+            lite_topic: Some(CheetahString::from("lite_topic")),
+            topic_request_header: None,
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(map.get("liteTopic").map(|value| value.as_str()), Some("lite_topic"));
+
+        let decoded = <AckMessageRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(decoded.lite_topic.as_deref(), Some("lite_topic"));
     }
 }

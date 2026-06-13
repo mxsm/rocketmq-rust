@@ -82,11 +82,29 @@ pub fn cal_signature(content: &[u8], secret_key: &str) -> Result<String, AuthErr
     cal_signature_with_algorithm(content, secret_key, SignatureAlgorithm::default())
 }
 
+pub fn cal_signature_segments<'a, I>(segments: I, secret_key: &str) -> Result<String, AuthError>
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
+    cal_signature_segments_with_algorithm(segments, secret_key, SignatureAlgorithm::default())
+}
+
 pub fn cal_signature_with_algorithm(
     content: &[u8],
     secret_key: &str,
     algorithm: SignatureAlgorithm,
 ) -> Result<String, AuthError> {
+    cal_signature_segments_with_algorithm([content], secret_key, algorithm)
+}
+
+pub fn cal_signature_segments_with_algorithm<'a, I>(
+    segments: I,
+    secret_key: &str,
+    algorithm: SignatureAlgorithm,
+) -> Result<String, AuthError>
+where
+    I: IntoIterator<Item = &'a [u8]>,
+{
     use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
@@ -97,7 +115,9 @@ pub fn cal_signature_with_algorithm(
             let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes()).map_err(|error| {
                 AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
             })?;
-            mac.update(content);
+            for segment in segments {
+                mac.update(segment);
+            }
             Ok(STANDARD.encode(mac.finalize().into_bytes().as_slice()))
         }
         SignatureAlgorithm::HmacSha256 => {
@@ -105,7 +125,9 @@ pub fn cal_signature_with_algorithm(
             let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|error| {
                 AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
             })?;
-            mac.update(content);
+            for segment in segments {
+                mac.update(segment);
+            }
             Ok(STANDARD.encode(mac.finalize().into_bytes().as_slice()))
         }
         SignatureAlgorithm::HmacMd5 => {
@@ -113,7 +135,9 @@ pub fn cal_signature_with_algorithm(
             let mut mac = HmacMd5::new_from_slice(secret_key.as_bytes()).map_err(|error| {
                 AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
             })?;
-            mac.update(content);
+            for segment in segments {
+                mac.update(segment);
+            }
             Ok(STANDARD.encode(mac.finalize().into_bytes().as_slice()))
         }
     }
@@ -175,6 +199,29 @@ mod tests {
         let signature = cal_signature(b"alicetopic-a", "secret").unwrap();
 
         assert_eq!(signature, "3yomro7y0WqWcbV+9tQa4av5w3Q=");
+    }
+
+    #[test]
+    fn test_cal_signature_segments_matches_contiguous_content() {
+        let contiguous = cal_signature(b"alicetokentopic-abody", "secret").unwrap();
+        let segmented = cal_signature_segments([b"alice".as_slice(), b"token", b"topic-a", b"body"], "secret").unwrap();
+
+        assert_eq!(segmented, contiguous);
+    }
+
+    #[test]
+    fn test_cal_signature_segments_supports_all_java_algorithms() {
+        for algorithm in [
+            SignatureAlgorithm::HmacSha1,
+            SignatureAlgorithm::HmacSha256,
+            SignatureAlgorithm::HmacMd5,
+        ] {
+            let contiguous = cal_signature_with_algorithm(b"alicetopic-a", "secret", algorithm).unwrap();
+            let segmented =
+                cal_signature_segments_with_algorithm([b"alice".as_slice(), b"topic-a"], "secret", algorithm).unwrap();
+
+            assert_eq!(segmented, contiguous);
+        }
     }
 
     #[test]

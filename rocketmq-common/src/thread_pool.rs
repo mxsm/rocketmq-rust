@@ -18,6 +18,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use anyhow::bail;
+use anyhow::Context;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
@@ -43,13 +45,17 @@ impl TokioExecutorService {
 
 impl TokioExecutorService {
     pub fn new() -> TokioExecutorService {
-        TokioExecutorService {
+        Self::try_new().unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
+    }
+
+    pub fn try_new() -> anyhow::Result<TokioExecutorService> {
+        Ok(TokioExecutorService {
             inner: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(num_cpus::get())
                 .enable_all()
                 .build()
-                .unwrap(),
-        }
+                .context("failed to create TokioExecutorService runtime")?,
+        })
     }
 
     pub fn new_with_config(
@@ -58,12 +64,23 @@ impl TokioExecutorService {
         keep_alive: Duration,
         max_blocking_threads: usize,
     ) -> TokioExecutorService {
+        Self::try_new_with_config(thread_num, thread_prefix, keep_alive, max_blocking_threads)
+            .unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
+    }
+
+    pub fn try_new_with_config(
+        thread_num: usize,
+        thread_prefix: Option<impl Into<String>>,
+        keep_alive: Duration,
+        max_blocking_threads: usize,
+    ) -> anyhow::Result<TokioExecutorService> {
+        validate_runtime_config(thread_num, max_blocking_threads)?;
         let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
             thread_prefix.into()
         } else {
             "rocketmq-thread-".to_string()
         };
-        TokioExecutorService {
+        Ok(TokioExecutorService {
             inner: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(thread_num)
                 .thread_keep_alive(keep_alive)
@@ -75,8 +92,8 @@ impl TokioExecutorService {
                 })
                 .enable_all()
                 .build()
-                .unwrap(),
-        }
+                .context("failed to create configured TokioExecutorService runtime")?,
+        })
     }
 }
 
@@ -137,16 +154,13 @@ impl FuturesExecutorServiceBuilder {
     }
 
     pub fn create(&mut self) -> anyhow::Result<FuturesExecutorService> {
+        let name_prefix = self.thread_name_prefix.as_deref().unwrap_or("Default-Executor");
         let thread_pool = futures::executor::ThreadPool::builder()
             .stack_size(self.stack_size)
             .pool_size(self.pool_size)
-            .name_prefix(
-                self.thread_name_prefix
-                    .as_ref()
-                    .unwrap_or(&String::from("Default-Executor")),
-            )
+            .name_prefix(name_prefix)
             .create()
-            .unwrap();
+            .context("failed to create futures executor thread pool")?;
         Ok(FuturesExecutorService { inner: thread_pool })
     }
 }
@@ -162,13 +176,17 @@ impl Default for ScheduledExecutorService {
 }
 impl ScheduledExecutorService {
     pub fn new() -> ScheduledExecutorService {
-        ScheduledExecutorService {
+        Self::try_new().unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
+    }
+
+    pub fn try_new() -> anyhow::Result<ScheduledExecutorService> {
+        Ok(ScheduledExecutorService {
             inner: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(num_cpus::get())
                 .enable_all()
                 .build()
-                .unwrap(),
-        }
+                .context("failed to create ScheduledExecutorService runtime")?,
+        })
     }
 
     pub fn new_with_config(
@@ -177,12 +195,23 @@ impl ScheduledExecutorService {
         keep_alive: Duration,
         max_blocking_threads: usize,
     ) -> ScheduledExecutorService {
+        Self::try_new_with_config(thread_num, thread_prefix, keep_alive, max_blocking_threads)
+            .unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
+    }
+
+    pub fn try_new_with_config(
+        thread_num: usize,
+        thread_prefix: Option<impl Into<String>>,
+        keep_alive: Duration,
+        max_blocking_threads: usize,
+    ) -> anyhow::Result<ScheduledExecutorService> {
+        validate_runtime_config(thread_num, max_blocking_threads)?;
         let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
             thread_prefix.into()
         } else {
             "rocketmq-thread-".to_string()
         };
-        ScheduledExecutorService {
+        Ok(ScheduledExecutorService {
             inner: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(thread_num)
                 .thread_keep_alive(keep_alive)
@@ -194,8 +223,8 @@ impl ScheduledExecutorService {
                 })
                 .enable_all()
                 .build()
-                .unwrap(),
-        }
+                .context("failed to create configured ScheduledExecutorService runtime")?,
+        })
     }
 
     pub fn schedule_at_fixed_rate<F>(&self, mut task: F, initial_delay: Option<Duration>, period: Duration)
@@ -225,6 +254,55 @@ impl ScheduledExecutorService {
     }
 }
 
+fn validate_runtime_config(thread_num: usize, max_blocking_threads: usize) -> anyhow::Result<()> {
+    if thread_num == 0 {
+        bail!("thread_num must be greater than zero");
+    }
+    if max_blocking_threads == 0 {
+        bail!("max_blocking_threads must be greater than zero");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn tokio_executor_try_new_with_config_rejects_invalid_thread_counts() {
+        let error = match TokioExecutorService::try_new_with_config(0, Some("test-"), Duration::from_secs(1), 1) {
+            Ok(_) => panic!("zero worker threads should be rejected before tokio builder panics"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("thread_num must be greater than zero"));
+
+        let error = match TokioExecutorService::try_new_with_config(1, Some("test-"), Duration::from_secs(1), 0) {
+            Ok(_) => panic!("zero blocking threads should be rejected before tokio builder panics"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("max_blocking_threads must be greater than zero"));
+    }
+
+    #[test]
+    fn scheduled_executor_try_new_with_config_rejects_invalid_thread_counts() {
+        let error = match ScheduledExecutorService::try_new_with_config(0, Some("test-"), Duration::from_secs(1), 1) {
+            Ok(_) => panic!("zero worker threads should be rejected before tokio builder panics"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("thread_num must be greater than zero"));
+
+        let error = match ScheduledExecutorService::try_new_with_config(1, Some("test-"), Duration::from_secs(1), 0) {
+            Ok(_) => panic!("zero blocking threads should be rejected before tokio builder panics"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("max_blocking_threads must be greater than zero"));
+    }
+}
+
 impl ScheduledExecutorService {
     pub fn shutdown(self) {
         self.inner.shutdown_background();
@@ -232,5 +310,26 @@ impl ScheduledExecutorService {
 
     pub fn shutdown_timeout(self, timeout: Duration) {
         self.inner.shutdown_timeout(timeout);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::FuturesExecutorServiceBuilder;
+
+    #[test]
+    fn futures_executor_builder_create_returns_executor() {
+        let mut builder = FuturesExecutorServiceBuilder::new().pool_size(1).stack_size(0);
+        let executor = builder.create().expect("executor should be created");
+        let (tx, rx) = mpsc::channel();
+
+        executor.spawn(async move {
+            tx.send(42).expect("test receiver should be alive");
+        });
+
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
     }
 }

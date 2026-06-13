@@ -129,7 +129,7 @@ impl<'a> fmt::Display for CheckForbiddenContext<'a> {
         }
 
         if let Some(ref mode) = self.communication_mode {
-            write!(f, "communication_mode: {:?}, ", mode)?;
+            write!(f, "communication_mode: {}, ", mode)?;
         }
 
         if self.send_result.is_some() {
@@ -206,6 +206,16 @@ mod tests {
         let ctx = CheckForbiddenContext::new().with_communication_mode(CommunicationMode::Sync);
 
         assert!(matches!(ctx.communication_mode, Some(CommunicationMode::Sync)));
+    }
+
+    #[test]
+    fn display_uses_java_communication_mode_name() {
+        let ctx = CheckForbiddenContext::new().with_communication_mode(CommunicationMode::Oneway);
+
+        let rendered = ctx.to_string();
+
+        assert!(rendered.contains("communication_mode: ONEWAY"));
+        assert!(!rendered.contains("communication_mode: Oneway"));
     }
 
     #[test]

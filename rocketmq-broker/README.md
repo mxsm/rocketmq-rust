@@ -162,16 +162,21 @@ If no configuration file is specified via `-c`, the broker will try to load from
 Example `broker.toml`:
 
 ```toml
-[broker_identity]
-broker_name = "broker-a"
-broker_cluster_name = "DefaultCluster"
-broker_id = 0
+namesrvAddr = "127.0.0.1:9876"
+brokerIp1 = "127.0.0.1"
+listenPort = 10911
+storePathRootDir = "./store"
+storePathCommitLog = "./store/commitlog"
+enableControllerMode = false
 
-namesrv_addr = "127.0.0.1:9876"
-broker_ip1 = "127.0.0.1"
-listen_port = 10911
-store_path_root_dir = "./store"
-enable_controller_mode = false
+[brokerServerConfig]
+listenPort = 10911
+bindAddress = "0.0.0.0"
+
+[brokerIdentity]
+brokerName = "broker-a"
+brokerClusterName = "DefaultCluster"
+brokerId = 0
 ```
 
 #### Exit Codes

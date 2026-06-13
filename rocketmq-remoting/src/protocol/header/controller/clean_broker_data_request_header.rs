@@ -29,6 +29,8 @@ pub struct CleanBrokerDataRequestHeader {
     pub invoke_time: u64,
 }
 
+pub type CleanControllerBrokerDataRequestHeader = CleanBrokerDataRequestHeader;
+
 impl Default for CleanBrokerDataRequestHeader {
     fn default() -> Self {
         Self {
@@ -115,5 +117,15 @@ mod tests {
         );
         assert!(!header.clean_living_broker);
         assert_eq!(header.invoke_time, 1234567890);
+    }
+
+    #[test]
+    fn clean_controller_broker_data_request_header_alias_matches_java_name() {
+        let header = CleanControllerBrokerDataRequestHeader {
+            broker_name: CheetahString::from_static_str("broker-a"),
+            ..Default::default()
+        };
+
+        assert_eq!(header.broker_name, "broker-a");
     }
 }

@@ -42,6 +42,12 @@ pub struct ChangeInvisibleTimeRequestHeader {
 
     #[required]
     pub invisible_time: i64,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lite_topic: Option<CheetahString>,
+
+    pub suspend: bool,
+
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -51,8 +57,15 @@ impl Display for ChangeInvisibleTimeRequestHeader {
         write!(
             f,
             "ChangeInvisibleTimeRequestHeader {{ consumer_group: {}, topic: {}, queue_id: {}, extra_info: {}, offset: \
-             {}, invisible_time: {} }}",
-            self.consumer_group, self.topic, self.queue_id, self.extra_info, self.offset, self.invisible_time
+             {}, invisible_time: {}, lite_topic: {:?}, suspend: {} }}",
+            self.consumer_group,
+            self.topic,
+            self.queue_id,
+            self.extra_info,
+            self.offset,
+            self.invisible_time,
+            self.lite_topic,
+            self.suspend
         )
     }
 }
@@ -63,6 +76,8 @@ mod tests {
     use serde_json;
 
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn change_invisible_time_request_header_display_format() {
@@ -73,12 +88,14 @@ mod tests {
             extra_info: CheetahString::from("info"),
             offset: 12345,
             invisible_time: 67890,
+            lite_topic: None,
+            suspend: false,
             topic_request_header: None,
         };
         assert_eq!(
             format!("{}", header),
             "ChangeInvisibleTimeRequestHeader { consumer_group: group1, topic: topic1, queue_id: 1, extra_info: info, \
-             offset: 12345, invisible_time: 67890 }"
+             offset: 12345, invisible_time: 67890, lite_topic: None, suspend: false }"
         );
     }
 
@@ -91,6 +108,8 @@ mod tests {
             extra_info: CheetahString::from("info"),
             offset: 12345,
             invisible_time: 67890,
+            lite_topic: Some(CheetahString::from("lite_topic")),
+            suspend: true,
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: None,
                 lo: None,
@@ -99,7 +118,7 @@ mod tests {
         assert_eq!(
             format!("{}", header),
             "ChangeInvisibleTimeRequestHeader { consumer_group: group1, topic: topic1, queue_id: 1, extra_info: info, \
-             offset: 12345, invisible_time: 67890 }"
+             offset: 12345, invisible_time: 67890, lite_topic: Some(\"lite_topic\"), suspend: true }"
         );
     }
 
@@ -112,18 +131,20 @@ mod tests {
             extra_info: CheetahString::from("info"),
             offset: 12345,
             invisible_time: 67890,
+            lite_topic: Some(CheetahString::from("lite_topic")),
+            suspend: true,
             topic_request_header: None,
         };
         let serialized = serde_json::to_string(&header).unwrap();
         assert_eq!(
             serialized,
-            r#"{"consumerGroup":"group1","topic":"topic1","queueId":1,"extraInfo":"info","offset":12345,"invisibleTime":67890}"#
+            r#"{"consumerGroup":"group1","topic":"topic1","queueId":1,"extraInfo":"info","offset":12345,"invisibleTime":67890,"liteTopic":"lite_topic","suspend":true}"#
         );
     }
 
     #[test]
     fn change_invisible_time_request_header_deserialize() {
-        let json = r#"{"consumerGroup":"group1","topic":"topic1","queueId":1,"extraInfo":"info","offset":12345,"invisibleTime":67890}"#;
+        let json = r#"{"consumerGroup":"group1","topic":"topic1","queueId":1,"extraInfo":"info","offset":12345,"invisibleTime":67890,"liteTopic":"lite_topic","suspend":true}"#;
         let header: ChangeInvisibleTimeRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.consumer_group, CheetahString::from("group1"));
         assert_eq!(header.topic, CheetahString::from("topic1"));
@@ -131,5 +152,30 @@ mod tests {
         assert_eq!(header.extra_info, CheetahString::from("info"));
         assert_eq!(header.offset, 12345);
         assert_eq!(header.invisible_time, 67890);
+        assert_eq!(header.lite_topic.as_deref(), Some("lite_topic"));
+        assert!(header.suspend);
+    }
+
+    #[test]
+    fn change_invisible_time_request_header_maps_lite_topic_and_suspend_like_java_header() {
+        let header = ChangeInvisibleTimeRequestHeader {
+            consumer_group: CheetahString::from("group1"),
+            topic: CheetahString::from("topic1"),
+            queue_id: 1,
+            extra_info: CheetahString::from("info"),
+            offset: 12345,
+            invisible_time: 67890,
+            lite_topic: Some(CheetahString::from("lite_topic")),
+            suspend: true,
+            topic_request_header: None,
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(map.get("liteTopic").map(|value| value.as_str()), Some("lite_topic"));
+        assert_eq!(map.get("suspend").map(|value| value.as_str()), Some("true"));
+
+        let decoded = <ChangeInvisibleTimeRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(decoded.lite_topic.as_deref(), Some("lite_topic"));
+        assert!(decoded.suspend);
     }
 }

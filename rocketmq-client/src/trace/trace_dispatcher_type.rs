@@ -24,6 +24,14 @@ pub enum TraceDispatcherType {
 
 impl TraceDispatcherType {
     #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Producer => "PRODUCER",
+            Self::Consumer => "CONSUMER",
+        }
+    }
+
+    #[inline]
     pub fn is_producer(&self) -> bool {
         matches!(self, Self::Producer)
     }
@@ -31,6 +39,12 @@ impl TraceDispatcherType {
     #[inline]
     pub fn is_consumer(&self) -> bool {
         matches!(self, Self::Consumer)
+    }
+}
+
+impl std::fmt::Display for TraceDispatcherType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -77,6 +91,12 @@ mod tests {
         let dispatcher_type = TraceDispatcherType::Producer;
         let debug_str = format!("{:?}", dispatcher_type);
         assert_eq!(debug_str, "Producer");
+    }
+
+    #[test]
+    fn trace_dispatcher_type_display_matches_java_enum_name() {
+        assert_eq!(TraceDispatcherType::Producer.to_string(), "PRODUCER");
+        assert_eq!(TraceDispatcherType::Consumer.to_string(), "CONSUMER");
     }
 
     #[test]

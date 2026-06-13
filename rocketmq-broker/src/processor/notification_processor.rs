@@ -351,18 +351,21 @@ where
             }
         }
 
-        if !has_msg
-            && self.pop_long_polling_service.polling_(
+        let mut polling_full = false;
+        if !has_msg {
+            match self.pop_long_polling_service.polling_(
                 ctx,
                 request,
                 PollingHeader::new_from_notification_request_header(&request_header),
-            ) == PollingResult::PollingSuc
-        {
-            return Ok(None);
+            ) {
+                PollingResult::PollingSuc => return Ok(None),
+                PollingResult::PollingFull => polling_full = true,
+                _ => {}
+            }
         }
 
         response.set_code_ref(ResponseCode::Success);
-        response.set_command_custom_header_ref(NotificationResponseHeader { has_msg });
+        response.set_command_custom_header_ref(NotificationResponseHeader { has_msg, polling_full });
 
         Ok(Some(response))
     }

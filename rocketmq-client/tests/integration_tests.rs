@@ -29,6 +29,8 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 #[test]
 fn test_producer_creation() {
@@ -155,6 +157,7 @@ fn ok_returns_true_when_non_empty() {
 fn select_with_empty_list_returns_none() {
     let tpi = TopicPublishInfo::new();
     assert!(tpi.select_one_message_queue_filters(&[]).is_none());
+    assert!(tpi.select_one_message_queue().is_none());
 }
 
 #[test]
@@ -186,6 +189,29 @@ fn select_by_broker_prefers_different_one() {
 }
 
 #[test]
+fn select_by_broker_uses_round_robin_order_like_java() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.message_queue_list = vec![
+        MessageQueue::from_parts("t", "b1", 0),
+        MessageQueue::from_parts("t", "b2", 1),
+        MessageQueue::from_parts("t", "b3", 2),
+    ];
+
+    let last = CheetahString::from("b1");
+    let mut selected_queue_ids = std::collections::HashSet::new();
+    for _ in 0..8 {
+        let out = tpi
+            .select_one_message_queue_by_broker(Some(&last))
+            .expect("a non-last broker queue should be selected");
+        assert_ne!(out.broker_name(), &last);
+        selected_queue_ids.insert(out.queue_id());
+    }
+
+    assert!(selected_queue_ids.contains(&1));
+    assert!(selected_queue_ids.contains(&2));
+}
+
+#[test]
 fn select_by_broker_falls_back_when_all_same() {
     let mut tpi = TopicPublishInfo::new();
     let mq1 = MessageQueue::from_parts("t", "same", 1);
@@ -213,6 +239,46 @@ fn select_with_filters_matches_and_no_match() {
     let filter_none = |_: &MessageQueue| false;
     let out = tpi.select_one_message_queue_filters(&[&filter_none]);
     assert!(out.is_none());
+}
+
+#[test]
+fn get_write_queue_nums_by_broker_matches_java_route_lookup() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.topic_route_data = Some(TopicRouteData {
+        queue_datas: vec![
+            QueueData::new(CheetahString::from("broker-a"), 4, 6, 6, 0),
+            QueueData::new(CheetahString::from("broker-b"), 2, 3, 6, 0),
+        ],
+        ..Default::default()
+    });
+
+    assert_eq!(tpi.get_write_queue_nums_by_broker("broker-a"), 6);
+    assert_eq!(tpi.get_write_queue_nums_by_broker("broker-b"), 3);
+    assert_eq!(tpi.get_write_queue_nums_by_broker("missing"), -1);
+}
+
+#[test]
+fn get_write_queue_nums_by_broker_returns_minus_one_without_java_route_data() {
+    let tpi = TopicPublishInfo::new();
+
+    assert_eq!(tpi.get_write_queue_nums_by_broker("broker-a"), -1);
+}
+
+#[test]
+fn get_write_queue_nums_by_broker_rejects_values_outside_java_int_range() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.topic_route_data = Some(TopicRouteData {
+        queue_datas: vec![QueueData::new(
+            CheetahString::from("broker-a"),
+            4,
+            i32::MAX as u32 + 1,
+            6,
+            0,
+        )],
+        ..Default::default()
+    });
+
+    assert_eq!(tpi.get_write_queue_nums_by_broker("broker-a"), -1);
 }
 
 #[test]

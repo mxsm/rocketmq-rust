@@ -151,12 +151,31 @@ impl MessageBuilder {
         self
     }
 
+    /// Sets the message priority.
+    #[inline]
+    pub fn priority(mut self, priority: u32) -> Self {
+        self.properties
+            .insert(MessagePropertyKey::Priority, priority.to_string());
+        self
+    }
+
+    /// Tries to set the message priority with Java-compatible non-negative validation.
+    pub fn try_priority(mut self, priority: i32) -> RocketMQResult<Self> {
+        if priority < 0 {
+            return Err(RocketMQError::illegal_argument(
+                "The priority must be greater than or equal to 0",
+            ));
+        }
+        self.properties
+            .insert(MessagePropertyKey::Priority, priority.to_string());
+        Ok(self)
+    }
+
     /// Sets whether to wait for store confirmation.
     #[inline]
     pub fn wait_store_msg_ok(mut self, wait: bool) -> Self {
-        if !wait {
-            self.properties.insert(MessagePropertyKey::WaitStoreMsgOk, "false");
-        }
+        self.properties
+            .insert(MessagePropertyKey::WaitStoreMsgOk, if wait { "true" } else { "false" });
         self
     }
 
@@ -242,10 +261,13 @@ impl MessageBuilder {
     /// # Errors
     ///
     /// Returns an error if required fields (topic) are not set.
-    pub fn build(self) -> RocketMQResult<super::message_single::Message> {
+    pub fn build(mut self) -> RocketMQResult<super::message_single::Message> {
         let topic = self
             .topic
             .ok_or_else(|| RocketMQError::InvalidProperty("Topic is required for message".to_string()))?;
+        if self.properties.get(MessagePropertyKey::WaitStoreMsgOk).is_none() {
+            self.properties.insert(MessagePropertyKey::WaitStoreMsgOk, "true");
+        }
 
         Ok(super::message_single::Message::from_builder(
             topic,
@@ -278,6 +300,7 @@ mod tests {
 
         assert_eq!(msg.topic().as_str(), "test-topic");
         assert_eq!(msg.body_slice(), b"hello world");
+        assert_eq!(msg.properties().get(MessagePropertyKey::WaitStoreMsgOk), Some("true"));
     }
 
     #[test]
@@ -305,6 +328,26 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_with_priority_matches_java_property() {
+        let msg = MessageBuilder::new()
+            .topic("test-topic")
+            .body_slice(b"test")
+            .priority(7)
+            .build_unchecked();
+
+        assert_eq!(msg.priority(), 7);
+        assert_eq!(msg.properties().get(MessagePropertyKey::Priority), Some("7"));
+    }
+
+    #[test]
+    fn test_builder_try_priority_rejects_negative_like_java() {
+        match MessageBuilder::new().topic("test-topic").try_priority(-1) {
+            Ok(_) => panic!("negative priority should be rejected"),
+            Err(error) => assert!(error.to_string().contains("greater than or equal to 0")),
+        }
+    }
+
+    #[test]
     fn test_builder_missing_topic() {
         let result = MessageBuilder::new().body_slice(b"test").build();
 
@@ -320,5 +363,30 @@ mod tests {
             .build_unchecked();
 
         assert_eq!(msg.transaction_id(), Some("tx-123"));
+    }
+
+    #[test]
+    fn test_builder_wait_store_msg_ok_writes_java_boolean_property() {
+        let wait_msg = MessageBuilder::new()
+            .topic("test-topic")
+            .body_slice(b"test")
+            .wait_store_msg_ok(true)
+            .build_unchecked();
+        assert!(wait_msg.wait_store_msg_ok());
+        assert_eq!(
+            wait_msg.properties().get(MessagePropertyKey::WaitStoreMsgOk),
+            Some("true")
+        );
+
+        let no_wait_msg = MessageBuilder::new()
+            .topic("test-topic")
+            .body_slice(b"test")
+            .wait_store_msg_ok(false)
+            .build_unchecked();
+        assert!(!no_wait_msg.wait_store_msg_ok());
+        assert_eq!(
+            no_wait_msg.properties().get(MessagePropertyKey::WaitStoreMsgOk),
+            Some("false")
+        );
     }
 }

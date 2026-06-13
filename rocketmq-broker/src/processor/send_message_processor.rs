@@ -1574,11 +1574,17 @@ fn recall_handle_topic_and_timestamp(
         return None;
     }
 
-    let deliver_ms = message
-        .property(MessageConst::PROPERTY_TIMER_DELIVER_MS)?
-        .parse::<u64>()
-        .ok()?;
     let now = TimeUtils::current_millis();
+    let deliver_ms = if let Some(delay_sec) = message.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
+        now.checked_add(delay_sec.parse::<u64>().ok()?.checked_mul(1000)?)?
+    } else if let Some(delay_ms) = message.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
+        now.checked_add(delay_ms.parse::<u64>().ok()?)?
+    } else {
+        message
+            .property(MessageConst::PROPERTY_TIMER_DELIVER_MS)?
+            .parse::<u64>()
+            .ok()?
+    };
     if deliver_ms <= now {
         return None;
     }
@@ -1681,6 +1687,48 @@ mod tests {
 
         assert_eq!(topic, "RecallTopic");
         assert_eq!(timestamp, i64::try_from(deliver_ms - 1000).unwrap() + 1);
+    }
+
+    #[test]
+    fn recall_handle_timestamp_uses_timer_delay_ms_before_store_transform() {
+        let mut message = message_with_topic("RecallTopic");
+        message.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("60000"),
+        );
+
+        let now = TimeUtils::current_millis();
+        let (topic, timestamp) =
+            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+
+        assert_eq!(topic, "RecallTopic");
+        let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
+        let max_expected = i64::try_from(((TimeUtils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
+        assert!(
+            (min_expected..=max_expected).contains(&timestamp),
+            "timestamp {timestamp} should be derived from timer delay ms"
+        );
+    }
+
+    #[test]
+    fn recall_handle_timestamp_uses_timer_delay_sec_before_store_transform() {
+        let mut message = message_with_topic("RecallTopic");
+        message.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC),
+            CheetahString::from_static_str("60"),
+        );
+
+        let now = TimeUtils::current_millis();
+        let (topic, timestamp) =
+            recall_handle_topic_and_timestamp(&message, &MessageStoreConfig::default()).expect("recall data");
+
+        assert_eq!(topic, "RecallTopic");
+        let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
+        let max_expected = i64::try_from(((TimeUtils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
+        assert!(
+            (min_expected..=max_expected).contains(&timestamp),
+            "timestamp {timestamp} should be derived from timer delay sec"
+        );
     }
 
     #[test]

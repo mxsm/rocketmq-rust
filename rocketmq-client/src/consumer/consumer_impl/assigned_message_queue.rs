@@ -70,6 +70,50 @@ impl AssignedMessageQueue {
         map.entry(mq.clone()).or_insert_with(|| AssignedQueue::new(mq));
     }
 
+    /// Updates all assigned message queues, dropping queues that are no longer assigned.
+    pub async fn update_assigned_message_queue<I>(&self, assigned: I)
+    where
+        I: IntoIterator<Item = MessageQueue>,
+    {
+        let assigned: HashSet<MessageQueue> = assigned.into_iter().collect();
+        let mut map = self.queue_map.write().await;
+
+        map.retain(|mq, aq| {
+            if assigned.contains(mq) {
+                true
+            } else {
+                aq.process_queue.set_dropped(true);
+                false
+            }
+        });
+
+        for mq in assigned {
+            map.entry(mq.clone()).or_insert_with(|| AssignedQueue::new(mq));
+        }
+    }
+
+    /// Updates assigned queues for one topic, leaving assignments of other topics untouched.
+    pub async fn update_assigned_message_queue_for_topic<I>(&self, topic: &str, assigned: I)
+    where
+        I: IntoIterator<Item = MessageQueue>,
+    {
+        let assigned: HashSet<MessageQueue> = assigned.into_iter().collect();
+        let mut map = self.queue_map.write().await;
+
+        map.retain(|mq, aq| {
+            if mq.topic() == topic && !assigned.contains(mq) {
+                aq.process_queue.set_dropped(true);
+                false
+            } else {
+                true
+            }
+        });
+
+        for mq in assigned {
+            map.entry(mq.clone()).or_insert_with(|| AssignedQueue::new(mq));
+        }
+    }
+
     /// Removes a message queue and returns its process queue.
     pub async fn remove(&self, mq: &MessageQueue) -> Option<Arc<ProcessQueue>> {
         let mut map = self.queue_map.write().await;
@@ -95,6 +139,11 @@ impl AssignedMessageQueue {
         removed_pqs
     }
 
+    /// Java-compatible alias for removing all assigned queues of a topic.
+    pub async fn remove_assigned_message_queue(&self, topic: &str) -> Vec<Arc<ProcessQueue>> {
+        self.remove_by_topic(topic).await
+    }
+
     /// Returns the process queue for the specified message queue.
     pub async fn get_process_queue(&self, mq: &MessageQueue) -> Option<Arc<ProcessQueue>> {
         let map = self.queue_map.read().await;
@@ -104,7 +153,7 @@ impl AssignedMessageQueue {
     /// Checks if the specified queue is paused.
     pub async fn is_paused(&self, mq: &MessageQueue) -> bool {
         let map = self.queue_map.read().await;
-        map.get(mq).map(|aq| aq.paused.load(Ordering::Acquire)).unwrap_or(false)
+        map.get(mq).map(|aq| aq.paused.load(Ordering::Acquire)).unwrap_or(true)
     }
 
     /// Sets the pause state for the specified queue.
@@ -175,6 +224,11 @@ impl AssignedMessageQueue {
     pub async fn message_queues(&self) -> HashSet<MessageQueue> {
         let map = self.queue_map.read().await;
         map.keys().cloned().collect()
+    }
+
+    /// Java-compatible alias for all assigned message queues.
+    pub async fn assigned_message_queues(&self) -> HashSet<MessageQueue> {
+        self.message_queues().await
     }
 
     /// Returns the number of assigned queues.
@@ -279,13 +333,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_assigned_message_queue_removes_unassigned_queues_like_java_assign() {
+        let amq = AssignedMessageQueue::new();
+        let retained = mock_mq("topic_a", 0);
+        let removed = mock_mq("topic_a", 1);
+
+        amq.put(retained.clone()).await;
+        amq.put(removed.clone()).await;
+        let removed_pq = amq.get_process_queue(&removed).await.unwrap();
+
+        amq.update_assigned_message_queue(vec![retained.clone()]).await;
+
+        let queues = amq.assigned_message_queues().await;
+        assert_eq!(queues.len(), 1);
+        assert!(queues.contains(&retained));
+        assert!(amq.get_process_queue(&removed).await.is_none());
+        assert!(removed_pq.is_dropped());
+    }
+
+    #[tokio::test]
+    async fn update_assigned_message_queue_for_topic_keeps_other_topics() {
+        let amq = AssignedMessageQueue::new();
+        let retained = mock_mq("topic_a", 0);
+        let removed_same_topic = mock_mq("topic_a", 1);
+        let other_topic = mock_mq("topic_b", 0);
+
+        amq.put(retained.clone()).await;
+        amq.put(removed_same_topic.clone()).await;
+        amq.put(other_topic.clone()).await;
+        let removed_pq = amq.get_process_queue(&removed_same_topic).await.unwrap();
+
+        amq.update_assigned_message_queue_for_topic("topic_a", vec![retained.clone()])
+            .await;
+
+        let queues = amq.message_queues().await;
+        assert_eq!(queues.len(), 2);
+        assert!(queues.contains(&retained));
+        assert!(queues.contains(&other_topic));
+        assert!(!queues.contains(&removed_same_topic));
+        assert!(removed_pq.is_dropped());
+    }
+
+    #[tokio::test]
     async fn test_pause_and_resume() {
         let amq = AssignedMessageQueue::new();
         let mq = mock_mq("topic_a", 0);
+        let unassigned_mq = mock_mq("topic_a", 1);
 
         amq.put(mq.clone()).await;
 
         assert!(!amq.is_paused(&mq).await);
+        assert!(amq.is_paused(&unassigned_mq).await);
 
         amq.set_paused(&mq, true).await;
         assert!(amq.is_paused(&mq).await);

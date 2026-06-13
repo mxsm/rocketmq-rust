@@ -20,7 +20,6 @@
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
 use rocketmq_common::common::message::message_single::Message;
 

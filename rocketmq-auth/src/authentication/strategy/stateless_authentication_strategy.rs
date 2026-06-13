@@ -28,6 +28,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::strategy::abstract_authentication_strategy::AbstractAuthenticationStrategy;
 use crate::authentication::strategy::authentication_strategy::AuthenticationStrategy;
+use crate::authentication::strategy::block_on_authentication_provider;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
 
@@ -99,11 +100,7 @@ where
             None => return Ok(()),
         };
 
-        let auth_result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(provider.authenticate(default_context))
-        });
-
-        auth_result.map_err(|e| AuthError::AuthenticationFailed(e.to_string()))
+        block_on_authentication_provider(provider.as_ref(), default_context)
     }
 
     pub fn provider(&self) -> Option<&P> {
@@ -154,6 +151,42 @@ mod tests {
 
     use super::*;
     use crate::authentication::provider::DefaultAuthenticationProvider;
+
+    struct CountingAuthenticationProvider {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl AuthenticationProvider for CountingAuthenticationProvider {
+        type Context = DefaultAuthenticationContext;
+
+        async fn initialize(
+            &mut self,
+            _config: AuthConfig,
+            _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
+        ) -> RocketMQResult<()> {
+            Ok(())
+        }
+
+        async fn authenticate(&self, _context: &Self::Context) -> RocketMQResult<()> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn new_context_from_metadata(
+            &self,
+            _metadata: &std::collections::HashMap<String, String>,
+            _request: Box<dyn Any + Send>,
+        ) -> Self::Context {
+            DefaultAuthenticationContext::new()
+        }
+
+        fn new_context_from_command(
+            &self,
+            _command: &rocketmq_remoting::protocol::remoting_command::RemotingCommand,
+        ) -> Self::Context {
+            DefaultAuthenticationContext::new()
+        }
+    }
 
     #[test]
     fn test_stateless_strategy_creation() {
@@ -261,5 +294,29 @@ mod tests {
 
         let result2 = strategy.authenticate(&context);
         assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn authenticates_inside_current_thread_runtime_without_block_in_place_panic() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = Arc::new(CountingAuthenticationProvider { calls: calls.clone() });
+        let strategy = StatelessAuthenticationStrategy::new(
+            AuthConfig {
+                authentication_enabled: true,
+                ..Default::default()
+            },
+            Some(provider),
+        );
+        let context = DefaultAuthenticationContext::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            assert!(strategy.authenticate(&context).is_ok());
+        });
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

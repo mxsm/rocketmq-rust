@@ -114,7 +114,7 @@ fn bench_increment_first_call(c: &mut Criterion) {
     group.bench_function("small_rng", |b| {
         b.iter(|| {
             // Reset the optimized version
-            let idx = ThreadLocalIndex;
+            let idx = ThreadLocalIndex::new();
             idx.reset();
             black_box(idx.increment_and_get())
         })
@@ -129,7 +129,8 @@ fn bench_increment_subsequent_calls(c: &mut Criterion) {
     // Initialize all versions first
     let _ = OriginalThreadLocalIndex.increment_and_get();
     let _ = ThreadRngThreadLocalIndex.increment_and_get();
-    let _ = ThreadLocalIndex.increment_and_get();
+    let small_rng_idx = ThreadLocalIndex::new();
+    let _ = small_rng_idx.increment_and_get();
 
     group.bench_function("original", |b| {
         b.iter(|| black_box(OriginalThreadLocalIndex.increment_and_get()))
@@ -139,9 +140,7 @@ fn bench_increment_subsequent_calls(c: &mut Criterion) {
         b.iter(|| black_box(ThreadRngThreadLocalIndex.increment_and_get()))
     });
 
-    group.bench_function("small_rng", |b| {
-        b.iter(|| black_box(ThreadLocalIndex.increment_and_get()))
-    });
+    group.bench_function("small_rng", |b| b.iter(|| black_box(small_rng_idx.increment_and_get())));
 
     group.finish();
 }
@@ -164,8 +163,9 @@ fn bench_reset(c: &mut Criterion) {
     });
 
     group.bench_function("small_rng", |b| {
+        let idx = ThreadLocalIndex::new();
         b.iter(|| {
-            ThreadLocalIndex.reset();
+            idx.reset();
             black_box(())
         })
     });
@@ -198,7 +198,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
 
     group.bench_function("small_rng", |b| {
         b.iter(|| {
-            let idx = ThreadLocalIndex;
+            let idx = ThreadLocalIndex::new();
             for _ in 0..100 {
                 black_box(idx.increment_and_get());
             }
@@ -247,7 +247,7 @@ fn bench_contention_simulation(c: &mut Criterion) {
             std::thread::scope(|s| {
                 for _ in 0..4 {
                     s.spawn(|| {
-                        let idx = ThreadLocalIndex;
+                        let idx = ThreadLocalIndex::new();
                         for _ in 0..1000 {
                             black_box(idx.increment_and_get());
                         }

@@ -12,13 +12,102 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::Hash;
-use std::hash::Hasher;
-
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 
 use crate::producer::message_queue_selector::MessageQueueSelector;
+
+/// Java-compatible hashCode support for [`SelectMessageQueueByHash`].
+///
+/// Java's selector delegates to `arg.hashCode()`, so Rust arguments need an explicit stable
+/// contract instead of `std::hash::Hash`, whose output is intentionally implementation-specific.
+pub trait JavaHashCode {
+    fn java_hash_code(&self) -> i32;
+}
+
+impl<T> JavaHashCode for &T
+where
+    T: JavaHashCode + ?Sized,
+{
+    #[inline]
+    fn java_hash_code(&self) -> i32 {
+        (*self).java_hash_code()
+    }
+}
+
+impl JavaHashCode for str {
+    #[inline]
+    fn java_hash_code(&self) -> i32 {
+        java_string_hash_code(self)
+    }
+}
+
+impl JavaHashCode for String {
+    #[inline]
+    fn java_hash_code(&self) -> i32 {
+        self.as_str().java_hash_code()
+    }
+}
+
+impl JavaHashCode for CheetahString {
+    #[inline]
+    fn java_hash_code(&self) -> i32 {
+        self.as_str().java_hash_code()
+    }
+}
+
+impl JavaHashCode for bool {
+    #[inline]
+    fn java_hash_code(&self) -> i32 {
+        if *self {
+            1231
+        } else {
+            1237
+        }
+    }
+}
+
+macro_rules! impl_java_integer_hash_code {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl JavaHashCode for $ty {
+                #[inline]
+                fn java_hash_code(&self) -> i32 {
+                    *self as i32
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! impl_java_long_hash_code {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl JavaHashCode for $ty {
+                #[inline]
+                fn java_hash_code(&self) -> i32 {
+                    java_long_hash_code(*self as u64)
+                }
+            }
+        )*
+    };
+}
+
+impl_java_integer_hash_code!(i8, i16, i32, u8, u16, u32);
+impl_java_long_hash_code!(i64, u64, isize, usize);
+
+#[inline]
+fn java_string_hash_code(value: &str) -> i32 {
+    value
+        .encode_utf16()
+        .fold(0i32, |hash, unit| hash.wrapping_mul(31).wrapping_add(unit as i32))
+}
+
+#[inline]
+fn java_long_hash_code(value: u64) -> i32 {
+    (value ^ (value >> 32)) as u32 as i32
+}
 
 /// A message queue selector that uses hash-based routing.
 ///
@@ -54,7 +143,7 @@ impl SelectMessageQueueByHash {
 impl<M, A> MessageQueueSelector<M, A> for SelectMessageQueueByHash
 where
     M: MessageTrait,
-    A: Hash,
+    A: JavaHashCode,
 {
     /// Selects a message queue by hashing the argument.
     ///
@@ -65,11 +154,8 @@ where
             return None;
         }
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        arg.hash(&mut hasher);
-        let hash_code = hasher.finish();
-
-        let index = (hash_code % mqs.len() as u64) as usize;
+        let value = arg.java_hash_code() as i64 % mqs.len() as i64;
+        let index = if value < 0 { -value } else { value } as usize;
         mqs.get(index).cloned()
     }
 }
@@ -109,6 +195,45 @@ mod tests {
         let selected_b = selector.select(&queues, &msg, &200);
         assert!(selected_a.is_some());
         assert!(selected_b.is_some());
+    }
+
+    #[test]
+    fn java_hash_code_matches_java_reference_values() {
+        assert_eq!("user_12345".java_hash_code(), 1_871_841_983);
+        assert_eq!("order-123".java_hash_code(), -392_797_389);
+        assert_eq!("rocketmq".java_hash_code(), -518_197_384);
+        assert_eq!("\u{4e2d}\u{6587}key".java_hash_code(), 2_076_960_549);
+        assert_eq!(12345_i32.java_hash_code(), 12_345);
+        assert_eq!((-12345_i32).java_hash_code(), -12_345);
+        assert_eq!(i32::MIN.java_hash_code(), i32::MIN);
+        assert_eq!(12345_i64.java_hash_code(), 12_345);
+        assert_eq!((-12345_i64).java_hash_code(), 12_344);
+        assert_eq!(4_294_967_296_i64.java_hash_code(), 1);
+        assert_eq!((-4_294_967_297_i64).java_hash_code(), 1);
+    }
+
+    #[test]
+    fn select_matches_java_hash_selector_reference_indexes() {
+        let selector = SelectMessageQueueByHash::new();
+        let queues: Vec<_> = (0..1024)
+            .map(|queue_id| MessageQueue::from_parts("test_topic", "broker-a", queue_id))
+            .collect();
+        let msg = Message::builder().topic("test_topic").build().unwrap();
+
+        assert_eq!(
+            selector.select(&queues[..3], &msg, &"user_12345").unwrap().queue_id(),
+            2
+        );
+        assert_eq!(selector.select(&queues[..4], &msg, &"order-123").unwrap().queue_id(), 1);
+        assert_eq!(selector.select(&queues[..10], &msg, &"rocketmq").unwrap().queue_id(), 4);
+        assert_eq!(
+            selector
+                .select(&queues[..1024], &msg, &"\u{4e2d}\u{6587}key")
+                .unwrap()
+                .queue_id(),
+            805
+        );
+        assert_eq!(selector.select(&queues[..10], &msg, &-12345_i64).unwrap().queue_id(), 4);
     }
 
     #[test]

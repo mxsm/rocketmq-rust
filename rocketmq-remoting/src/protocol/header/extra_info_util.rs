@@ -310,18 +310,19 @@ impl ExtraInfoUtil {
             }
 
             let key = format!("{}@{}", split[0], split[1]);
-            if msg_offset_map.contains_key(&key) {
-                return Err(IllegalArgument("parse msgOffsetMap error, duplicate".to_string()).into());
-            }
-
-            msg_offset_map.insert(key.clone(), Vec::with_capacity(8));
+            let offsets = match msg_offset_map.entry(key) {
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(IllegalArgument("parse msgOffsetMap error, duplicate".to_string()).into());
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(Vec::with_capacity(8)),
+            };
             let msg_offsets: Vec<&str> = split[2].split(",").collect();
 
             for msg_offset in msg_offsets {
                 let offset = msg_offset
                     .parse::<i64>()
                     .map_err(|_| IllegalArgumentError("parse msgOffset error".to_string()))?;
-                msg_offset_map.get_mut(&key).unwrap().push(offset);
+                offsets.push(offset);
             }
         }
 

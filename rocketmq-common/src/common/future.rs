@@ -14,9 +14,12 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
+use std::thread;
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
@@ -41,6 +44,31 @@ struct CompletableFutureState<T> {
 
     /// An optional error value contained within the CompletableFuture upon completion.
     error: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+fn lock_state<T>(state: &Mutex<CompletableFutureState<T>>) -> MutexGuard<'_, CompletableFutureState<T>> {
+    state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn complete_state<T>(state: &Mutex<CompletableFutureState<T>>, data: T) {
+    let mut state = lock_state(state);
+    state.data = Some(data);
+    state.completed = State::Ready;
+    if let Some(waker) = state.waker.take() {
+        waker.wake();
+    }
+}
+
+fn complete_exceptionally<T>(
+    state: &Mutex<CompletableFutureState<T>>,
+    error: Box<dyn std::error::Error + Send + Sync>,
+) {
+    let mut state = lock_state(state);
+    state.completed = State::Ready;
+    state.error = Some(error);
+    if let Some(waker) = state.waker.take() {
+        waker.wake();
+    }
 }
 
 /// A CompletableFuture represents a future value that may be completed or pending.
@@ -69,19 +97,25 @@ impl<T: Send + 'static> CompletableFuture<T> {
         }));
         let arc = status.clone();
 
-        // Spawn a Tokio task to handle completion.
         let (tx, mut rx) = mpsc::channel::<T>(1);
-        tokio::spawn(async move {
-            if let Some(data) = rx.recv().await {
-                let mut state = arc.lock().unwrap();
-                state.data = Some(data);
-                state.completed = State::Ready;
-                if let Some(waker) = state.waker.take() {
-                    waker.wake();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Some(data) = rx.recv().await {
+                    complete_state(&arc, data);
+                    rx.close();
                 }
-                rx.close();
-            }
-        });
+            });
+        } else if let Err(error) = thread::Builder::new()
+            .name("rocketmq-completable-future".to_string())
+            .spawn(move || {
+                if let Some(data) = rx.blocking_recv() {
+                    complete_state(&arc, data);
+                    rx.close();
+                }
+            })
+        {
+            complete_exceptionally(&status, Box::new(error));
+        }
 
         Self {
             state: status,
@@ -96,21 +130,11 @@ impl<T: Send + 'static> CompletableFuture<T> {
 
     // Rust code to complete a future task by updating the state and waking up the associated waker
     pub fn complete(&mut self, result: T) {
-        let mut state = self.state.lock().unwrap();
-        state.completed = State::Ready;
-        state.data = Some(result);
-        if let Some(waker) = state.waker.take() {
-            waker.wake();
-        }
+        complete_state(&self.state, result);
     }
 
     pub fn complete_exceptionally(&mut self, error: Box<dyn std::error::Error + Send + Sync>) {
-        let mut state = self.state.lock().unwrap();
-        state.completed = State::Ready;
-        state.error = Some(error);
-        if let Some(waker) = state.waker.take() {
-            waker.wake();
-        }
+        complete_exceptionally(&self.state, error);
     }
 }
 
@@ -119,7 +143,7 @@ impl<T> std::future::Future for CompletableFuture<T> {
 
     /// Polls the CompletableFuture to determine if the future value is ready.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut shared_state = self.state.lock().unwrap();
+        let mut shared_state = lock_state(&self.state);
         if shared_state.completed == State::Ready {
             // If the future value is ready, return it.
             Poll::Ready(shared_state.data.take())
@@ -135,7 +159,18 @@ impl<T> std::future::Future for CompletableFuture<T> {
 mod tests {
     use tokio::runtime::Runtime;
 
-    use super::CompletableFuture;
+    use super::*;
+
+    fn poison_state<T>(state: Arc<Mutex<CompletableFutureState<T>>>) {
+        let state_for_panic = state.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = state_for_panic.lock().unwrap();
+            panic!("poison future state");
+        }));
+
+        assert!(result.is_err());
+        assert!(state.lock().is_err());
+    }
 
     #[test]
     fn test_completable_future() {
@@ -152,5 +187,31 @@ mod tests {
             // Ensure that the result is Some(42)
             assert_eq!(result, Some(42));
         });
+    }
+
+    #[test]
+    fn completable_future_recovers_from_poisoned_state_lock() {
+        Runtime::new().unwrap().block_on(async move {
+            let cf = CompletableFuture::new();
+            let state = cf.state.clone();
+            let sender = cf.get_sender();
+
+            poison_state(state);
+            sender.send(42).await.expect("Failed to send data");
+
+            assert_eq!(cf.await, Some(42));
+        });
+    }
+
+    #[test]
+    fn completable_future_new_without_tokio_runtime_does_not_panic() {
+        let cf = CompletableFuture::new();
+        let sender = cf.get_sender();
+
+        sender
+            .blocking_send(42)
+            .expect("fallback completion thread should receive data");
+
+        assert_eq!(futures::executor::block_on(cf), Some(42));
     }
 }

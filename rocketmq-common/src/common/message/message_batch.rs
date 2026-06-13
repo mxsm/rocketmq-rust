@@ -41,6 +41,14 @@ pub struct MessageBatch {
 }
 
 impl MessageBatch {
+    #[inline]
+    fn has_delay_property(message: &Message) -> bool {
+        message.delay_time_level() > 0
+            || message.properties().delay_time_ms().unwrap_or(0) > 0
+            || message.properties().delay_time_sec().unwrap_or(0) > 0
+            || message.properties().deliver_time_ms().unwrap_or(0) > 0
+    }
+
     /// Encode all messages in the batch.
     #[inline]
     pub fn encode(&self) -> Bytes {
@@ -94,11 +102,25 @@ impl MessageBatch {
             }
         }
 
+        Self::generate_from_messages(message_list)
+    }
+
+    /// Build a batch from owned [`Message`] values without cloning each message again.
+    ///
+    /// This keeps the same Java-compatible validation as [`Self::generate_from_vec`], but it is
+    /// the preferred hot path when callers already normalized inputs to concrete `Message`s.
+    pub fn generate_from_messages(messages: Vec<Message>) -> rocketmq_error::RocketMQResult<MessageBatch> {
+        if messages.is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "MessageBatch::generate_from_vec: messages is empty",
+            ));
+        }
+
         let mut first: Option<&Message> = None;
-        for message in &message_list {
-            if message.delay_time_level() > 0 {
+        for message in &messages {
+            if Self::has_delay_property(message) {
                 return Err(RocketMQError::illegal_argument(
-                    "TimeDelayLevel is not supported for batching",
+                    "Delayed messages are not supported for batching",
                 ));
             }
             if message.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
@@ -122,13 +144,17 @@ impl MessageBatch {
                 first = Some(message);
             }
         }
-        let first = first.unwrap();
+        let Some(first) = first else {
+            return Err(RocketMQError::illegal_argument(
+                "MessageBatch::generate_from_vec: messages is empty",
+            ));
+        };
         let mut final_message = Message::default();
         final_message.set_topic(first.topic().clone());
         final_message.set_wait_store_msg_ok(first.is_wait_store_msg_ok());
         Ok(MessageBatch {
             final_message,
-            messages: message_list,
+            messages,
         })
     }
 }
@@ -294,6 +320,15 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_from_messages_ok() {
+        let messages = vec![create_test_message("topic1"), create_test_message("topic1")];
+        let batch = MessageBatch::generate_from_messages(messages).unwrap();
+
+        assert_eq!(batch.messages.len(), 2);
+        assert_eq!(batch.final_message.topic().as_str(), "topic1");
+    }
+
+    #[test]
     fn test_generate_from_vec_empty() {
         let messages: Vec<Message> = vec![];
         let result = MessageBatch::generate_from_vec(messages);
@@ -324,7 +359,52 @@ mod tests {
         let result = MessageBatch::generate_from_vec(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("TimeDelayLevel"));
+        assert!(err.to_string().contains("Delayed messages"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_delay_millis_message_matches_java_rejection() {
+        let msg1 = create_test_message("topic1");
+        let msg2 = Message::builder()
+            .topic("topic1")
+            .body(Bytes::from_static(b"test body"))
+            .delay_millis(1000)
+            .build_unchecked();
+
+        let result = MessageBatch::generate_from_vec(vec![msg1, msg2]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Delayed messages"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_delay_secs_message_matches_java_rejection() {
+        let msg1 = create_test_message("topic1");
+        let msg2 = Message::builder()
+            .topic("topic1")
+            .body(Bytes::from_static(b"test body"))
+            .delay_secs(1)
+            .build_unchecked();
+
+        let result = MessageBatch::generate_from_vec(vec![msg1, msg2]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Delayed messages"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_deliver_time_message_matches_java_rejection() {
+        let msg1 = create_test_message("topic1");
+        let msg2 = Message::builder()
+            .topic("topic1")
+            .body(Bytes::from_static(b"test body"))
+            .deliver_time_ms(1000)
+            .build_unchecked();
+
+        let result = MessageBatch::generate_from_vec(vec![msg1, msg2]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Delayed messages"));
     }
 
     #[test]

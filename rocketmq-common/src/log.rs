@@ -337,14 +337,16 @@ impl Level {
         tracing::Level::from_str(self.0)
             .map_err(|_| RocketMQError::illegal_argument(format!("Invalid log level: {}", self.0)))
     }
+
+    /// Parses a log level without panicking on invalid input.
+    pub fn try_from_str(level: &str) -> Result<Self, String> {
+        level.parse()
+    }
 }
 
 impl From<&'static str> for Level {
     fn from(level: &'static str) -> Self {
-        match level {
-            "ERROR" | "WARN" | "INFO" | "DEBUG" | "TRACE" => Level(level),
-            _ => panic!("Invalid log level: {level}"),
-        }
+        Level::try_from_str(level).unwrap_or(Level::INFO)
     }
 }
 
@@ -396,6 +398,20 @@ mod tests {
         assert_eq!("ERROR".parse::<Level>().unwrap(), Level::ERROR);
         assert_eq!("INFO".parse::<Level>().unwrap(), Level::INFO);
         assert!("invalid".parse::<Level>().is_err());
+    }
+
+    #[test]
+    fn level_try_from_str_reports_invalid_level() {
+        assert_eq!(Level::try_from_str("WARN").unwrap(), Level::WARN);
+        assert_eq!(
+            Level::try_from_str("invalid").expect_err("invalid level should be reported"),
+            "Invalid log level: invalid"
+        );
+    }
+
+    #[test]
+    fn level_from_static_str_does_not_panic_on_invalid_level() {
+        assert_eq!(Level::from("invalid"), Level::INFO);
     }
 
     #[test]

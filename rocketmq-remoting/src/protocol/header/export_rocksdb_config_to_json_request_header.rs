@@ -48,6 +48,8 @@ pub struct ExportRocksdbConfigToJsonRequestHeader {
     pub config_type: CheetahString,
 }
 
+pub type ExportRocksDBConfigToJsonRequestHeader = ExportRocksdbConfigToJsonRequestHeader;
+
 impl ExportRocksdbConfigToJsonRequestHeader {
     pub fn fetch_config_type(&self) -> Result<Vec<ExportRocksdbConfigType>, String> {
         ExportRocksdbConfigType::parse_many(self.config_type.as_str())
@@ -79,6 +81,18 @@ mod tests {
                 ExportRocksdbConfigType::SubscriptionGroups,
                 ExportRocksdbConfigType::ConsumerOffsets,
             ]
+        );
+    }
+
+    #[test]
+    fn export_rocksdb_config_to_json_request_header_alias_matches_java_name() {
+        let header = ExportRocksDBConfigToJsonRequestHeader {
+            config_type: CheetahString::from_static_str("topics"),
+        };
+
+        assert_eq!(
+            header.fetch_config_type().expect("config type should parse"),
+            vec![ExportRocksdbConfigType::Topics]
         );
     }
 }

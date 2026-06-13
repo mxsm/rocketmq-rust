@@ -49,8 +49,10 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoom {
         let premq_all: Vec<MessageQueue> = mq_all
             .iter()
             .filter(|mq| {
-                let parts: Vec<&str> = mq.broker_name().split('@').collect();
-                parts.len() == 2 && self.consumer_idcs.contains(parts[0])
+                let Some((machine_room, broker_name)) = mq.broker_name().split_once('@') else {
+                    return false;
+                };
+                !broker_name.is_empty() && !broker_name.contains('@') && self.consumer_idcs.contains(machine_room)
             })
             .cloned()
             .collect();
@@ -201,6 +203,26 @@ mod tests {
             .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
             .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn allocate_excludes_trailing_or_extra_room_separator_like_java_split() {
+        let consumer_idcs: HashSet<CheetahString> = hashset!(CheetahString::from("room1"));
+        let strategy = AllocateMessageQueueByMachineRoom::new(consumer_idcs);
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all = vec![
+            MessageQueue::from_parts("topic", "room1@", 0),
+            MessageQueue::from_parts("topic", "room1@broker-a@extra", 1),
+            MessageQueue::from_parts("topic", "room1@broker-a", 2),
+        ];
+        let cid_all = vec![CheetahString::from("consumer1")];
+
+        let result = strategy
+            .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
+            .unwrap();
+
+        assert_eq!(result, vec![MessageQueue::from_parts("topic", "room1@broker-a", 2)]);
     }
 
     #[test]

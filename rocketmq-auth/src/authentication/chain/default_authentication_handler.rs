@@ -206,6 +206,7 @@ impl<P: AuthenticationMetadataProvider> AuthenticationHandler for DefaultAuthent
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQError;
     use rocketmq_error::RocketMQResult;
 
     use super::*;
@@ -244,25 +245,38 @@ mod tests {
         }
 
         fn create_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
-            unimplemented!()
+            Box::pin(async {
+                Err(RocketMQError::illegal_argument(
+                    "MockMetadataProvider does not support create_user",
+                ))
+            })
         }
 
         fn delete_user<'a>(
             &'a self,
             _username: &'a str,
         ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
-            unimplemented!()
+            Box::pin(async {
+                Err(RocketMQError::illegal_argument(
+                    "MockMetadataProvider does not support delete_user",
+                ))
+            })
         }
 
         fn update_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
-            unimplemented!()
+            Box::pin(async {
+                Err(RocketMQError::illegal_argument(
+                    "MockMetadataProvider does not support update_user",
+                ))
+            })
         }
 
         fn list_user<'a>(
             &'a self,
             _filter: Option<&'a str>,
         ) -> Pin<Box<dyn Future<Output = RocketMQResult<Vec<User>>> + Send + 'a>> {
-            unimplemented!()
+            let users = self.users.clone();
+            Box::pin(async move { Ok(users) })
         }
     }
 

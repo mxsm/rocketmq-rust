@@ -41,7 +41,7 @@ pub struct MessageSelector {
 
 impl MessageSelector {
     /// Creates a new message selector with the specified type and expression.
-    fn new(expression_type: impl Into<CheetahString>, expression: impl Into<CheetahString>) -> Self {
+    pub(crate) fn new(expression_type: impl Into<CheetahString>, expression: impl Into<CheetahString>) -> Self {
         Self {
             expression_type: expression_type.into(),
             expression: expression.into(),

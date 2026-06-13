@@ -308,7 +308,7 @@ impl Default for ControllerConfig {
             metrics_in_delta: false,
             config_black_list: "configBlackList;configStorePath".to_string(),
             node_id: 1,
-            listen_addr: "127.0.0.1:60109".parse().unwrap(),
+            listen_addr: SocketAddr::from(([127, 0, 0, 1], 60109)),
             raft_peers: Vec::new(),
             controller_peers: Vec::new(),
             election_timeout_ms: 1000,
@@ -499,7 +499,7 @@ impl ControllerConfig {
 
     /// Test config helper
     pub fn test_config() -> Self {
-        Self::default().with_node_info(1, "127.0.0.1:60109".parse().unwrap())
+        Self::default().with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
     }
 
     /// Resolve the Raft RPC address for a node.
@@ -583,99 +583,74 @@ impl ControllerConfig {
         use std::fmt::Write;
 
         let mut result = String::with_capacity(2048);
+        macro_rules! write_property {
+            ($($arg:tt)*) => {
+                let _ = writeln!(result, $($arg)*);
+            };
+        }
 
-        writeln!(result, "rocketmqHome={}", self.rocketmq_home).unwrap();
-        writeln!(result, "configStorePath={}", self.config_store_path.display()).unwrap();
-        writeln!(result, "controllerType={}", self.controller_type).unwrap();
-        writeln!(
-            result,
-            "scanNotActiveBrokerInterval={}",
-            self.scan_not_active_broker_interval
-        )
-        .unwrap();
-        writeln!(result, "controllerThreadPoolNums={}", self.controller_thread_pool_nums).unwrap();
-        writeln!(
-            result,
+        write_property!("rocketmqHome={}", self.rocketmq_home);
+        write_property!("configStorePath={}", self.config_store_path.display());
+        write_property!("controllerType={}", self.controller_type);
+        write_property!("scanNotActiveBrokerInterval={}", self.scan_not_active_broker_interval);
+        write_property!("controllerThreadPoolNums={}", self.controller_thread_pool_nums);
+        write_property!(
             "controllerRequestThreadPoolQueueCapacity={}",
             self.controller_request_thread_pool_queue_capacity
-        )
-        .unwrap();
-        writeln!(result, "mappedFileSize={}", self.mapped_file_size).unwrap();
-        writeln!(result, "controllerStorePath={}", self.controller_store_path).unwrap();
-        writeln!(result, "electMasterMaxRetryCount={}", self.elect_master_max_retry_count).unwrap();
-        writeln!(result, "enableElectUncleanMaster={}", self.enable_elect_unclean_master).unwrap();
-        writeln!(result, "isProcessReadEvent={}", self.is_process_read_event).unwrap();
-        writeln!(result, "notifyBrokerRoleChanged={}", self.notify_broker_role_changed).unwrap();
-        writeln!(
-            result,
-            "scanInactiveMasterInterval={}",
-            self.scan_inactive_master_interval
-        )
-        .unwrap();
-        writeln!(result, "raftScanWaitTimeoutMs={}", self.raft_scan_wait_timeout_ms).unwrap();
-        writeln!(result, "metricsExporterType={}", self.metrics_exporter_type).unwrap();
-        writeln!(
-            result,
-            "metricsGrpcExporterTarget={}",
-            self.metrics_grpc_exporter_target
-        )
-        .unwrap();
-        writeln!(
-            result,
-            "metricsGrpcExporterHeader={}",
-            self.metrics_grpc_exporter_header
-        )
-        .unwrap();
-        writeln!(
-            result,
+        );
+        write_property!("mappedFileSize={}", self.mapped_file_size);
+        write_property!("controllerStorePath={}", self.controller_store_path);
+        write_property!("electMasterMaxRetryCount={}", self.elect_master_max_retry_count);
+        write_property!("enableElectUncleanMaster={}", self.enable_elect_unclean_master);
+        write_property!("isProcessReadEvent={}", self.is_process_read_event);
+        write_property!("notifyBrokerRoleChanged={}", self.notify_broker_role_changed);
+        write_property!("scanInactiveMasterInterval={}", self.scan_inactive_master_interval);
+        write_property!("raftScanWaitTimeoutMs={}", self.raft_scan_wait_timeout_ms);
+        write_property!("metricsExporterType={}", self.metrics_exporter_type);
+        write_property!("metricsGrpcExporterTarget={}", self.metrics_grpc_exporter_target);
+        write_property!("metricsGrpcExporterHeader={}", self.metrics_grpc_exporter_header);
+        write_property!(
             "metricGrpcExporterTimeOutInMills={}",
             self.metric_grpc_exporter_time_out_in_mills
-        )
-        .unwrap();
-        writeln!(
-            result,
+        );
+        write_property!(
             "metricGrpcExporterIntervalInMills={}",
             self.metric_grpc_exporter_interval_in_mills
-        )
-        .unwrap();
-        writeln!(
-            result,
+        );
+        write_property!(
             "metricLoggingExporterIntervalInMills={}",
             self.metric_logging_exporter_interval_in_mills
-        )
-        .unwrap();
-        writeln!(result, "metricsPromExporterPort={}", self.metrics_prom_exporter_port).unwrap();
-        writeln!(result, "metricsPromExporterHost={}", self.metrics_prom_exporter_host).unwrap();
-        writeln!(result, "metricsLabel={}", self.metrics_label).unwrap();
-        writeln!(result, "metricsInDelta={}", self.metrics_in_delta).unwrap();
-        writeln!(result, "configBlackList={}", self.config_black_list).unwrap();
-        writeln!(result, "nodeId={}", self.node_id).unwrap();
-        writeln!(result, "listenAddr={}", self.listen_addr).unwrap();
+        );
+        write_property!("metricsPromExporterPort={}", self.metrics_prom_exporter_port);
+        write_property!("metricsPromExporterHost={}", self.metrics_prom_exporter_host);
+        write_property!("metricsLabel={}", self.metrics_label);
+        write_property!("metricsInDelta={}", self.metrics_in_delta);
+        write_property!("configBlackList={}", self.config_black_list);
+        write_property!("nodeId={}", self.node_id);
+        write_property!("listenAddr={}", self.listen_addr);
 
         let peers: Vec<String> = self
             .raft_peers
             .iter()
             .map(|peer| format!("{}-{}", peer.id, peer.addr))
             .collect();
-        writeln!(result, "raftPeers={}", peers.join(";")).unwrap();
+        write_property!("raftPeers={}", peers.join(";"));
 
         let controller_peers: Vec<String> = self
             .controller_peers
             .iter()
             .map(|peer| format!("{}-{}", peer.id, peer.addr))
             .collect();
-        writeln!(result, "controllerPeers={}", controller_peers.join(";")).unwrap();
+        write_property!("controllerPeers={}", controller_peers.join(";"));
 
-        writeln!(result, "electionTimeoutMs={}", self.election_timeout_ms).unwrap();
-        writeln!(result, "heartbeatIntervalMs={}", self.heartbeat_interval_ms).unwrap();
-        writeln!(result, "storagePath={}", self.storage_path).unwrap();
-        writeln!(result, "storageBackend={}", self.storage_backend).unwrap();
-        writeln!(
-            result,
+        write_property!("electionTimeoutMs={}", self.election_timeout_ms);
+        write_property!("heartbeatIntervalMs={}", self.heartbeat_interval_ms);
+        write_property!("storagePath={}", self.storage_path);
+        write_property!("storageBackend={}", self.storage_backend);
+        write_property!(
             "enableElectUncleanMasterLocal={}",
             self.enable_elect_unclean_master_local
-        )
-        .unwrap();
+        );
 
         result
     }

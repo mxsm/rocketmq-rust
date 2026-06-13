@@ -23,6 +23,8 @@ use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
@@ -32,6 +34,14 @@ use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::protocol::remoting_command::RemotingCommand;
 
 pub type ConnectionId = CheetahString;
+
+/// Async transport accepted by the RocketMQ framed connection.
+pub trait ConnectionTransport: AsyncRead + AsyncWrite + Send + Unpin {}
+
+impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
+
+pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
+pub type ConnectionFramed = Framed<BoxedConnectionTransport, CompositeCodec>;
 
 /// Connection health state
 ///
@@ -99,12 +109,12 @@ pub struct Connection {
     /// Outbound message sink (sends encoded frames to peer)
     ///
     /// Handles outbound data flow with automatic framing
-    outbound_sink: SplitSink<Framed<TcpStream, CompositeCodec>, Bytes>,
+    outbound_sink: SplitSink<ConnectionFramed, Bytes>,
 
     /// Inbound message stream (receives decoded frames from peer)
     ///
     /// Handles inbound data flow with automatic frame decoding
-    inbound_stream: SplitStream<Framed<TcpStream, CompositeCodec>>,
+    inbound_stream: SplitStream<ConnectionFramed>,
 
     // === State Management (Tokio Watch Channel) ===
     /// Broadcast channel for connection state changes
@@ -181,9 +191,21 @@ impl Connection {
     /// });
     /// ```
     pub fn new(tcp_stream: TcpStream) -> Connection {
+        Self::new_with_stream(tcp_stream)
+    }
+
+    /// Creates a new `Connection` over any async stream implementing RocketMQ framing.
+    pub fn new_with_stream<S>(stream: S) -> Connection
+    where
+        S: ConnectionTransport + 'static,
+    {
         const CAPACITY: usize = 1024 * 1024; // 1 MB
         const BUFFER_SIZE: usize = 8 * 1024; // 8 KB
-        let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), CAPACITY);
+        let framed = Framed::with_capacity(
+            Box::new(stream) as BoxedConnectionTransport,
+            CompositeCodec::new(),
+            CAPACITY,
+        );
         let (outbound_sink, inbound_stream) = framed.split();
 
         // Initialize watch channel with Healthy state
@@ -205,7 +227,7 @@ impl Connection {
     ///
     /// Immutable reference to the inbound message stream
     #[inline]
-    pub fn inbound_stream(&self) -> &SplitStream<Framed<TcpStream, CompositeCodec>> {
+    pub fn inbound_stream(&self) -> &SplitStream<ConnectionFramed> {
         &self.inbound_stream
     }
 
@@ -215,7 +237,7 @@ impl Connection {
     ///
     /// Immutable reference to the outbound message sink
     #[inline]
-    pub fn outbound_sink(&self) -> &SplitSink<Framed<TcpStream, CompositeCodec>, Bytes> {
+    pub fn outbound_sink(&self) -> &SplitSink<ConnectionFramed, Bytes> {
         &self.outbound_sink
     }
 

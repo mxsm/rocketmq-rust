@@ -43,7 +43,6 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
 use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
 use rocketmq_common::common::attribute::Attribute;

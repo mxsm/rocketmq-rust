@@ -75,9 +75,15 @@ dashmap = { workspace = true, features = ["serde"] }
 # SIMD-accelerated JSON parsing (30-50% faster than serde_json)
 simd-json = { version = "0.17", optional = true }
 
+# TLS transport for client connections. Enabled by default so `ClientConfig::use_tls`
+# can be honored without requiring downstream feature wiring.
+rustls-native-certs = { version = "0.8", optional = true }
+tokio-rustls        = { version = "0.26", optional = true }
+
 [features]
-default = []
+default = ["tls"]
 simd    = ["simd-json"]
+tls     = ["rustls-native-certs", "tokio-rustls"]
 
 [dev-dependencies]
 bytes     = "1.11.1"

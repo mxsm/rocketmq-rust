@@ -78,7 +78,6 @@ First, start the RocketMQ NameServer and Broker services.
 
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_rust::rocketmq;
@@ -120,7 +119,6 @@ pub async fn main() -> Result<()> {
 
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_rust::rocketmq;
 
@@ -172,7 +170,6 @@ pub async fn main() -> rocketmq_client_rust::Result<()> {
 
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::Result;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_rust::rocketmq;
@@ -274,7 +271,6 @@ pub async fn main() -> rocketmq_client_rust::Result<()> {
 
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::message_single::Message;
@@ -323,7 +319,6 @@ pub async fn main() -> rocketmq_client_rust::Result<()> {
 
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_single::Message;
 use cheetah_string::CheetahString;
 use rocketmq_rust::rocketmq;

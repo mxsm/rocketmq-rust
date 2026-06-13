@@ -32,6 +32,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::strategy::abstract_authentication_strategy::AbstractAuthenticationStrategy;
 use crate::authentication::strategy::authentication_strategy::AuthenticationStrategy;
+use crate::authentication::strategy::block_on_authentication_provider;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
 use crate::observability::AuthMetrics;
@@ -204,11 +205,7 @@ where
             None => return Ok(()),
         };
 
-        let auth_result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(provider.authenticate(default_context))
-        });
-
-        auth_result.map_err(|e| AuthError::AuthenticationFailed(e.to_string()))
+        block_on_authentication_provider(provider.as_ref(), default_context)
     }
 
     pub fn provider(&self) -> Option<&P> {
@@ -490,5 +487,37 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn authenticates_inside_current_thread_runtime_without_block_in_place_panic() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let should_succeed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let provider = Arc::new(CountingAuthenticationProvider {
+            calls: calls.clone(),
+            should_succeed,
+        });
+        let strategy = StatefulAuthenticationStrategy::new(
+            AuthConfig {
+                authentication_enabled: true,
+                ..AuthConfig::default()
+            },
+            Some(provider),
+        );
+        let mut context = DefaultAuthenticationContext::new();
+        context
+            .base
+            .set_channel_id(Some(CheetahString::from("channel-current-thread")));
+        context.set_username(CheetahString::from("alice"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            assert!(strategy.authenticate(&context).is_ok());
+        });
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

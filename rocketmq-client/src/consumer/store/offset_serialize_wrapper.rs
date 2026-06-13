@@ -20,6 +20,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::consumer::store::offset_serialize::OffsetSerialize;
 
@@ -52,11 +53,12 @@ impl From<OffsetSerialize> for OffsetSerializeWrapper {
         let offset_table = offset_serialize
             .offset_table
             .into_iter()
-            .map(|(k, v)| {
-                (
-                    MessageQueue::decode(k.as_bytes()).expect("Failed to decode message queue"),
-                    AtomicI64::new(v),
-                )
+            .filter_map(|(k, v)| match MessageQueue::decode(k.as_bytes()) {
+                Ok(message_queue) => Some((message_queue, AtomicI64::new(v))),
+                Err(err) => {
+                    warn!("skip offset entry because message queue decode failed: {err}");
+                    None
+                }
             })
             .collect();
         Self { offset_table }

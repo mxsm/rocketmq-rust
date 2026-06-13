@@ -53,6 +53,14 @@ impl TraceContext {
             trace_beans: None,
         }
     }
+
+    pub fn compare_to(&self, other: &Self) -> i32 {
+        match self.cmp(other) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        }
+    }
 }
 
 impl PartialEq for TraceContext {
@@ -180,6 +188,22 @@ mod tests {
             ..Default::default()
         };
         assert!(trace_context1 < trace_context2);
+    }
+
+    #[test]
+    fn compare_to_matches_java_comparable_shape() {
+        let older = TraceContext {
+            time_stamp: 12345,
+            ..Default::default()
+        };
+        let newer = TraceContext {
+            time_stamp: 67890,
+            ..Default::default()
+        };
+
+        assert_eq!(older.compare_to(&newer), -1);
+        assert_eq!(newer.compare_to(&older), 1);
+        assert_eq!(older.compare_to(&older), 0);
     }
 
     #[test]

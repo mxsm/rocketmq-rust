@@ -124,7 +124,7 @@ impl MessageProperties {
     /// Returns whether to wait for store confirmation.
     pub fn wait_store_msg_ok(&self) -> bool {
         self.get(MessagePropertyKey::WaitStoreMsgOk)
-            .map(|s| s != "false")
+            .map(|s| s.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
     }
 
@@ -179,6 +179,13 @@ impl MessageProperties {
             .map(|s| s == "true")
             .unwrap_or(false)
     }
+
+    /// Returns the message priority, or `-1` like Java when missing or invalid.
+    pub fn priority(&self) -> i32 {
+        self.get(MessagePropertyKey::Priority)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-1)
+    }
 }
 
 /// Type-safe property keys.
@@ -199,6 +206,7 @@ pub enum MessagePropertyKey {
     MinOffset,
     MaxOffset,
     BuyerId,
+    OriginGroup,
     OriginMessageId,
     TransferFlag,
     CorrectionFlag,
@@ -214,6 +222,7 @@ pub enum MessagePropertyKey {
     PopCk,
     PopCkOffset,
     FirstPopTime,
+    Priority,
     TransactionPreparedQueueOffset,
     DupInfo,
     ExtendUniqInfo,
@@ -230,6 +239,7 @@ pub enum MessagePropertyKey {
     TimerEnqueueMs,
     TimerDequeueMs,
     TimerRollTimes,
+    TimerRollLabel,
     TimerOutMs,
     TimerDelUniqkey,
     BornHost,
@@ -243,6 +253,7 @@ pub enum MessagePropertyKey {
     InnerMultiDispatch,
     InnerNum,
     Mq2Flag,
+    TransOffset,
     ShardingKey,
     TransactionId,
     TransactionCheckTimes,
@@ -270,6 +281,7 @@ impl MessagePropertyKey {
             Self::MinOffset => MessageConst::PROPERTY_MIN_OFFSET,
             Self::MaxOffset => MessageConst::PROPERTY_MAX_OFFSET,
             Self::BuyerId => MessageConst::PROPERTY_BUYER_ID,
+            Self::OriginGroup => MessageConst::PROPERTY_ORIGIN_GROUP,
             Self::OriginMessageId => MessageConst::PROPERTY_ORIGIN_MESSAGE_ID,
             Self::TransferFlag => MessageConst::PROPERTY_TRANSFER_FLAG,
             Self::CorrectionFlag => MessageConst::PROPERTY_CORRECTION_FLAG,
@@ -285,6 +297,7 @@ impl MessagePropertyKey {
             Self::PopCk => MessageConst::PROPERTY_POP_CK,
             Self::PopCkOffset => MessageConst::PROPERTY_POP_CK_OFFSET,
             Self::FirstPopTime => MessageConst::PROPERTY_FIRST_POP_TIME,
+            Self::Priority => MessageConst::PROPERTY_PRIORITY,
             Self::TransactionPreparedQueueOffset => MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
             Self::DupInfo => MessageConst::DUP_INFO,
             Self::ExtendUniqInfo => MessageConst::PROPERTY_EXTEND_UNIQ_INFO,
@@ -301,6 +314,7 @@ impl MessagePropertyKey {
             Self::TimerEnqueueMs => MessageConst::PROPERTY_TIMER_ENQUEUE_MS,
             Self::TimerDequeueMs => MessageConst::PROPERTY_TIMER_DEQUEUE_MS,
             Self::TimerRollTimes => MessageConst::PROPERTY_TIMER_ROLL_TIMES,
+            Self::TimerRollLabel => MessageConst::PROPERTY_TIMER_ROLL_LABEL,
             Self::TimerOutMs => MessageConst::PROPERTY_TIMER_OUT_MS,
             Self::TimerDelUniqkey => MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
             Self::BornHost => MessageConst::PROPERTY_BORN_HOST,
@@ -314,6 +328,7 @@ impl MessagePropertyKey {
             Self::InnerMultiDispatch => MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
             Self::InnerNum => MessageConst::PROPERTY_INNER_NUM,
             Self::Mq2Flag => MessageConst::PROPERTY_MQ2_FLAG,
+            Self::TransOffset => MessageConst::PROPERTY_TRANS_OFFSET,
             Self::ShardingKey => MessageConst::PROPERTY_SHARDING_KEY,
             Self::TransactionId => MessageConst::PROPERTY_TRANSACTION_ID,
             Self::TransactionCheckTimes => MessageConst::PROPERTY_TRANSACTION_CHECK_TIMES,
@@ -325,5 +340,47 @@ impl MessagePropertyKey {
 
     pub(crate) fn to_cheetah_string(self) -> CheetahString {
         CheetahString::from_static_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_store_msg_ok_matches_java_boolean_parse_semantics() {
+        let mut properties = MessageProperties::new();
+        assert!(properties.wait_store_msg_ok());
+
+        properties.insert(MessagePropertyKey::WaitStoreMsgOk, "true");
+        assert!(properties.wait_store_msg_ok());
+
+        properties.insert(MessagePropertyKey::WaitStoreMsgOk, "TRUE");
+        assert!(properties.wait_store_msg_ok());
+
+        properties.insert(MessagePropertyKey::WaitStoreMsgOk, "false");
+        assert!(!properties.wait_store_msg_ok());
+
+        properties.insert(MessagePropertyKey::WaitStoreMsgOk, "yes");
+        assert!(!properties.wait_store_msg_ok());
+    }
+
+    #[test]
+    fn priority_matches_java_default_and_parse_semantics() {
+        let mut properties = MessageProperties::new();
+        assert_eq!(properties.priority(), -1);
+
+        properties.insert(MessagePropertyKey::Priority, "7");
+        assert_eq!(properties.priority(), 7);
+
+        properties.insert(MessagePropertyKey::Priority, "invalid");
+        assert_eq!(properties.priority(), -1);
+    }
+
+    #[test]
+    fn protocol_property_keys_include_java_message_const_gaps() {
+        assert_eq!(MessagePropertyKey::OriginGroup.as_str(), "ORIGIN_GROUP");
+        assert_eq!(MessagePropertyKey::TransOffset.as_str(), "TRANS_OFFSET");
+        assert_eq!(MessagePropertyKey::TimerRollLabel.as_str(), "TIMER_ROLL_LABEL");
     }
 }

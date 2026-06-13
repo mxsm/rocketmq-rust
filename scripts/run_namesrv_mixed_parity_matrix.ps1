@@ -187,16 +187,21 @@ function Write-RustBrokerConfig {
     param([string]$Path)
 
     $content = @"
-[broker_identity]
-broker_name = "$BrokerName"
-broker_cluster_name = "$ClusterName"
-broker_id = 0
+namesrvAddr = "$namesrvAddr"
+brokerIp1 = "$NamesrvHost"
+listenPort = $BrokerPort
+storePathRootDir = "$($dataRoot -replace '\\','/')"
+storePathCommitLog = "$((Join-Path $dataRoot 'commitlog') -replace '\\','/')"
+enableControllerMode = false
 
-namesrv_addr = "$namesrvAddr"
-broker_ip1 = "$NamesrvHost"
-listen_port = $BrokerPort
-store_path_root_dir = "$($dataRoot -replace '\\','/')"
-enable_controller_mode = false
+[brokerServerConfig]
+listenPort = $BrokerPort
+bindAddress = "0.0.0.0"
+
+[brokerIdentity]
+brokerName = "$BrokerName"
+brokerClusterName = "$ClusterName"
+brokerId = 0
 "@
     Write-AsciiFile -Path $Path -Content $content
 }

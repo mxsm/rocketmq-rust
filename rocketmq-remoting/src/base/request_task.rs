@@ -22,6 +22,7 @@ use rocketmq_common::TimeUtils::current_millis;
 
 use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
+use tracing::warn;
 
 pub struct RequestTask {
     runnable: Arc<dyn Fn() + Send + Sync>,
@@ -55,8 +56,13 @@ impl RequestTask {
         *self.stop_run.lock()
     }
 
-    pub async fn return_response(&self, _code: i32, _remark: String) {
-        unimplemented!("return_response")
+    pub async fn return_response(&self, code: i32, remark: String) {
+        let response =
+            RemotingCommand::create_response_command_with_code_remark(code, remark).set_opaque(self.request.opaque());
+        let mut channel = self.channel.clone();
+        if let Err(err) = channel.connection_mut().send_command(response).await {
+            warn!("return response to {} failed: {}", channel.remote_address(), err);
+        }
     }
 }
 

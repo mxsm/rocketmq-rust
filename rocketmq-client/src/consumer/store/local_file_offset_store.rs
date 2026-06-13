@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -75,8 +76,23 @@ pub struct LocalFileOffsetStore {
     offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
     dirty_flag: Arc<AtomicBool>,
     persist_tx: mpsc::UnboundedSender<PersistCommand>,
-    #[allow(dead_code)]
-    persist_handle: Arc<JoinHandle<()>>,
+    persist_handle: PersistTaskHandle,
+}
+
+enum PersistTaskHandle {
+    Tokio(JoinHandle<()>),
+    Thread(thread::JoinHandle<()>),
+    NotStarted,
+}
+
+impl PersistTaskHandle {
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::Tokio(handle) => handle.is_finished(),
+            Self::Thread(handle) => handle.is_finished(),
+            Self::NotStarted => true,
+        }
+    }
 }
 
 impl LocalFileOffsetStore {
@@ -98,10 +114,8 @@ impl LocalFileOffsetStore {
         let dirty_flag_clone = dirty_flag.clone();
         let store_path_clone = store_path.clone();
 
-        // Start background persistence task
-        let persist_handle = Arc::new(tokio::spawn(async move {
-            Self::background_persist_task(offset_table_clone, dirty_flag_clone, store_path_clone, persist_rx).await;
-        }));
+        let persist_handle =
+            Self::spawn_background_persist_task(offset_table_clone, dirty_flag_clone, store_path_clone, persist_rx);
 
         Self {
             client_instance,
@@ -111,6 +125,36 @@ impl LocalFileOffsetStore {
             dirty_flag,
             persist_tx,
             persist_handle,
+        }
+    }
+
+    fn spawn_background_persist_task(
+        offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
+        dirty_flag: Arc<AtomicBool>,
+        store_path: String,
+        persist_rx: mpsc::UnboundedReceiver<PersistCommand>,
+    ) -> PersistTaskHandle {
+        let task = async move {
+            Self::background_persist_task(offset_table, dirty_flag, store_path, persist_rx).await;
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return PersistTaskHandle::Tokio(handle.spawn(task));
+        }
+
+        match thread::Builder::new()
+            .name("rocketmq-client-local-offset-store".to_string())
+            .spawn(
+                move || match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(runtime) => runtime.block_on(task),
+                    Err(error) => error!("Failed to build LocalFileOffsetStore runtime: {}", error),
+                },
+            ) {
+            Ok(handle) => PersistTaskHandle::Thread(handle),
+            Err(error) => {
+                error!("Failed to spawn LocalFileOffsetStore background thread: {}", error);
+                PersistTaskHandle::NotStarted
+            }
         }
     }
 
@@ -325,16 +369,39 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
 
     async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64 {
         match type_ {
-            ReadOffsetType::ReadFromMemory | ReadOffsetType::MemoryFirstThenStore => self
+            ReadOffsetType::ReadFromMemory => self
                 .offset_table
                 .get(mq)
                 .map(|entry| entry.value().get_offset())
                 .unwrap_or(-1),
+            ReadOffsetType::MemoryFirstThenStore => {
+                if let Some(offset) = self.offset_table.get(mq).map(|entry| entry.value().get_offset()) {
+                    return offset;
+                }
+                match self.read_local_offset().await {
+                    Ok(offset_serialize_wrapper) => {
+                        if let Some(offset_serialize_wrapper) = offset_serialize_wrapper {
+                            if let Some(offset) = offset_serialize_wrapper.offset_table.get(mq) {
+                                let offset = offset.load(Ordering::Relaxed);
+                                self.update_offset(mq, offset, false).await;
+                                offset
+                            } else {
+                                -1
+                            }
+                        } else {
+                            -1
+                        }
+                    }
+                    Err(_) => -1,
+                }
+            }
             ReadOffsetType::ReadFromStore => match self.read_local_offset().await {
                 Ok(offset_serialize_wrapper) => {
                     if let Some(offset_serialize_wrapper) = offset_serialize_wrapper {
                         if let Some(offset) = offset_serialize_wrapper.offset_table.get(mq) {
-                            offset.load(Ordering::Relaxed)
+                            let offset = offset.load(Ordering::Relaxed);
+                            self.update_offset(mq, offset, false).await;
+                            offset
                         } else {
                             -1
                         }
@@ -413,7 +480,91 @@ impl Drop for LocalFileOffsetStore {
     fn drop(&mut self) {
         // Send shutdown command to background task
         self.persist_tx.send(PersistCommand::Shutdown).ok();
+        let _ = self.persist_handle.is_finished();
         // Note: We can't await the handle in Drop (it's not async)
         // The background task will complete its final persist and exit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use tokio::sync::mpsc;
+
+    use crate::base::client_config::ClientConfig;
+    use crate::consumer::store::controllable_offset::ControllableOffset;
+    use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
+    use crate::consumer::store::offset_store::OffsetStoreTrait;
+    use crate::consumer::store::read_offset_type::ReadOffsetType;
+    use crate::factory::mq_client_instance::MQClientInstance;
+
+    #[test]
+    fn new_without_tokio_runtime_does_not_spawn_panic() {
+        let client_instance =
+            MQClientInstance::new_arc(ClientConfig::default(), 0, "local-offset-store-no-runtime-test", None);
+        let store = LocalFileOffsetStore::new(
+            client_instance,
+            CheetahString::from_static_str("local_offset_store_no_runtime_group"),
+        );
+
+        drop(store);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn memory_first_then_store_reads_local_file_on_memory_miss_like_java() {
+        let client_id = format!("local-offset-store-read-fallback-test-{}", std::process::id());
+        let group = CheetahString::from(format!("local_offset_store_read_fallback_group_{}", std::process::id()));
+        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
+        let store_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("tmp")
+            .join("local_offset_store_read_fallback");
+        let store_path = store_dir.join("offsets.json").to_string_lossy().to_string();
+        let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
+        let dirty_flag = Arc::new(AtomicBool::new(false));
+        let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+        let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
+            offset_table.clone(),
+            dirty_flag.clone(),
+            store_path.clone(),
+            persist_rx,
+        );
+        let mut store = LocalFileOffsetStore {
+            client_instance,
+            group_name: group,
+            store_path: CheetahString::from(store_path),
+            offset_table,
+            dirty_flag,
+            persist_tx,
+            persist_handle,
+        };
+        let mq = MessageQueue::from_parts("local-offset-store-topic", "broker-a", 0);
+
+        if let Some(parent) = Path::new(store.store_path.as_str()).parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        store.update_offset(&mq, 42, false).await;
+        store.persist(&mq).await;
+        store.offset_table.clear();
+
+        let offset = store.read_offset(&mq, ReadOffsetType::MemoryFirstThenStore).await;
+        assert_eq!(42, offset);
+        assert_eq!(42, store.read_offset(&mq, ReadOffsetType::ReadFromMemory).await);
+
+        let store_path = store.store_path.to_string();
+        store.dirty_flag.store(false, Ordering::Release);
+        drop(store);
+        let _ = tokio::fs::remove_file(&store_path).await;
+        let _ = tokio::fs::remove_file(format!("{store_path}.bak")).await;
+        let _ = tokio::fs::remove_file(format!("{store_path}.tmp")).await;
     }
 }

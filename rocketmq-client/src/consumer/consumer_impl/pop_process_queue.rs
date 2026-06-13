@@ -15,8 +15,8 @@
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Acquire;
 use std::sync::atomic::Ordering::Relaxed;
@@ -28,9 +28,9 @@ use rocketmq_remoting::protocol::body::pop_process_queue_info::PopProcessQueueIn
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 
 #[derive(Clone)]
-pub(crate) struct PopProcessQueue {
+pub struct PopProcessQueue {
     last_pop_timestamp: Arc<AtomicU64>,
-    wait_ack_counter: Arc<AtomicUsize>,
+    wait_ack_counter: Arc<AtomicI32>,
     dropped: Arc<AtomicBool>,
 }
 
@@ -47,7 +47,7 @@ impl Default for PopProcessQueue {
     fn default() -> Self {
         PopProcessQueue {
             last_pop_timestamp: Arc::new(AtomicU64::new(current_millis())),
-            wait_ack_counter: Arc::new(AtomicUsize::new(0)),
+            wait_ack_counter: Arc::new(AtomicI32::new(0)),
             dropped: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -55,59 +55,61 @@ impl Default for PopProcessQueue {
 
 impl PopProcessQueue {
     #[inline]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         PopProcessQueue::default()
     }
 
     #[inline]
-    pub(crate) fn get_last_pop_timestamp(&self) -> u64 {
+    pub fn get_last_pop_timestamp(&self) -> u64 {
         self.last_pop_timestamp.load(Ordering::Relaxed)
     }
 
     #[inline]
-    pub(crate) fn set_last_pop_timestamp(&self, last_pop_timestamp: u64) {
+    pub fn set_last_pop_timestamp(&self, last_pop_timestamp: u64) {
         self.last_pop_timestamp.store(last_pop_timestamp, Ordering::Release);
     }
 
     #[inline]
-    pub(crate) fn inc_found_msg(&self, count: usize) {
-        self.wait_ack_counter.fetch_add(count, Ordering::AcqRel);
+    pub fn inc_found_msg(&self, count: usize) {
+        self.wait_ack_counter
+            .fetch_add(count.min(i32::MAX as usize) as i32, Ordering::AcqRel);
     }
 
     #[inline]
-    pub(crate) fn ack(&self) -> usize {
+    pub fn ack(&self) -> i32 {
         self.wait_ack_counter.fetch_sub(1, Ordering::AcqRel)
     }
 
     #[inline]
-    pub(crate) fn dec_found_msg(&self, count: usize) {
-        self.wait_ack_counter.fetch_sub(count, Ordering::AcqRel);
+    pub fn dec_found_msg(&self, count: usize) {
+        self.wait_ack_counter
+            .fetch_sub(count.min(i32::MAX as usize) as i32, Ordering::AcqRel);
     }
 
     #[inline]
-    pub(crate) fn get_wai_ack_msg_count(&self) -> usize {
+    pub fn get_wai_ack_msg_count(&self) -> i32 {
         self.wait_ack_counter.load(Ordering::Acquire)
     }
 
     #[inline]
-    pub(crate) fn is_dropped(&self) -> bool {
+    pub fn is_dropped(&self) -> bool {
         self.dropped.load(Ordering::Acquire)
     }
 
     #[inline]
-    pub(crate) fn set_dropped(&self, dropped: bool) {
+    pub fn set_dropped(&self, dropped: bool) {
         self.dropped.store(dropped, Ordering::Release);
     }
 
     #[inline]
-    pub(crate) fn fill_pop_process_queue_info(&self, info: &mut PopProcessQueueInfo) {
-        info.set_wait_ack_count(self.get_wai_ack_msg_count() as i32);
+    pub fn fill_pop_process_queue_info(&self, info: &mut PopProcessQueueInfo) {
+        info.set_wait_ack_count(self.get_wai_ack_msg_count());
         info.set_droped(self.is_dropped());
         info.set_last_pop_timestamp(self.get_last_pop_timestamp());
     }
 
     #[inline]
-    pub(crate) fn is_pull_expired(&self) -> bool {
+    pub fn is_pull_expired(&self) -> bool {
         let current_time = current_millis();
         current_time.saturating_sub(self.last_pop_timestamp.load(Acquire)) > *PULL_MAX_IDLE_TIME
     }
@@ -118,9 +120,9 @@ impl Display for PopProcessQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PopProcessQueue [last_pop_timestamp={:?}, wait_ack_counter={}, dropped={}]",
-            self.last_pop_timestamp,
+            "PopProcessQueue[waitAckCounter:{}, lastPopTimestamp:{}, drop:{}]",
             self.wait_ack_counter.load(Ordering::Relaxed),
+            self.last_pop_timestamp.load(Ordering::Relaxed),
             self.dropped.load(Ordering::Relaxed)
         )
     }
@@ -165,8 +167,15 @@ mod tests {
     fn pop_process_queue_acknowledges_msg() {
         let queue = PopProcessQueue::new();
         queue.inc_found_msg(5);
-        queue.ack();
+        assert_eq!(queue.ack(), 5);
         assert_eq!(queue.get_wai_ack_msg_count(), 4);
+    }
+
+    #[test]
+    fn pop_process_queue_ack_at_zero_matches_java_signed_counter() {
+        let queue = PopProcessQueue::new();
+        assert_eq!(queue.ack(), 0);
+        assert_eq!(queue.get_wai_ack_msg_count(), -1);
     }
 
     #[test]
@@ -181,5 +190,14 @@ mod tests {
         let queue = PopProcessQueue::new();
         queue.set_last_pop_timestamp(queue.get_last_pop_timestamp() - *PULL_MAX_IDLE_TIME - 1);
         assert!(queue.is_pull_expired());
+    }
+
+    #[test]
+    fn pop_process_queue_info_preserves_negative_wait_ack_count_like_java() {
+        let queue = PopProcessQueue::new();
+        queue.ack();
+        let mut info = PopProcessQueueInfo::new(0, false, 0);
+        queue.fill_pop_process_queue_info(&mut info);
+        assert_eq!(info.wait_ack_count(), -1);
     }
 }

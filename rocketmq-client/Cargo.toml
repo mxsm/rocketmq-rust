@@ -33,6 +33,7 @@ rocketmq-common          = { workspace = true }
 rocketmq-remoting        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-error.workspace = true
+rocketmq-auth.workspace  = true
 
 #json spupport
 serde.workspace      = true
@@ -73,6 +74,18 @@ harness = false
 
 [[bench]]
 name    = "message_util_bench"
+harness = false
+
+[[bench]]
+name    = "oneway_benchmark"
+harness = false
+
+[[bench]]
+name    = "select_queue_benchmark"
+harness = false
+
+[[bench]]
+name    = "client_hot_path_benchmark"
 harness = false
 
 [[example]]
@@ -127,6 +140,10 @@ path = "examples/ordermessage/ordermessage_consumer.rs"
 [[example]]
 name = "transaction-producer"
 path = "examples/transaction/transaction_producer.rs"
+
+[[example]]
+name = "client-production-benchmark"
+path = "examples/benchmark/client_production_benchmark.rs"
 
 [[example]]
 name = "pop-consumer"

@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use rocketmq_common::TimeUtils::current_millis;
@@ -29,6 +31,22 @@ use tracing::info;
 use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
+
+fn spawn_rebalance_task<F>(task: F) -> std::io::Result<Option<tokio::task::AbortHandle>>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let task = handle.spawn(task);
+        return Ok(Some(task.abort_handle()));
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    thread::Builder::new()
+        .name("rocketmq-client-rebalance-service".to_string())
+        .spawn(move || runtime.block_on(task))?;
+    Ok(None)
+}
 
 /// Configuration for RebalanceService.
 ///
@@ -175,13 +193,10 @@ impl RebalanceService {
     /// # Arguments
     ///
     /// * `config` - RebalanceConfig to use
-    ///
-    /// # Panics
-    ///
-    /// Panics if the configuration is invalid.
-    pub fn with_config(config: RebalanceConfig) -> Self {
+    pub fn with_config(mut config: RebalanceConfig) -> Self {
         if let Err(e) = config.validate() {
-            panic!("Invalid RebalanceConfig: {}", e);
+            warn!("Invalid RebalanceConfig: {}; using default rebalance configuration", e);
+            config = RebalanceConfig::default();
         }
 
         RebalanceService {
@@ -225,7 +240,7 @@ impl RebalanceService {
         // Clone config for use in spawned task
         let config = self.config.clone();
 
-        let handle = tokio::spawn(async move {
+        let abort_handle = match spawn_rebalance_task(async move {
             let mut last_rebalance_timestamp = tokio::time::Instant::now();
             let min_interval = config.min_interval();
             let mut real_wait_interval = config.wait_interval();
@@ -296,9 +311,16 @@ impl RebalanceService {
                     last_rebalance_timestamp = now;
                 }
             }
-        });
+        }) {
+            Ok(abort_handle) => abort_handle,
+            Err(error) => {
+                self.started.store(false, Ordering::SeqCst);
+                self.tx_shutdown = None;
+                return Err(Box::new(error));
+            }
+        };
 
-        self.task_abort_handle = Some(Arc::new(handle.abort_handle()));
+        self.task_abort_handle = abort_handle.map(Arc::new);
         Ok(())
     }
 
@@ -332,6 +354,8 @@ impl RebalanceService {
                 // Force abort task
                 if let Some(abort_handle) = &self.task_abort_handle {
                     abort_handle.abort();
+                } else {
+                    warn!("RebalanceService shutdown timeout but no abort handle is available for the fallback task");
                 }
                 return Err("Shutdown timeout".into());
             }
@@ -407,6 +431,7 @@ impl RebalanceService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base::client_config::ClientConfig;
 
     #[test]
     fn test_rebalance_config_default() {
@@ -514,6 +539,44 @@ mod tests {
     }
 
     #[test]
+    fn start_without_tokio_runtime_does_not_spawn_panic() {
+        let config = RebalanceConfig {
+            wait_interval_ms: 60_000,
+            min_interval_ms: 1,
+            enable_dynamic_interval: true,
+        };
+        let mut service = RebalanceService::with_config(config);
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "rebalance-no-runtime-client", None);
+
+        futures::executor::block_on(service.start(instance))
+            .expect("rebalance service should start without a Tokio runtime");
+
+        assert!(service.is_running());
+        assert!(
+            service.task_abort_handle.is_none(),
+            "fallback thread path does not expose a Tokio abort handle"
+        );
+
+        let tx_shutdown = service
+            .tx_shutdown
+            .as_ref()
+            .expect("start should install shutdown sender");
+        let _ = tx_shutdown.send(());
+
+        for _ in 0..50 {
+            if !service.is_running() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            !service.is_running(),
+            "fallback rebalance task did not observe shutdown"
+        );
+    }
+
+    #[test]
     fn test_rebalance_service_with_config() {
         let config = RebalanceConfig {
             wait_interval_ms: 10000,
@@ -527,14 +590,22 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid RebalanceConfig")]
-    fn test_rebalance_service_with_invalid_config() {
+    fn test_rebalance_service_with_invalid_config_falls_back_to_default() {
         let config = RebalanceConfig {
             wait_interval_ms: 0,
             min_interval_ms: 1000,
             enable_dynamic_interval: true,
         };
-        RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config);
+
+        assert_eq!(
+            service.config().wait_interval_ms,
+            RebalanceConfig::default().wait_interval_ms
+        );
+        assert_eq!(
+            service.config().min_interval_ms,
+            RebalanceConfig::default().min_interval_ms
+        );
     }
 
     #[test]

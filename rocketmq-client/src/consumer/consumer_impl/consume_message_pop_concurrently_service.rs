@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use std::error::Error;
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -51,6 +53,26 @@ use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 
+fn spawn_detached_pop_concurrent_task<F>(thread_name: &'static str, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        drop(handle.spawn(task));
+        return;
+    }
+
+    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
+        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(runtime) => runtime.block_on(task),
+            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
+        }
+    }) {
+        Ok(handle) => drop(handle),
+        Err(error) => warn!("Failed to spawn {} background thread: {}", thread_name, error),
+    }
+}
+
 pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: ArcMut<ClientConfig>,
@@ -71,7 +93,7 @@ impl ConsumeMessagePopConcurrentlyService {
         message_listener: ArcMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
-        let consume_thread = consumer_config.consume_thread_max;
+        let consume_thread = consumer_config.consume_thread_min;
         Self {
             default_mqpush_consumer_impl,
             client_config,
@@ -82,6 +104,28 @@ impl ConsumeMessagePopConcurrentlyService {
             active_tasks: Arc::new(AtomicUsize::new(0)),
             concurrency_limiter: Arc::new(Semaphore::new(consume_thread as usize)),
             max_concurrency: Arc::new(AtomicUsize::new(consume_thread as usize)),
+        }
+    }
+
+    fn resize_available_permits(semaphore: &Semaphore, old_total: usize, new_total: usize) {
+        let available = semaphore.available_permits();
+        let in_flight = old_total.saturating_sub(available);
+        let target_available = new_total.saturating_sub(in_flight);
+
+        match target_available.cmp(&available) {
+            std::cmp::Ordering::Greater => semaphore.add_permits(target_available - available),
+            std::cmp::Ordering::Less => {
+                let _ = semaphore.forget_permits(available - target_available);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
+    fn get_max_reconsume_times(&self) -> i32 {
+        if self.consumer_config.max_reconsume_times == -1 {
+            16
+        } else {
+            self.consumer_config.max_reconsume_times
         }
     }
 }
@@ -96,6 +140,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         );
 
         self.stopped.store(true, Ordering::Release);
+        self.concurrency_limiter.close();
 
         let timeout = Duration::from_millis(await_terminate_millis);
         let start_time = Instant::now();
@@ -119,38 +164,12 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
     }
 
     fn update_core_pool_size(&self, core_pool_size: usize) {
-        if core_pool_size > 0 && core_pool_size <= u16::MAX as usize {
-            let old_size = self.max_concurrency.load(Ordering::Acquire);
-            self.max_concurrency.store(core_pool_size, Ordering::Release);
-
-            if core_pool_size > old_size {
-                let diff = core_pool_size - old_size;
-                self.concurrency_limiter.add_permits(diff);
-                info!(
-                    "{} ConsumeMessagePopConcurrentlyService increase core pool size from {} to {}",
-                    self.consumer_group, old_size, core_pool_size
-                );
-            } else if core_pool_size < old_size {
-                info!(
-                    "{} ConsumeMessagePopConcurrentlyService decrease core pool size from {} to {} (will take effect \
-                     gradually)",
-                    self.consumer_group, old_size, core_pool_size
-                );
-            }
-        }
-    }
-
-    fn inc_core_pool_size(&self) {
-        let current = self.max_concurrency.load(Ordering::Acquire);
-        if current < u16::MAX as usize {
-            self.update_core_pool_size(current + 1);
-        }
-    }
-
-    fn dec_core_pool_size(&self) {
-        let current = self.max_concurrency.load(Ordering::Acquire);
-        if current > 1 {
-            self.update_core_pool_size(current - 1);
+        if core_pool_size > 0
+            && core_pool_size <= i16::MAX as usize
+            && core_pool_size < self.consumer_config.consume_thread_max as usize
+        {
+            let old_size = self.max_concurrency.swap(core_pool_size, Ordering::AcqRel);
+            Self::resize_available_permits(&self.concurrency_limiter, old_size, core_pool_size);
         }
     }
 
@@ -168,11 +187,17 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
-        self.default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .mut_from_ref()
-            .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+            default_mqpush_consumer_impl
+                .mut_from_ref()
+                .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+        } else {
+            warn!(
+                "consumeMessageDirectly namespace reset skipped: DefaultMQPushConsumerImpl is not initialized, \
+                 group={}",
+                self.consumer_group
+            );
+        }
 
         let begin_timestamp = Instant::now();
 
@@ -219,7 +244,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        unimplemented!("ConsumeMessagePopConcurrentlyService.submit_consume_request is not supported")
+        let _ = (this, msgs, process_queue, message_queue, dispatch_to_consume);
     }
 
     async fn submit_pop_consume_request(
@@ -229,7 +254,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
+        let consume_batch_size = self.consumer_config.consume_message_batch_max_size.max(1);
         if msgs.len() <= consume_batch_size as usize {
             let request = ConsumeRequest::new(
                 msgs,
@@ -241,7 +266,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
             );
             let limiter = self.concurrency_limiter.clone();
             let stopped = self.stopped.clone();
-            tokio::spawn(async move {
+            spawn_detached_pop_concurrent_task("rocketmq-client-pop-concurrent-consume", async move {
                 if stopped.load(Ordering::Acquire) {
                     return;
                 }
@@ -277,7 +302,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                     let pop_service = this.clone();
                     let limiter_clone = limiter.clone();
                     let stopped_clone = stopped.clone();
-                    tokio::spawn(async move {
+                    spawn_detached_pop_concurrent_task("rocketmq-client-pop-concurrent-consume", async move {
                         if stopped_clone.load(Ordering::Acquire) {
                             return;
                         }
@@ -309,7 +334,12 @@ impl ConsumeMessagePopConcurrentlyService {
     ) {
         let stopped = self.stopped.clone();
 
-        tokio::spawn(async move {
+        spawn_detached_pop_concurrent_task("rocketmq-client-pop-concurrent-consume-delay", async move {
+            if stopped.load(Ordering::Acquire) {
+                warn!("Service stopped, discard delayed consume request for {}", message_queue);
+                return;
+            }
+
             tokio::time::sleep(Duration::from_millis(5000)).await;
 
             if stopped.load(Ordering::Acquire) {
@@ -332,17 +362,7 @@ impl ConsumeMessagePopConcurrentlyService {
         if consume_request.msgs.is_empty() {
             return;
         }
-        let mut ack_index = context.ack_index;
-        match status {
-            ConsumeConcurrentlyStatus::ConsumeSuccess => {
-                if ack_index >= consume_request.msgs.len() as i32 {
-                    ack_index = consume_request.msgs.len() as i32 - 1;
-                }
-            }
-            ConsumeConcurrentlyStatus::ReconsumeLater => {
-                ack_index = -1;
-            }
-        }
+        let ack_index = normalize_ack_index(status, context.ack_index, consume_request.msgs.len());
 
         // Update per-topic/group consume throughput counters, split by ack index.
         if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
@@ -369,11 +389,16 @@ impl ConsumeMessagePopConcurrentlyService {
         if ack_index >= 0 {
             for i in 0..=ack_index {
                 let msg = &consume_request.msgs[i as usize];
-                self.default_mqpush_consumer_impl
-                    .as_mut()
-                    .unwrap()
-                    .ack_async(msg.as_ref(), &self.consumer_group)
-                    .await;
+                if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
+                    default_mqpush_consumer_impl
+                        .ack_async(msg.as_ref(), &self.consumer_group)
+                        .await;
+                } else {
+                    warn!(
+                        "pop consume ack skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
+                        self.consumer_group, consume_request.message_queue
+                    );
+                }
                 consume_request.process_queue.ack();
             }
         }
@@ -381,7 +406,7 @@ impl ConsumeMessagePopConcurrentlyService {
         for i in (ack_index + 1) as usize..consume_request.msgs.len() {
             let msg = &consume_request.msgs[i];
             consume_request.process_queue.ack();
-            if msg.reconsume_times >= self.consumer_config.max_reconsume_times {
+            if msg.reconsume_times >= self.get_max_reconsume_times() {
                 self.check_need_ack_or_delay(msg).await;
                 continue;
             }
@@ -393,25 +418,25 @@ impl ConsumeMessagePopConcurrentlyService {
     }
 
     async fn check_need_ack_or_delay(&mut self, message: &MessageExt) {
-        let delay_level_table = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .pop_delay_level
-            .as_ref();
-        let delay_time = delay_level_table[delay_level_table.len() - 1] * 1000 * 2;
-        let msg_delay_time = current_millis() - message.born_timestamp as u64;
-        if msg_delay_time > delay_time as u64 {
+        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+            warn!(
+                "pop consume retry handling skipped: DefaultMQPushConsumerImpl is not initialized, group={}, msg={}",
+                self.consumer_group, message
+            );
+            return;
+        };
+        let delay_level_table = default_mqpush_consumer_impl.pop_delay_level.clone();
+        let delay_time = i64::from(delay_level_table[delay_level_table.len() - 1]) * 1000 * 2;
+        let msg_delay_time = java_signed_elapsed_millis(current_millis(), message.born_timestamp);
+        if msg_delay_time > delay_time {
             warn!("Consume too many times, ack message async. message {}", message);
-            self.default_mqpush_consumer_impl
-                .as_mut()
-                .unwrap()
+            default_mqpush_consumer_impl
                 .ack_async(message, &self.consumer_group)
                 .await;
         } else {
             let mut delay_level = (delay_level_table.len() as i32) - 1;
             while delay_level >= 0 {
-                if msg_delay_time >= (delay_level_table[delay_level as usize] * 1000) as u64 {
+                if msg_delay_time >= i64::from(delay_level_table[delay_level as usize]) * 1000 {
                     delay_level += 1;
                     break;
                 }
@@ -438,13 +463,15 @@ impl ConsumeMessagePopConcurrentlyService {
         if delay_level == 0 {
             delay_level = message.reconsume_times;
         }
-        let delay_level_table = self
-            .default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .pop_delay_level
-            .as_ref();
-        let delay_second = if delay_level as usize > delay_level_table.len() {
+        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+            warn!(
+                "changePopInvisibleTime skipped: DefaultMQPushConsumerImpl is not initialized, group={} msg={}",
+                consumer_group, message
+            );
+            return;
+        };
+        let delay_level_table = default_mqpush_consumer_impl.pop_delay_level.clone();
+        let delay_second = if delay_level < 0 || delay_level as usize >= delay_level_table.len() {
             delay_level_table[delay_level_table.len() - 1]
         } else {
             delay_level_table[delay_level as usize]
@@ -461,10 +488,7 @@ impl ConsumeMessagePopConcurrentlyService {
             }
         }
 
-        let result = self
-            .default_mqpush_consumer_impl
-            .as_mut()
-            .unwrap()
+        let result = default_mqpush_consumer_impl
             .change_pop_invisible_time_async(
                 message.topic(),
                 consumer_group,
@@ -583,7 +607,15 @@ impl ConsumeRequest {
             self.process_queue.inc_found_msg(self.msgs.len());
             return;
         }
-        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+        let Some(mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref().cloned() else {
+            warn!(
+                "pop consume request skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}, msgs={}",
+                self.consumer_group,
+                self.message_queue,
+                self.msgs.len()
+            );
+            return;
+        };
         default_mqpush_consumer_impl.reset_retry_and_namespace(&mut self.msgs, self.consumer_group.as_str());
         let mut consume_message_context = None;
 
@@ -611,7 +643,9 @@ impl ConsumeRequest {
                             .unwrap_or_default(),
                     ),
             );
-            default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_mut().unwrap());
+            if let Some(context) = consume_message_context.as_mut() {
+                default_mqpush_consumer_impl.execute_hook_before(context);
+            }
         }
 
         let listener = self.message_listener.clone();
@@ -660,42 +694,36 @@ impl ConsumeRequest {
             }
         };
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        let return_type = match status {
-            None => {
-                if has_exception {
-                    ConsumeReturnType::Exception
-                } else {
-                    ConsumeReturnType::ReturnNull
-                }
-            }
-            Some(s) => {
-                if consume_rt >= self.invisible_time {
-                    ConsumeReturnType::TimeOut
-                } else if s == ConsumeConcurrentlyStatus::ReconsumeLater {
-                    ConsumeReturnType::Failed
-                } else {
-                    ConsumeReturnType::Success
-                }
-            }
-        };
+        let return_type = classify_pop_consume_return_type(status, has_exception, consume_rt, self.invisible_time);
 
         if default_mqpush_consumer_impl.has_hook() {
-            consume_message_context.as_mut().unwrap().props.insert(
-                CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE),
-                return_type.to_string().into(),
-            );
+            if let Some(context) = consume_message_context.as_mut() {
+                context.props.insert(
+                    CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE),
+                    return_type.to_string().into(),
+                );
+            } else {
+                warn!(
+                    "pop consume hook context missing before return type update, group={}, mq={}",
+                    self.consumer_group, self.message_queue
+                );
+            }
         }
 
-        if status.is_none() {
-            status = Some(ConsumeConcurrentlyStatus::ReconsumeLater);
-        }
+        let final_status = status.unwrap_or(ConsumeConcurrentlyStatus::ReconsumeLater);
 
         if default_mqpush_consumer_impl.has_hook() {
-            let cmc = consume_message_context.as_mut().unwrap();
-            cmc.status = status.unwrap().to_string().into();
-            cmc.success = status.unwrap() == ConsumeConcurrentlyStatus::ConsumeSuccess;
-            cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
-            default_mqpush_consumer_impl.execute_hook_after(consume_message_context.as_mut().unwrap());
+            if let Some(cmc) = consume_message_context.as_mut() {
+                cmc.status = final_status.to_string().into();
+                cmc.success = final_status == ConsumeConcurrentlyStatus::ConsumeSuccess;
+                cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
+                default_mqpush_consumer_impl.execute_hook_after(cmc);
+            } else {
+                warn!(
+                    "pop consume hook context missing before after-hook execution, group={}, mq={}",
+                    self.consumer_group, self.message_queue
+                );
+            }
         }
 
         // Record message consume round-trip time.
@@ -725,8 +753,372 @@ impl ConsumeRequest {
             let this = consume_message_concurrently_service.clone();
 
             consume_message_concurrently_service
-                .process_consume_result(this, status.unwrap(), &context, &mut self)
+                .process_consume_result(this, final_status, &context, &mut self)
                 .await;
         }
+    }
+}
+
+fn normalize_ack_index(status: ConsumeConcurrentlyStatus, ack_index: i32, message_count: usize) -> i32 {
+    if message_count == 0 {
+        return -1;
+    }
+    match status {
+        ConsumeConcurrentlyStatus::ConsumeSuccess => ack_index.clamp(-1, message_count as i32 - 1),
+        ConsumeConcurrentlyStatus::ReconsumeLater => -1,
+    }
+}
+
+fn java_signed_elapsed_millis(now_millis: u64, born_timestamp: i64) -> i64 {
+    i64::try_from(now_millis)
+        .unwrap_or(i64::MAX)
+        .saturating_sub(born_timestamp)
+}
+
+fn classify_pop_consume_return_type(
+    status: Option<ConsumeConcurrentlyStatus>,
+    has_exception: bool,
+    consume_rt: u64,
+    invisible_time: u64,
+) -> ConsumeReturnType {
+    match status {
+        None => {
+            if has_exception {
+                ConsumeReturnType::Exception
+            } else {
+                ConsumeReturnType::ReturnNull
+            }
+        }
+        Some(ConsumeConcurrentlyStatus::ReconsumeLater) => {
+            if consume_rt >= invisible_time.saturating_mul(1000) {
+                ConsumeReturnType::TimeOut
+            } else {
+                ConsumeReturnType::Failed
+            }
+        }
+        Some(ConsumeConcurrentlyStatus::ConsumeSuccess) => {
+            if consume_rt >= invisible_time.saturating_mul(1000) {
+                ConsumeReturnType::TimeOut
+            } else {
+                ConsumeReturnType::Success
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message_queue() -> MessageQueue {
+        MessageQueue::from_parts("topic", "broker-a", 0)
+    }
+
+    fn listener() -> ArcMessageListenerConcurrently {
+        Arc::new(|_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
+            Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+        })
+    }
+
+    fn consumer_group() -> CheetahString {
+        CheetahString::from_static_str("group")
+    }
+
+    fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopConcurrentlyService {
+        ConsumeMessagePopConcurrentlyService::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(ConsumerConfig::default()),
+            consumer_group(),
+            listener(),
+            default_impl,
+        )
+    }
+
+    fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopConcurrentlyService {
+        ConsumeMessagePopConcurrentlyService::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(consumer_config),
+            consumer_group(),
+            listener(),
+            None,
+        )
+    }
+
+    fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
+        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ))
+    }
+
+    fn pop_message() -> MessageExt {
+        let mut message = MessageExt::default();
+        let extra_info = ExtraInfoUtil::build_extra_info(0, current_millis() as i64, 60_000, 0, "topic", "broker-a", 0);
+        MessageAccessor::put_property(
+            &mut message,
+            CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+            CheetahString::from_string(extra_info),
+        );
+        message
+    }
+
+    #[test]
+    fn normalize_ack_index_clamps_public_listener_values() {
+        assert_eq!(
+            normalize_ack_index(ConsumeConcurrentlyStatus::ConsumeSuccess, -3, 2),
+            -1
+        );
+        assert_eq!(normalize_ack_index(ConsumeConcurrentlyStatus::ConsumeSuccess, 99, 2), 1);
+        assert_eq!(
+            normalize_ack_index(ConsumeConcurrentlyStatus::ReconsumeLater, 99, 2),
+            -1
+        );
+        assert_eq!(normalize_ack_index(ConsumeConcurrentlyStatus::ConsumeSuccess, 0, 0), -1);
+    }
+
+    #[test]
+    fn java_signed_elapsed_millis_matches_java_long_subtraction_without_wrapping() {
+        assert_eq!(java_signed_elapsed_millis(1_500, 1_000), 500);
+        assert_eq!(java_signed_elapsed_millis(1_000, 1_500), -500);
+        assert_eq!(java_signed_elapsed_millis(1_000, -500), 1_500);
+        assert_eq!(java_signed_elapsed_millis(u64::MAX, -1), i64::MAX);
+    }
+
+    #[test]
+    fn max_reconsume_times_defaults_to_java_push_impl_value() {
+        let service = new_service(None);
+
+        assert_eq!(service.get_max_reconsume_times(), 16);
+    }
+
+    #[test]
+    fn max_reconsume_times_preserves_configured_value() {
+        let config = ConsumerConfig {
+            max_reconsume_times: 3,
+            ..Default::default()
+        };
+        let service = new_service_with_config(config);
+
+        assert_eq!(service.get_max_reconsume_times(), 3);
+    }
+
+    #[test]
+    fn core_pool_size_starts_at_min_and_update_matches_java_bounds() {
+        let config = ConsumerConfig {
+            consume_thread_min: 2,
+            consume_thread_max: 5,
+            ..Default::default()
+        };
+        let service = new_service_with_config(config);
+
+        assert_eq!(service.get_core_pool_size(), 2);
+
+        service.update_core_pool_size(4);
+        assert_eq!(service.get_core_pool_size(), 4);
+
+        service.update_core_pool_size(5);
+        assert_eq!(service.get_core_pool_size(), 4);
+
+        service.update_core_pool_size(0);
+        assert_eq!(service.get_core_pool_size(), 4);
+    }
+
+    #[test]
+    fn inc_and_dec_core_pool_size_are_noops_like_java() {
+        let config = ConsumerConfig {
+            consume_thread_min: 2,
+            consume_thread_max: 5,
+            ..Default::default()
+        };
+        let service = new_service_with_config(config);
+
+        service.inc_core_pool_size();
+        service.dec_core_pool_size();
+
+        assert_eq!(service.get_core_pool_size(), 2);
+    }
+
+    #[test]
+    fn submit_single_pop_consume_request_without_tokio_runtime_does_not_spawn_panic() {
+        let service = new_service(None);
+        service.stopped.store(true, Ordering::Release);
+
+        futures::executor::block_on(service.submit_pop_consume_request(
+            ArcMut::new(new_service(None)),
+            vec![pop_message()],
+            &PopProcessQueue::new(),
+            &message_queue(),
+        ));
+        std::thread::sleep(Duration::from_millis(30));
+    }
+
+    #[test]
+    fn submit_split_pop_consume_request_without_tokio_runtime_does_not_spawn_panic() {
+        let config = ConsumerConfig {
+            consume_message_batch_max_size: 1,
+            ..Default::default()
+        };
+        let service = new_service_with_config(config);
+        service.stopped.store(true, Ordering::Release);
+
+        futures::executor::block_on(service.submit_pop_consume_request(
+            ArcMut::new(new_service(None)),
+            vec![pop_message(), pop_message()],
+            &PopProcessQueue::new(),
+            &message_queue(),
+        ));
+        std::thread::sleep(Duration::from_millis(30));
+    }
+
+    #[test]
+    fn submit_pop_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
+        let service = new_service(None);
+        service.stopped.store(true, Ordering::Release);
+
+        futures::executor::block_on(service.submit_pop_consume_request_later(
+            ArcMut::new(new_service(None)),
+            vec![pop_message()],
+            Arc::new(PopProcessQueue::new()),
+            message_queue(),
+        ));
+        std::thread::sleep(Duration::from_millis(30));
+    }
+
+    #[test]
+    fn pop_consume_return_type_timeout_uses_java_invisible_time_multiplier() {
+        assert_eq!(
+            classify_pop_consume_return_type(
+                Some(ConsumeConcurrentlyStatus::ConsumeSuccess),
+                false,
+                59_999_999,
+                60_000
+            ),
+            ConsumeReturnType::Success
+        );
+        assert_eq!(
+            classify_pop_consume_return_type(
+                Some(ConsumeConcurrentlyStatus::ConsumeSuccess),
+                false,
+                60_000_000,
+                60_000
+            ),
+            ConsumeReturnType::TimeOut
+        );
+        assert_eq!(
+            classify_pop_consume_return_type(
+                Some(ConsumeConcurrentlyStatus::ReconsumeLater),
+                false,
+                59_999_999,
+                60_000
+            ),
+            ConsumeReturnType::Failed
+        );
+    }
+
+    #[test]
+    fn pop_consume_return_type_preserves_null_and_exception_classification() {
+        assert_eq!(
+            classify_pop_consume_return_type(None, true, 60_000_000, 60_000),
+            ConsumeReturnType::Exception
+        );
+        assert_eq!(
+            classify_pop_consume_return_type(None, false, 60_000_000, 60_000),
+            ConsumeReturnType::ReturnNull
+        );
+    }
+
+    #[tokio::test]
+    async fn consume_message_directly_without_default_impl_does_not_panic() {
+        let service = new_service(None);
+
+        let result = service
+            .consume_message_directly(pop_message(), Some(CheetahString::from_static_str("broker-a")))
+            .await;
+
+        assert!(matches!(result.consume_result(), Some(CMResult::CRSuccess)));
+    }
+
+    #[tokio::test]
+    async fn consume_request_without_default_impl_is_ignored_without_panic() {
+        let service = ArcMut::new(new_service(None));
+        let process_queue = Arc::new(PopProcessQueue::new());
+        let request = ConsumeRequest::new(
+            vec![pop_message()],
+            process_queue,
+            message_queue(),
+            consumer_group(),
+            listener(),
+            None,
+        );
+
+        request.run(service.clone()).await;
+
+        assert_eq!(service.active_tasks.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_concurrency_limiter_like_java_executor_shutdown() {
+        let mut service = new_service(None);
+
+        service.shutdown(100).await;
+
+        assert!(service.concurrency_limiter.is_closed());
+    }
+
+    #[tokio::test]
+    async fn process_consume_result_without_default_impl_does_not_panic() {
+        let mut service = new_service(None);
+        let process_queue = Arc::new(PopProcessQueue::new());
+        process_queue.inc_found_msg(1);
+        let mut request = ConsumeRequest::new(
+            vec![pop_message()],
+            process_queue.clone(),
+            message_queue(),
+            consumer_group(),
+            listener(),
+            None,
+        );
+        let context = ConsumeConcurrentlyContext::new(message_queue());
+
+        service
+            .process_consume_result(
+                ArcMut::new(new_service(None)),
+                ConsumeConcurrentlyStatus::ConsumeSuccess,
+                &context,
+                &mut request,
+            )
+            .await;
+
+        assert_eq!(process_queue.get_wai_ack_msg_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn process_consume_result_without_client_instance_does_not_panic() {
+        let default_impl = new_default_impl();
+        let mut service = new_service(Some(default_impl.clone()));
+        let process_queue = Arc::new(PopProcessQueue::new());
+        process_queue.inc_found_msg(1);
+        let mut request = ConsumeRequest::new(
+            vec![pop_message()],
+            process_queue.clone(),
+            message_queue(),
+            consumer_group(),
+            listener(),
+            Some(default_impl),
+        );
+        let context = ConsumeConcurrentlyContext::new(message_queue());
+
+        service
+            .process_consume_result(
+                ArcMut::new(new_service(None)),
+                ConsumeConcurrentlyStatus::ConsumeSuccess,
+                &context,
+                &mut request,
+            )
+            .await;
+
+        assert_eq!(process_queue.get_wai_ack_msg_count(), 0);
     }
 }

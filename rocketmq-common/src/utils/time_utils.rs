@@ -17,71 +17,51 @@
 //! All functions query [`std::time::SystemTime::now`] and return the elapsed
 //! duration since the Unix epoch in the requested unit.
 
+#[inline(always)]
+fn duration_since_unix_epoch(time: std::time::SystemTime) -> std::time::Duration {
+    time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default()
+}
+
 /// Returns the current Unix timestamp in milliseconds.
 ///
-/// # Panics
-///
-/// Panics if the system clock is set to a time before the Unix epoch.
+/// Returns 0 if the system clock is set before the Unix epoch.
 #[deprecated(since = "0.8.0", note = "use `current_millis` instead")]
 #[inline(always)]
 pub fn get_current_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    duration_since_unix_epoch(std::time::SystemTime::now()).as_millis() as u64
 }
 
 /// Returns the current Unix timestamp in nanoseconds.
 ///
-/// # Panics
-///
-/// Panics if the system clock is set to a time before the Unix epoch.
+/// Returns 0 if the system clock is set before the Unix epoch.
 #[deprecated(since = "0.8.0", note = "use `current_nano` instead")]
 #[inline(always)]
 pub fn get_current_nano() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
+    duration_since_unix_epoch(std::time::SystemTime::now()).as_nanos() as u64
 }
 
 /// Returns the current Unix timestamp in milliseconds.
 ///
-/// # Panics
-///
-/// Panics if the system clock is set to a time before the Unix epoch.
+/// Returns 0 if the system clock is set before the Unix epoch.
 #[inline(always)]
 pub fn current_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    duration_since_unix_epoch(std::time::SystemTime::now()).as_millis() as u64
 }
 
 /// Returns the current Unix timestamp in nanoseconds.
 ///
-/// # Panics
-///
-/// Panics if the system clock is set to a time before the Unix epoch.
+/// Returns 0 if the system clock is set before the Unix epoch.
 #[inline(always)]
 pub fn current_nano() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
+    duration_since_unix_epoch(std::time::SystemTime::now()).as_nanos() as u64
 }
 
 /// Returns the current Unix timestamp in whole seconds.
 ///
-/// # Panics
-///
-/// Panics if the system clock is set to a time before the Unix epoch.
+/// Returns 0 if the system clock is set before the Unix epoch.
 #[inline(always)]
 pub fn current_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+    duration_since_unix_epoch(std::time::SystemTime::now()).as_secs()
 }
 
 #[cfg(test)]
@@ -91,6 +71,13 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     use super::*;
+
+    #[test]
+    fn duration_since_unix_epoch_returns_zero_for_before_epoch() {
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+        assert_eq!(duration_since_unix_epoch(before_epoch), Duration::ZERO);
+    }
 
     #[allow(deprecated)]
     #[test]

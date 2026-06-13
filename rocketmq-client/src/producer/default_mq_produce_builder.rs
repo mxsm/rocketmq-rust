@@ -95,6 +95,12 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
+    pub fn use_tls(mut self, use_tls: bool) -> Self {
+        self.client_config.set_use_tls(use_tls);
+        self
+    }
+
+    #[inline]
     pub fn create_topic_key(mut self, create_topic_key: impl Into<CheetahString>) -> Self {
         self.create_topic_key = Some(create_topic_key.into());
         self

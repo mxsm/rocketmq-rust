@@ -17,16 +17,22 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_common::common::mix_all;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
+use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::default_lite_pull_consume_timestamp;
+use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::validate_lite_pull_consume_from_where;
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullConsumerConfig;
 use crate::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
 use crate::trace::trace_dispatcher::TraceDispatcher;
+
+pub(crate) const MIN_AUTOCOMMIT_INTERVAL_MILLIS: u64 = 1000;
 
 /// Builder for creating a [`DefaultLitePullConsumer`] with customized configuration.
 ///
@@ -40,7 +46,7 @@ use crate::trace::trace_dispatcher::TraceDispatcher;
 ///     .name_server_addr("127.0.0.1:9876")
 ///     .pull_batch_size(32)
 ///     .auto_commit(true)
-///     .build();
+///     .build()?;
 /// ```
 pub struct DefaultLitePullConsumerBuilder {
     // Client configuration
@@ -49,6 +55,7 @@ pub struct DefaultLitePullConsumerBuilder {
     instance_name: Option<CheetahString>,
     namespace: Option<CheetahString>,
     access_channel: Option<CheetahString>,
+    use_tls: bool,
 
     // Consumer configuration
     consumer_group: Option<CheetahString>,
@@ -56,10 +63,13 @@ pub struct DefaultLitePullConsumerBuilder {
     consume_from_where: ConsumeFromWhere,
     consume_timestamp: Option<CheetahString>,
     allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
+    unit_mode: bool,
 
     // Pull configuration
     pull_batch_size: i32,
     pull_thread_nums: usize,
+    connect_broker_by_user: bool,
+    default_broker_id: u64,
 
     // Flow control
     pull_threshold_for_queue: i64,
@@ -71,6 +81,9 @@ pub struct DefaultLitePullConsumerBuilder {
     pull_time_delay_millis_when_exception: u64,
     pull_time_delay_millis_when_cache_flow_control: u64,
     pull_time_delay_millis_when_broker_flow_control: u64,
+    broker_suspend_max_time_millis: u64,
+    consumer_timeout_millis_when_suspend: u64,
+    consumer_pull_timeout_millis: u64,
 
     // Poll configuration
     poll_timeout_millis: u64,
@@ -105,24 +118,31 @@ impl DefaultLitePullConsumerBuilder {
             instance_name: None,
             namespace: None,
             access_channel: None,
+            use_tls: false,
             consumer_group: None,
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
-            consume_timestamp: None,
+            consume_timestamp: Some(default_lite_pull_consume_timestamp()),
             allocate_message_queue_strategy: Arc::new(AllocateMessageQueueAveragely),
+            unit_mode: false,
             pull_batch_size: 10,
             pull_thread_nums: 20,
+            connect_broker_by_user: false,
+            default_broker_id: mix_all::MASTER_ID,
             pull_threshold_for_queue: 1000,
             pull_threshold_size_for_queue: 100,
-            pull_threshold_for_all: -1,
+            pull_threshold_for_all: 10000,
             consume_max_span: 2000,
             pull_time_delay_millis_when_exception: 1000,
             pull_time_delay_millis_when_cache_flow_control: 50,
             pull_time_delay_millis_when_broker_flow_control: 20,
+            broker_suspend_max_time_millis: 20_000,
+            consumer_timeout_millis_when_suspend: 30_000,
+            consumer_pull_timeout_millis: 10_000,
             poll_timeout_millis: 5000,
             auto_commit: true,
             auto_commit_interval_millis: 5000,
-            topic_metadata_check_interval_millis: 10000,
+            topic_metadata_check_interval_millis: 30000,
             message_request_mode: MessageRequestMode::Pull,
             rpc_hook: None,
             trace_dispatcher: None,
@@ -173,6 +193,12 @@ impl DefaultLitePullConsumerBuilder {
         self
     }
 
+    /// Sets whether client remoting connections should use TLS.
+    pub fn use_tls(mut self, use_tls: bool) -> Self {
+        self.use_tls = use_tls;
+        self
+    }
+
     /// Sets the message model (default: Clustering).
     pub fn message_model(mut self, model: MessageModel) -> Self {
         self.message_model = model;
@@ -200,6 +226,12 @@ impl DefaultLitePullConsumerBuilder {
         self
     }
 
+    /// Sets whether the subscription group runs in unit mode (default: false).
+    pub fn unit_mode(mut self, unit_mode: bool) -> Self {
+        self.unit_mode = unit_mode;
+        self
+    }
+
     /// Sets the number of messages to pull in a single request (default: 10, range: 1-1024).
     pub fn pull_batch_size(mut self, size: i32) -> Self {
         self.pull_batch_size = size;
@@ -209,6 +241,18 @@ impl DefaultLitePullConsumerBuilder {
     /// Sets the number of concurrent pull threads (default: 20).
     pub fn pull_thread_nums(mut self, nums: usize) -> Self {
         self.pull_thread_nums = nums;
+        self
+    }
+
+    /// Sets whether pulls should always use the configured default broker ID.
+    pub fn connect_broker_by_user(mut self, connect: bool) -> Self {
+        self.connect_broker_by_user = connect;
+        self
+    }
+
+    /// Sets the broker ID used when user-controlled broker selection is enabled.
+    pub fn default_broker_id(mut self, broker_id: u64) -> Self {
+        self.default_broker_id = broker_id;
         self
     }
 
@@ -224,8 +268,7 @@ impl DefaultLitePullConsumerBuilder {
         self
     }
 
-    /// Sets the maximum total number of cached messages across all queues (default: -1 for
-    /// unlimited).
+    /// Sets the maximum total number of cached messages across all queues (default: 10000).
     pub fn pull_threshold_for_all(mut self, threshold: i64) -> Self {
         self.pull_threshold_for_all = threshold;
         self
@@ -255,6 +298,25 @@ impl DefaultLitePullConsumerBuilder {
         self
     }
 
+    /// Sets the maximum time that the broker may suspend a long-poll pull request (default:
+    /// 20000ms).
+    pub fn broker_suspend_max_time_millis(mut self, timeout: u64) -> Self {
+        self.broker_suspend_max_time_millis = timeout;
+        self
+    }
+
+    /// Sets the consumer-side timeout for suspended long-poll pull requests (default: 30000ms).
+    pub fn consumer_timeout_millis_when_suspend(mut self, timeout: u64) -> Self {
+        self.consumer_timeout_millis_when_suspend = timeout;
+        self
+    }
+
+    /// Sets the lite pull RPC timeout in milliseconds (default: 10000ms).
+    pub fn consumer_pull_timeout_millis(mut self, timeout: u64) -> Self {
+        self.consumer_pull_timeout_millis = timeout;
+        self
+    }
+
     /// Sets the default poll timeout in milliseconds (default: 5000).
     pub fn poll_timeout_millis(mut self, timeout: u64) -> Self {
         self.poll_timeout_millis = timeout;
@@ -269,11 +331,13 @@ impl DefaultLitePullConsumerBuilder {
 
     /// Sets the interval between automatic offset commits (default: 5000ms, minimum: 1000ms).
     pub fn auto_commit_interval_millis(mut self, interval: u64) -> Self {
-        self.auto_commit_interval_millis = interval.max(1000);
+        if interval >= MIN_AUTOCOMMIT_INTERVAL_MILLIS {
+            self.auto_commit_interval_millis = interval;
+        }
         self
     }
 
-    /// Sets the interval for checking topic metadata changes (default: 10000ms).
+    /// Sets the interval for checking topic metadata changes (default: 30000ms).
     pub fn topic_metadata_check_interval_millis(mut self, interval: u64) -> Self {
         self.topic_metadata_check_interval_millis = interval;
         self
@@ -311,16 +375,17 @@ impl DefaultLitePullConsumerBuilder {
     }
 
     /// Builds the [`DefaultLitePullConsumer`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if required fields (consumer_group, name_server_addr) are not set.
-    pub fn build(self) -> DefaultLitePullConsumer {
-        let consumer_group = self.consumer_group.expect("consumer_group is required");
-        let name_server_addr = self.name_server_addr.expect("name_server_addr is required");
+    pub fn build(self) -> RocketMQResult<DefaultLitePullConsumer> {
+        let Some(consumer_group) = self.consumer_group else {
+            return Err(mq_client_err!("consumer_group is required"));
+        };
+        validate_lite_pull_consume_from_where(self.consume_from_where)?;
 
         let mut client_config = ClientConfig::default();
-        client_config.set_namesrv_addr(name_server_addr);
+        client_config.set_enable_stream_request_type(true);
+        if let Some(name_server_addr) = self.name_server_addr {
+            client_config.set_namesrv_addr(name_server_addr);
+        }
 
         if let Some(ip) = self.client_ip {
             client_config.set_client_ip(ip);
@@ -333,6 +398,7 @@ impl DefaultLitePullConsumerBuilder {
         if let Some(namespace) = self.namespace {
             client_config.set_namespace(namespace);
         }
+        client_config.set_use_tls(self.use_tls);
 
         let consumer_config = LitePullConsumerConfig {
             consumer_group,
@@ -340,8 +406,11 @@ impl DefaultLitePullConsumerBuilder {
             consume_from_where: self.consume_from_where,
             consume_timestamp: self.consume_timestamp,
             allocate_message_queue_strategy: self.allocate_message_queue_strategy,
+            unit_mode: self.unit_mode,
             pull_batch_size: self.pull_batch_size,
             pull_thread_nums: self.pull_thread_nums,
+            connect_broker_by_user: self.connect_broker_by_user,
+            default_broker_id: self.default_broker_id,
             pull_threshold_for_queue: self.pull_threshold_for_queue,
             pull_threshold_size_for_queue: self.pull_threshold_size_for_queue,
             pull_threshold_for_all: self.pull_threshold_for_all,
@@ -349,6 +418,9 @@ impl DefaultLitePullConsumerBuilder {
             pull_time_delay_millis_when_exception: self.pull_time_delay_millis_when_exception,
             pull_time_delay_millis_when_cache_flow_control: self.pull_time_delay_millis_when_cache_flow_control,
             pull_time_delay_millis_when_broker_flow_control: self.pull_time_delay_millis_when_broker_flow_control,
+            broker_suspend_max_time_millis: self.broker_suspend_max_time_millis,
+            consumer_timeout_millis_when_suspend: self.consumer_timeout_millis_when_suspend,
+            consumer_pull_timeout_millis: self.consumer_pull_timeout_millis,
             poll_timeout_millis: self.poll_timeout_millis,
             auto_commit: self.auto_commit,
             auto_commit_interval_millis: self.auto_commit_interval_millis,
@@ -356,13 +428,239 @@ impl DefaultLitePullConsumerBuilder {
             message_request_mode: self.message_request_mode,
         };
 
-        DefaultLitePullConsumer::new(
+        Ok(DefaultLitePullConsumer::new(
             ArcMut::new(client_config),
             ArcMut::new(consumer_config),
             self.rpc_hook,
             self.trace_dispatcher,
             self.enable_msg_trace,
             self.custom_trace_topic,
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_without_consumer_group_returns_error() {
+        let result = DefaultLitePullConsumerBuilder::new().build();
+        match result {
+            Ok(_) => panic!("builder should reject missing consumer group"),
+            Err(error) => assert!(error.to_string().contains("consumer_group is required")),
+        }
+    }
+
+    #[test]
+    fn build_without_name_server_addr_uses_default_client_config() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use default client config");
+
+        assert_eq!(consumer.consumer_group().as_str(), "lite_pull_group");
+    }
+
+    #[test]
+    fn build_enables_stream_request_type_like_java_lite_pull_constructor() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java LitePull client id mode");
+
+        assert!(consumer.client_config().is_enable_stream_request_type());
+        assert!(consumer.client_config().build_mq_client_id().ends_with("@STREAM"));
+    }
+
+    #[test]
+    fn build_use_tls_initializes_client_config_like_java_client_config() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_tls_group")
+            .use_tls(true)
+            .build()
+            .expect("builder should apply TLS flag");
+
+        assert!(consumer.is_use_tls());
+        assert!(consumer.client_config().is_use_tls());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn build_rejects_unsupported_consume_from_where_like_java_lite_pull() {
+        let result = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .consume_from_where(ConsumeFromWhere::ConsumeFromMinOffset)
+            .build();
+
+        match result {
+            Ok(_) => panic!("Java LitePull rejects legacy consumeFromWhere values"),
+            Err(error) => assert!(error.to_string().contains("Invalid ConsumeFromWhere Value")),
+        }
+    }
+
+    #[test]
+    fn default_pull_threshold_for_all_matches_java() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java default pull threshold");
+
+        assert_eq!(consumer.consumer_config().pull_threshold_for_all, 10000);
+        assert_eq!(LitePullConsumerConfig::default().pull_threshold_for_all, 10000);
+    }
+
+    #[test]
+    fn pull_thread_nums_defaults_and_overrides_match_java_lite_pull() {
+        let default_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java default pull thread count");
+
+        assert_eq!(default_consumer.consumer_config().pull_thread_nums, 20);
+        assert_eq!(LitePullConsumerConfig::default().pull_thread_nums, 20);
+
+        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .pull_thread_nums(7)
+            .build()
+            .expect("builder should preserve configured pull thread count");
+
+        assert_eq!(custom_consumer.consumer_config().pull_thread_nums, 7);
+    }
+
+    #[tokio::test]
+    async fn broker_selection_defaults_and_overrides_match_java_lite_pull() {
+        let default_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java default broker selection");
+
+        assert!(!default_consumer.is_connect_broker_by_user().await);
+        assert_eq!(default_consumer.default_broker_id().await, mix_all::MASTER_ID);
+        assert!(!LitePullConsumerConfig::default().connect_broker_by_user);
+        assert_eq!(LitePullConsumerConfig::default().default_broker_id, mix_all::MASTER_ID);
+
+        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .connect_broker_by_user(true)
+            .default_broker_id(2)
+            .build()
+            .expect("builder should preserve configured broker selection");
+
+        assert!(custom_consumer.is_connect_broker_by_user().await);
+        assert_eq!(custom_consumer.default_broker_id().await, 2);
+    }
+
+    #[tokio::test]
+    async fn unit_mode_defaults_and_overrides_match_java_lite_pull() {
+        let default_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java default unit mode");
+
+        assert!(!default_consumer.is_unit_mode().await);
+        assert!(!default_consumer.consumer_config().unit_mode);
+        assert!(!LitePullConsumerConfig::default().unit_mode);
+
+        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .unit_mode(true)
+            .build()
+            .expect("builder should preserve configured unit mode");
+
+        assert!(custom_consumer.is_unit_mode().await);
+        assert!(custom_consumer.consumer_config().unit_mode);
+    }
+
+    #[test]
+    fn long_polling_timeout_defaults_and_overrides_match_java_lite_pull() {
+        let default_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java default long polling timeouts");
+
+        assert_eq!(
+            default_consumer.consumer_config().broker_suspend_max_time_millis,
+            20_000
+        );
+        assert_eq!(
+            default_consumer.consumer_config().consumer_timeout_millis_when_suspend,
+            30_000
+        );
+        assert_eq!(default_consumer.consumer_config().consumer_pull_timeout_millis, 10_000);
+        assert_eq!(LitePullConsumerConfig::default().broker_suspend_max_time_millis, 20_000);
+        assert_eq!(
+            LitePullConsumerConfig::default().consumer_timeout_millis_when_suspend,
+            30_000
+        );
+        assert_eq!(LitePullConsumerConfig::default().consumer_pull_timeout_millis, 10_000);
+
+        let custom_consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .broker_suspend_max_time_millis(12_345)
+            .consumer_timeout_millis_when_suspend(23_456)
+            .consumer_pull_timeout_millis(34_567)
+            .build()
+            .expect("builder should keep configured long polling timeouts");
+
+        assert_eq!(custom_consumer.consumer_config().broker_suspend_max_time_millis, 12_345);
+        assert_eq!(
+            custom_consumer.consumer_config().consumer_timeout_millis_when_suspend,
+            23_456
+        );
+        assert_eq!(custom_consumer.consumer_config().consumer_pull_timeout_millis, 34_567);
+    }
+
+    #[test]
+    fn default_consume_timestamp_matches_java_shape() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .build()
+            .expect("builder should use Java default consume timestamp");
+        let timestamp = consumer
+            .consumer_config()
+            .consume_timestamp
+            .as_ref()
+            .expect("Java LitePull default consume timestamp should be present");
+
+        assert!(rocketmq_common::utils::util_all::parse_date(
+            timestamp,
+            rocketmq_common::utils::util_all::YYYYMMDDHHMMSS
         )
+        .is_some());
+        let config = LitePullConsumerConfig::default();
+        let config_timestamp = config
+            .consume_timestamp
+            .as_ref()
+            .expect("Java LitePull config default consume timestamp should be present");
+        assert!(rocketmq_common::utils::util_all::parse_date(
+            config_timestamp,
+            rocketmq_common::utils::util_all::YYYYMMDDHHMMSS
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn auto_commit_interval_below_java_minimum_keeps_default() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .auto_commit_interval_millis(MIN_AUTOCOMMIT_INTERVAL_MILLIS - 1)
+            .build()
+            .expect("builder should ignore invalid auto commit interval");
+
+        assert_eq!(consumer.consumer_config().auto_commit_interval_millis, 5000);
+    }
+
+    #[test]
+    fn auto_commit_interval_below_java_minimum_keeps_previous_valid_value() {
+        let consumer = DefaultLitePullConsumerBuilder::new()
+            .consumer_group("lite_pull_group")
+            .auto_commit_interval_millis(2000)
+            .auto_commit_interval_millis(MIN_AUTOCOMMIT_INTERVAL_MILLIS - 1)
+            .build()
+            .expect("builder should keep previous valid auto commit interval");
+
+        assert_eq!(consumer.consumer_config().auto_commit_interval_millis, 2000);
     }
 }

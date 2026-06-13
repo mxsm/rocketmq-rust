@@ -15,7 +15,6 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
-use proc_macro2::TokenTree;
 use quote::format_ident;
 use quote::quote;
 use syn::parse_macro_input;
@@ -23,7 +22,6 @@ use syn::Data;
 use syn::DeriveInput;
 use syn::Fields;
 use syn::Ident;
-use syn::Meta;
 
 use crate::get_type_name;
 use crate::has_serde_flatten_attribute;
@@ -282,7 +280,8 @@ struct FieldMetadata {
     ty: syn::Type,
     inner_type: Option<syn::Type>,
     is_required: bool,
-    camel_key: String,
+    wire_key: String,
+    aliases: Vec<String>,
     type_category: TypeCategory,
 }
 
@@ -303,6 +302,8 @@ impl FieldMetadata {
         // Parse attributes
         let mut is_required = false;
         let mut is_flatten = false;
+        let mut wire_key = snake_to_camel_case(&ident.to_string());
+        let mut aliases = Vec::new();
 
         for attr in &field.attrs {
             if let Some(id) = attr.path().get_ident() {
@@ -310,16 +311,28 @@ impl FieldMetadata {
                     is_required = true;
                 }
                 if id == "serde" {
-                    if let Meta::List(meta_list) = &attr.meta {
-                        for token in meta_list.tokens.clone().into_iter() {
-                            if let TokenTree::Ident(ident) = token {
-                                if ident.eq("flatten") {
-                                    is_flatten = true;
-                                    break;
-                                }
-                            }
+                    let _ = attr.parse_nested_meta(|meta| {
+                        if meta.path.is_ident("flatten") {
+                            is_flatten = true;
+                            return Ok(());
                         }
-                    }
+                        if meta.path.is_ident("rename") {
+                            let value = meta.value()?;
+                            let lit: syn::LitStr = value.parse()?;
+                            wire_key = lit.value();
+                            return Ok(());
+                        }
+                        if meta.path.is_ident("alias") {
+                            let value = meta.value()?;
+                            let lit: syn::LitStr = value.parse()?;
+                            let alias = lit.value();
+                            if alias != wire_key && !aliases.iter().any(|existing| existing == &alias) {
+                                aliases.push(alias);
+                            }
+                            return Ok(());
+                        }
+                        Ok(())
+                    });
                 }
             }
         }
@@ -343,14 +356,13 @@ impl FieldMetadata {
             TypeCategory::Primitive
         };
 
-        let camel_key = snake_to_camel_case(&ident.to_string());
-
         Self {
             ident,
             ty,
             inner_type,
             is_required,
-            camel_key,
+            wire_key,
+            aliases,
             type_category,
         }
     }
@@ -358,7 +370,7 @@ impl FieldMetadata {
     /// Generate constant field name declaration
     fn gen_const_decl(&self) -> TokenStream2 {
         let const_ident = format_ident!("{}", self.ident.to_string().to_ascii_uppercase());
-        let key_lit = syn::LitStr::new(&self.camel_key, Span::call_site());
+        let key_lit = syn::LitStr::new(&self.wire_key, Span::call_site());
         quote! {
             const #const_ident: &'static str = #key_lit;
         }
@@ -454,11 +466,16 @@ impl FieldMetadata {
             return None;
         }
 
-        let key_lit = syn::LitStr::new(&self.camel_key, Span::call_site());
+        let key_lit = syn::LitStr::new(&self.wire_key, Span::call_site());
         let local_ident = format_ident!("__{}", self.ident);
+        let alias_lits: Vec<_> = self
+            .aliases
+            .iter()
+            .map(|alias| syn::LitStr::new(alias, Span::call_site()))
+            .collect();
 
         Some(quote! {
-            #key_lit => {
+            #key_lit #( | #alias_lits )* => {
                 #local_ident = Some(v.clone());
             }
         })
@@ -467,7 +484,7 @@ impl FieldMetadata {
     /// Generate struct field construction code
     fn gen_field_construct(&self) -> TokenStream2 {
         let field_ident = &self.ident;
-        let missing_msg = format!("Missing {} field", self.camel_key);
+        let missing_msg = format!("Missing {} field", self.wire_key);
 
         // Handle flattened structs via recursive FromMap call
         if self.type_category == TypeCategory::StructFlattened {
@@ -520,7 +537,7 @@ impl FieldMetadata {
             // Option<Primitive>
             (TypeCategory::Primitive, true, _) => {
                 let inner_ty = self.inner_type.as_ref().unwrap();
-                let parse_error = format!("Parse {} field error", self.camel_key);
+                let parse_error = format!("Parse {} field error", self.wire_key);
                 quote! {
                     #field_ident: match #local_ident {
                         Some(s) => s.as_str().parse::<#inner_ty>()
@@ -533,7 +550,7 @@ impl FieldMetadata {
             // Primitive (required)
             (TypeCategory::Primitive, false, true) => {
                 let ty = &self.ty;
-                let parse_error = format!("Parse {} field error", self.camel_key);
+                let parse_error = format!("Parse {} field error", self.wire_key);
                 quote! {
                     #field_ident: #local_ident
                         .ok_or_else(|| rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string()))?

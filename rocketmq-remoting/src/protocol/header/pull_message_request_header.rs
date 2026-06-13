@@ -29,6 +29,8 @@ pub struct PullMessageRequestHeader {
     #[required]
     pub topic: CheetahString,
 
+    pub lite_topic: Option<CheetahString>,
+
     #[required]
     pub queue_id: i32,
 
@@ -54,6 +56,7 @@ pub struct PullMessageRequestHeader {
     pub expression_type: Option<CheetahString>,
     pub max_msg_bytes: Option<i32>,
     pub request_source: Option<i32>,
+    #[serde(rename = "proxyFrowardClientId", alias = "proxyForwardClientId")]
     pub proxy_forward_client_id: Option<CheetahString>,
     #[serde(flatten)]
     pub topic_request: Option<TopicRequestHeader>,
@@ -162,6 +165,7 @@ mod tests {
         let header = PullMessageRequestHeader {
             consumer_group: CheetahString::from_static_str("test_consumer_group"),
             topic: CheetahString::from_static_str("test_topic"),
+            lite_topic: Some(CheetahString::from_static_str("test_lite_topic")),
             queue_id: 1,
             queue_offset: 100,
             max_msg_nums: 10,
@@ -182,6 +186,10 @@ mod tests {
             "test_consumer_group"
         );
         assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("liteTopic")).unwrap(),
+            "test_lite_topic"
+        );
         assert_eq!(map.get(&CheetahString::from_static_str("queueId")).unwrap(), "1");
         assert_eq!(map.get(&CheetahString::from_static_str("queueOffset")).unwrap(), "100");
         assert_eq!(map.get(&CheetahString::from_static_str("maxMsgNums")).unwrap(), "10");
@@ -204,7 +212,7 @@ mod tests {
         assert_eq!(map.get(&CheetahString::from_static_str("maxMsgBytes")).unwrap(), "1024");
         assert_eq!(map.get(&CheetahString::from_static_str("requestSource")).unwrap(), "1");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("proxyForwardClientId"))
+            map.get(&CheetahString::from_static_str("proxyFrowardClientId"))
                 .unwrap(),
             "test_client_id"
         );
@@ -220,6 +228,10 @@ mod tests {
         map.insert(
             CheetahString::from_static_str("topic"),
             CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("liteTopic"),
+            CheetahString::from_static_str("test_lite_topic"),
         );
         map.insert(
             CheetahString::from_static_str("queueId"),
@@ -266,13 +278,14 @@ mod tests {
             CheetahString::from_static_str("1"),
         );
         map.insert(
-            CheetahString::from_static_str("proxyForwardClientId"),
+            CheetahString::from_static_str("proxyFrowardClientId"),
             CheetahString::from_static_str("test_client_id"),
         );
 
         let header = <PullMessageRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.consumer_group, "test_consumer_group");
         assert_eq!(header.topic, "test_topic");
+        assert_eq!(header.lite_topic.unwrap(), "test_lite_topic");
         assert_eq!(header.queue_id, 1);
         assert_eq!(header.queue_offset, 100);
         assert_eq!(header.max_msg_nums, 10);
@@ -285,6 +298,59 @@ mod tests {
         assert_eq!(header.max_msg_bytes.unwrap(), 1024);
         assert_eq!(header.request_source.unwrap(), 1);
         assert_eq!(header.proxy_forward_client_id.unwrap(), "test_client_id");
+    }
+
+    #[test]
+    fn pull_message_request_header_accepts_legacy_corrected_proxy_forward_key() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("consumerGroup"),
+            CheetahString::from_static_str("test_consumer_group"),
+        );
+        map.insert(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("test_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("liteTopic"),
+            CheetahString::from_static_str("test_lite_topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("queueId"),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str("queueOffset"),
+            CheetahString::from_static_str("100"),
+        );
+        map.insert(
+            CheetahString::from_static_str("maxMsgNums"),
+            CheetahString::from_static_str("10"),
+        );
+        map.insert(
+            CheetahString::from_static_str("sysFlag"),
+            CheetahString::from_static_str("0"),
+        );
+        map.insert(
+            CheetahString::from_static_str("commitOffset"),
+            CheetahString::from_static_str("50"),
+        );
+        map.insert(
+            CheetahString::from_static_str("suspendTimeoutMillis"),
+            CheetahString::from_static_str("3000"),
+        );
+        map.insert(
+            CheetahString::from_static_str("subVersion"),
+            CheetahString::from_static_str("1"),
+        );
+        map.insert(
+            CheetahString::from_static_str("proxyForwardClientId"),
+            CheetahString::from_static_str("legacy_client_id"),
+        );
+
+        let header = <PullMessageRequestHeader as FromMap>::from(&map).unwrap();
+
+        assert_eq!(header.proxy_forward_client_id.unwrap(), "legacy_client_id");
     }
 
     #[test]
@@ -330,6 +396,7 @@ mod tests {
         let header = <PullMessageRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.consumer_group, "test_consumer_group");
         assert_eq!(header.topic, "test_topic");
+        assert!(header.lite_topic.is_none());
         assert_eq!(header.queue_id, 1);
         assert_eq!(header.queue_offset, 100);
         assert_eq!(header.max_msg_nums, 10);

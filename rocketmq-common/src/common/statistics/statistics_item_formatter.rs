@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn format_creates_correct_string() {
         let formatter = StatisticsItemFormatter;
-        let item = StatisticsItem::new("kind", "object", vec!["item1", "item2"]);
+        let item = StatisticsItem::new("kind", "object", vec!["item1", "item2"]).expect("valid item");
         item.inc_items(vec![1, 2]);
         let result = formatter.format(&item);
         assert_eq!(result, "kind|object|1|2|1");
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn format_creates_correct_string_with_multiple_items() {
         let formatter = StatisticsItemFormatter;
-        let item = StatisticsItem::new("kind", "object", vec!["item1", "item2", "item3"]);
+        let item = StatisticsItem::new("kind", "object", vec!["item1", "item2", "item3"]).expect("valid item");
         item.inc_items(vec![1, 2, 3]);
         let result = formatter.format(&item);
         assert_eq!(result, "kind|object|1|2|3|1");

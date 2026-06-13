@@ -14,7 +14,10 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageType;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::utils::util_all;
+
+use crate::trace::trace_data_encoder::TraceDataEncoder;
 
 static LOCAL_ADDRESS: std::sync::LazyLock<CheetahString> = std::sync::LazyLock::new(util_all::get_ip_str);
 
@@ -55,11 +58,60 @@ impl Default for TraceView {
     }
 }
 
+impl TraceView {
+    pub fn decode_from_trace_trans_data(key: &str, message_ext: &MessageExt) -> Vec<TraceView> {
+        let Some(body) = message_ext.body() else {
+            return Vec::new();
+        };
+        if body.is_empty() {
+            return Vec::new();
+        }
+
+        let message_body = String::from_utf8_lossy(&body);
+        TraceDataEncoder::decoder_from_trace_data_string(&message_body)
+            .into_iter()
+            .filter_map(|context| {
+                let trace_bean = context.trace_beans.as_ref()?.first()?;
+                if trace_bean.msg_id != key {
+                    return None;
+                }
+
+                Some(TraceView {
+                    msg_id: trace_bean.msg_id.clone(),
+                    tags: trace_bean.tags.clone(),
+                    keys: trace_bean.keys.clone(),
+                    store_host: trace_bean.store_host.clone(),
+                    client_host: CheetahString::from_string(message_ext.born_host().to_string()),
+                    cost_time: i64::from(context.cost_time),
+                    msg_type: trace_bean.msg_type,
+                    offset_msg_id: trace_bean.offset_msg_id.clone(),
+                    time_stamp: i64::try_from(context.time_stamp).unwrap_or(i64::MAX),
+                    born_time: 0,
+                    topic: trace_bean.topic.clone(),
+                    group_name: context.group_name.clone(),
+                    status: if context.is_success {
+                        CheetahString::from_static_str("success")
+                    } else {
+                        CheetahString::from_static_str("failed")
+                    },
+                })
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::MessageTrait;
 
     use super::*;
+    use crate::trace::trace_bean::TraceBean;
+    use crate::trace::trace_context::TraceContext;
+    use crate::trace::trace_data_encoder::TraceDataEncoder;
+    use crate::trace::trace_type::TraceType;
 
     #[test]
     fn trace_view_default_values() {
@@ -109,5 +161,52 @@ mod tests {
         assert_eq!(trace_view.topic, CheetahString::from("topic"));
         assert_eq!(trace_view.group_name, CheetahString::from("group"));
         assert_eq!(trace_view.status, CheetahString::from("status"));
+    }
+
+    #[test]
+    fn decode_from_trace_trans_data_matches_java_filter_and_projection() {
+        let matching_bean = TraceBean {
+            topic: CheetahString::from("topic_a"),
+            msg_id: CheetahString::from("msg-a"),
+            offset_msg_id: CheetahString::from("offset-a"),
+            tags: CheetahString::from("tag-a"),
+            keys: CheetahString::from("key-a"),
+            store_host: CheetahString::from("store-host"),
+            msg_type: Some(MessageType::NormalMsg),
+            ..Default::default()
+        };
+        let other_bean = TraceBean {
+            msg_id: CheetahString::from("msg-b"),
+            ..matching_bean.clone()
+        };
+        let context = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            time_stamp: 12345,
+            group_name: CheetahString::from("group-a"),
+            cost_time: 17,
+            is_success: true,
+            trace_beans: Some(vec![matching_bean, other_bean]),
+            ..Default::default()
+        };
+        let transfer = TraceDataEncoder::encoder_from_context_bean(&context).expect("trace context should encode");
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from(transfer.trans_data.to_string()));
+
+        let views = TraceView::decode_from_trace_trans_data("msg-a", &message_ext);
+
+        assert_eq!(views.len(), 1);
+        let view = &views[0];
+        assert_eq!(view.msg_id, CheetahString::from("msg-a"));
+        assert_eq!(view.topic, CheetahString::from("topic_a"));
+        assert_eq!(view.group_name, CheetahString::from("group-a"));
+        assert_eq!(view.status, CheetahString::from("success"));
+        assert_eq!(view.cost_time, 17);
+        assert_eq!(view.time_stamp, 12345);
+        assert_eq!(view.offset_msg_id, CheetahString::from("offset-a"));
+        assert_eq!(
+            view.client_host,
+            CheetahString::from_string(message_ext.born_host().to_string())
+        );
+        assert!(TraceView::decode_from_trace_trans_data("missing", &message_ext).is_empty());
     }
 }

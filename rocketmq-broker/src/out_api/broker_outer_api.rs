@@ -228,7 +228,7 @@ impl BrokerOuterAPI {
         }
         let mut register_broker_result_list = Vec::new();
         if !name_server_address_list.is_empty() {
-            let mut request_header = RegisterBrokerRequestHeader {
+            let request_header = RegisterBrokerRequestHeader {
                 broker_addr,
                 broker_id,
                 broker_name,
@@ -240,19 +240,17 @@ impl BrokerOuterAPI {
                 body_crc32: 0,
             };
 
-            //build request body
-            let request_body = RegisterBrokerBody {
-                topic_config_serialize_wrapper: topic_config_wrapper,
+            let register_request = build_register_broker_request_parts(
+                request_header,
+                topic_config_wrapper,
                 filter_server_list,
-            };
-            let body = request_body.encode(compressed);
-            let body_crc32 = crc32_utils::crc32(body.as_ref());
-            request_header.body_crc32 = body_crc32;
+                compressed,
+            );
 
             let mut handle_vec = Vec::with_capacity(name_server_address_list.len());
             for namesrv_addr in name_server_address_list.iter() {
-                let cloned_body = body.clone();
-                let cloned_header = request_header.clone();
+                let cloned_body = register_request.body.clone();
+                let cloned_header = register_request.header.clone();
                 let addr = namesrv_addr.clone();
                 let broker_runtime_inner_ = broker_runtime_inner.clone();
                 let join_handle = tokio::spawn(async move {
@@ -1712,6 +1710,27 @@ fn process_pull_response(
     Ok(pull_result)
 }
 
+struct RegisterBrokerRequestParts {
+    header: RegisterBrokerRequestHeader,
+    body: Vec<u8>,
+}
+
+fn build_register_broker_request_parts(
+    mut header: RegisterBrokerRequestHeader,
+    topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
+    filter_server_list: Vec<CheetahString>,
+    compressed: bool,
+) -> RegisterBrokerRequestParts {
+    let request_body = RegisterBrokerBody {
+        topic_config_serialize_wrapper: topic_config_wrapper,
+        filter_server_list,
+    };
+    let body = request_body.encode(compressed);
+    header.compressed = compressed;
+    header.body_crc32 = crc32_utils::crc32(body.as_ref());
+    RegisterBrokerRequestParts { header, body }
+}
+
 fn dns_lookup_address_by_domain(domain: &str) -> Vec<CheetahString> {
     let mut address_list = Vec::new();
     // Ensure logging is initialized
@@ -1928,5 +1947,60 @@ mod tests {
         );
 
         assert!(broker_member_group.broker_addrs.is_empty());
+    }
+
+    #[test]
+    fn register_broker_request_parts_preserves_compression_header_and_body() {
+        for compressed in [false, true] {
+            let parts = build_register_broker_request_parts(
+                register_broker_header_fixture(),
+                topic_config_wrapper_fixture(),
+                vec![CheetahString::from_static_str("filter-server-a")],
+                compressed,
+            );
+
+            assert_eq!(parts.header.compressed, compressed);
+            assert_eq!(parts.header.body_crc32, crc32_utils::crc32(parts.body.as_ref()));
+
+            let decoded = RegisterBrokerBody::decode(
+                &Bytes::from(parts.body),
+                parts.header.compressed,
+                rocketmq_common::common::mq_version::RocketMqVersion::V5_0_0,
+            )
+            .expect("register broker body should decode with matching compression header");
+
+            assert!(decoded
+                .topic_config_serialize_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table
+                .contains_key(&CheetahString::from_static_str("TestTopic")));
+            assert_eq!(
+                decoded.filter_server_list,
+                vec![CheetahString::from_static_str("filter-server-a")]
+            );
+        }
+    }
+
+    fn register_broker_header_fixture() -> RegisterBrokerRequestHeader {
+        RegisterBrokerRequestHeader {
+            broker_name: CheetahString::from_static_str("broker-a"),
+            broker_addr: CheetahString::from_static_str("127.0.0.1:10911"),
+            cluster_name: CheetahString::from_static_str("cluster-a"),
+            ha_server_addr: CheetahString::from_static_str("127.0.0.1:10912"),
+            broker_id: 0,
+            heartbeat_timeout_millis: Some(120_000),
+            enable_acting_master: Some(false),
+            compressed: false,
+            body_crc32: 0,
+        }
+    }
+
+    fn topic_config_wrapper_fixture() -> TopicConfigAndMappingSerializeWrapper {
+        let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        wrapper.topic_config_serialize_wrapper.topic_config_table.insert(
+            CheetahString::from_static_str("TestTopic"),
+            TopicConfig::with_queues("TestTopic", 4, 4),
+        );
+        wrapper
     }
 }

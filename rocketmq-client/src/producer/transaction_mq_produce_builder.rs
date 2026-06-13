@@ -132,6 +132,13 @@ impl TransactionMQProducerBuilder {
         self
     }
 
+    pub fn use_tls(mut self, use_tls: bool) -> Self {
+        self.client_config
+            .get_or_insert_with(ClientConfig::default)
+            .set_use_tls(use_tls);
+        self
+    }
+
     pub fn create_topic_key(mut self, create_topic_key: impl Into<CheetahString>) -> Self {
         self.create_topic_key = Some(create_topic_key.into());
         self
@@ -337,6 +344,8 @@ impl TransactionMQProducerBuilder {
         }
         let transaction_producer_config = TransactionProducerConfig {
             transaction_listener: self.transaction_listener,
+            transaction_check_listener: None,
+            executor_service: None,
             check_thread_pool_min_size: self.check_thread_pool_min_size.unwrap_or(1),
             check_thread_pool_max_size: self.check_thread_pool_max_size.unwrap_or(1),
             check_request_hold_max: self.check_request_hold_max.unwrap_or(2000),

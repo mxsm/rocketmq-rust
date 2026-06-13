@@ -292,6 +292,8 @@ export default function MessageQueryPage() {
                 onChange={setTopic}
                 ariaLabel="Select message topic"
                 className="message-topic-select"
+                searchable
+                searchPlaceholder="Search topics"
               />
             ) : (
               <input value={topic} placeholder={topicLoading ? 'Loading topics' : 'Topic name'} onChange={(event) => setTopic(event.target.value)} />

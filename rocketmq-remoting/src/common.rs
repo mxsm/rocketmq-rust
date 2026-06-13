@@ -12,4 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod heartbeat_v2_result;
 pub mod remoting_helper;

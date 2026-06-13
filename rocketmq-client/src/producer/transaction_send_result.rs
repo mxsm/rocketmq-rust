@@ -30,10 +30,59 @@ pub struct TransactionSendResult {
 
 impl Display for TransactionSendResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "TransactionSendResult {{ local_transaction_state: {:?}, send_result: {:?} }}",
-            self.local_transaction_state, self.send_result
-        )
+        match self.send_result.as_ref() {
+            Some(send_result) => write!(f, "{send_result}"),
+            None => write!(
+                f,
+                "SendResult [sendStatus=null, msgId=null, offsetMsgId=null, messageQueue=null, queueOffset=0, \
+                 recallHandle=null]"
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+
+    use super::*;
+    use crate::producer::send_status::SendStatus;
+
+    #[test]
+    fn transaction_send_result_display_delegates_to_send_result_like_java() {
+        let mut send_result = SendResult::new(
+            SendStatus::SendOk,
+            Some(CheetahString::from("msg-a")),
+            Some("offset-a".to_string()),
+            Some(MessageQueue::from_parts("TopicA", "BrokerA", 1)),
+            9,
+        );
+        send_result.set_recall_handle("recall-a".to_string());
+
+        let transaction_result = TransactionSendResult {
+            local_transaction_state: Some(LocalTransactionState::CommitMessage),
+            send_result: Some(send_result),
+        };
+
+        assert_eq!(
+            transaction_result.to_string(),
+            "SendResult [sendStatus=SEND_OK, msgId=msg-a, offsetMsgId=offset-a, messageQueue=MessageQueue \
+             [topic=TopicA, brokerName=BrokerA, queueId=1], queueOffset=9, recallHandle=recall-a]"
+        );
+    }
+
+    #[test]
+    fn empty_transaction_send_result_display_matches_java_empty_parent_result() {
+        let transaction_result = TransactionSendResult {
+            local_transaction_state: None,
+            send_result: None,
+        };
+
+        assert_eq!(
+            transaction_result.to_string(),
+            "SendResult [sendStatus=null, msgId=null, offsetMsgId=null, messageQueue=null, queueOffset=0, \
+             recallHandle=null]"
+        );
     }
 }

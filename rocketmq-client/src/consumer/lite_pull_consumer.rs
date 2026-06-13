@@ -14,12 +14,21 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
+use cheetah_string::CheetahString;
+use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_rust::ArcMut;
 
+use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
+use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::consumer::message_queue_listener::MessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
+use crate::consumer::store::offset_store::OffsetStore;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
 
 /// A consumer that pulls messages from brokers on demand, providing explicit control over
@@ -160,7 +169,11 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Arguments
     ///
     /// * `message_queues` - The complete set of queues to assign to this consumer.
-    async fn assign(&self, message_queues: Vec<MessageQueue>);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `message_queues` is empty or the assignment cannot be applied.
+    async fn assign(&self, message_queues: Vec<MessageQueue>) -> rocketmq_error::RocketMQResult<()>;
 
     /// Sets the subscription filter expression applied when fetching from manually assigned queues.
     ///
@@ -170,7 +183,16 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// * `topic` - The topic for which the filter expression applies.
     /// * `sub_expression` - A tag expression or SQL-92 predicate used to filter messages.
-    async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str);
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the expression is blank, the consumer has already started, or
+    /// the subscription cannot be switched to manual assignment mode.
+    async fn set_sub_expression_for_assign(
+        &self,
+        topic: &str,
+        sub_expression: &str,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Populates `sub_expression_map` with the filter selector for each subscribed topic,
     /// providing the subscription metadata required for heartbeat payloads.
@@ -189,6 +211,9 @@ pub trait LitePullConsumerLocal: Sync {
         &self,
         sub_expression_map: &mut HashMap<String, MessageSelector>,
     ) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Returns the subscriptions currently advertised in heartbeat payloads.
+    async fn subscriptions_for_heartbeat(&self) -> HashSet<SubscriptionData>;
 
     /// Fetches the next batch of messages without allocating owned copies.
     ///
@@ -283,6 +308,178 @@ pub trait LitePullConsumerLocal: Sync {
     /// This function does not block the calling thread.
     async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt>;
 
+    /// Returns the configured message model.
+    async fn message_model(&self) -> MessageModel;
+
+    /// Sets the message model.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setMessageModel`.
+    async fn set_message_model(&self, message_model: MessageModel);
+
+    /// Returns where consumption starts when no offset exists.
+    async fn consume_from_where(&self) -> ConsumeFromWhere;
+
+    /// Sets where consumption starts when no offset exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for legacy `ConsumeFromWhere` values that Java LitePull rejects.
+    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Returns the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
+    async fn consume_timestamp(&self) -> Option<CheetahString>;
+
+    /// Sets the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
+    async fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>);
+
+    /// Returns the message queue allocation strategy used during rebalance.
+    async fn allocate_message_queue_strategy(&self) -> Arc<dyn AllocateMessageQueueStrategy + Send + Sync>;
+
+    /// Sets the message queue allocation strategy used during rebalance.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setAllocateMessageQueueStrategy`.
+    async fn set_allocate_message_queue_strategy(
+        &self,
+        allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
+    );
+
+    /// Returns the listener notified when rebalance changes assigned message queues.
+    async fn message_queue_listener(&self) -> Option<ArcMessageQueueListener>;
+
+    /// Sets the listener notified when rebalance changes assigned message queues.
+    ///
+    /// Passing `None` clears the listener, matching Java's nullable
+    /// `DefaultLitePullConsumer.setMessageQueueListener`.
+    async fn set_message_queue_listener(&self, message_queue_listener: Option<ArcMessageQueueListener>);
+
+    /// Returns the configured offset store, if one has been set or initialized.
+    async fn offset_store(&self) -> Option<ArcMut<OffsetStore>>;
+
+    /// Sets the offset store used by the consumer.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setOffsetStore`. The store
+    /// should be set before startup so load, rebalance, and commit paths share
+    /// the same backend.
+    async fn set_offset_store(&self, offset_store: Option<ArcMut<OffsetStore>>) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Returns the topic metadata check interval in milliseconds.
+    async fn topic_metadata_check_interval_millis(&self) -> u64;
+
+    /// Sets the topic metadata check interval in milliseconds.
+    ///
+    /// Like Java, this applies directly to the stored configuration. If the
+    /// metadata task is already scheduled, the existing task keeps its start-time interval.
+    async fn set_topic_metadata_check_interval_millis(&self, interval_millis: u64);
+
+    /// Returns the default timeout used by [`poll`] in milliseconds.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// [`poll`]: LitePullConsumerLocal::poll
+    async fn poll_timeout_millis(&self) -> u64;
+
+    /// Sets the default timeout used by [`poll`] in milliseconds.
+    ///
+    /// This follows the Java client setter and applies the value directly. Use
+    /// [`poll_with_timeout`] for a per-call timeout override.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// [`poll`]: LitePullConsumerLocal::poll
+    /// [`poll_with_timeout`]: LitePullConsumerLocal::poll_with_timeout
+    async fn set_poll_timeout_millis(&self, timeout_millis: u64);
+
+    /// Returns the maximum time that the broker may suspend a long-poll pull request.
+    async fn broker_suspend_max_time_millis(&self) -> u64;
+
+    /// Sets the maximum time that the broker may suspend a long-poll pull request.
+    ///
+    /// This follows Java `DefaultLitePullConsumer.setBrokerSuspendMaxTimeMillis`
+    /// and applies the value directly.
+    async fn set_broker_suspend_max_time_millis(&self, timeout_millis: u64);
+
+    /// Returns the consumer-side timeout for suspended long-poll pull requests.
+    async fn consumer_timeout_millis_when_suspend(&self) -> u64;
+
+    /// Sets the consumer-side timeout for suspended long-poll pull requests.
+    ///
+    /// This follows Java `DefaultLitePullConsumer.setConsumerTimeoutMillisWhenSuspend`
+    /// and applies the value directly.
+    async fn set_consumer_timeout_millis_when_suspend(&self, timeout_millis: u64);
+
+    /// Returns the RPC timeout used by lite pull requests in milliseconds.
+    async fn consumer_pull_timeout_millis(&self) -> u64;
+
+    /// Sets the RPC timeout used by lite pull requests in milliseconds.
+    ///
+    /// This follows Java `DefaultLitePullConsumer.setConsumerPullTimeoutMillis`
+    /// and applies the value directly.
+    async fn set_consumer_pull_timeout_millis(&self, timeout_millis: u64);
+
+    /// Returns the maximum number of messages requested in a single pull.
+    async fn pull_batch_size(&self) -> i32;
+
+    /// Sets the maximum number of messages requested in a single pull.
+    ///
+    /// This follows the Java client setter and applies the value directly.
+    async fn set_pull_batch_size(&self, pull_batch_size: i32);
+
+    /// Returns the configured number of pull worker threads.
+    async fn pull_thread_nums(&self) -> usize;
+
+    /// Sets the configured number of pull worker threads.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setPullThreadNums`.
+    async fn set_pull_thread_nums(&self, pull_thread_nums: usize);
+
+    /// Returns the maximum total number of cached messages across all queues.
+    async fn pull_threshold_for_all(&self) -> i64;
+
+    /// Sets the maximum total number of cached messages across all queues.
+    ///
+    /// This follows the Java client setter and applies the value directly.
+    async fn set_pull_threshold_for_all(&self, pull_threshold_for_all: i64);
+
+    /// Returns the maximum cached message count for each queue.
+    async fn pull_threshold_for_queue(&self) -> i64;
+
+    /// Sets the maximum cached message count for each queue.
+    ///
+    /// This follows the Java client setter and applies the value directly.
+    async fn set_pull_threshold_for_queue(&self, pull_threshold_for_queue: i64);
+
+    /// Returns the maximum cached message size in MiB for each queue.
+    async fn pull_threshold_size_for_queue(&self) -> i32;
+
+    /// Sets the maximum cached message size in MiB for each queue.
+    ///
+    /// This follows the Java client setter and applies the value directly.
+    async fn set_pull_threshold_size_for_queue(&self, pull_threshold_size_for_queue: i32);
+
+    /// Returns the maximum allowed offset span in a cached process queue.
+    async fn consume_max_span(&self) -> i64;
+
+    /// Sets the maximum allowed offset span in a cached process queue.
+    ///
+    /// This follows the Java client setter and applies the value directly.
+    async fn set_consume_max_span(&self, consume_max_span: i64);
+
+    /// Returns whether pulls always use the configured default broker ID.
+    async fn is_connect_broker_by_user(&self) -> bool;
+
+    /// Sets whether pulls always use the configured default broker ID.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setConnectBrokerByUser`.
+    async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool);
+
+    /// Returns the broker ID used when user-controlled broker selection is enabled.
+    async fn default_broker_id(&self) -> u64;
+
+    /// Sets the broker ID used when user-controlled broker selection is enabled.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setDefaultBrokerId`.
+    async fn set_default_broker_id(&self, broker_id: u64);
+
     /// Seeks the fetch position of the specified [`MessageQueue`] to the given offset.
     ///
     /// The next [`poll`] invocation will return messages starting from `offset`.
@@ -344,6 +541,31 @@ pub trait LitePullConsumerLocal: Sync {
     /// [`commit_sync`]: LitePullConsumerLocal::commit_sync
     async fn set_auto_commit(&self, auto_commit: bool);
 
+    /// Returns whether the subscription group runs in unit mode.
+    async fn is_unit_mode(&self) -> bool;
+
+    /// Sets whether the subscription group runs in unit mode.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setUnitMode`.
+    async fn set_unit_mode(&self, unit_mode: bool);
+
+    /// Returns the interval between automatic offset commits in milliseconds.
+    ///
+    /// This function does not block the calling thread.
+    async fn auto_commit_interval_millis(&self) -> u64;
+
+    /// Sets the interval between automatic offset commits in milliseconds.
+    ///
+    /// Values below the Java client minimum of 1000ms are ignored, matching
+    /// `DefaultLitePullConsumer.setAutoCommitIntervalMillis`.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `interval_millis` - The new auto-commit interval in milliseconds.
+    async fn set_auto_commit_interval_millis(&self, interval_millis: u64);
+
     /// Queries the broker for all [`MessageQueue`]s belonging to the specified topic.
     ///
     /// This function does not block the calling thread.
@@ -377,15 +599,57 @@ pub trait LitePullConsumerLocal: Sync {
         timestamp: u64,
     ) -> rocketmq_error::RocketMQResult<i64>;
 
-    /// Commits all consumed offsets and waits for the broker to acknowledge the operation.
+    /// Queries the broker for the earliest message store time of the specified queue.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue is not found on the broker, the consumer is not running,
+    /// or this LitePull implementation does not support broker offset metadata queries.
+    async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+
+    /// Queries the broker for the current maximum offset of the specified queue.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue is not found on the broker, the consumer is not running,
+    /// or this LitePull implementation does not support broker offset metadata queries.
+    async fn max_offset(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+
+    /// Queries the broker for the current minimum offset of the specified queue.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue is not found on the broker, the consumer is not running,
+    /// or this LitePull implementation does not support broker offset metadata queries.
+    async fn min_offset(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+
+    /// Commits all consumed offsets to the consumer offset store.
     ///
     /// This function does not block the calling thread.
     ///
     /// # Deprecation
     ///
-    /// This method is deprecated. The name implies synchronous behavior, but the underlying
-    /// implementation relies on a background thread to commit offsets rather than committing
-    /// synchronously. Use [`commit`] instead.
+    /// This method is deprecated. The name implies broker-synchronous persistence, but Java
+    /// `DefaultLitePullConsumer.commitSync()` delegates to `commitAll()` and only updates the
+    /// consumer offset store. Use [`commit`] for the modern equivalent.
     ///
     /// [`commit`]: LitePullConsumerLocal::commit
     async fn commit_sync(&self);
@@ -408,10 +672,11 @@ pub trait LitePullConsumerLocal: Sync {
     /// [`commit_with_map`]: LitePullConsumerLocal::commit_with_map
     async fn commit_sync_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool);
 
-    /// Commits all consumed offsets asynchronously.
+    /// Commits all consumed offsets to the consumer offset store.
     ///
-    /// This function does not block the calling thread. The commit is performed in the
-    /// background; use [`commit_sync`] if acknowledgment is required before proceeding.
+    /// This function does not block the calling thread. Broker or local-file persistence is
+    /// performed by the normal periodic persistence task, shutdown, or explicit
+    /// `commit_with_map` / `commit_with_set` calls with `persist = true`.
     ///
     /// [`commit_sync`]: LitePullConsumerLocal::commit_sync
     async fn commit(&self);
@@ -511,18 +776,19 @@ pub trait LitePullConsumerLocal: Sync {
     /// [`poll`]: LitePullConsumerLocal::poll
     async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Commits all consumed offsets for all assigned queues.
+    /// Commits all consumed offsets for all assigned queues to the local offset store.
     ///
     /// This method commits the current consumption offset for every assigned [`MessageQueue`].
-    /// Unlike [`commit`], which commits offsets asynchronously in the background, this method
-    /// ensures all offsets are persisted to the broker.
+    /// It follows the Java client `commitAll()` behavior: offsets are updated in the consumer's
+    /// offset store, while broker or local-file persistence is handled by the normal periodic
+    /// persistence task, shutdown, or explicit `commit_with_map` / `commit_with_set` calls with
+    /// `persist = true`.
     ///
     /// This function does not block the calling thread.
     ///
     /// # Errors
     ///
-    /// Returns an error if the consumer is not in the running state or if the offset
-    /// persistence fails.
+    /// Returns an error if the consumer is not in the running state.
     ///
     /// [`commit`]: LitePullConsumerLocal::commit
     async fn commit_all(&self) -> rocketmq_error::RocketMQResult<()>;

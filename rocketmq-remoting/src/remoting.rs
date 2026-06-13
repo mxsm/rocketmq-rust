@@ -71,6 +71,7 @@ pub trait InvokeCallback {
 #[allow(unused_variables)]
 pub(crate) mod inner {
     use std::collections::HashMap;
+    use std::net::SocketAddr;
     use std::sync::Arc;
 
     use rocketmq_error::RocketMQError;
@@ -165,10 +166,12 @@ pub(crate) mod inner {
                 HandleErrorResult::ReturnMethod => return Ok(()),
                 HandleErrorResult::GoHead => {}
             }
-            if response.is_none() || oneway_rpc {
+            if oneway_rpc {
                 return Ok(());
             }
-            let response = response.unwrap();
+            let Some(response) = response else {
+                return Ok(());
+            };
             let result = ctx
                 .channel_mut()
                 .connection_mut()
@@ -213,12 +216,7 @@ pub(crate) mod inner {
             request: &RemotingCommand,
             response: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
-            if let Some(response) = response {
-                for hook in self.rpc_hooks.iter() {
-                    hook.do_after_response(channel.remote_address(), request, response)?;
-                }
-            }
-            Ok(())
+            self.do_after_rpc_hooks_with_addr(channel.remote_address(), request, response)
         }
 
         pub fn do_before_rpc_hooks(
@@ -226,12 +224,38 @@ pub(crate) mod inner {
             channel: &Channel,
             request: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
+            self.do_before_rpc_hooks_with_addr(channel.remote_address(), request)
+        }
+
+        pub fn do_before_rpc_hooks_with_addr(
+            &self,
+            remote_address: SocketAddr,
+            request: Option<&mut RemotingCommand>,
+        ) -> rocketmq_error::RocketMQResult<()> {
             if let Some(request) = request {
                 for hook in self.rpc_hooks.iter() {
-                    hook.do_before_request(channel.remote_address(), request)?;
+                    hook.do_before_request(remote_address, request)?;
                 }
             }
             Ok(())
+        }
+
+        pub fn do_after_rpc_hooks_with_addr(
+            &self,
+            remote_address: SocketAddr,
+            request: &RemotingCommand,
+            response: Option<&mut RemotingCommand>,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            if let Some(response) = response {
+                for hook in self.rpc_hooks.iter() {
+                    hook.do_after_response(remote_address, request, response)?;
+                }
+            }
+            Ok(())
+        }
+
+        pub fn has_rpc_hooks(&self) -> bool {
+            !self.rpc_hooks.is_empty()
         }
 
         pub fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {

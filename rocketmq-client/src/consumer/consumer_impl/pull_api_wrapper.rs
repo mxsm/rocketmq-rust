@@ -89,6 +89,14 @@ impl PullAPIWrapper {
         !self.filter_message_hook_list.is_empty()
     }
 
+    pub fn unit_mode(&self) -> bool {
+        self.unit_mode
+    }
+
+    pub fn set_unit_mode(&mut self, unit_mode: bool) {
+        self.unit_mode = unit_mode;
+    }
+
     pub fn process_pull_result(
         &self,
         message_queue: &MessageQueue,
@@ -292,6 +300,7 @@ impl PullAPIWrapper {
             let request_header = PullMessageRequestHeader {
                 consumer_group: self.consumer_group.clone(),
                 topic: mq.topic().clone(),
+                lite_topic: None,
                 queue_id: mq.queue_id(),
                 queue_offset: offset,
                 max_msg_nums: max_nums,
@@ -323,7 +332,7 @@ impl PullAPIWrapper {
             }
 
             MQClientAPIImpl::pull_message(
-                self.client_instance.get_mq_client_api_impl(),
+                self.client_instance.get_mq_client_api_impl()?,
                 broker_addr,
                 request_header,
                 timeout_millis,

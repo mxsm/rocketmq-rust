@@ -22,14 +22,30 @@ use crate::protocol::static_topic::i32_key_map_serde;
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TopicQueueMappingDetail {
     #[serde(flatten)]
     pub topic_queue_mapping_info: TopicQueueMappingInfo,
 
     #[serde(rename = "hostedQueues")]
-    #[serde(default, deserialize_with = "i32_key_map_serde::deserialize_optional_i32_key_map")]
+    #[serde(
+        default = "default_hosted_queues",
+        deserialize_with = "i32_key_map_serde::deserialize_optional_i32_key_map"
+    )]
     pub hosted_queues: Option<HashMap<i32 /* global id */, Vec<LogicQueueMappingItem>>>,
+}
+
+fn default_hosted_queues() -> Option<HashMap<i32, Vec<LogicQueueMappingItem>>> {
+    Some(HashMap::new())
+}
+
+impl Default for TopicQueueMappingDetail {
+    fn default() -> Self {
+        Self {
+            topic_queue_mapping_info: TopicQueueMappingInfo::default(),
+            hosted_queues: default_hosted_queues(),
+        }
+    }
 }
 
 impl TopicQueueMappingDetail {
@@ -41,13 +57,17 @@ impl TopicQueueMappingDetail {
     }
 
     pub fn compute_max_offset_from_mapping(mapping_detail: &TopicQueueMappingDetail, global_id: Option<i32>) -> i64 {
-        match Self::get_mapping_info(mapping_detail, global_id.unwrap()) {
+        let Some(global_id) = global_id else {
+            return -1;
+        };
+        match Self::get_mapping_info(mapping_detail, global_id) {
             Some(mapping_items) => {
                 if mapping_items.is_empty() {
                     return -1;
                 }
-                let item = mapping_items.last().unwrap();
-                item.compute_max_static_queue_offset()
+                mapping_items
+                    .last()
+                    .map_or(-1, LogicQueueMappingItem::compute_max_static_queue_offset)
             }
             None => -1,
         }
@@ -90,8 +110,21 @@ impl TopicQueueMappingDetail {
         if mapping_info.is_empty() {
             return;
         }
-        if let Some(q_map) = &mut mapping_detail.hosted_queues {
-            q_map.insert(global_id, mapping_info);
+        mapping_detail
+            .hosted_queues
+            .get_or_insert_with(HashMap::new)
+            .insert(global_id, mapping_info);
+    }
+
+    pub fn check_if_as_physical(mapping_detail: &TopicQueueMappingDetail, global_id: i32) -> bool {
+        match Self::get_mapping_info(mapping_detail, global_id) {
+            None => true,
+            Some(mapping_items) => {
+                mapping_items.len() == 1
+                    && mapping_items
+                        .first()
+                        .is_some_and(|mapping_item| mapping_item.logic_offset == 0)
+            }
         }
     }
 }
@@ -104,7 +137,7 @@ mod tests {
     fn topic_queue_mapping_detail_default() {
         let detail = TopicQueueMappingDetail::default();
         assert_eq!(detail.topic_queue_mapping_info, TopicQueueMappingInfo::default());
-        assert!(detail.hosted_queues.is_none());
+        assert_eq!(detail.hosted_queues, Some(HashMap::new()));
     }
 
     #[test]
@@ -121,6 +154,15 @@ mod tests {
 
         let deserialized: TopicQueueMappingDetail = serde_json::from_str(&json).unwrap();
         assert_eq!(detail, deserialized);
+    }
+
+    #[test]
+    fn topic_queue_mapping_detail_missing_hosted_queues_uses_java_empty_default() {
+        let json = r#"{"topic":"test","scope":"__global__","totalQueues":0,"bname":null,"epoch":0,"dirty":false,"currIdMap":null}"#;
+
+        let detail: TopicQueueMappingDetail = serde_json::from_str(json).unwrap();
+
+        assert_eq!(detail.hosted_queues, Some(HashMap::new()));
     }
 
     #[test]
@@ -164,6 +206,10 @@ mod tests {
         // non-existent global_id
         assert_eq!(
             TopicQueueMappingDetail::compute_max_offset_from_mapping(&detail, Some(2)),
+            -1
+        );
+        assert_eq!(
+            TopicQueueMappingDetail::compute_max_offset_from_mapping(&detail, None),
             -1
         );
     }
@@ -230,7 +276,6 @@ mod tests {
     #[test]
     fn put_mapping_info() {
         let detail = ArcMut::new(TopicQueueMappingDetail::default());
-        detail.mut_from_ref().hosted_queues = Some(HashMap::new());
 
         let items = vec![LogicQueueMappingItem::default()];
         TopicQueueMappingDetail::put_mapping_info(detail.clone(), 1, items.clone());
@@ -239,5 +284,57 @@ mod tests {
 
         TopicQueueMappingDetail::put_mapping_info(detail.clone(), 2, vec![]);
         assert!(detail.hosted_queues.as_ref().unwrap().get(&2).is_none());
+    }
+
+    #[test]
+    fn put_mapping_info_initializes_missing_hosted_queues_like_java() {
+        let detail = ArcMut::new(TopicQueueMappingDetail {
+            hosted_queues: None,
+            ..Default::default()
+        });
+
+        let items = vec![LogicQueueMappingItem::default()];
+        TopicQueueMappingDetail::put_mapping_info(detail.clone(), 1, items.clone());
+
+        assert_eq!(detail.hosted_queues.as_ref().unwrap().get(&1), Some(&items));
+    }
+
+    #[test]
+    fn check_if_as_physical_matches_java_rules() {
+        let mut detail = TopicQueueMappingDetail::default();
+        assert!(TopicQueueMappingDetail::check_if_as_physical(&detail, 0));
+
+        detail.hosted_queues.as_mut().unwrap().insert(
+            0,
+            vec![LogicQueueMappingItem {
+                logic_offset: 0,
+                ..Default::default()
+            }],
+        );
+        assert!(TopicQueueMappingDetail::check_if_as_physical(&detail, 0));
+
+        detail.hosted_queues.as_mut().unwrap().insert(
+            1,
+            vec![LogicQueueMappingItem {
+                logic_offset: 10,
+                ..Default::default()
+            }],
+        );
+        assert!(!TopicQueueMappingDetail::check_if_as_physical(&detail, 1));
+
+        detail.hosted_queues.as_mut().unwrap().insert(
+            2,
+            vec![
+                LogicQueueMappingItem {
+                    logic_offset: 0,
+                    ..Default::default()
+                },
+                LogicQueueMappingItem {
+                    logic_offset: 0,
+                    ..Default::default()
+                },
+            ],
+        );
+        assert!(!TopicQueueMappingDetail::check_if_as_physical(&detail, 2));
     }
 }

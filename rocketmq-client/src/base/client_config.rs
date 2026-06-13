@@ -21,9 +21,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::name_server_address_utils::NameServerAddressUtils;
-use rocketmq_common::utils::name_server_address_utils::NAMESRV_ENDPOINT_PATTERN;
 use rocketmq_common::utils::network_util::NetworkUtil;
-use rocketmq_common::utils::string_utils::StringUtils;
 use rocketmq_common::TimeUtils::current_nano;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::request_type::RequestType;
@@ -186,6 +184,17 @@ impl ClientConfig {
     }
 
     #[inline]
+    pub fn queues_with_namespace<I>(&mut self, queues: I) -> Vec<MessageQueue>
+    where
+        I: IntoIterator<Item = MessageQueue>,
+    {
+        queues
+            .into_iter()
+            .map(|queue| self.queue_with_namespace(queue))
+            .collect()
+    }
+
+    #[inline]
     pub fn get_namespace(&mut self) -> Option<CheetahString> {
         let namespace_initialized = self.namespace_initialized.load(Ordering::Acquire);
         if namespace_initialized {
@@ -255,13 +264,13 @@ impl ClientConfig {
 
     #[inline]
     pub fn get_namesrv_addr(&self) -> Option<CheetahString> {
-        if StringUtils::is_not_empty_str(self.namesrv_addr.as_deref())
-            && NAMESRV_ENDPOINT_PATTERN.is_match(self.namesrv_addr.as_ref().unwrap().as_str())
+        if let Some(namesrv_addr) = self
+            .namesrv_addr
+            .as_ref()
+            .filter(|addr| !addr.is_empty() && NameServerAddressUtils::is_name_srv_endpoint(addr.as_str()))
         {
-            NameServerAddressUtils::get_name_srv_addr_from_namesrv_endpoint(
-                self.namesrv_addr.as_ref().unwrap().as_str(),
-            )
-            .map(|addr| addr.into())
+            NameServerAddressUtils::get_name_srv_addr_from_namesrv_endpoint(namesrv_addr.as_str())
+                .map(|addr| addr.into())
         } else {
             self.namesrv_addr.clone()
         }
@@ -356,8 +365,18 @@ impl ClientConfig {
     }
 
     #[inline]
+    pub fn get_pull_time_delay_mills_when_exception(&self) -> u32 {
+        self.get_pull_time_delay_millis_when_exception()
+    }
+
+    #[inline]
     pub fn set_pull_time_delay_millis_when_exception(&mut self, delay: u32) {
         self.pull_time_delay_millis_when_exception = delay;
+    }
+
+    #[inline]
+    pub fn set_pull_time_delay_mills_when_exception(&mut self, delay: u32) {
+        self.set_pull_time_delay_millis_when_exception(delay);
     }
 
     #[inline]
@@ -566,6 +585,16 @@ impl ClientConfig {
     }
 
     #[inline]
+    pub fn is_enable_concurrent_heartbeat(&self) -> bool {
+        self.enable_concurrent_heartbeat
+    }
+
+    #[inline]
+    pub fn set_enable_concurrent_heartbeat(&mut self, enabled: bool) {
+        self.enable_concurrent_heartbeat = enabled;
+    }
+
+    #[inline]
     pub fn set_concurrent_heartbeat_thread_pool_size(&mut self, size: usize) {
         self.concurrent_heartbeat_thread_pool_size = size;
     }
@@ -611,6 +640,7 @@ impl ClientConfig {
         self.trace_topic = other.trace_topic.clone();
         self.trace_msg_batch_num = other.trace_msg_batch_num;
         self.max_page_size_in_get_metadata = other.max_page_size_in_get_metadata;
+        self.enable_concurrent_heartbeat = other.enable_concurrent_heartbeat;
         self.concurrent_heartbeat_thread_pool_size = other.concurrent_heartbeat_thread_pool_size;
     }
 
@@ -636,8 +666,8 @@ impl ClientConfig {
     ///     .namesrv_addr("localhost:9876")
     ///     .instance_name("my_producer")
     ///     .enable_tls(true)
-    ///     .build()
-    ///     .unwrap();
+    ///     .build()?;
+    /// # Ok::<(), rocketmq_error::RocketMQError>(())
     /// ```
     #[inline]
     pub fn builder() -> crate::base::client_config_builder::ClientConfigBuilder {
@@ -650,7 +680,7 @@ impl std::fmt::Display for ClientConfig {
         write!(
             f,
             "ClientConfig {{ namesrv_addr: {:?}, client_ip: {:?}, instance_name: {}, \
-             client_callback_executor_threads: {}, namespace: {:?}, namespace_v2: {:?}, access_channel: {:?}, \
+             client_callback_executor_threads: {}, namespace: {:?}, namespace_v2: {:?}, access_channel: {}, \
              poll_name_server_interval: {}, heartbeat_broker_interval: {}, persist_consumer_offset_interval: {}, \
              pull_time_delay_millis_when_exception: {}, unit_mode: {}, unit_name: {:?}, decode_read_body: {}, \
              decode_decompress_body: {}, vip_channel_enabled: {}, use_heartbeat_v2: {}, use_tls: {}, \
@@ -693,5 +723,89 @@ impl std::fmt::Display for ClientConfig {
             self.enable_concurrent_heartbeat,
             self.concurrent_heartbeat_thread_pool_size
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn java_compatible_aliases_delegate_to_client_config_fields() {
+        let mut config = ClientConfig::default();
+
+        config.set_pull_time_delay_mills_when_exception(2345);
+        assert_eq!(config.get_pull_time_delay_mills_when_exception(), 2345);
+        assert_eq!(config.get_pull_time_delay_millis_when_exception(), 2345);
+
+        config.set_enable_concurrent_heartbeat(false);
+        assert!(!config.is_enable_concurrent_heartbeat());
+        config.set_enable_concurrent_heartbeat(true);
+        assert!(config.is_enable_concurrent_heartbeat());
+    }
+
+    #[test]
+    fn reset_client_config_copies_modern_java_fields() {
+        let mut source = ClientConfig::default();
+        source.set_use_tls(true);
+        source.set_enable_trace(true);
+        source.set_trace_topic(CheetahString::from("TraceTopicA"));
+        source.set_trace_msg_batch_num(32);
+        source.set_max_page_size_in_get_metadata(4096);
+        source.set_enable_concurrent_heartbeat(true);
+        source.set_concurrent_heartbeat_thread_pool_size(8);
+
+        let mut target = ClientConfig::default();
+        target.set_use_tls(false);
+        target.set_enable_trace(false);
+        target.trace_topic = None;
+        target.set_trace_msg_batch_num(10);
+        target.set_max_page_size_in_get_metadata(2000);
+        target.set_enable_concurrent_heartbeat(false);
+        target.set_concurrent_heartbeat_thread_pool_size(1);
+
+        target.reset_client_config(&source);
+
+        assert!(target.is_use_tls());
+        assert!(target.is_enable_trace());
+        assert_eq!(
+            target.get_trace_topic().map(|topic| topic.as_str()),
+            Some("TraceTopicA")
+        );
+        assert_eq!(target.get_trace_msg_batch_num(), 32);
+        assert_eq!(target.get_max_page_size_in_get_metadata(), 4096);
+        assert!(target.is_enable_concurrent_heartbeat());
+        assert_eq!(target.get_concurrent_heartbeat_thread_pool_size(), 8);
+    }
+
+    #[test]
+    fn display_uses_java_access_channel_name() {
+        let mut config = ClientConfig::default();
+        config.set_access_channel(AccessChannel::Cloud);
+
+        let rendered = config.to_string();
+
+        assert!(rendered.contains("access_channel: CLOUD"));
+        assert!(!rendered.contains("access_channel: Cloud"));
+    }
+
+    #[test]
+    fn queues_with_namespace_wraps_each_queue_like_java_collection_helper() {
+        let mut config = ClientConfig::default();
+        let queues = vec![
+            MessageQueue::from_parts("topic_a", "broker-a", 0),
+            MessageQueue::from_parts("ns%topic_b", "broker-a", 1),
+        ];
+
+        let unchanged = config.queues_with_namespace(queues.clone());
+        assert_eq!(unchanged[0].topic_str(), "topic_a");
+        assert_eq!(unchanged[1].topic_str(), "ns%topic_b");
+
+        config.namespace = Some(CheetahString::from("ns"));
+        config.namespace_initialized.store(false, Ordering::Release);
+
+        let wrapped = config.queues_with_namespace(queues);
+        assert_eq!(wrapped[0].topic_str(), "ns%topic_a");
+        assert_eq!(wrapped[1].topic_str(), "ns%topic_b");
     }
 }

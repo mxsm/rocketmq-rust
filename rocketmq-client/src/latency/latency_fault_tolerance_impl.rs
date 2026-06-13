@@ -51,6 +51,11 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
     pub fn set_service_detector(&mut self, service_detector: S) {
         self.service_detector = Some(service_detector);
     }
+
+    #[cfg(test)]
+    pub(crate) fn detector_config_for_test(&self) -> (u32, u32) {
+        (self.detect_interval, self.detect_timeout)
+    }
 }
 
 impl<R, S> LatencyFaultTolerance<CheetahString> for LatencyFaultToleranceImpl<R, S>
@@ -114,26 +119,7 @@ where
 
     fn start_detector(this: ArcMut<Self>) {
         let token = this.cancel_token.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
-            // First tick completes immediately; skip it to match Java's 3s initial delay.
-            interval.tick().await;
-
-            loop {
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        tracing::info!("Fault tolerance detector stopped");
-                        break;
-                    }
-                    _ = interval.tick() => {}
-                }
-                if !this.start_detector_enable.load(std::sync::atomic::Ordering::Relaxed) {
-                    continue;
-                }
-
-                this.detect_by_one_round().await;
-            }
-        });
+        spawn_detector_loop(this, token);
     }
 
     fn shutdown(&self) {
@@ -210,7 +196,67 @@ use std::sync::atomic::AtomicBool;
 use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
+use tracing::error;
 use tracing::info;
+use tracing::warn;
+
+async fn run_detector_loop<R, S>(this: ArcMut<LatencyFaultToleranceImpl<R, S>>, token: CancellationToken)
+where
+    R: Resolver,
+    S: ServiceDetector,
+{
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
+    // First tick completes immediately; skip it to match Java's 3s initial delay.
+    interval.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                tracing::info!("Fault tolerance detector stopped");
+                break;
+            }
+            _ = interval.tick() => {}
+        }
+        if !this.start_detector_enable.load(std::sync::atomic::Ordering::Relaxed) {
+            continue;
+        }
+
+        this.detect_by_one_round().await;
+    }
+}
+
+fn spawn_detector_loop<R, S>(this: ArcMut<LatencyFaultToleranceImpl<R, S>>, token: CancellationToken)
+where
+    R: Resolver,
+    S: ServiceDetector,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let task = handle.spawn(run_detector_loop(this, token));
+            drop(task);
+        }
+        Err(error) => {
+            warn!(
+                "No Tokio runtime available while starting fault tolerance detector; using a dedicated detector \
+                 thread. error={}",
+                error
+            );
+            let thread = std::thread::Builder::new().name("rocketmq-client-fault-detector".to_string());
+            if let Err(error) = thread.spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        error!("Failed to create fault tolerance detector runtime: {}", error);
+                        return;
+                    }
+                };
+                runtime.block_on(run_detector_loop(this, token));
+            }) {
+                error!("Failed to spawn fault tolerance detector thread: {}", error);
+            }
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -277,6 +323,14 @@ impl FaultItem {
 
     pub fn get_start_timestamp(&self) -> u64 {
         self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn compare_to(&self, other: &Self) -> i32 {
+        match self.cmp(other) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        }
     }
 }
 
@@ -353,5 +407,48 @@ impl std::fmt::Display for FaultItem {
             self.get_start_timestamp(),
             self.is_reachable()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoopResolver;
+
+    impl Resolver for NoopResolver {
+        async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
+            None
+        }
+    }
+
+    struct NoopServiceDetector;
+
+    impl ServiceDetector for NoopServiceDetector {
+        async fn detect(&self, _endpoint: &str, _timeout_millis: u64) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn fault_item_compare_to_matches_java_comparable_shape() {
+        let fast = FaultItem::new(CheetahString::from("fast"));
+        let slow = FaultItem::new(CheetahString::from("slow"));
+        fast.set_current_latency(10);
+        slow.set_current_latency(20);
+
+        assert_eq!(fast.compare_to(&slow), -1);
+        assert_eq!(slow.compare_to(&fast), 1);
+        assert_eq!(fast.compare_to(&fast), 0);
+    }
+
+    #[test]
+    fn start_detector_without_tokio_runtime_does_not_spawn_panic() {
+        let detector = ArcMut::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+
+        LatencyFaultTolerance::start_detector(detector.clone());
+        detector.shutdown();
+
+        std::thread::sleep(tokio::time::Duration::from_millis(20));
     }
 }

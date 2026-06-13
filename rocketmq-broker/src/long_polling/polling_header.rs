@@ -140,6 +140,8 @@ mod tests {
             born_time: 1234567890,
             order: false,
             attempt_id: None,
+            exp_type: None,
+            exp: None,
             poll_time: 1234567890,
             topic_request_header: None,
         };

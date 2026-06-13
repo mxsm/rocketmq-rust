@@ -45,3 +45,42 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
     /// A static string slice representing the name of the strategy.
     fn get_name(&self) -> &'static str;
 }
+
+/// Java-compatible name for the abstract allocation strategy base type.
+///
+/// Java exposes `AbstractAllocateMessageQueueStrategy` as a base class that
+/// implements shared validation before concrete allocation strategies run. In
+/// Rust the behavior is represented by `AllocateMessageQueueStrategy` plus the
+/// shared rebalance `check` helper, so the Java name maps to the trait object.
+pub type AbstractAllocateMessageQueueStrategy = dyn AllocateMessageQueueStrategy;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoopStrategy;
+
+    impl AllocateMessageQueueStrategy for NoopStrategy {
+        fn allocate(
+            &self,
+            _consumer_group: &CheetahString,
+            _current_cid: &CheetahString,
+            _mq_all: &[MessageQueue],
+            _cid_all: &[CheetahString],
+        ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+            Ok(Vec::new())
+        }
+
+        fn get_name(&self) -> &'static str {
+            "NOOP"
+        }
+    }
+
+    #[test]
+    fn abstract_allocate_message_queue_strategy_alias_accepts_real_strategy() {
+        let strategy = NoopStrategy;
+        let abstract_strategy: &AbstractAllocateMessageQueueStrategy = &strategy;
+
+        assert_eq!(abstract_strategy.get_name(), "NOOP");
+    }
+}

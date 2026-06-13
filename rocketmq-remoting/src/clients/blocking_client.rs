@@ -45,7 +45,7 @@ impl BlockingClient {
             .build()?;
         let inner = rt.block_on(crate::clients::Client::connect(addr))?;
         Ok(BlockingClient { inner, rt })*/
-        unimplemented!("BlockingClient::connect")
+        anyhow::bail!("BlockingClient is not supported by the current async remoting client")
     }
 
     /*    pub fn invoke_oneway(

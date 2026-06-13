@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::hint;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -521,7 +520,7 @@ impl RemotingCommand {
         let serialize_type = RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::ROCKETMQ);
 
         // Write total_length and serialize_type at the beginning (in-place update)
-        let total_length = (header_size as i32 + body_length).to_be_bytes();
+        let total_length = (4 + header_size as i32 + body_length).to_be_bytes();
         let serialize_type_bytes = serialize_type.to_be_bytes();
 
         dst[begin_index..begin_index + 4].copy_from_slice(&total_length);
@@ -870,14 +869,25 @@ impl RemotingCommand {
         }
     }
 
-    pub fn read_custom_header_ref_unchecked<T>(&self) -> &T
+    pub fn try_read_custom_header_ref<T>(&self) -> rocketmq_error::RocketMQResult<&T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         match self.command_custom_header.as_ref() {
-            None => unsafe { hint::unreachable_unchecked() },
-            Some(value) => value.as_ref().as_any().downcast_ref::<T>().unwrap(),
+            None => Err(Self::custom_header_missing_error::<T>()),
+            Some(value) => value
+                .as_ref()
+                .as_any()
+                .downcast_ref::<T>()
+                .ok_or_else(Self::custom_header_type_mismatch_error::<T>),
         }
+    }
+
+    pub fn read_custom_header_ref_unchecked<T>(&self) -> rocketmq_error::RocketMQResult<&T>
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        self.try_read_custom_header_ref::<T>()
     }
 
     pub fn read_custom_header_mut<T>(&mut self) -> Option<&mut T>
@@ -900,14 +910,25 @@ impl RemotingCommand {
         }
     }
 
-    pub fn read_custom_header_mut_unchecked<T>(&mut self) -> &mut T
+    pub fn try_read_custom_header_mut<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         match self.command_custom_header.as_mut() {
-            None => unsafe { hint::unreachable_unchecked() },
-            Some(value) => value.as_mut().as_any_mut().downcast_mut::<T>().unwrap(),
+            None => Err(Self::custom_header_missing_error::<T>()),
+            Some(value) => value
+                .as_mut()
+                .as_any_mut()
+                .downcast_mut::<T>()
+                .ok_or_else(Self::custom_header_type_mismatch_error::<T>),
         }
+    }
+
+    pub fn read_custom_header_mut_unchecked<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        self.try_read_custom_header_mut::<T>()
     }
 
     pub fn command_custom_header_ref(&self) -> Option<&dyn CommandCustomHeader> {
@@ -944,6 +965,32 @@ impl RemotingCommand {
         if self.ext_fields.is_none() {
             self.ext_fields = Some(std::collections::HashMap::new());
         }
+    }
+
+    fn custom_header_missing_error<T>() -> rocketmq_error::RocketMQError
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+            format: "header",
+            message: format!(
+                "Command custom header is missing; expected {}.",
+                std::any::type_name::<T>()
+            ),
+        })
+    }
+
+    fn custom_header_type_mismatch_error<T>() -> rocketmq_error::RocketMQError
+    where
+        T: CommandCustomHeader + Sync + Send + 'static,
+    {
+        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+            format: "header",
+            message: format!(
+                "Command custom header type mismatch; expected {}.",
+                std::any::type_name::<T>()
+            ),
+        })
     }
 }
 
@@ -988,6 +1035,26 @@ impl AsMut<RemotingCommand> for RemotingCommand {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Default)]
+    struct TestCustomHeader {
+        value: i32,
+    }
+
+    impl CommandCustomHeader for TestCustomHeader {
+        fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+            Some(HashMap::new())
+        }
+    }
+
+    #[derive(Debug)]
+    struct OtherCustomHeader;
+
+    impl CommandCustomHeader for OtherCustomHeader {
+        fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+            Some(HashMap::new())
+        }
+    }
+
     #[test]
     fn test_remoting_command() {
         let command = RemotingCommand::create_remoting_command(1)
@@ -1017,5 +1084,58 @@ mod tests {
         println!("i={}", RemotingCommand::default().opaque);
         println!("i={}", RemotingCommand::default().opaque);
         println!("i={}", RemotingCommand::default().opaque);
+    }
+
+    #[test]
+    fn try_read_custom_header_ref_reports_missing_header() {
+        let command = RemotingCommand::create_remoting_command(1);
+
+        let error = command.try_read_custom_header_ref::<TestCustomHeader>().unwrap_err();
+
+        assert!(error.to_string().contains("missing"));
+        assert!(command.read_custom_header_ref_unchecked::<TestCustomHeader>().is_err());
+    }
+
+    #[test]
+    fn try_read_custom_header_ref_reports_type_mismatch() {
+        let command = RemotingCommand::create_request_command(1, TestCustomHeader::default());
+
+        let error = command.try_read_custom_header_ref::<OtherCustomHeader>().unwrap_err();
+
+        assert!(error.to_string().contains("type mismatch"));
+        assert!(command.read_custom_header_ref_unchecked::<OtherCustomHeader>().is_err());
+    }
+
+    #[test]
+    fn try_read_custom_header_mut_updates_expected_header() {
+        let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
+
+        let header = command.try_read_custom_header_mut::<TestCustomHeader>().unwrap();
+        header.value = 9;
+
+        let header = command.try_read_custom_header_ref::<TestCustomHeader>().unwrap();
+        assert_eq!(header.value, 9);
+    }
+
+    #[test]
+    fn fast_rocketmq_encode_frame_decodes_with_body() {
+        let body = Bytes::from_static(b"rocketmq-body");
+        let mut command = RemotingCommand::create_remoting_command(100)
+            .set_language(LanguageCode::RUST)
+            .set_opaque(7)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_body(body.clone());
+
+        let mut encoded = BytesMut::new();
+        command.fast_header_encode(&mut encoded);
+        encoded.extend_from_slice(&body);
+
+        let decoded = RemotingCommand::decode(&mut encoded)
+            .expect("fast rocketmq frame should decode")
+            .expect("complete frame should produce command");
+
+        assert_eq!(decoded.code(), 100);
+        assert_eq!(decoded.opaque(), 7);
+        assert_eq!(decoded.get_body(), Some(&body));
     }
 }

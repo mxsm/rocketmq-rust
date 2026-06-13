@@ -31,11 +31,9 @@ impl Display for PopResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PopResult [msg_found_list={}, pop_status={}, pop_time={}, invisible_time={}, rest_num={}]",
-            self.msg_found_list.as_ref().map_or(0, |value| value.len()),
+            "PopResult [popStatus={},msgFoundList={},restNum={}]",
             self.pop_status,
-            self.pop_time,
-            self.invisible_time,
+            self.msg_found_list.as_ref().map_or(0, |value| value.len()),
             self.rest_num
         )
     }
@@ -63,7 +61,7 @@ mod tests {
         };
         assert_eq!(
             format!("{}", pop_result),
-            "PopResult [msg_found_list=0, pop_status=FOUND, pop_time=123456789, invisible_time=1000, rest_num=10]"
+            "PopResult [popStatus=FOUND,msgFoundList=0,restNum=10]"
         );
     }
 
@@ -78,7 +76,7 @@ mod tests {
         };
         assert_eq!(
             format!("{}", pop_result),
-            "PopResult [msg_found_list=2, pop_status=NO_NEW_MSG, pop_time=987654321, invisible_time=2000, rest_num=5]"
+            "PopResult [popStatus=NO_NEW_MSG,msgFoundList=2,restNum=5]"
         );
     }
 
@@ -93,8 +91,7 @@ mod tests {
         };
         assert_eq!(
             format!("{}", pop_result),
-            "PopResult [msg_found_list=1, pop_status=POLLING_FULL, pop_time=111111111, invisible_time=3000, \
-             rest_num=0]"
+            "PopResult [popStatus=POLLING_FULL,msgFoundList=1,restNum=0]"
         );
     }
 
@@ -109,8 +106,23 @@ mod tests {
         };
         assert_eq!(
             format!("{}", pop_result),
-            "PopResult [msg_found_list=0, pop_status=POLLING_NOT_FOUND, pop_time=222222222, invisible_time=4000, \
-             rest_num=20]"
+            "PopResult [popStatus=POLLING_NOT_FOUND,msgFoundList=0,restNum=20]"
+        );
+    }
+
+    #[test]
+    fn display_pop_result_with_none_msg_list_counts_zero_like_java_null_list() {
+        let pop_result = PopResult {
+            msg_found_list: None,
+            pop_status: PopStatus::Found,
+            pop_time: 0,
+            invisible_time: 0,
+            rest_num: 3,
+        };
+
+        assert_eq!(
+            format!("{}", pop_result),
+            "PopResult [popStatus=FOUND,msgFoundList=0,restNum=3]"
         );
     }
 }

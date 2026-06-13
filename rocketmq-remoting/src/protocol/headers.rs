@@ -124,6 +124,7 @@ pub mod controller {
     pub use super::super::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
     pub use super::super::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
     pub use super::super::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
+    pub use super::super::header::controller::clean_broker_data_request_header::CleanControllerBrokerDataRequestHeader;
     pub use super::super::header::controller::elect_master_request_header::ElectMasterRequestHeader;
     pub use super::super::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
     pub use super::super::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
@@ -135,10 +136,16 @@ pub mod controller {
 
 pub mod admin {
     pub use super::super::header::add_broker_request_header::AddBrokerRequestHeader;
+    pub use super::super::header::create_topic_list_request_header::CreateTopicListRequestHeader;
     pub use super::super::header::create_topic_request_header::CreateTopicRequestHeader;
     pub use super::super::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     pub use super::super::header::delete_topic_request_header::DeleteTopicRequestHeader;
+    pub use super::super::header::export_rocksdb_config_to_json_request_header::ExportRocksDBConfigToJsonRequestHeader;
     pub use super::super::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+    pub use super::super::header::get_all_producer_info_request_header::GetAllProducerInfoRequestHeader;
+    pub use super::super::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupRequestHeader;
+    pub use super::super::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupResponseHeader;
+    pub use super::super::header::get_all_topic_config_request_header::GetAllTopicConfigRequestHeader;
     pub use super::super::header::get_all_topic_config_response_header::GetAllTopicConfigResponseHeader;
     pub use super::super::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader;
     pub use super::super::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
@@ -187,8 +194,14 @@ pub mod acl {
     pub use super::super::header::delete_user_request_header::DeleteUserRequestHeader;
     pub use super::super::header::get_user_request_headers::GetUserRequestHeader;
     pub use super::super::header::list_acl_request_header::ListAclRequestHeader;
+    pub use super::super::header::list_acl_request_header::ListAclsRequestHeader;
     pub use super::super::header::list_users_request_header::ListUsersRequestHeader;
     pub use super::super::header::update_user_request_header::UpdateUserRequestHeader;
+}
+
+pub mod lite {
+    pub use super::super::header::lite_subscription_ctl_request_header::LiteSubscriptionCtlRequestHeader;
+    pub use super::super::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 }
 
 pub mod special {
@@ -238,8 +251,13 @@ pub use super::header::pull_message_response_header::PullMessageResponseHeader;
 
 // Administrative operations
 pub use super::header::add_broker_request_header::AddBrokerRequestHeader;
+pub use super::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 pub use super::header::create_topic_request_header::CreateTopicRequestHeader;
 pub use super::header::delete_topic_request_header::DeleteTopicRequestHeader;
+pub use super::header::get_all_producer_info_request_header::GetAllProducerInfoRequestHeader;
+pub use super::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupRequestHeader;
+pub use super::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupResponseHeader;
+pub use super::header::get_all_topic_config_request_header::GetAllTopicConfigRequestHeader;
 pub use super::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 pub use super::header::remove_broker_request_header::RemoveBrokerRequestHeader;
 

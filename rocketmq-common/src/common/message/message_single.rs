@@ -224,12 +224,10 @@ impl Message {
             properties.insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
         }
 
-        if !wait_store_msg_ok {
-            properties.insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
-                CheetahString::from_static_str("false"),
-            );
-        }
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            CheetahString::from_static_str(if wait_store_msg_ok { "true" } else { "false" }),
+        );
 
         Message {
             topic,
@@ -266,12 +264,10 @@ impl Message {
             properties.insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
         }
 
-        if !wait_store_msg_ok {
-            properties.insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
-                CheetahString::from_static_str("false"),
-            );
-        }
+        properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            CheetahString::from_static_str(if wait_store_msg_ok { "true" } else { "false" }),
+        );
 
         Message {
             topic,
@@ -357,12 +353,10 @@ impl Message {
 
     #[inline]
     fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
-        if !wait_store_msg_ok {
-            self.properties.as_map_mut().insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
-                CheetahString::from_static_str("false"),
-            );
-        }
+        self.properties.as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            CheetahString::from_static_str(if wait_store_msg_ok { "true" } else { "false" }),
+        );
     }
 
     #[inline]
@@ -454,6 +448,27 @@ impl Message {
         self.properties.buyer_id()
     }
 
+    /// Returns the message priority, or `-1` if not set or not parseable.
+    #[inline]
+    pub fn priority(&self) -> i32 {
+        self.properties.priority()
+    }
+
+    /// Sets the message priority with Java-compatible non-negative validation.
+    #[inline]
+    pub fn try_set_priority(&mut self, priority: i32) -> rocketmq_error::RocketMQResult<()> {
+        if priority < 0 {
+            return Err(rocketmq_error::RocketMQError::illegal_argument(
+                "The priority must be greater than or equal to 0",
+            ));
+        }
+        self.properties.as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY),
+            CheetahString::from(priority.to_string()),
+        );
+        Ok(())
+    }
+
     /// Returns the instance ID.
     #[inline]
     pub fn instance_id(&self) -> Option<&str> {
@@ -538,32 +553,49 @@ impl Message {
     }
 }
 
+fn java_properties_to_string(properties: &HashMap<CheetahString, CheetahString>) -> String {
+    if properties.is_empty() {
+        return "{}".to_string();
+    }
+
+    let mut entries = properties
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    entries.sort_unstable_by(|left, right| left.0.cmp(right.0).then_with(|| left.1.cmp(right.1)));
+
+    let body = entries
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{{body}}}")
+}
+
+fn java_body_to_string(body: Option<&Bytes>) -> String {
+    match body {
+        Some(body) => {
+            let values = body
+                .iter()
+                .map(|byte| (*byte as i8).to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{values}]")
+        }
+        None => "null".to_string(),
+    }
+}
+
 impl Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let properties_str = self
-            .properties
-            .as_map()
-            .iter()
-            .map(|(k, v)| format!("{k}: {v}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let body_len = self.body.len();
-        let compressed = if self.body.is_compressed() {
-            "compressed"
-        } else {
-            "uncompressed"
-        };
-
-        let transaction_id_str = match &self.transaction_id {
-            Some(transaction_id) => format!("Some({transaction_id:?})"),
-            None => "None".to_string(),
-        };
-
         write!(
             f,
-            "Message {{ topic: {}, flag: {:?}, properties: {{ {} }}, body: {} bytes ({}), transaction_id: {} }}",
-            self.topic, self.flag, properties_str, body_len, compressed, transaction_id_str
+            "Message{{topic='{}', flag={}, properties={}, body={}, transactionId='{}'}}",
+            self.topic,
+            self.flag.bits(),
+            java_properties_to_string(self.properties.as_map()),
+            java_body_to_string(self.body.raw()),
+            self.transaction_id.as_deref().unwrap_or("null")
         )
     }
 }
@@ -679,14 +711,10 @@ pub fn parse_topic_filter_type(sys_flag: i32) -> TopicFilterType {
 }
 
 pub fn tags_string2tags_code(tags: Option<&CheetahString>) -> i64 {
-    if tags.is_none() {
-        return 0;
+    match tags {
+        Some(tags) if !tags.is_empty() => JavaStringHasher::hash_str(tags.as_str()) as i64,
+        _ => 0,
     }
-    let tags = tags.unwrap();
-    if tags.is_empty() {
-        return 0;
-    }
-    JavaStringHasher::hash_str(tags.as_str()) as i64
 }
 
 #[cfg(test)]
@@ -765,6 +793,10 @@ mod tests {
         assert_eq!(msg.topic().as_str(), "test_topic");
         assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
         assert!(msg.is_wait_store_msg_ok());
+        assert_eq!(
+            msg.properties().as_map().get(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            Some(&CheetahString::from_static_str("true"))
+        );
     }
 
     #[test]
@@ -773,7 +805,29 @@ mod tests {
         let msg = Message::with_details_bytes("test_topic", "tag1", "key1", 0, body.clone(), false);
         assert_eq!(msg.topic().as_str(), "test_topic");
         assert!(!msg.is_wait_store_msg_ok());
+        assert_eq!(
+            msg.properties().as_map().get(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            Some(&CheetahString::from_static_str("false"))
+        );
         assert_eq!(msg.body().unwrap(), body);
+    }
+
+    #[test]
+    fn test_message_priority_matches_java_semantics() {
+        let mut msg = Message::new("test_topic", b"test_body");
+        assert_eq!(msg.priority(), -1);
+
+        msg.try_set_priority(3).unwrap();
+        assert_eq!(msg.priority(), 3);
+        assert_eq!(
+            msg.properties().as_map().get(MessageConst::PROPERTY_PRIORITY),
+            Some(&CheetahString::from_static_str("3"))
+        );
+
+        let error = msg
+            .try_set_priority(-1)
+            .expect_err("negative priority should be rejected");
+        assert!(error.to_string().contains("greater than or equal to 0"));
     }
 
     #[test]
@@ -787,6 +841,28 @@ mod tests {
     }
 
     #[test]
+    fn message_display_matches_java_to_string_shape() {
+        let mut msg = Message::with_tags("TopicA", "TagA", &[1, 255]);
+        msg.set_flag(7);
+        msg.set_transaction_id(CheetahString::from_static_str("tx-1"));
+
+        assert_eq!(
+            msg.to_string(),
+            "Message{topic='TopicA', flag=7, properties={TAGS=TagA, WAIT=true}, body=[1, -1], transactionId='tx-1'}"
+        );
+    }
+
+    #[test]
+    fn empty_message_display_uses_java_array_null_wording_for_absent_body() {
+        let msg = Message::default();
+
+        assert_eq!(
+            msg.to_string(),
+            "Message{topic='', flag=0, properties={}, body=null, transactionId='null'}"
+        );
+    }
+
+    #[test]
     fn test_properties_capacity_optimization() {
         // Test with no tags or keys
         let msg1 = Message::with_details_bytes(
@@ -797,7 +873,11 @@ mod tests {
             Bytes::from_static(b"body"),
             true,
         );
-        assert_eq!(msg1.properties().len(), 0);
+        assert_eq!(msg1.properties().len(), 1);
+        assert_eq!(
+            msg1.properties().as_map().get(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            Some(&CheetahString::from_static_str("true"))
+        );
 
         // Test with tags
         let msg2 = Message::with_details_bytes(
@@ -808,15 +888,19 @@ mod tests {
             Bytes::from_static(b"body"),
             true,
         );
-        assert_eq!(msg2.properties().len(), 1);
+        assert_eq!(msg2.properties().len(), 2);
 
         // Test with tags and keys
         let msg3 = Message::with_details_bytes("topic", "tag1", "key1", 0, Bytes::from_static(b"body"), true);
-        assert_eq!(msg3.properties().len(), 2);
+        assert_eq!(msg3.properties().len(), 3);
 
         // Test with wait_store_msg_ok = false
         let msg4 = Message::with_details_bytes("topic", "tag1", "key1", 0, Bytes::from_static(b"body"), false);
         assert_eq!(msg4.properties().len(), 3);
+        assert_eq!(
+            msg4.properties().as_map().get(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+            Some(&CheetahString::from_static_str("false"))
+        );
     }
 
     #[test]
@@ -854,6 +938,26 @@ mod tests {
 
         // Test system reserved property
         let result = msg.put_user_property(CheetahString::from_slice("KEYS"), CheetahString::from_slice("value"));
+        assert!(result.is_err());
+        if let Err(RocketMQError::InvalidProperty(e)) = result {
+            assert!(e.contains("used by system"));
+        }
+
+        // Test Java-reserved priority property
+        let result = msg.put_user_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY),
+            CheetahString::from_slice("value"),
+        );
+        assert!(result.is_err());
+        if let Err(RocketMQError::InvalidProperty(e)) = result {
+            assert!(e.contains("used by system"));
+        }
+
+        // Test Java-reserved origin group property
+        let result = msg.put_user_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_ORIGIN_GROUP),
+            CheetahString::from_slice("value"),
+        );
         assert!(result.is_err());
         if let Err(RocketMQError::InvalidProperty(e)) = result {
             assert!(e.contains("used by system"));

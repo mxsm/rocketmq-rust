@@ -14,9 +14,9 @@
 
 use std::error::Error;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -27,8 +27,8 @@ use tokio::sync::Notify;
 
 use crate::producer::request_callback::RequestCallbackFn;
 
-type AtomicMessagePtr = AtomicPtr<Option<Box<dyn MessageTrait + Send>>>;
-type AtomicCausePtr = AtomicPtr<Box<dyn Error + Send + Sync>>;
+type ResponseMessage = Box<dyn MessageTrait + Send>;
+type RequestCause = Arc<dyn Error + Send + Sync>;
 
 pub struct RequestResponseFuture {
     correlation_id: CheetahString,
@@ -37,11 +37,9 @@ pub struct RequestResponseFuture {
     request_msg: Option<Message>,
     timeout_millis: u64,
     notify: Arc<Notify>,
-    //response_msg: Arc<Mutex<Option<Message>>>,
-    response_msg: AtomicMessagePtr,
-    send_request_ok: Arc<AtomicBool>,
-    cause: AtomicCausePtr,
-    //cause: Arc<Mutex<Option<Box<dyn Error + Send + Sync>>>>,
+    response_msg: Mutex<Option<ResponseMessage>>,
+    send_request_ok: AtomicBool,
+    cause: Mutex<Option<RequestCause>>,
 }
 
 impl RequestResponseFuture {
@@ -57,23 +55,30 @@ impl RequestResponseFuture {
             request_msg: None,
             timeout_millis,
             notify: Arc::new(Notify::new()),
-            // response_msg: Arc::new(Mutex::new(None)),
-            response_msg: AtomicPtr::new(std::ptr::null_mut()),
-            send_request_ok: Arc::new(AtomicBool::new(false)),
-            cause: AtomicPtr::new(std::ptr::null_mut()),
-            //cause: Arc::new(Mutex::new(None)),
+            response_msg: Mutex::new(None),
+            send_request_ok: AtomicBool::new(true),
+            cause: Mutex::new(None),
         }
     }
 
-    pub async fn execute_request_callback(&self) {
+    pub fn execute_request_callback(&self) {
         if let Some(ref callback) = self.request_callback {
             let send_request_ok = self.send_request_ok.load(Ordering::Acquire);
-            if send_request_ok && self.get_cause().is_none() {
-                let response_msg = self.get_response_msg();
-                callback(Some(&*response_msg.unwrap()), None);
+            let cause = self.get_cause();
+            if send_request_ok && cause.is_none() {
+                let response_msg = self
+                    .response_msg
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                callback(
+                    response_msg.as_deref().map(|message| message as &dyn MessageTrait),
+                    None,
+                );
             } else {
-                let cause = self.get_cause();
-                callback(None, Some(&*cause.unwrap()));
+                callback(
+                    None,
+                    cause.as_ref().map(|cause| cause.as_ref() as &dyn std::error::Error),
+                );
             }
         }
     }
@@ -83,14 +88,6 @@ impl RequestResponseFuture {
     }
 
     pub async fn wait_response_message(&self, timeout: Duration) -> Option<Box<dyn MessageTrait + Send>> {
-        /*if tokio::time::timeout(timeout, self.notify.notified())
-            .await
-            .is_ok()
-        {
-            return self.get_response_msg();
-        }
-        None*/
-
         match tokio::time::timeout(timeout, self.notify.notified()).await {
             Ok(_) => self.get_response_msg(),
             Err(error) => {
@@ -101,8 +98,11 @@ impl RequestResponseFuture {
     }
 
     pub fn put_response_message(&self, response_msg: Option<Box<dyn MessageTrait + Send>>) {
-        let raw = Box::into_raw(Box::new(response_msg));
-        self.response_msg.store(raw, Ordering::Release);
+        let mut stored_response = self
+            .response_msg
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *stored_response = response_msg;
         self.notify.notify_waiters();
     }
 
@@ -125,8 +125,14 @@ impl RequestResponseFuture {
 
     pub fn on_success(&self) {
         if let Some(callback) = &self.request_callback {
-            let response_msg = self.get_response_msg();
-            callback(Some(&*response_msg.unwrap()), None);
+            let response_msg = self
+                .response_msg
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            callback(
+                response_msg.as_deref().map(|message| message as &dyn MessageTrait),
+                None,
+            );
         }
     }
 
@@ -140,17 +146,14 @@ impl RequestResponseFuture {
 
     #[inline]
     pub fn get_response_msg(&self) -> Option<Box<dyn MessageTrait + Send>> {
-        let raw = self.response_msg.load(Ordering::Acquire);
-        if raw.is_null() {
-            return None;
-        }
-        let response_msg = unsafe { Box::from_raw(raw) };
-        *response_msg
+        self.response_msg
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
     }
 
     pub fn set_response_msg(&self, response_msg: Box<dyn MessageTrait + Send>) {
-        let raw = Box::into_raw(Box::new(Some(response_msg)));
-        self.response_msg.store(raw, Ordering::Release);
+        self.put_response_message(Some(response_msg));
     }
 
     pub async fn is_send_request_ok(&self) -> bool {
@@ -158,27 +161,106 @@ impl RequestResponseFuture {
     }
 
     pub fn set_send_request_ok(&self, send_request_ok: bool) {
-        self.send_request_ok.store(false, Ordering::Release)
+        self.send_request_ok.store(send_request_ok, Ordering::Release)
     }
 
     pub fn get_request_msg(&self) -> Option<&Message> {
         self.request_msg.as_ref()
     }
 
-    pub fn get_cause(&self) -> Option<Box<dyn Error + Send + Sync>> {
-        //self.cause.lock().await.clone()
-        let raw = self.cause.load(Ordering::Acquire);
-        if raw.is_null() {
-            return None;
-        }
-        let cause = unsafe { Box::from_raw(raw) };
-        Some(*cause)
+    pub fn get_cause(&self) -> Option<RequestCause> {
+        self.cause
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub fn set_cause(&self, cause: Box<dyn Error + Send + Sync>) {
-        /*let mut err = self.cause.lock().await;
-         *err = Some(cause); */
-        let raw = Box::into_raw(Box::new(cause));
-        self.cause.store(raw, Ordering::Release);
+        let mut stored_cause = self.cause.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *stored_cause = Some(Arc::from(cause));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use bytes::Bytes;
+
+    use super::*;
+
+    fn response_message() -> Box<dyn MessageTrait + Send> {
+        Box::new(
+            Message::builder()
+                .topic("reply_topic")
+                .body(Bytes::from_static(b"ok"))
+                .build_unchecked(),
+        )
+    }
+
+    #[tokio::test]
+    async fn default_send_request_ok_matches_java() {
+        let future = RequestResponseFuture::new("corr".into(), 3_000, None);
+        assert!(future.is_send_request_ok().await);
+
+        future.set_send_request_ok(false);
+        assert!(!future.is_send_request_ok().await);
+
+        future.set_send_request_ok(true);
+        assert!(future.is_send_request_ok().await);
+    }
+
+    #[test]
+    fn success_callback_accepts_missing_response_without_panic() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_inner = Arc::clone(&calls);
+        let callback: RequestCallbackFn = Arc::new(move |response, error| {
+            assert!(response.is_none());
+            assert!(error.is_none());
+            calls_inner.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let future = RequestResponseFuture::new("corr".into(), 3_000, Some(callback));
+        future.execute_request_callback();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn callback_can_read_response_more_than_once_without_consuming_it() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_inner = Arc::clone(&calls);
+        let callback: RequestCallbackFn = Arc::new(move |response, error| {
+            assert!(response.is_some());
+            assert!(error.is_none());
+            calls_inner.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let future = RequestResponseFuture::new("corr".into(), 3_000, Some(callback));
+        future.put_response_message(Some(response_message()));
+
+        future.on_success();
+        future.execute_request_callback();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(future.get_response_msg().is_some());
+        assert!(future.get_response_msg().is_none());
+    }
+
+    #[test]
+    fn failure_callback_passes_none_when_cause_is_absent_like_java_null() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_inner = Arc::clone(&calls);
+        let callback: RequestCallbackFn = Arc::new(move |response, error| {
+            assert!(response.is_none());
+            assert!(error.is_none());
+            calls_inner.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let future = RequestResponseFuture::new("corr".into(), 3_000, Some(callback));
+        future.set_send_request_ok(false);
+        future.execute_request_callback();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

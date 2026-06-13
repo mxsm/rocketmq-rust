@@ -15,6 +15,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
+
 use crate::base::access_channel::AccessChannel;
 
 /// The type of tracing operation being performed.
@@ -147,6 +149,14 @@ pub trait TraceDispatcher: Any {
     ///
     /// A mutable reference to `self` as `&mut dyn Any`.
     fn as_mut_any(&mut self) -> &mut dyn Any;
+
+    fn trace_topic_name(&self) -> Option<&str> {
+        None
+    }
+
+    fn trace_client_host(&self) -> Option<CheetahString> {
+        None
+    }
 }
 
 /// Type alias for an atomically reference-counted trace dispatcher.

@@ -1663,10 +1663,15 @@ fn format_java_properties_string(message: &MessageExt) -> String {
     let mut entries = message
         .properties()
         .iter()
+        .filter(|(key, _)| is_dashboard_property(key.as_str()))
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>();
     entries.sort();
     format!("{{{}}}", entries.join(", "))
+}
+
+fn is_dashboard_property(key: &str) -> bool {
+    key != MessageConst::PROPERTY_WAIT_STORE_MSG_OK
 }
 
 fn decode_export_message_body(message: &MessageExt) -> String {
@@ -1873,6 +1878,7 @@ fn map_message_detail(message: MessageExt, message_tracks: Vec<MessageTrack>) ->
     let properties = message
         .properties()
         .iter()
+        .filter(|(key, _)| is_dashboard_property(key.as_str()))
         .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect::<BTreeMap<_, _>>();
     let body = message.body().map(|body| body.to_vec()).unwrap_or_default();
@@ -2151,6 +2157,7 @@ mod tests {
             detail.properties.get("order_source").map(String::as_str),
             Some("mobile")
         );
+        assert!(!detail.properties.contains_key(MessageConst::PROPERTY_WAIT_STORE_MSG_OK));
         assert_eq!(detail.message_track_list, Some(Vec::new()));
     }
 

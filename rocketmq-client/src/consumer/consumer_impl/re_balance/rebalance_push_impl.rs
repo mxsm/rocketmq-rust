@@ -23,7 +23,6 @@ use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::utils::util_all;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
@@ -336,17 +335,11 @@ impl Rebalance for RebalancePushImpl {
                                 format!("Client instance not initialized for mq: {}", mq)
                             ));
                         };
-                        let timestamp = util_all::parse_date(
-                            self.consumer_config.consume_timestamp.as_ref().unwrap(),
-                            util_all::YYYYMMDDHHMMSS,
-                        )
-                        .unwrap()
-                        .and_utc()
-                        .timestamp();
-                        client_instance
-                            .mq_admin_impl
-                            .search_offset(mq, timestamp as u64)
-                            .await?
+                        let timestamp = super::parse_consume_timestamp_millis(
+                            self.consumer_config.consume_timestamp.as_deref(),
+                            mq,
+                        )?;
+                        client_instance.mq_admin_impl.search_offset(mq, timestamp).await?
                     }
                 } else {
                     return Err(mq_client_err!(
@@ -465,10 +458,11 @@ impl Rebalance for RebalancePushImpl {
                 ..Default::default()
             };
             request_body.mq_set.insert(mq.clone());
-            let result = client
-                .mq_client_api_impl
-                .as_mut()
-                .unwrap()
+            let Some(mq_client_api_impl) = client.mq_client_api_impl.as_mut() else {
+                warn!("unlockBatchMQ skipped: MQClientAPIImpl is not initialized, mq={}", mq);
+                return;
+            };
+            let result = mq_client_api_impl
                 .unlock_batch_mq(
                     find_broker_result.broker_addr.as_ref(),
                     request_body,
@@ -537,7 +531,7 @@ impl Rebalance for RebalancePushImpl {
         //Pop message mode, order message consumer not implement, it's use
         // ConsumeMessageOrderlyService to consume
         self.consumer_config.client_rebalance
-            || self.rebalance_impl_inner.message_model.unwrap() == MessageModel::Broadcasting
+            || self.rebalance_impl_inner.message_model == Some(MessageModel::Broadcasting)
             || self
                 .default_mqpush_consumer_impl
                 .as_ref()
@@ -618,10 +612,14 @@ async fn lock_all_impl(
                         mq_set: mqs.clone(),
                         ..Default::default()
                     };
-                    let result = client_instance
-                        .mq_client_api_impl
-                        .as_mut()
-                        .unwrap()
+                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                        warn!(
+                            "lockBatchMQ skipped: MQClientAPIImpl is not initialized for broker {}",
+                            broker_name
+                        );
+                        return;
+                    };
+                    let result = mq_client_api_impl
                         .lock_batch_mq(find_broker_result.broker_addr.as_str(), request_body, 1_000)
                         .await;
                     match result {
@@ -685,10 +683,14 @@ async fn unlock_all_impl(
                         mq_set: mqs.clone(),
                         ..Default::default()
                     };
-                    let result = client_instance
-                        .mq_client_api_impl
-                        .as_mut()
-                        .unwrap()
+                    let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                        warn!(
+                            "unlockBatchMQ skipped: MQClientAPIImpl is not initialized for broker {}",
+                            broker_name
+                        );
+                        return;
+                    };
+                    let result = mq_client_api_impl
                         .unlock_batch_mq(&find_broker_result.broker_addr, request_body, 1_000, oneway)
                         .await;
                     match result {

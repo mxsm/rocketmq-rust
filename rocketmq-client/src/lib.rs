@@ -74,18 +74,157 @@ pub mod admin;
 pub mod base;
 pub mod common;
 pub mod consumer;
+pub mod exception;
 pub mod factory;
 mod hook;
 pub mod implementation;
-mod latency;
+pub mod latency;
+pub mod legacy;
+pub mod lock;
 pub mod producer;
 pub mod stat;
 mod trace;
 mod types;
 pub mod utils;
 
+pub use crate::admin::DefaultMQAdminExt;
+pub use crate::admin::DefaultMQAdminExtImpl;
+pub use crate::admin::MQAdminExt;
+pub use crate::admin::MQAdminExtInner;
+pub use crate::admin::MQAdminExtInnerImpl;
+pub use crate::base::MQAdmin;
+pub use crate::base::MqClientAdmin;
+pub use crate::base::MqClientAdminInner;
+pub use crate::common::acl::AclConstants;
+pub use crate::common::acl::AclException;
+pub use crate::common::acl::AclSigner;
+pub use crate::common::acl::AclUtils;
+pub use crate::common::acl::Permission;
+pub use crate::common::acl::SigningAlgorithm;
+pub use crate::common::acl_client_rpc_hook::AclClientRPCHook;
+pub use crate::common::admin_tool_result::AdminToolResult;
+pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
+pub use crate::common::nameserver_access_config::NameserverAccessConfig;
+pub use crate::common::session_credentials::SessionCredentials;
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+pub use crate::consumer::notify_result::NotifyResult;
+pub use crate::consumer::AbstractAllocateMessageQueueStrategy;
+pub use crate::consumer::AckCallback;
+pub use crate::consumer::AckCallbackFn;
+pub use crate::consumer::AckResult;
+pub use crate::consumer::AckStatus;
+pub use crate::consumer::AllocateMachineRoomNearby;
+pub use crate::consumer::AllocateMessageQueueAveragely;
+pub use crate::consumer::AllocateMessageQueueAveragelyByCircle;
+pub use crate::consumer::AllocateMessageQueueByConfig;
+pub use crate::consumer::AllocateMessageQueueByMachineRoom;
+pub use crate::consumer::AllocateMessageQueueByMachineRoomNearby;
+pub use crate::consumer::AllocateMessageQueueConsistentHash;
+pub use crate::consumer::AllocateMessageQueueStrategy;
+pub use crate::consumer::ArcMessageQueueListener;
+pub use crate::consumer::ConsumeConcurrentlyContext;
+pub use crate::consumer::ConsumeConcurrentlyStatus;
+pub use crate::consumer::ConsumeOrderlyContext;
+pub use crate::consumer::ConsumeOrderlyStatus;
+pub use crate::consumer::ControllableOffset;
+pub use crate::consumer::DefaultLitePullConsumer;
+pub use crate::consumer::DefaultLitePullConsumerBuilder;
+pub use crate::consumer::DefaultMQPushConsumer;
+pub use crate::consumer::DefaultMQPushConsumerBuilder;
+pub use crate::consumer::HashFunction;
+pub use crate::consumer::LitePullConsumer;
+pub use crate::consumer::LocalFileOffsetStore;
+pub use crate::consumer::MQConsumer;
+pub use crate::consumer::MQConsumerInner;
+pub use crate::consumer::MQPushConsumer;
+pub use crate::consumer::MachineRoomResolver;
+pub use crate::consumer::MessageListener;
+pub use crate::consumer::MessageListenerConcurrently;
+pub use crate::consumer::MessageListenerOrderly;
+pub use crate::consumer::MessageQueueListener;
+pub use crate::consumer::MessageSelector;
+pub use crate::consumer::OffsetSerialize;
+pub use crate::consumer::OffsetSerializeWrapper;
+pub use crate::consumer::OffsetStore;
+pub use crate::consumer::PopCallback;
+pub use crate::consumer::PopCallbackFn;
+pub use crate::consumer::PopResult;
+pub use crate::consumer::PopStatus;
+pub use crate::consumer::PullCallback;
+pub use crate::consumer::PullCallbackFn;
+pub use crate::consumer::PullResult;
+pub use crate::consumer::PullStatus;
+pub use crate::consumer::ReadOffsetType;
+pub use crate::consumer::RemoteBrokerOffsetStore;
+pub use crate::consumer::TopicMessageQueueChangeListener;
+pub use crate::exception::MQBrokerException;
+pub use crate::exception::MQClientException;
+pub use crate::exception::OffsetNotFoundException;
+pub use crate::exception::RequestTimeoutException;
+pub use crate::hook::consume_message_context::ConsumeMessageContext;
+pub use crate::hook::consume_message_hook::ConsumeMessageHook;
+pub use crate::hook::consume_message_hook::ConsumeMessageHookArc;
+pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
+pub type MQClientAPIExt = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+pub type MqClientAdminImpl = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+pub use crate::latency::BrokerFilter;
+pub use crate::latency::MQFaultStrategy;
+pub use crate::latency::Resolver;
+pub use crate::latency::ServiceDetector;
+#[allow(deprecated)]
+pub use crate::legacy::ConsumeMessageOpenTracingHookImpl;
+pub use crate::legacy::ConsumeRequest;
+#[allow(deprecated)]
+pub use crate::legacy::DefaultMQPullConsumer;
+#[allow(deprecated)]
+pub use crate::legacy::DefaultMQPullConsumerImpl;
+pub use crate::legacy::DoNothingClientRemotingProcessor;
+#[allow(deprecated)]
+pub use crate::legacy::EndTransactionOpenTracingHookImpl;
+#[allow(deprecated)]
+pub use crate::legacy::MQHelper;
+#[allow(deprecated)]
+pub use crate::legacy::MQPullConsumer;
+#[allow(deprecated)]
+pub use crate::legacy::MQPullConsumerScheduleService;
+#[allow(deprecated)]
+pub use crate::legacy::PullTaskCallback;
+#[allow(deprecated)]
+pub use crate::legacy::PullTaskContext;
+#[allow(deprecated)]
+pub use crate::legacy::PullTaskImpl;
+pub use crate::legacy::RebalanceImpl;
+#[allow(deprecated)]
+pub use crate::legacy::RebalancePullImpl;
+#[allow(deprecated)]
+pub use crate::legacy::SendMessageOpenTracingHookImpl;
+#[allow(deprecated)]
+pub use crate::legacy::TransactionCheckListener;
+pub use crate::lock::ReadWriteCASLock;
+pub use crate::producer::DefaultMQProducer;
+pub use crate::producer::JavaHashCode;
+pub use crate::producer::LocalTransactionState;
+pub use crate::producer::MQProducer;
+pub use crate::producer::MessageQueueSelector;
+pub use crate::producer::MessageQueueSelectorFn;
+pub use crate::producer::RequestCallback;
+pub use crate::producer::SelectMessageQueueByHash;
+pub use crate::producer::SelectMessageQueueByMachineRoom;
+pub use crate::producer::SelectMessageQueueByRandom;
+pub use crate::producer::SendCallback;
+pub use crate::producer::SendResult;
+pub use crate::producer::SendStatus;
+pub use crate::producer::TransactionListener;
+pub use crate::producer::TransactionMQProducer;
+pub use crate::producer::TransactionMQProducerBuilder;
+pub use crate::producer::TransactionSendResult;
+pub use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 pub use crate::trace::trace_data_encoder::TraceDataEncoder;
+pub use crate::trace::trace_dispatcher::ArcTraceDispatcher;
+pub use crate::trace::trace_dispatcher::TraceDispatcher;
+pub use crate::trace::trace_dispatcher::Type as TraceDispatcherOperation;
+pub use crate::trace::trace_dispatcher_type::TraceDispatcherType;
+pub use crate::trace::trace_type::TraceType;
 
 #[cfg(test)]
 mod tests {

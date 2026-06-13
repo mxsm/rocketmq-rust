@@ -13,14 +13,23 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 
+use crate::base::query_result::QueryResult;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
+
+fn unsupported_mq_admin_operation(operation: &'static str) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::illegal_argument(format!(
+        "{operation} is not supported by this MQProducer implementation"
+    ))
+}
 
 #[allow(async_fn_in_trait)]
 pub trait MQProducer {
@@ -45,6 +54,69 @@ pub trait MQProducer {
     /// * `rocketmq_error::RocketMQResult<Vec<MessageQueue>>` - A result containing a vector of
     ///   message queues or an error.
     async fn fetch_publish_message_queues(&mut self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
+
+    /// Creates a topic through the producer's admin facade.
+    ///
+    /// Java's `MQProducer` extends `MQAdmin`; Rust keeps these admin operations async because all
+    /// broker I/O in this client is async.
+    async fn create_topic(
+        &mut self,
+        _key: &str,
+        _new_topic: &str,
+        _queue_num: i32,
+        _attributes: HashMap<String, String>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        Err(unsupported_mq_admin_operation("createTopic"))
+    }
+
+    /// Creates a topic with an explicit topic system flag.
+    async fn create_topic_with_flag(
+        &mut self,
+        _key: &str,
+        _new_topic: &str,
+        _queue_num: i32,
+        _topic_sys_flag: i32,
+        _attributes: HashMap<String, String>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        Err(unsupported_mq_admin_operation("createTopicWithFlag"))
+    }
+
+    /// Searches the offset in a queue by store timestamp.
+    async fn search_offset(&mut self, _mq: &MessageQueue, _timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+        Err(unsupported_mq_admin_operation("searchOffset"))
+    }
+
+    /// Returns the broker max offset for a queue.
+    async fn max_offset(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        Err(unsupported_mq_admin_operation("maxOffset"))
+    }
+
+    /// Returns the broker min offset for a queue.
+    async fn min_offset(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        Err(unsupported_mq_admin_operation("minOffset"))
+    }
+
+    /// Returns the earliest store time for messages in a queue.
+    async fn earliest_msg_store_time(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        Err(unsupported_mq_admin_operation("earliestMsgStoreTime"))
+    }
+
+    /// Queries messages by key in a time range.
+    async fn query_message(
+        &mut self,
+        _topic: &str,
+        _key: &str,
+        _max_num: i32,
+        _begin: u64,
+        _end: u64,
+    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+        Err(unsupported_mq_admin_operation("queryMessage"))
+    }
+
+    /// Views a message by message id.
+    async fn view_message(&mut self, _topic: &str, _msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+        Err(unsupported_mq_admin_operation("viewMessage"))
+    }
 
     /// Sends a message.
     ///

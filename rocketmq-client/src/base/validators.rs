@@ -29,16 +29,19 @@ pub struct Validators;
 impl Validators {
     pub const CHARACTER_MAX_LENGTH: usize = 255;
     pub const TOPIC_MAX_LENGTH: usize = 127;
+    pub const GROUP_MAX_LENGTH: usize = 120;
 
     pub fn check_group(group: &str) -> rocketmq_error::RocketMQResult<()> {
         if group.trim().is_empty() {
             return Err(mq_client_err!("the specified group is blank"));
         }
 
-        if group.len() > Self::CHARACTER_MAX_LENGTH {
-            return Err(mq_client_err!(
-                "the specified group is longer than group max length 255."
-            ));
+        if group.len() > Self::GROUP_MAX_LENGTH {
+            return Err(mq_client_err!(format!(
+                "the specified group[{}] is longer than group max length: {}.",
+                group,
+                Self::GROUP_MAX_LENGTH
+            )));
         }
 
         if TopicValidator::is_topic_or_group_illegal(group) {
@@ -54,24 +57,23 @@ impl Validators {
     where
         M: MessageTrait,
     {
-        if msg.is_none() {
+        let Some(msg) = msg else {
             return Err(mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
                 "the message is null".to_string()
             ));
-        }
-        let msg = msg.unwrap();
+        };
         Self::check_topic(msg.topic())?;
         Self::is_not_allowed_send_topic(msg.topic())?;
 
-        if msg.get_body().is_none() {
+        let Some(body) = msg.get_body() else {
             return Err(mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
                 "the message body is null".to_string()
             ));
-        }
+        };
 
-        let length = msg.get_body().unwrap().len();
+        let length = body.len();
         if length == 0 {
             return Err(mq_client_err!(
                 ResponseCode::MessageIllegal as i32,
@@ -164,7 +166,7 @@ impl Validators {
 
     pub fn check_broker_config(broker_config: &HashMap<String, String>) -> rocketmq_error::RocketMQResult<()> {
         if let Some(broker_permission) = broker_config.get("brokerPermission") {
-            if !PermName::is_valid(broker_permission.parse().unwrap()) {
+            if !PermName::is_valid_str(broker_permission) {
                 return Err(mq_client_err!(format!(
                     "brokerPermission value: {} is invalid.",
                     broker_permission
@@ -195,6 +197,20 @@ mod tests {
         let long_group = "a".repeat(256);
         let result = Validators::check_group(&long_group);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_group_matches_java_max_length() {
+        let max_group = "a".repeat(Validators::GROUP_MAX_LENGTH);
+        assert!(Validators::check_group(&max_group).is_ok());
+
+        let too_long_group = "a".repeat(Validators::GROUP_MAX_LENGTH + 1);
+        let result = Validators::check_group(&too_long_group);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("longer than group max length: 120."));
     }
 
     #[test]
@@ -258,6 +274,14 @@ mod tests {
     fn check_broker_config_invalid_permission() {
         let mut broker_config = HashMap::new();
         broker_config.insert("brokerPermission".to_string(), "999".to_string());
+        let result = Validators::check_broker_config(&broker_config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_broker_config_rejects_non_numeric_permission_without_panic() {
+        let mut broker_config = HashMap::new();
+        broker_config.insert("brokerPermission".to_string(), "abc".to_string());
         let result = Validators::check_broker_config(&broker_config);
         assert!(result.is_err());
     }

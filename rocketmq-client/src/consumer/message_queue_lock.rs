@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 type LockObject = Arc<Mutex<()>>;
 
 #[derive(Default)]
-pub(crate) struct MessageQueueLock {
+pub struct MessageQueueLock {
     mq_lock_table: Arc<DashMap<MessageQueue, Arc<DashMap<i32, LockObject>>>>,
 }
 
@@ -57,5 +57,36 @@ impl MessageQueueLock {
             .clone();
 
         lock
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message_queue() -> MessageQueue {
+        MessageQueue::from_parts("TopicA", "BrokerA", 0)
+    }
+
+    #[tokio::test]
+    async fn fetch_lock_object_reuses_lock_for_same_queue_like_java() {
+        let lock = MessageQueueLock::new();
+        let mq = message_queue();
+
+        let first = lock.fetch_lock_object(&mq).await;
+        let second = lock.fetch_lock_object(&mq).await;
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn fetch_lock_object_uses_independent_locks_per_sharding_key_like_java() {
+        let lock = MessageQueueLock::new();
+        let mq = message_queue();
+
+        let first = lock.fetch_lock_object_with_sharding_key(&mq, 0).await;
+        let second = lock.fetch_lock_object_with_sharding_key(&mq, 1).await;
+
+        assert!(!Arc::ptr_eq(&first, &second));
     }
 }

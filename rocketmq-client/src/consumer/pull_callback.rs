@@ -49,21 +49,43 @@ impl PullCallback for DefaultPullCallback {
     async fn on_success(&mut self, mut pull_result_ext: PullResultExt) {
         let mut push_consumer_impl = self.push_consumer_impl.clone();
 
-        let message_queue_inner = self.message_queue_inner.take().unwrap();
-        let subscription_data = self.subscription_data.take().unwrap();
-        let mut pull_request = self.pull_request.take().unwrap();
+        let Some(message_queue_inner) = self.message_queue_inner.take() else {
+            warn!("pull callback success ignored: message queue is missing");
+            return;
+        };
+        let Some(subscription_data) = self.subscription_data.take() else {
+            warn!(
+                "pull callback success ignored: subscription data is missing, mq={}",
+                message_queue_inner
+            );
+            if let Some(pull_request) = self.pull_request.take() {
+                let delay = push_consumer_impl.pull_time_delay_mills_when_exception;
+                push_consumer_impl.execute_pull_request_later(pull_request, delay);
+            }
+            return;
+        };
+        let Some(mut pull_request) = self.pull_request.take() else {
+            warn!(
+                "pull callback success ignored: pull request is missing, mq={}",
+                message_queue_inner
+            );
+            return;
+        };
 
-        push_consumer_impl
-            .pull_api_wrapper
-            .as_mut()
-            .unwrap()
-            .process_pull_result(&message_queue_inner, &mut pull_result_ext, &subscription_data);
+        let Some(pull_api_wrapper) = push_consumer_impl.pull_api_wrapper.as_mut() else {
+            warn!(
+                "pull callback success ignored: PullAPIWrapper is not initialized, mq={}",
+                message_queue_inner
+            );
+            let delay = push_consumer_impl.pull_time_delay_mills_when_exception;
+            push_consumer_impl.execute_pull_request_later(pull_request, delay);
+            return;
+        };
+        pull_api_wrapper.process_pull_result(&message_queue_inner, &mut pull_result_ext, &subscription_data);
         match pull_result_ext.pull_result.pull_status {
             PullStatus::Found => {
                 let prev_request_offset = pull_request.next_offset;
                 pull_request.set_next_offset(pull_result_ext.pull_result.next_begin_offset as i64);
-                /*let pull_rt = current_millis() - begin_timestamp.elapsed().as_millis() as u64;
-                self.client_instance.as_mut().unwrap().*/
                 let mut first_msg_offset = i64::MAX;
                 if pull_result_ext
                     .pull_result
@@ -73,27 +95,32 @@ impl PullCallback for DefaultPullCallback {
                 {
                     push_consumer_impl.execute_pull_request_immediately(pull_request).await;
                 } else {
-                    first_msg_offset = pull_result_ext
-                        .pull_result
-                        .msg_found_list
-                        .as_ref()
-                        .unwrap()
-                        .first()
-                        .unwrap()
-                        .queue_offset;
-                    let vec = pull_result_ext.pull_result.msg_found_list.clone();
-                    let dispatch_to_consume = pull_request.process_queue.put_message(vec.unwrap_or_default()).await;
-                    push_consumer_impl
-                        .consume_message_service
-                        .as_mut()
-                        .unwrap()
-                        .submit_consume_request(
-                            pull_result_ext.pull_result.msg_found_list.unwrap_or_default(),
-                            pull_request.get_process_queue().clone(),
-                            pull_request.get_message_queue().clone(),
-                            dispatch_to_consume,
-                        )
-                        .await;
+                    let msg_found_list = pull_result_ext.pull_result.msg_found_list.take().unwrap_or_default();
+                    if msg_found_list.is_empty() {
+                        push_consumer_impl.execute_pull_request_immediately(pull_request).await;
+                        return;
+                    }
+                    first_msg_offset = msg_found_list.first().map_or(i64::MAX, |msg| msg.queue_offset);
+                    if push_consumer_impl.consume_message_service.is_none() {
+                        warn!(
+                            "pull callback found messages but ConsumeMessageService is not initialized, mq={}",
+                            message_queue_inner
+                        );
+                        let delay = push_consumer_impl.pull_time_delay_mills_when_exception;
+                        push_consumer_impl.execute_pull_request_later(pull_request, delay);
+                        return;
+                    }
+                    let dispatch_to_consume = pull_request.process_queue.put_message(&msg_found_list).await;
+                    if let Some(consume_message_service) = push_consumer_impl.consume_message_service.as_mut() {
+                        consume_message_service
+                            .submit_consume_request(
+                                msg_found_list,
+                                pull_request.get_process_queue().clone(),
+                                pull_request.get_message_queue().clone(),
+                                dispatch_to_consume,
+                            )
+                            .await;
+                    }
                     let pull_interval = push_consumer_impl.consumer_config.pull_interval;
                     if pull_interval > 0 {
                         push_consumer_impl.execute_pull_request_later(pull_request, pull_interval);
@@ -125,7 +152,13 @@ impl PullCallback for DefaultPullCallback {
                 pull_request.next_offset = pull_result_ext.pull_result.next_begin_offset as i64;
                 pull_request.process_queue.set_dropped(true);
 
-                let offset_store = push_consumer_impl.offset_store.as_mut().unwrap();
+                let Some(offset_store) = push_consumer_impl.offset_store.as_mut() else {
+                    warn!(
+                        "offset illegal repair skipped: OffsetStore is not initialized, {}",
+                        pull_request
+                    );
+                    return;
+                };
                 offset_store
                     .update_and_freeze_offset(pull_request.get_message_queue(), pull_request.next_offset)
                     .await;
@@ -134,20 +167,36 @@ impl PullCallback for DefaultPullCallback {
                     .rebalance_impl
                     .remove_process_queue(pull_request.get_message_queue())
                     .await;
-                push_consumer_impl
+                match push_consumer_impl
                     .rebalance_impl
                     .rebalance_impl_inner
                     .client_instance
                     .as_ref()
-                    .unwrap()
-                    .re_balance_immediately()
+                {
+                    Some(client_instance) => client_instance.re_balance_immediately(),
+                    None => {
+                        warn!("offset illegal repair skipped immediate rebalance: MQClientInstance is not initialized")
+                    }
+                }
             }
         };
     }
 
     fn on_exception(&mut self, err: Box<dyn std::error::Error + Send>) {
-        let message_queue_inner = self.message_queue_inner.take().unwrap();
-        let pull_request = self.pull_request.take().unwrap();
+        let Some(message_queue_inner) = self.message_queue_inner.take() else {
+            warn!(
+                "pull callback exception ignored: message queue is missing, error={}",
+                err
+            );
+            return;
+        };
+        let Some(pull_request) = self.pull_request.take() else {
+            warn!(
+                "pull callback exception ignored: pull request is missing, mq={}, error={}",
+                message_queue_inner, err
+            );
+            return;
+        };
         let topic = message_queue_inner.topic_str();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if let Some(er) = err.downcast_ref::<RocketmqError>() {
@@ -196,5 +245,53 @@ impl PullCallback for DefaultPullCallback {
 
         self.push_consumer_impl
             .execute_pull_request_later(pull_request, time_delay);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::base::client_config::ClientConfig;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+    use crate::consumer::pull_result::PullResult;
+
+    fn new_callback() -> DefaultPullCallback {
+        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let push_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ));
+        DefaultPullCallback {
+            push_consumer_impl,
+            message_queue_inner: None,
+            subscription_data: None,
+            pull_request: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn success_without_message_queue_is_ignored_without_panic() {
+        let mut callback = new_callback();
+        let pull_result_ext = PullResultExt {
+            pull_result: PullResult::new(PullStatus::NoNewMsg, 0, 0, 0, None),
+            suggest_which_broker_id: 0,
+            message_binary: Some(Bytes::new()),
+            offset_delta: None,
+        };
+
+        PullCallback::on_success(&mut callback, pull_result_ext).await;
+    }
+
+    #[test]
+    fn exception_without_pull_request_is_ignored_without_panic() {
+        let mut callback = new_callback();
+        callback.message_queue_inner = Some(MessageQueue::from_parts("topic", "broker-a", 0));
+
+        PullCallback::on_exception(&mut callback, Box::new(io::Error::other("test error")));
     }
 }

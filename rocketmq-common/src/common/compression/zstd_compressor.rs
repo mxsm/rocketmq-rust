@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Error;
-
 use bytes::Bytes;
 
 use crate::common::compression::compression_type::CompressionType;
@@ -22,11 +20,11 @@ use crate::common::compression::compressor::Compressor;
 pub struct ZstdCompressor;
 
 impl Compressor for ZstdCompressor {
-    fn compress(&self, src: &[u8], level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
-        Ok(CompressionType::Zstd.compression(src))
+    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
+        CompressionType::Zstd.try_compression(src)
     }
 
     fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes> {
-        Ok(CompressionType::Zstd.decompression(src))
+        CompressionType::Zstd.try_decompression(src)
     }
 }

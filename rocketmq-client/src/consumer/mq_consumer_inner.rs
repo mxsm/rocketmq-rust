@@ -26,6 +26,7 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
 
+use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::DefaultLitePullConsumerImpl;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
@@ -90,7 +91,7 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
     async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64>;
 
     /// Returns the running information of the consumer.
-    fn consumer_running_info(&self) -> ConsumerRunningInfo;
+    async fn consumer_running_info(&self) -> ConsumerRunningInfo;
 }
 
 pub trait MQConsumerInnerAny: std::any::Any {
@@ -111,16 +112,54 @@ impl<T: MQConsumerInner> MQConsumerInnerAny for T {
 
 #[derive(Clone)]
 pub struct MQConsumerInnerImpl {
-    pub(crate) default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>,
+    inner: MQConsumerInnerImplKind,
+}
+
+#[derive(Clone)]
+enum MQConsumerInnerImplKind {
+    Push(ArcMut<DefaultMQPushConsumerImpl>),
+    LitePull(ArcMut<DefaultLitePullConsumerImpl>),
 }
 
 impl MQConsumerInnerImpl {
+    pub(crate) fn from_push(default_mqpush_consumer_impl: ArcMut<DefaultMQPushConsumerImpl>) -> Self {
+        Self {
+            inner: MQConsumerInnerImplKind::Push(default_mqpush_consumer_impl),
+        }
+    }
+
+    pub(crate) fn from_lite_pull(default_lite_pull_consumer_impl: ArcMut<DefaultLitePullConsumerImpl>) -> Self {
+        Self {
+            inner: MQConsumerInnerImplKind::LitePull(default_lite_pull_consumer_impl),
+        }
+    }
+
+    pub(crate) fn is_push_consumer(&self) -> bool {
+        matches!(self.inner, MQConsumerInnerImplKind::Push(_))
+    }
+
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
-        self.default_mqpush_consumer_impl.pop_message(pop_request).await;
+        match &mut self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => consumer.pop_message(pop_request).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                tracing::warn!(
+                    "Ignoring broker pop request for lite pull consumer group={}",
+                    MQConsumerInner::group_name(consumer.as_ref())
+                );
+            }
+        }
     }
 
     pub(crate) async fn pull_message(&mut self, pull_request: PullRequest) {
-        self.default_mqpush_consumer_impl.pull_message(pull_request).await;
+        match &mut self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => consumer.pull_message(pull_request).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                tracing::warn!(
+                    "Ignoring broker pull request for lite pull consumer group={}",
+                    MQConsumerInner::group_name(consumer.as_ref())
+                );
+            }
+        }
     }
 
     pub(crate) async fn consume_message_directly(
@@ -128,81 +167,182 @@ impl MQConsumerInnerImpl {
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> Option<ConsumeMessageDirectlyResult> {
-        self.default_mqpush_consumer_impl
-            .consume_message_directly(msg, broker_name)
-            .await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => consumer.consume_message_directly(msg, broker_name).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                tracing::warn!(
+                    "consumeMessageDirectly is not supported for lite pull consumer group={}",
+                    MQConsumerInner::group_name(consumer.as_ref())
+                );
+                None
+            }
+        }
     }
 }
 
 impl MQConsumerInner for MQConsumerInnerImpl {
     #[inline]
     fn group_name(&self) -> CheetahString {
-        MQConsumerInner::group_name(self.default_mqpush_consumer_impl.as_ref())
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::group_name(consumer.as_ref()),
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::group_name(consumer.as_ref()),
+        }
     }
 
     #[inline]
     fn message_model(&self) -> MessageModel {
-        MQConsumerInner::message_model(self.default_mqpush_consumer_impl.as_ref())
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::message_model(consumer.as_ref()),
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::message_model(consumer.as_ref()),
+        }
     }
 
     #[inline]
     fn consume_type(&self) -> ConsumeType {
-        MQConsumerInner::consume_type(self.default_mqpush_consumer_impl.as_ref())
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::consume_type(consumer.as_ref()),
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::consume_type(consumer.as_ref()),
+        }
     }
 
     #[inline]
     fn consume_from_where(&self) -> ConsumeFromWhere {
-        MQConsumerInner::consume_from_where(self.default_mqpush_consumer_impl.as_ref())
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::consume_from_where(consumer.as_ref()),
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::consume_from_where(consumer.as_ref()),
+        }
     }
 
     #[inline]
     fn subscriptions(&self) -> HashSet<SubscriptionData> {
-        MQConsumerInner::subscriptions(self.default_mqpush_consumer_impl.as_ref())
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::subscriptions(consumer.as_ref()),
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::subscriptions(consumer.as_ref()),
+        }
     }
 
     #[inline]
     async fn do_rebalance(&self) {
-        MQConsumerInner::do_rebalance(self.default_mqpush_consumer_impl.as_ref()).await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::do_rebalance(consumer.as_ref()).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::do_rebalance(consumer.as_ref()).await,
+        }
     }
 
     #[inline]
     async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool> {
-        MQConsumerInner::try_rebalance(self.default_mqpush_consumer_impl.as_ref()).await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::try_rebalance(consumer.as_ref()).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::try_rebalance(consumer.as_ref()).await,
+        }
     }
 
     #[inline]
     async fn persist_consumer_offset(&self) {
-        MQConsumerInner::persist_consumer_offset(self.default_mqpush_consumer_impl.as_ref()).await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => {
+                MQConsumerInner::persist_consumer_offset(consumer.as_ref()).await
+            }
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                MQConsumerInner::persist_consumer_offset(consumer.as_ref()).await
+            }
+        }
     }
 
     #[inline]
     async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>) {
-        MQConsumerInner::update_topic_subscribe_info(self.default_mqpush_consumer_impl.mut_from_ref(), topic, info)
-            .await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => {
+                MQConsumerInner::update_topic_subscribe_info(consumer.as_ref(), topic, info).await
+            }
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                MQConsumerInner::update_topic_subscribe_info(consumer.as_ref(), topic, info).await
+            }
+        }
     }
 
     #[inline]
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
-        MQConsumerInner::is_subscribe_topic_need_update(self.default_mqpush_consumer_impl.as_ref(), topic).await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => {
+                MQConsumerInner::is_subscribe_topic_need_update(consumer.as_ref(), topic).await
+            }
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                MQConsumerInner::is_subscribe_topic_need_update(consumer.as_ref(), topic).await
+            }
+        }
     }
 
     #[inline]
     fn is_unit_mode(&self) -> bool {
-        MQConsumerInner::is_unit_mode(self.default_mqpush_consumer_impl.as_ref())
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::is_unit_mode(consumer.as_ref()),
+            MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::is_unit_mode(consumer.as_ref()),
+        }
     }
 
     #[inline]
     async fn reset_offsets(&self, topic: &CheetahString, offsets: HashMap<MessageQueue, i64>) {
-        MQConsumerInner::reset_offsets(self.default_mqpush_consumer_impl.as_ref(), topic, offsets).await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => {
+                MQConsumerInner::reset_offsets(consumer.as_ref(), topic, offsets).await
+            }
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                MQConsumerInner::reset_offsets(consumer.as_ref(), topic, offsets).await
+            }
+        }
     }
 
     #[inline]
     async fn consumer_status(&self, topic: &CheetahString) -> HashMap<MessageQueue, i64> {
-        MQConsumerInner::consumer_status(self.default_mqpush_consumer_impl.as_ref(), topic).await
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::consumer_status(consumer.as_ref(), topic).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                MQConsumerInner::consumer_status(consumer.as_ref(), topic).await
+            }
+        }
     }
 
     #[inline]
-    fn consumer_running_info(&self) -> ConsumerRunningInfo {
-        MQConsumerInner::consumer_running_info(self.default_mqpush_consumer_impl.as_ref())
+    async fn consumer_running_info(&self) -> ConsumerRunningInfo {
+        match &self.inner {
+            MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::consumer_running_info(consumer.as_ref()).await,
+            MQConsumerInnerImplKind::LitePull(consumer) => {
+                MQConsumerInner::consumer_running_info(consumer.as_ref()).await
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
+
+    use super::*;
+    use crate::base::client_config::ClientConfig;
+    use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullConsumerConfig;
+
+    #[test]
+    fn lite_pull_wrapper_delegates_heartbeat_fields() {
+        let consumer_group = CheetahString::from_static_str("lite_pull_wrapper_group");
+        let consumer_config = ArcMut::new(LitePullConsumerConfig {
+            consumer_group: consumer_group.clone(),
+            ..Default::default()
+        });
+        let impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+            ArcMut::new(ClientConfig::default()),
+            consumer_config,
+        ));
+        let wrapper = MQConsumerInnerImpl::from_lite_pull(impl_);
+
+        assert_eq!(MQConsumerInner::group_name(&wrapper), consumer_group);
+        assert_eq!(MQConsumerInner::message_model(&wrapper), MessageModel::Clustering);
+        assert_eq!(MQConsumerInner::consume_type(&wrapper), ConsumeType::ConsumeActively);
+        assert_eq!(
+            MQConsumerInner::consume_from_where(&wrapper),
+            ConsumeFromWhere::ConsumeFromLastOffset
+        );
+        assert!(!MQConsumerInner::is_unit_mode(&wrapper));
+        assert!(MQConsumerInner::subscriptions(&wrapper).is_empty());
     }
 }

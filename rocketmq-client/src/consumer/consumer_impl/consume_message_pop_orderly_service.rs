@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -30,6 +32,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Semaphore;
 use tracing::error;
@@ -55,11 +58,59 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) concurrency_limiter: Arc<Semaphore>,
+    pub(crate) max_concurrency: Arc<AtomicUsize>,
     pub(self) consume_request_set: Arc<DashSet<ConsumeRequest>>,
     pub(crate) message_queue_lock: MessageQueueLock,
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
-    pub(crate) lock_refresh_task: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) lock_refresh_task: Option<PopOrderlyTaskHandle>,
+}
+
+pub(crate) enum PopOrderlyTaskHandle {
+    Tokio(tokio::task::JoinHandle<()>),
+    Thread(thread::JoinHandle<()>),
+}
+
+impl PopOrderlyTaskHandle {
+    fn shutdown(self) {
+        match self {
+            Self::Tokio(handle) => handle.abort(),
+            Self::Thread(handle) => {
+                if handle.is_finished() {
+                    let _ = handle.join();
+                }
+            }
+        }
+    }
+}
+
+fn spawn_pop_orderly_task<F>(thread_name: &'static str, task: F) -> Option<PopOrderlyTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return Some(PopOrderlyTaskHandle::Tokio(handle.spawn(task)));
+    }
+
+    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
+        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(runtime) => runtime.block_on(task),
+            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
+        }
+    }) {
+        Ok(handle) => Some(PopOrderlyTaskHandle::Thread(handle)),
+        Err(error) => {
+            warn!("Failed to spawn {} background thread: {}", thread_name, error);
+            None
+        }
+    }
+}
+
+fn spawn_detached_pop_orderly_task<F>(thread_name: &'static str, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    drop(spawn_pop_orderly_task(thread_name, task));
 }
 
 /// Default callback implementation for acknowledgment operations
@@ -81,7 +132,7 @@ impl ConsumeMessagePopOrderlyService {
         message_listener: ArcMessageListenerOrderly,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
-        let consume_thread = consumer_config.consume_thread_max;
+        let consume_thread = consumer_config.consume_thread_min;
         Self {
             default_mqpush_consumer_impl,
             client_config,
@@ -89,6 +140,7 @@ impl ConsumeMessagePopOrderlyService {
             consumer_group,
             message_listener,
             concurrency_limiter: Arc::new(Semaphore::new(consume_thread as usize)),
+            max_concurrency: Arc::new(AtomicUsize::new(consume_thread as usize)),
             consume_request_set: Arc::new(DashSet::new()),
             message_queue_lock: Default::default(),
             stopped: Arc::new(AtomicBool::new(false)),
@@ -101,6 +153,55 @@ impl ConsumeMessagePopOrderlyService {
         self.consume_request_set.remove(request);
     }
 
+    pub async fn lock_mq_periodically(&mut self) {
+        if self.stopped.load(Ordering::Acquire) {
+            return;
+        }
+
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() else {
+            warn!(
+                "lockMQPeriodically skipped: DefaultMQPushConsumerImpl is not initialized, group={}",
+                self.consumer_group
+            );
+            return;
+        };
+
+        use crate::consumer::consumer_impl::re_balance::Rebalance;
+        default_mqpush_consumer_impl
+            .rebalance_impl
+            .mut_from_ref()
+            .lock_all()
+            .await;
+    }
+
+    pub fn reset_namespace(&mut self, msgs: &mut [ArcMut<MessageExt>]) {
+        let namespace = self.client_config.get_namespace().unwrap_or_default();
+        if namespace.is_empty() {
+            return;
+        }
+
+        for msg in msgs {
+            let topic = msg.topic().to_string();
+            msg.set_topic(CheetahString::from_string(
+                NamespaceUtil::without_namespace_with_namespace(topic.as_str(), namespace.as_str()),
+            ));
+        }
+    }
+
+    fn resize_available_permits(semaphore: &Semaphore, old_total: usize, new_total: usize) {
+        let available = semaphore.available_permits();
+        let in_flight = old_total.saturating_sub(available);
+        let target_available = new_total.saturating_sub(in_flight);
+
+        match target_available.cmp(&available) {
+            std::cmp::Ordering::Greater => semaphore.add_permits(target_available - available),
+            std::cmp::Ordering::Less => {
+                let _ = semaphore.forget_permits(available - target_available);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
     fn submit_consume_request(&mut self, this: ArcMut<Self>, mut request: ConsumeRequest, force: bool) {
         if !force && !self.consume_request_set.insert(request.clone()) {
             return;
@@ -110,7 +211,7 @@ impl ConsumeMessagePopOrderlyService {
         let active_tasks = self.active_tasks.clone();
         let concurrency_limiter = self.concurrency_limiter.clone();
 
-        tokio::spawn(async move {
+        spawn_detached_pop_orderly_task("rocketmq-client-pop-orderly-consume", async move {
             if stopped.load(Ordering::Acquire) {
                 return;
             }
@@ -140,7 +241,7 @@ impl ConsumeMessagePopOrderlyService {
         let stopped = self.stopped.clone();
         let consume_request_set = self.consume_request_set.clone();
 
-        tokio::spawn(async move {
+        spawn_detached_pop_orderly_task("rocketmq-client-pop-orderly-consume-delay", async move {
             tokio::time::sleep(Duration::from_millis(suspend_time_millis)).await;
 
             if stopped.load(Ordering::Acquire) {
@@ -202,7 +303,16 @@ impl ConsumeMessagePopOrderlyService {
             Vec::new()
         };
 
-        let mut new_msg = Message::builder().topic(&retry_topic).body(body).build_unchecked();
+        let mut new_msg = match Message::builder().topic(&retry_topic).body(body).build() {
+            Ok(message) => message,
+            Err(error) => {
+                error!(
+                    "sendMessageBack skipped: failed to build retry message, group={} msg={:?}, error={}",
+                    self.consumer_group, msg, error
+                );
+                return false;
+            }
+        };
 
         MessageAccessor::set_properties(&mut new_msg, msg.properties().clone());
         let origin_msg_id = MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
@@ -344,7 +454,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
             None => return,
         };
 
-        let handle = tokio::spawn(async move {
+        let handle = spawn_pop_orderly_task("rocketmq-client-pop-orderly-lock-refresh", async move {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             let mut interval = tokio::time::interval(Duration::from_millis(20_000));
@@ -365,7 +475,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
             }
         });
 
-        self.lock_refresh_task = Some(handle);
+        self.lock_refresh_task = handle;
     }
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
@@ -381,7 +491,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         self.concurrency_limiter.close();
 
         if let Some(task) = self.lock_refresh_task.take() {
-            task.abort();
+            task.shutdown();
         }
 
         let timeout = Duration::from_millis(await_terminate_millis);
@@ -409,6 +519,20 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         );
     }
 
+    fn update_core_pool_size(&self, core_pool_size: usize) {
+        if core_pool_size > 0
+            && core_pool_size <= i16::MAX as usize
+            && core_pool_size < self.consumer_config.consume_thread_max as usize
+        {
+            let old_size = self.max_concurrency.swap(core_pool_size, Ordering::AcqRel);
+            Self::resize_available_permits(&self.concurrency_limiter, old_size, core_pool_size);
+        }
+    }
+
+    fn get_core_pool_size(&self) -> usize {
+        self.max_concurrency.load(Ordering::Acquire)
+    }
+
     #[allow(deprecated)]
     async fn consume_message_directly(
         &self,
@@ -418,11 +542,17 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         info!("consumeMessageDirectly receive new message: {}", msg);
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
-        self.default_mqpush_consumer_impl
-            .as_ref()
-            .unwrap()
-            .mut_from_ref()
-            .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+            default_mqpush_consumer_impl
+                .mut_from_ref()
+                .reset_retry_and_namespace(msgs.as_mut_slice(), self.consumer_group.as_str());
+        } else {
+            warn!(
+                "consumeMessageDirectly namespace reset skipped: DefaultMQPushConsumerImpl is not initialized, \
+                 group={}",
+                self.consumer_group
+            );
+        }
 
         let begin_timestamp = Instant::now();
 
@@ -483,7 +613,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        unimplemented!("ConsumeMessagePopOrderlyService not support submit_consume_request")
+        let _ = (this, msgs, process_queue, message_queue, dispatch_to_consume);
     }
 
     async fn submit_pop_consume_request(
@@ -649,6 +779,157 @@ impl Hash for ConsumeRequest {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    fn listener() -> ArcMessageListenerOrderly {
+        Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success))
+    }
+
+    fn new_service(default_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopOrderlyService {
+        ConsumeMessagePopOrderlyService::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(ConsumerConfig::default()),
+            CheetahString::from_static_str("group"),
+            listener(),
+            default_impl,
+        )
+    }
+
+    fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopOrderlyService {
+        ConsumeMessagePopOrderlyService::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(consumer_config),
+            CheetahString::from_static_str("group"),
+            listener(),
+            None,
+        )
+    }
+
+    fn new_default_impl() -> ArcMut<DefaultMQPushConsumerImpl> {
+        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ))
+    }
+
+    fn message_queue() -> MessageQueue {
+        MessageQueue::from_parts("topic", "broker-a", 0)
+    }
+
+    fn consume_request() -> ConsumeRequest {
+        ConsumeRequest::new(Arc::new(PopProcessQueue::new()), message_queue(), vec![])
+    }
+
+    #[tokio::test]
+    async fn consume_message_directly_without_default_impl_does_not_panic() {
+        let service = new_service(None);
+
+        let result = service
+            .consume_message_directly(MessageExt::default(), Some(CheetahString::from_static_str("broker-a")))
+            .await;
+
+        assert!(matches!(result.consume_result(), Some(CMResult::CRSuccess)));
+    }
+
+    #[tokio::test]
+    async fn lock_mq_periodically_without_default_impl_does_not_panic() {
+        let mut service = new_service(None);
+
+        service.lock_mq_periodically().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_concurrency_limiter_like_java_executor_shutdown() {
+        let mut service = new_service(None);
+
+        service.shutdown(100).await;
+
+        assert!(service.concurrency_limiter.is_closed());
+    }
+
+    #[test]
+    fn start_without_tokio_runtime_does_not_spawn_panic() {
+        let mut service = new_service(Some(new_default_impl()));
+        let this = ArcMut::new(new_service(None));
+
+        service.start(this);
+        service.stopped.store(true, Ordering::Release);
+        if let Some(handle) = service.lock_refresh_task.take() {
+            handle.shutdown();
+        }
+    }
+
+    #[test]
+    fn submit_consume_request_without_tokio_runtime_does_not_spawn_panic() {
+        let mut service = new_service(None);
+        let this = ArcMut::new(new_service(None));
+        service.stopped.store(true, Ordering::Release);
+
+        ConsumeMessagePopOrderlyService::submit_consume_request(&mut service, this, consume_request(), true);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    #[test]
+    fn submit_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
+        let service = ArcMut::new(new_service(None));
+        let this = service.clone();
+
+        service.submit_consume_request_later(this, consume_request(), 10);
+        service.stopped.store(true, Ordering::Release);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+
+    #[test]
+    fn reset_namespace_removes_configured_namespace_like_java() {
+        let mut service = new_service(None);
+        service
+            .client_config
+            .set_namespace(CheetahString::from_static_str("ns"));
+        let mut msg = ArcMut::new(MessageExt::default());
+        msg.set_topic(CheetahString::from_static_str("ns%topic-a"));
+        let mut msgs = vec![msg];
+
+        service.reset_namespace(msgs.as_mut_slice());
+
+        assert_eq!(msgs[0].topic(), "topic-a");
+    }
+
+    #[test]
+    fn core_pool_size_starts_at_min_and_update_matches_java_bounds() {
+        let config = ConsumerConfig {
+            consume_thread_min: 2,
+            consume_thread_max: 5,
+            ..Default::default()
+        };
+        let service = new_service_with_config(config);
+
+        assert_eq!(service.get_core_pool_size(), 2);
+
+        service.update_core_pool_size(4);
+        assert_eq!(service.get_core_pool_size(), 4);
+
+        service.update_core_pool_size(5);
+        assert_eq!(service.get_core_pool_size(), 4);
+
+        service.update_core_pool_size(0);
+        assert_eq!(service.get_core_pool_size(), 4);
+    }
+
+    #[test]
+    fn inc_and_dec_core_pool_size_are_noops_like_java() {
+        let config = ConsumerConfig {
+            consume_thread_min: 2,
+            consume_thread_max: 5,
+            ..Default::default()
+        };
+        let service = new_service_with_config(config);
+
+        service.inc_core_pool_size();
+        service.dec_core_pool_size();
+
+        assert_eq!(service.get_core_pool_size(), 2);
+    }
 
     #[test]
     fn test_consume_request_equality() {

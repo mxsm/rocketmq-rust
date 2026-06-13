@@ -37,6 +37,10 @@ pub struct QueryMessageRequestHeader {
     #[required]
     pub end_timestamp: i64,
 
+    pub index_type: Option<CheetahString>,
+
+    pub last_key: Option<CheetahString>,
+
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -65,22 +69,28 @@ mod query_message_request_header_tests {
         assert_eq!(header.max_num, 10);
         assert_eq!(header.begin_timestamp, 1000);
         assert_eq!(header.end_timestamp, 2000);
+        assert!(header.index_type.is_none());
+        assert!(header.last_key.is_none());
     }
 
     #[test]
-    fn creating_from_map_missing_optional_fields_still_succeeds() {
+    fn creating_from_map_with_optional_index_fields_populates_struct_correctly() {
         let mut map = HashMap::new();
         map.insert("topic".into(), "test_topic".into());
         map.insert("key".into(), "test_key".into());
         map.insert("maxNum".into(), "10".into());
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
+        map.insert("indexType".into(), "U".into());
+        map.insert("lastKey".into(), "next-index-key".into());
 
         let header: QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");
         assert_eq!(header.max_num, 10);
+        assert_eq!(header.index_type.as_deref(), Some("U"));
+        assert_eq!(header.last_key.as_deref(), Some("next-index-key"));
     }
 
     #[test]
@@ -104,6 +114,8 @@ mod query_message_request_header_tests {
             max_num: 10,
             begin_timestamp: 1000,
             end_timestamp: 2000,
+            index_type: Some("K".into()),
+            last_key: Some("last-key".into()),
             topic_request_header: None,
         };
 
@@ -114,6 +126,8 @@ mod query_message_request_header_tests {
         assert_eq!(map.get("maxNum").unwrap(), "10");
         assert_eq!(map.get("beginTimestamp").unwrap(), "1000");
         assert_eq!(map.get("endTimestamp").unwrap(), "2000");
+        assert_eq!(map.get("indexType").unwrap(), "K");
+        assert_eq!(map.get("lastKey").unwrap(), "last-key");
     }
 
     #[test]
@@ -125,6 +139,8 @@ mod query_message_request_header_tests {
             max_num: 10,
             begin_timestamp: 1000,
             end_timestamp: 2000,
+            index_type: None,
+            last_key: None,
             topic_request_header: Some(topic_request_header),
         };
 

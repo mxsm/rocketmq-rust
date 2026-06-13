@@ -1044,12 +1044,12 @@ where
 
     #[inline]
     fn commit_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult {
-        self.get_half_message_by_offset(request_header.commit_log_offset as i64)
+        self.get_half_message_by_offset(request_header.commit_log_offset)
     }
 
     #[inline]
     fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult {
-        self.get_half_message_by_offset(request_header.commit_log_offset as i64)
+        self.get_half_message_by_offset(request_header.commit_log_offset)
     }
 
     async fn check<Listener: TransactionalMessageCheckListener + Clone>(

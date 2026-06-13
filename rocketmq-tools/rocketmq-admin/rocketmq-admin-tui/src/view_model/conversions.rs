@@ -1854,6 +1854,7 @@ fn message_properties_summary(message: &MessageExt) -> String {
     let mut properties = message
         .properties()
         .iter()
+        .filter(|(key, _)| key.as_str() != MessageConst::PROPERTY_WAIT_STORE_MSG_OK)
         .map(|(key, value)| format!("{}={}", key.as_str(), sanitize_cell(value.as_str())))
         .collect::<Vec<_>>();
     properties.sort();

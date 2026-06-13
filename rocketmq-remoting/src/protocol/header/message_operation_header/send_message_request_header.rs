@@ -21,6 +21,7 @@ use crate::code::request_code::RequestCode;
 use crate::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
@@ -64,11 +65,24 @@ impl SendMessageRequestHeader {
     pub fn is_batch(&self) -> bool {
         self.batch.unwrap_or_default()
     }
+
+    #[inline]
+    fn topic_request_header_mut(&mut self) -> &mut TopicRequestHeader {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+    }
+
+    #[inline]
+    fn rpc_request_header_mut(&mut self) -> &mut RpcRequestHeader {
+        self.topic_request_header_mut()
+            .rpc_request_header
+            .get_or_insert_with(RpcRequestHeader::default)
+    }
 }
 
 impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
-        self.topic_request_header.as_mut().unwrap().lo = lo;
+        self.topic_request_header_mut().lo = lo;
     }
 
     fn lo(&self) -> Option<bool> {
@@ -96,13 +110,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 
     fn set_broker_name(&mut self, broker_name: CheetahString) {
-        self.topic_request_header
-            .as_mut()
-            .unwrap()
-            .rpc_request_header
-            .as_mut()
-            .unwrap()
-            .broker_name = Some(broker_name);
+        self.rpc_request_header_mut().broker_name = Some(broker_name);
     }
 
     fn namespace(&self) -> Option<&str> {
@@ -115,13 +123,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 
     fn set_namespace(&mut self, namespace: CheetahString) {
-        self.topic_request_header
-            .as_mut()
-            .unwrap()
-            .rpc_request_header
-            .as_mut()
-            .unwrap()
-            .namespace = Some(namespace);
+        self.rpc_request_header_mut().namespace = Some(namespace);
     }
 
     fn namespaced(&self) -> Option<bool> {
@@ -135,13 +137,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 
     fn set_namespaced(&mut self, namespaced: bool) {
-        self.topic_request_header
-            .as_mut()
-            .unwrap()
-            .rpc_request_header
-            .as_mut()
-            .unwrap()
-            .namespaced = Some(namespaced);
+        self.rpc_request_header_mut().namespaced = Some(namespaced);
     }
 
     fn oneway(&self) -> Option<bool> {
@@ -155,13 +151,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     }
 
     fn set_oneway(&mut self, oneway: bool) {
-        self.topic_request_header
-            .as_mut()
-            .unwrap()
-            .rpc_request_header
-            .as_mut()
-            .unwrap()
-            .namespaced = Some(oneway);
+        self.rpc_request_header_mut().oneway = Some(oneway);
     }
 
     fn queue_id(&self) -> i32 {
@@ -223,6 +213,25 @@ mod tests {
     use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::FromMap;
     use crate::protocol::remoting_command::RemotingCommand;
+
+    fn minimal_header() -> SendMessageRequestHeader {
+        SendMessageRequestHeader {
+            producer_group: CheetahString::from_static_str("test_producer_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            default_topic: CheetahString::from_static_str("test_default_topic"),
+            default_topic_queue_nums: 8,
+            queue_id: 1,
+            sys_flag: 0,
+            born_timestamp: 1622547800000,
+            flag: 0,
+            properties: None,
+            reconsume_times: None,
+            unit_mode: None,
+            batch: None,
+            max_reconsume_times: None,
+            topic_request_header: None,
+        }
+    }
 
     #[test]
     fn parse_request_header_handles_invalid_request_code() {
@@ -291,6 +300,30 @@ mod tests {
             map.get(&CheetahString::from_static_str("maxReconsumeTimes")).unwrap(),
             "5"
         );
+    }
+
+    #[test]
+    fn topic_request_header_setters_initialize_missing_nested_headers() {
+        let mut header = minimal_header();
+
+        header.set_lo(Some(true));
+        header.set_broker_name(CheetahString::from_static_str("broker-a"));
+        header.set_namespace(CheetahString::from_static_str("ns-a"));
+        header.set_namespaced(true);
+        header.set_oneway(true);
+
+        assert_eq!(header.lo(), Some(true));
+        assert_eq!(header.broker_name().map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(header.namespace(), Some("ns-a"));
+        assert_eq!(header.namespaced(), Some(true));
+        assert_eq!(header.oneway(), Some(true));
+
+        let map = header.to_map().expect("header should encode");
+        assert_eq!(map.get("lo").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("brokerName").map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(map.get("namespace").map(CheetahString::as_str), Some("ns-a"));
+        assert_eq!(map.get("namespaced").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("oneway").map(CheetahString::as_str), Some("true"));
     }
 
     #[test]

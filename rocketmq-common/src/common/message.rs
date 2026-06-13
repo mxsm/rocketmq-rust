@@ -162,7 +162,7 @@ pub trait MessageTrait: Any + Display + Debug {
         self.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
         ))
-        .map(|v| v.as_str() != "false")
+        .map(|v| v.as_str().eq_ignore_ascii_case("true"))
         .unwrap_or(true)
     }
 
@@ -199,6 +199,27 @@ pub trait MessageTrait: Any + Display + Debug {
 
     /// Sets multiple properties for the message.
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>);
+
+    /// Returns the message priority, or `-1` if not set or not parseable.
+    fn priority(&self) -> i32 {
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1)
+    }
+
+    /// Sets the message priority, matching Java's non-negative validation.
+    fn try_set_priority(&mut self, priority: i32) -> RocketMQResult<()> {
+        if priority < 0 {
+            return Err(RocketMQError::illegal_argument(
+                "The priority must be greater than or equal to 0",
+            ));
+        }
+        self.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY),
+            CheetahString::from_string(priority.to_string()),
+        );
+        Ok(())
+    }
 
     /// Returns the buyer ID associated with the message.
     fn buyer_id(&self) -> Option<CheetahString> {
@@ -296,6 +317,7 @@ pub trait MessageTrait: Any + Display + Debug {
 mod tests {
     use super::MessageConst;
     use super::MessageTrait;
+    use super::STRING_HASH_SET;
     use crate::common::message::message_builder::MessageBuilder;
     use crate::common::message::message_single::Message;
     use cheetah_string::CheetahString;
@@ -318,6 +340,20 @@ mod tests {
         assert_eq!(MessageConst::TIMER_ENGINE_TYPE, "E_T");
         assert_eq!(MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL, "F");
         assert_eq!(MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE, "R");
+    }
+
+    #[test]
+    fn priority_constant_matches_java_and_is_reserved() {
+        assert_eq!(MessageConst::PROPERTY_PRIORITY, "_SYS_MSG_PRIORITY_");
+        assert!(STRING_HASH_SET.contains(MessageConst::PROPERTY_PRIORITY));
+    }
+
+    #[test]
+    fn message_const_missing_java_protocol_keys_are_aligned() {
+        assert_eq!(MessageConst::PROPERTY_ORIGIN_GROUP, "ORIGIN_GROUP");
+        assert_eq!(MessageConst::PROPERTY_TRANS_OFFSET, "TRANS_OFFSET");
+        assert_eq!(MessageConst::PROPERTY_TIMER_ROLL_LABEL, "TIMER_ROLL_LABEL");
+        assert!(STRING_HASH_SET.contains(MessageConst::PROPERTY_ORIGIN_GROUP));
     }
 }
 
@@ -459,10 +495,12 @@ impl MessageConst {
     pub const PROPERTY_MIN_OFFSET: &'static str = "MIN_OFFSET";
     pub const PROPERTY_MQ2_FLAG: &'static str = "MQ2_FLAG";
     pub const PROPERTY_MSG_REGION: &'static str = "MSG_REGION";
+    pub const PROPERTY_ORIGIN_GROUP: &'static str = "ORIGIN_GROUP";
     pub const PROPERTY_ORIGIN_MESSAGE_ID: &'static str = "ORIGIN_MESSAGE_ID";
     pub const PROPERTY_POP_CK: &'static str = "POP_CK";
     pub const PROPERTY_POP_CK_OFFSET: &'static str = "POP_CK_OFFSET";
     pub const PROPERTY_PRODUCER_GROUP: &'static str = "PGROUP";
+    pub const PROPERTY_PRIORITY: &'static str = "_SYS_MSG_PRIORITY_";
     pub const PROPERTY_PUSH_REPLY_TIME: &'static str = "PUSH_REPLY_TIME";
     pub const PROPERTY_REAL_QUEUE_ID: &'static str = "REAL_QID";
     pub const PROPERTY_REAL_TOPIC: &'static str = "REAL_TOPIC";
@@ -481,9 +519,11 @@ impl MessageConst {
     pub const PROPERTY_TIMER_DEQUEUE_MS: &'static str = "TIMER_DEQUEUE_MS";
     pub const PROPERTY_TIMER_ENQUEUE_MS: &'static str = "TIMER_ENQUEUE_MS";
     pub const PROPERTY_TIMER_OUT_MS: &'static str = "TIMER_OUT_MS";
+    pub const PROPERTY_TIMER_ROLL_LABEL: &'static str = "TIMER_ROLL_LABEL";
     pub const PROPERTY_TIMER_ROLL_TIMES: &'static str = "TIMER_ROLL_TIMES";
     pub const PROPERTY_TRACE_CONTEXT: &'static str = "TRACE_CONTEXT";
     pub const PROPERTY_TRACE_SWITCH: &'static str = "TRACE_ON";
+    pub const PROPERTY_TRANS_OFFSET: &'static str = "TRANS_OFFSET";
     pub const PROPERTY_TRANSACTION_CHECK_TIMES: &'static str = "TRANSACTION_CHECK_TIMES";
     pub const PROPERTY_TRANSACTION_ID: &'static str = "__transactionId__";
     pub const PROPERTY_TRANSACTION_PREPARED: &'static str = "TRAN_MSG";
@@ -523,6 +563,7 @@ pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     set.insert(MessageConst::PROPERTY_WAIT_STORE_MSG_OK);
     set.insert(MessageConst::PROPERTY_DELAY_TIME_LEVEL);
     set.insert(MessageConst::PROPERTY_RETRY_TOPIC);
+    set.insert(MessageConst::PROPERTY_ORIGIN_GROUP);
     set.insert(MessageConst::PROPERTY_REAL_TOPIC);
     set.insert(MessageConst::PROPERTY_REAL_QUEUE_ID);
     set.insert(MessageConst::PROPERTY_TRANSACTION_PREPARED);
@@ -567,6 +608,7 @@ pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     set.insert(MessageConst::PROPERTY_DLQ_ORIGIN_TOPIC);
     set.insert(MessageConst::PROPERTY_DLQ_ORIGIN_MESSAGE_ID);
     set.insert(MessageConst::PROPERTY_CRC32);
+    set.insert(MessageConst::PROPERTY_PRIORITY);
     set.insert(MessageConst::PROPERTY_LITE_TOPIC);
     set
 });

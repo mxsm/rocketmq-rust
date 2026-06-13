@@ -30,11 +30,11 @@ pub struct EndTransactionRequestHeader {
 
     //ConsumeQueue Offset
     #[required]
-    pub tran_state_table_offset: u64,
+    pub tran_state_table_offset: i64,
 
     // Offset of the message in the CommitLog
     #[required]
-    pub commit_log_offset: u64,
+    pub commit_log_offset: i64,
 
     //TRANSACTION_COMMIT_TYPE,TRANSACTION_ROLLBACK_TYPE,TRANSACTION_NOT_TYPE
     #[required]
@@ -320,6 +320,73 @@ mod tests {
         assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert_eq!(header.transaction_id.unwrap(), "tran1");
+    }
+
+    #[test]
+    fn end_transaction_request_header_preserves_java_signed_long_offsets() {
+        use crate::protocol::command_custom_header::CommandCustomHeader;
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        let header = EndTransactionRequestHeader {
+            topic: CheetahString::from("topic1"),
+            producer_group: CheetahString::from("group1"),
+            tran_state_table_offset: -123,
+            commit_log_offset: -456,
+            commit_or_rollback: 1,
+            from_transaction_check: true,
+            msg_id: CheetahString::from("msg1"),
+            transaction_id: None,
+            rpc_request_header: RpcRequestHeader::default(),
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET
+            )),
+            Some(&CheetahString::from_static_str("-123"))
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                EndTransactionRequestHeader::COMMIT_LOG_OFFSET
+            )),
+            Some(&CheetahString::from_static_str("-456"))
+        );
+
+        let restored = <EndTransactionRequestHeader as FromMap>::from(&HashMap::from([
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::TOPIC),
+                CheetahString::from_static_str("topic1"),
+            ),
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::PRODUCER_GROUP),
+                CheetahString::from_static_str("group1"),
+            ),
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET),
+                CheetahString::from_static_str("-123"),
+            ),
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_LOG_OFFSET),
+                CheetahString::from_static_str("-456"),
+            ),
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
+                CheetahString::from_static_str("1"),
+            ),
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
+                CheetahString::from_static_str("true"),
+            ),
+            (
+                CheetahString::from_static_str(EndTransactionRequestHeader::MSG_ID),
+                CheetahString::from_static_str("msg1"),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(restored.tran_state_table_offset, -123);
+        assert_eq!(restored.commit_log_offset, -456);
     }
 
     #[test]

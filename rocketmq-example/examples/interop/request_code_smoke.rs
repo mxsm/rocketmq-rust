@@ -27,7 +27,6 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_status::Consu
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::message_ext::MessageExt;

@@ -94,10 +94,11 @@ impl StatisticsManager {
 
                     for item in tmp_item_map.values() {
                         let last_time_stamp = item.last_timestamp();
-                        if current_millis() - last_time_stamp > Self::MAX_IDLE_TIME
-                            && (statistics_item_state_getter.is_none()
-                                || !statistics_item_state_getter.as_ref().unwrap().online(item))
-                        {
+                        let expired = current_millis() - last_time_stamp > Self::MAX_IDLE_TIME;
+                        let offline = statistics_item_state_getter
+                            .as_ref()
+                            .is_none_or(|getter| !getter.online(item));
+                        if expired && offline {
                             // Remove expired item
                             remove(item, &stats_table_clone, &kind_meta_map);
                         }
@@ -115,11 +116,11 @@ impl StatisticsManager {
             } else {
                 let kind_meta_map = self.kind_meta_map.read();
                 if let Some(kind_meta) = kind_meta_map.get(kind) {
-                    let new_item = Arc::new(StatisticsItem::new(
-                        kind,
-                        key,
-                        kind_meta.get_item_names().iter().map(|item| item.as_str()).collect(),
-                    ));
+                    let item_names = kind_meta.get_item_names().iter().map(|item| item.as_str()).collect();
+                    let Ok(new_item) = StatisticsItem::new(kind, key, item_names) else {
+                        return false;
+                    };
+                    let new_item = Arc::new(new_item);
                     item_map.insert(key.to_string(), new_item.clone());
                     new_item.inc_items(item_accumulates);
                     self.schedule_statistics_item(new_item);
@@ -157,5 +158,23 @@ pub fn remove(
     let kind_meta_map = kind_meta_map.write();
     if let Some(kind_meta) = kind_meta_map.get(stat_kind) {
         kind_meta.get_scheduled_printer().remove(item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
+
+    #[tokio::test]
+    async fn inc_rejects_empty_item_names_without_panicking() {
+        let manager = StatisticsManager::new();
+        manager.add_statistics_kind_meta(Arc::new(StatisticsKindMeta::new(
+            "kind".to_string(),
+            Vec::new(),
+            StatisticsItemScheduledPrinter,
+        )));
+
+        assert!(!manager.inc("kind", "key", vec![1]).await);
     }
 }

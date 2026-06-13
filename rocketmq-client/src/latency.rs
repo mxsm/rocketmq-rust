@@ -17,3 +17,8 @@ pub(crate) mod latency_fault_tolerance_impl;
 pub(crate) mod mq_fault_strategy;
 pub(crate) mod resolver;
 pub(crate) mod service_detector;
+
+pub use mq_fault_strategy::BrokerFilter;
+pub use mq_fault_strategy::MQFaultStrategy;
+pub use resolver::Resolver;
+pub use service_detector::ServiceDetector;

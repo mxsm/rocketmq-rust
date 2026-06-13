@@ -69,12 +69,16 @@ impl FilterAPI {
         sub_string: &CheetahString,
         type_: Option<CheetahString>,
     ) -> Result<SubscriptionData, String> {
-        if type_.is_none() || type_.as_ref().unwrap().as_str() == ExpressionType::TAG {
+        let Some(expression_type) = type_ else {
+            return FilterAPI::build_subscription_data(topic, sub_string);
+        };
+
+        if expression_type.as_str() == ExpressionType::TAG {
             return FilterAPI::build_subscription_data(topic, sub_string);
         }
 
         if sub_string.is_empty() {
-            return Err(format!("Expression can't be null! {}", type_.unwrap_or_default()));
+            return Err(format!("Expression can't be null! {expression_type}"));
         }
 
         let mut subscription_data = SubscriptionData {
@@ -82,7 +86,7 @@ impl FilterAPI {
             sub_string: sub_string.clone(),
             ..Default::default()
         };
-        subscription_data.expression_type = type_.unwrap();
+        subscription_data.expression_type = expression_type;
         Ok(subscription_data)
     }
 }
@@ -137,6 +141,29 @@ mod tests {
 
         assert_eq!(subscription_data.topic.as_str(), topic);
         assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
+    }
+
+    #[test]
+    fn build_creates_tag_subscription_for_none_expression_type_like_java() {
+        let topic = "test_topic".into();
+        let sub_string = "tag1||tag2".into();
+        let subscription_data = FilterAPI::build(&topic, &sub_string, None).unwrap();
+
+        assert_eq!(subscription_data.topic.as_str(), topic);
+        assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
+        assert!(subscription_data.tags_set.contains("tag1"));
+        assert!(subscription_data.tags_set.contains("tag2"));
+    }
+
+    #[test]
+    fn build_treats_empty_tag_expression_as_sub_all_like_java() {
+        let topic = "test_topic".into();
+        let sub_string = "".into();
+        let type_ = Some(ExpressionType::TAG.into());
+        let subscription_data = FilterAPI::build(&topic, &sub_string, type_).unwrap();
+
+        assert_eq!(subscription_data.topic.as_str(), topic);
+        assert_eq!(subscription_data.sub_string, SubscriptionData::SUB_ALL);
     }
 
     #[test]

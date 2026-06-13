@@ -72,6 +72,7 @@ use crate::protocol::header::pull_message_response_header::PullMessageResponseHe
 use crate::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use crate::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
+use crate::protocol::remoting_command::RemotingCommand;
 use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
@@ -155,6 +156,27 @@ impl RpcClientImpl {
         self.client_hook_list.clear();
     }
 
+    fn create_request_command<H>(
+        &self,
+        addr: &CheetahString,
+        request: RpcRequest<H>,
+        timeout_millis: u64,
+    ) -> Result<(i32, RemotingCommand), RpcClientError>
+    where
+        H: CommandCustomHeader + TopicRequestHeaderTrait,
+    {
+        let request_code = request.code;
+        let request_command = RpcClientUtils::try_create_command_for_rpc_request(request).map_err(|err| {
+            RpcClientError::RequestFailed {
+                addr: addr.to_string(),
+                request_code,
+                timeout_ms: timeout_millis,
+                source: Box::new(err),
+            }
+        })?;
+        Ok((request_code, request_command))
+    }
+
     /// Resolves broker address by name, returning error if not found
     fn get_broker_addr_by_name(&self, broker_name: &str) -> Result<CheetahString, RpcClientError> {
         self.client_metadata
@@ -196,8 +218,7 @@ impl RpcClientImpl {
             timeout_millis
         );
 
-        let request_code = request.code;
-        let request_command = RpcClientUtils::create_command_for_rpc_request(request);
+        let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
 
         let response = self
             .remoting_client
@@ -270,8 +291,7 @@ impl RpcClientImpl {
         request: RpcRequest<H>,
         timeout_millis: u64,
     ) -> Result<RpcResponse, RpcClientError> {
-        let request_code = request.code;
-        let request_command = RpcClientUtils::create_command_for_rpc_request(request);
+        let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
 
         let response = self
             .remoting_client
@@ -343,7 +363,12 @@ impl RpcClient for RpcClientImpl {
         }
 
         // Resolve broker address
-        let broker_name = request.header.broker_name().expect("broker name is required");
+        let broker_name = request
+            .header
+            .broker_name()
+            .ok_or_else(|| RpcClientError::BrokerNotFound {
+                broker_name: "<missing brokerName>".to_string(),
+            })?;
         let addr = self.get_broker_addr_by_name(broker_name.as_ref())?;
 
         let result = match RequestCode::from(request.code) {
@@ -398,8 +423,7 @@ impl RpcClient for RpcClientImpl {
                 .await?
             }
             RequestCode::GetTopicStatsInfo | RequestCode::GetTopicConfig => {
-                let request_code = request.code;
-                let request_command = RpcClientUtils::create_command_for_rpc_request(request);
+                let (request_code, request_command) = self.create_request_command(&addr, request, timeout_millis)?;
                 let response = self
                     .remoting_client
                     .invoke_request(Some(&addr), request_command, timeout_millis)
@@ -498,7 +522,11 @@ impl RpcClientImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+    use crate::runtime::config::client_config::TokioClientConfig;
 
     #[test]
     fn test_error_formatting() {
@@ -512,5 +540,33 @@ mod tests {
             code_name: "SUCCESS".to_string(),
         };
         assert!(err.to_string().contains("Unexpected response code"));
+    }
+
+    #[tokio::test]
+    async fn invoke_without_broker_name_returns_typed_error_instead_of_panicking() {
+        let client_metadata = Arc::new(ClientMetadata::new());
+        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
+            Arc::new(TokioClientConfig::default()),
+            DefaultRemotingRequestProcessor,
+        ));
+        let rpc_client = RpcClientImpl::new(client_metadata, remoting_client);
+        let request = RpcRequest::new(
+            RequestCode::GetMinOffset.into(),
+            GetMinOffsetRequestHeader {
+                topic: CheetahString::from_static_str("TopicA"),
+                queue_id: 0,
+                topic_request_header: None,
+            },
+            None,
+        );
+
+        let Err(error) = rpc_client.invoke(request, 3000).await else {
+            panic!("missing brokerName should return a typed error");
+        };
+
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::Rpc(RpcClientError::BrokerNotFound { .. })
+        ));
     }
 }
