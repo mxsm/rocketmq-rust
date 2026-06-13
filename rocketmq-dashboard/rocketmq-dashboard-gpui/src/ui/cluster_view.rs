@@ -18,8 +18,8 @@
 //! and managing RocketMQ clusters.
 
 use gpui::*;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::StyledExt;
+use gpui_component::scroll::ScrollableElement;
 
 /// Cluster view containing cluster information and metrics
 pub struct ClusterView {}

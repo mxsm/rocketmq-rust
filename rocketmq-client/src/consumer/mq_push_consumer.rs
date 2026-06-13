@@ -138,4 +138,14 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// This method does not block the calling thread.
     async fn resume(&self);
+
+    /// Updates the core size used by the concurrent consume worker pool.
+    ///
+    /// Orderly consumers and implementations without a resizable worker pool may
+    /// ignore this request.
+    fn update_core_pool_size(&self, _core_pool_size: usize) -> rocketmq_error::RocketMQResult<()> {
+        Err(crate::mq_client_err!(
+            "updateCorePoolSize is not supported by this MQPushConsumer implementation"
+        ))
+    }
 }

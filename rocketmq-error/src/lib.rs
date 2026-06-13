@@ -237,12 +237,12 @@ pub struct MQBrokerErr {
 impl MQBrokerErr {
     pub fn new(response_code: i32, error_message: impl Into<String>) -> Self {
         let error_message = error_message.into();
-        let message = "";
+        let message = format!("CODE: {response_code} DESC: {error_message}");
         Self {
             response_code,
             error_message: Some(error_message),
             broker_addr: None,
-            message: String::from(message),
+            message,
         }
     }
 
@@ -253,12 +253,12 @@ impl MQBrokerErr {
     ) -> Self {
         let broker_addr = broker_addr.into();
         let error_message = error_message.into();
-        let message = "";
+        let message = format!("CODE: {response_code} DESC: {error_message} BROKER: {broker_addr}");
         Self {
             response_code,
             error_message: Some(error_message),
             broker_addr: Some(broker_addr),
-            message: String::from(message),
+            message,
         }
     }
 
@@ -303,25 +303,21 @@ pub struct ClientErr {
 impl ClientErr {
     pub fn new(error_message: impl Into<String>) -> Self {
         let error_message = error_message.into();
-        let message = "string";
-        // let message = FAQUrl::attach_default_url(Some(error_message.as_str()));
+        let message = error_message.clone();
         Self {
             response_code: -1,
             error_message: Some(error_message),
-            message: String::from(message),
+            message,
         }
     }
 
     pub fn new_with_code(response_code: i32, error_message: impl Into<String>) -> Self {
         let error_message = error_message.into();
-        /*let message = FAQUrl::attach_default_url(Some(
-            format!("CODE: {}  DESC: {}", response_code, error_message,).as_str(),
-        ));*/
-        let message = "";
+        let message = format!("CODE: {response_code} DESC: {error_message}");
         Self {
             response_code,
             error_message: Some(error_message),
-            message: String::from(message),
+            message,
         }
     }
 
@@ -584,5 +580,59 @@ impl From<RocketmqError> for unified::RocketMQError {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_err_display_preserves_original_message() {
+        let err = ClientErr::new("Topic of the message does not match its target message queue");
+
+        assert_eq!(
+            err.to_string(),
+            "Topic of the message does not match its target message queue"
+        );
+        assert_eq!(err.response_code(), -1);
+        assert_eq!(
+            err.error_message().map(String::as_str),
+            Some("Topic of the message does not match its target message queue")
+        );
+    }
+
+    #[test]
+    fn client_err_with_code_display_includes_code_and_description() {
+        let err = ClientErr::new_with_code(17, "No route info of this topic");
+
+        assert_eq!(err.to_string(), "CODE: 17 DESC: No route info of this topic");
+        assert_eq!(err.response_code(), 17);
+        assert_eq!(
+            err.error_message().map(String::as_str),
+            Some("No route info of this topic")
+        );
+    }
+
+    #[test]
+    fn broker_err_display_includes_code_description_and_broker_when_present() {
+        let err = MQBrokerErr::new_with_broker(14, "topic does not exist", "127.0.0.1:10911");
+
+        assert_eq!(
+            err.to_string(),
+            "CODE: 14 DESC: topic does not exist BROKER: 127.0.0.1:10911"
+        );
+        assert_eq!(err.response_code(), 14);
+        assert_eq!(err.error_message().map(String::as_str), Some("topic does not exist"));
+        assert_eq!(err.broker_addr().map(String::as_str), Some("127.0.0.1:10911"));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn macro_created_client_error_keeps_message_visible() {
+        let result: LegacyRocketMQResult<()> = crate::mq_client_err_legacy!("send failed");
+        let err = result.expect_err("macro should create a client error");
+
+        assert_eq!(err.to_string(), "send failed");
     }
 }

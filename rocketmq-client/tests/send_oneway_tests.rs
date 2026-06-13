@@ -18,7 +18,6 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 

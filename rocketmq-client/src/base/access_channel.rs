@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::ser::SerializeStruct;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -25,17 +24,28 @@ pub enum AccessChannel {
     Cloud,
 }
 
+impl AccessChannel {
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AccessChannel::Local => "LOCAL",
+            AccessChannel::Cloud => "CLOUD",
+        }
+    }
+}
+
+impl std::fmt::Display for AccessChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl Serialize for AccessChannel {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("AccessChannel", 1)?;
-        match *self {
-            AccessChannel::Local => state.serialize_field("AccessChannel", "LOCAL")?,
-            AccessChannel::Cloud => state.serialize_field("AccessChannel", "CLOUD")?,
-        }
-        state.end()
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -63,14 +73,20 @@ mod tests {
     fn serialize_access_channel_local() {
         let channel = AccessChannel::Local;
         let serialized = serde_json::to_string(&channel).unwrap();
-        assert_eq!(serialized, r#"{"AccessChannel":"LOCAL"}"#);
+        assert_eq!(serialized, r#""LOCAL""#);
     }
 
     #[test]
     fn serialize_access_channel_cloud() {
         let channel = AccessChannel::Cloud;
         let serialized = serde_json::to_string(&channel).unwrap();
-        assert_eq!(serialized, r#"{"AccessChannel":"CLOUD"}"#);
+        assert_eq!(serialized, r#""CLOUD""#);
+    }
+
+    #[test]
+    fn display_access_channel_matches_java_enum_name() {
+        assert_eq!(AccessChannel::Local.to_string(), "LOCAL");
+        assert_eq!(AccessChannel::Cloud.to_string(), "CLOUD");
     }
 
     #[test]

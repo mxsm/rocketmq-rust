@@ -20,3 +20,7 @@ pub mod mq_admin;
 pub mod mq_client_admin;
 pub mod query_result;
 pub mod validators;
+
+pub use mq_admin::MQAdmin;
+pub use mq_client_admin::MqClientAdmin;
+pub use mq_client_admin::MqClientAdminInner;

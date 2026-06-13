@@ -138,7 +138,7 @@ where
 /// let results: RocketMQResult<Vec<usize>> =
 ///     with_timeout_all(Duration::from_secs(1), futures).await;
 /// assert!(results.is_ok());
-/// assert_eq!(results.unwrap().len(), 3);
+/// assert_eq!(results?.len(), 3);
 /// # Ok(())
 /// # }
 /// ```

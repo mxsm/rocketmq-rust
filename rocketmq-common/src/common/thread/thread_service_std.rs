@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use parking_lot::Mutex;
+use tracing::error;
 use tracing::info;
 
 use crate::common::thread::Runnable;
@@ -60,17 +61,21 @@ impl ServiceThreadStd {
         let name = self.name.clone();
         let runnable = self.runnable.clone();
         let stopped = self.stopped.clone();
-        let thread = std::thread::Builder::new()
-            .name(name.clone())
-            .spawn(move || {
-                info!("Starting service thread: {}", name);
-                if stopped.load(std::sync::atomic::Ordering::Relaxed) {
-                    info!("Service thread stopped: {}", name);
-                    return;
-                }
-                runnable.lock().run();
-            })
-            .expect("Failed to start service thread");
+        let thread = match std::thread::Builder::new().name(name.clone()).spawn(move || {
+            info!("Starting service thread: {}", name);
+            if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                info!("Service thread stopped: {}", name);
+                return;
+            }
+            runnable.lock().run();
+        }) {
+            Ok(thread) => thread,
+            Err(err) => {
+                self.started.store(false, Ordering::Release);
+                error!("Failed to start service thread {}: {}", self.name, err);
+                return;
+            }
+        };
         self.thread = Some(thread);
     }
 
@@ -95,7 +100,9 @@ impl ServiceThreadStd {
             if interrupt {
                 drop(thread);
             } else {
-                thread.join().expect("Failed to join service thread");
+                if thread.join().is_err() {
+                    error!("Failed to join service thread {}", self.name);
+                }
             }
         }
     }

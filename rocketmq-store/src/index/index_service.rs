@@ -211,8 +211,8 @@ impl IndexService {
     /// Query offset with index type support (matches Java overload)
     ///
     /// # Arguments
-    /// * `index_type` - Optional index type (e.g., MessageConst::INDEX_TAG_TYPE) If None or empty,
-    ///   uses default format: topic#key If INDEX_TAG_TYPE, uses format: topic#T#key
+    /// * `index_type` - Optional index type (e.g., MessageConst::INDEX_TAG_TYPE or
+    ///   MessageConst::INDEX_UNIQUE_TYPE). If None or empty, uses default format: topic#key.
     pub fn query_offset_with_type(
         &self,
         topic: &str,
@@ -227,8 +227,13 @@ impl IndexService {
             return QueryOffsetResult::new(Vec::new(), 0, 0);
         }
 
-        let query_index_type =
-            index_type.filter(|idx_type| !idx_type.is_empty() && *idx_type == MessageConst::INDEX_TAG_TYPE);
+        let query_index_type = index_type.filter(|idx_type| {
+            !idx_type.is_empty()
+                && matches!(
+                    *idx_type,
+                    MessageConst::INDEX_TAG_TYPE | MessageConst::INDEX_UNIQUE_TYPE
+                )
+        });
         let mut query_key = String::with_capacity(index_key_len(topic, key, query_index_type));
         let query_key = build_key_into(&mut query_key, topic, key, query_index_type);
         let mut phy_offsets = Vec::with_capacity(max_num as usize);
@@ -321,7 +326,12 @@ impl IndexService {
                     index_file_new = self.put_key(
                         index_file,
                         dispatch_request,
-                        build_key_into(&mut index_key, topic, uniq_key.as_str(), None),
+                        build_key_into(
+                            &mut index_key,
+                            topic,
+                            uniq_key.as_str(),
+                            Some(MessageConst::INDEX_UNIQUE_TYPE),
+                        ),
                     );
                     if index_file_new.is_none() {
                         error!(
@@ -554,9 +564,9 @@ fn index_build_key_capacity(topic: &str, uniq_key: Option<&str>, keys: &str, tag
         .map(str::len)
         .max()
         .unwrap_or_default();
-    let plain_key_len = uniq_key.map_or(normal_key_len, |uniq_key| normal_key_len.max(uniq_key.len()));
+    let unique_key_len = uniq_key.map_or(0, |uniq_key| uniq_key.len() + MessageConst::INDEX_UNIQUE_TYPE.len() + 1);
     let typed_key_len = tags.map_or(0, |tags| tags.len() + MessageConst::INDEX_TAG_TYPE.len() + 1);
-    topic.len() + plain_key_len.max(typed_key_len) + 1
+    topic.len() + normal_key_len.max(unique_key_len).max(typed_key_len) + 1
 }
 
 #[cfg(test)]
@@ -607,7 +617,7 @@ mod tests {
     fn index_build_key_capacity_covers_uniq_normal_and_tag_keys() {
         assert_eq!(
             index_build_key_capacity("Topic", Some("uniq-longer"), "k1 k22", Some("Tag")),
-            index_key_len("Topic", "uniq-longer", None)
+            index_key_len("Topic", "uniq-longer", Some(MessageConst::INDEX_UNIQUE_TYPE))
         );
         assert_eq!(
             index_build_key_capacity("Topic", Some("u"), "short very-long-normal-key", Some("Tag")),
@@ -664,10 +674,20 @@ mod tests {
 
         index_service.build_index(&dispatch_request);
 
-        for key in ["key1", "key2", "uniq123"] {
+        for key in ["key1", "key2"] {
             let result = index_service.query_offset("TestTopic", key, 10, 0, i64::MAX);
             assert_eq!(result.get_phy_offsets(), &[1000], "missing index for key {key}");
         }
+
+        let unique_result = index_service.query_offset_with_type(
+            "TestTopic",
+            "uniq123",
+            10,
+            0,
+            i64::MAX,
+            Some(MessageConst::INDEX_UNIQUE_TYPE),
+        );
+        assert_eq!(unique_result.get_phy_offsets(), &[1000]);
 
         let tag_result = index_service.query_offset_with_type(
             "TestTopic",

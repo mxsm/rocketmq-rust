@@ -197,7 +197,10 @@ impl ProcessQueue {
 
             let should_remove = {
                 let store = self.store.read().await;
-                !store.msg_tree_map.is_empty() && queue_offset == *store.msg_tree_map.first_key_value().unwrap().0
+                store
+                    .msg_tree_map
+                    .first_key_value()
+                    .is_some_and(|(offset, _)| queue_offset == *offset)
             };
             if should_remove {
                 self.remove_message(&[msg]).await;
@@ -205,7 +208,7 @@ impl ProcessQueue {
         }
     }
 
-    pub(crate) async fn put_message(&self, messages: Vec<ArcMut<MessageExt>>) -> bool {
+    pub(crate) async fn put_message(&self, messages: &[ArcMut<MessageExt>]) -> bool {
         let mut dispatch_to_consume = false;
         let mut store = self.store.write().await;
         let mut valid_msg_cnt = 0i64;
@@ -249,12 +252,13 @@ impl ProcessQueue {
 
     pub(crate) async fn get_max_span(&self) -> u64 {
         let store = self.store.read().await;
-        if store.msg_tree_map.is_empty() {
-            return 0;
+        match (
+            store.msg_tree_map.first_key_value(),
+            store.msg_tree_map.last_key_value(),
+        ) {
+            (Some((first, _)), Some((last, _))) => (last - first) as u64,
+            _ => 0,
         }
-        let first = store.msg_tree_map.first_key_value().unwrap();
-        let last = store.msg_tree_map.last_key_value().unwrap();
-        (last.0 - first.0) as u64
     }
 
     pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageExt>]) -> i64 {
@@ -287,8 +291,8 @@ impl ProcessQueue {
             }
         }
 
-        if !store.msg_tree_map.is_empty() {
-            result = *store.msg_tree_map.first_key_value().unwrap().0;
+        if let Some((first_offset, _)) = store.msg_tree_map.first_key_value() {
+            result = *first_offset;
         }
 
         result
@@ -370,6 +374,8 @@ impl ProcessQueue {
         store.queue_offset_max = 0;
         self.msg_count.store(0, Ordering::Release);
         self.msg_size.store(0, Ordering::Release);
+        self.msg_acc_cnt.store(0, Ordering::Release);
+        self.consuming.store(false, Ordering::Release);
     }
 
     pub(crate) async fn fill_process_queue_info(&self, info: &mut ProcessQueueInfo) {
@@ -408,12 +414,13 @@ impl ProcessQueue {
     /// Returns `Some((min_offset, max_offset))` of the pending message tree, or `None` if empty.
     pub(crate) async fn get_offset_span(&self) -> Option<(i64, i64)> {
         let store = self.store.read().await;
-        if store.msg_tree_map.is_empty() {
-            return None;
+        match (
+            store.msg_tree_map.first_key_value(),
+            store.msg_tree_map.last_key_value(),
+        ) {
+            (Some((min, _)), Some((max, _))) => Some((*min, *max)),
+            _ => None,
         }
-        let min = *store.msg_tree_map.first_key_value().unwrap().0;
-        let max = *store.msg_tree_map.last_key_value().unwrap().0;
-        Some((min, max))
     }
 
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {
@@ -446,6 +453,10 @@ impl ProcessQueue {
 
     pub(crate) fn get_last_consume_timestamp(&self) -> u64 {
         self.last_consume_timestamp.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn update_last_consume_timestamp(&self) {
+        self.last_consume_timestamp.store(current_millis(), Ordering::Release);
     }
 
     pub(crate) fn get_msg_acc_cnt(&self) -> i64 {
@@ -491,7 +502,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs.clone()).await;
+        pq.put_message(&msgs).await;
 
         assert_eq!(pq.msg_count(), 10);
 
@@ -506,7 +517,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(5);
-        pq.put_message(msgs.clone()).await;
+        pq.put_message(&msgs).await;
 
         assert_eq!(pq.msg_count(), 5);
 
@@ -517,11 +528,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_clear_resets_consuming_state_for_new_dispatch() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(5);
+        assert!(pq.put_message(&msgs).await);
+        assert!(pq.is_consuming());
+
+        pq.clear().await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+        assert!(!pq.is_consuming());
+        assert!(pq.put_message(&msgs).await);
+    }
+
+    #[tokio::test]
     async fn test_take_messages_updates_consuming_map() {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         let taken = pq.take_messages(5).await;
 
@@ -540,7 +567,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(5);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         let timestamp_before = pq.last_consume_timestamp.load(Ordering::Acquire);
 
@@ -570,7 +597,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         pq.take_messages(3).await;
 
@@ -609,7 +636,7 @@ mod tests {
         assert!(!pq.has_temp_message().await);
 
         let msgs = create_test_messages(5);
-        pq.put_message(msgs.clone()).await;
+        pq.put_message(&msgs).await;
 
         assert!(pq.has_temp_message().await);
 
@@ -623,7 +650,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         assert_eq!(pq.msg_count(), 10);
 
@@ -647,7 +674,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         pq.take_messages(5).await;
 
@@ -725,7 +752,7 @@ mod tests {
             msgs.push(ArcMut::new(msg));
         }
 
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         assert!(pq.get_msg_acc_cnt() > 0);
     }
@@ -735,7 +762,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
         pq.take_messages(5).await;
 
         assert_eq!(pq.msg_count(), 10);
@@ -760,7 +787,7 @@ mod tests {
         assert_eq!(pq.get_max_span().await, 0);
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         let span = pq.get_max_span().await;
         assert_eq!(span, 9);
@@ -773,7 +800,7 @@ mod tests {
         assert!(!pq.is_consuming());
 
         let msgs = create_test_messages(5);
-        let should_dispatch = pq.put_message(msgs).await;
+        let should_dispatch = pq.put_message(&msgs).await;
 
         assert!(should_dispatch);
         assert!(pq.is_consuming());
@@ -797,7 +824,7 @@ mod tests {
             msgs.push(ArcMut::new(msg));
         }
 
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         let max_offset = pq.store.read().await.queue_offset_max;
         assert_eq!(max_offset, 9);
@@ -808,7 +835,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(10);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         assert_eq!(pq.msg_size(), 1000);
 
@@ -828,7 +855,7 @@ mod tests {
         let pq = ProcessQueue::new();
 
         let msgs = create_test_messages(5);
-        pq.put_message(msgs).await;
+        pq.put_message(&msgs).await;
 
         assert_eq!(pq.msg_size(), 500);
 

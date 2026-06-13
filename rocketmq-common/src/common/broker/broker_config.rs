@@ -14,6 +14,8 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -1224,7 +1226,7 @@ pub struct BrokerConfig {
 impl Default for BrokerConfig {
     fn default() -> Self {
         let broker_identity = BrokerIdentity::new();
-        let local_ip = local_ip_address::local_ip().unwrap();
+        let local_ip = local_ip_address::local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
         let broker_ip1 = local_ip.to_string().into();
         let broker_ip2 = Some(local_ip.to_string().into());
         let listen_port = 10911;
@@ -1247,12 +1249,7 @@ impl Default for BrokerConfig {
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
             async_send_enable: false,
-            store_path_root_dir: dirs::home_dir()
-                .unwrap()
-                .join("store")
-                .to_string_lossy()
-                .into_owned()
-                .into(),
+            store_path_root_dir: defaults::store_path_root_dir(),
             use_single_rocksdb_for_all_configs: false,
             enable_split_registration: false,
             split_registration_size: 800,

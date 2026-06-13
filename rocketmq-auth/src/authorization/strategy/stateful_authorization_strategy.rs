@@ -19,11 +19,13 @@
 //! channel/connection.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -34,8 +36,11 @@ use crate::authorization::provider::AuthorizationError;
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
+use crate::authorization::strategy::block_on_base_authorization;
 use crate::config::AuthConfig;
 use crate::observability::AuthMetrics;
+
+type AuthCache = HashMap<String, CachedAuthResult>;
 
 /// Cached authorization result.
 #[derive(Clone, Debug)]
@@ -133,7 +138,7 @@ pub struct StatefulAuthorizationStrategy {
     base: AbstractAuthorizationStrategy,
 
     /// Authorization cache (key -> result)
-    auth_cache: Arc<RwLock<std::collections::HashMap<String, CachedAuthResult>>>,
+    auth_cache: Arc<RwLock<AuthCache>>,
 
     /// Cache TTL
     cache_ttl: Duration,
@@ -202,7 +207,7 @@ impl StatefulAuthorizationStrategy {
 
         Ok(Self {
             base,
-            auth_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            auth_cache: Arc::new(RwLock::new(HashMap::new())),
             cache_ttl,
             cache_max_size,
             request_counter: AtomicUsize::new(0),
@@ -249,9 +254,32 @@ impl StatefulAuthorizationStrategy {
         current
     }
 
+    fn recover_poisoned_cache(&self) {
+        let mut cache = match self.auth_cache.write() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        cache.clear();
+        self.auth_cache.clear_poison();
+        debug!("Authorization cache lock poisoned; cache cleared");
+    }
+
+    fn write_cache_recovering(&self) -> RwLockWriteGuard<'_, AuthCache> {
+        match self.auth_cache.write() {
+            Ok(cache) => cache,
+            Err(poisoned) => {
+                let mut cache = poisoned.into_inner();
+                cache.clear();
+                self.auth_cache.clear_poison();
+                debug!("Authorization cache write lock poisoned; cache cleared before reuse");
+                cache
+            }
+        }
+    }
+
     /// Evicts expired entries from the cache.
     fn evict_expired(&self) {
-        let mut cache = self.auth_cache.write().unwrap();
+        let mut cache = self.write_cache_recovering();
         let before_size = cache.len();
 
         cache.retain(|_, result| !result.is_expired(self.cache_ttl));
@@ -264,7 +292,7 @@ impl StatefulAuthorizationStrategy {
 
     /// Evicts oldest entries if cache is over capacity.
     fn evict_if_full(&self) {
-        let mut cache = self.auth_cache.write().unwrap();
+        let mut cache = self.write_cache_recovering();
 
         if cache.len() >= self.cache_max_size {
             // Simple eviction: remove first 10% of entries
@@ -286,12 +314,19 @@ impl StatefulAuthorizationStrategy {
 
     /// Gets the current cache size.
     pub fn cache_size(&self) -> usize {
-        self.auth_cache.read().unwrap().len()
+        match self.auth_cache.read() {
+            Ok(cache) => cache.len(),
+            Err(poisoned) => {
+                drop(poisoned);
+                self.recover_poisoned_cache();
+                0
+            }
+        }
     }
 
     /// Clears the entire cache.
     pub fn clear_cache(&self) {
-        let mut cache = self.auth_cache.write().unwrap();
+        let mut cache = self.write_cache_recovering();
         cache.clear();
         debug!("Authorization cache cleared");
     }
@@ -323,32 +358,40 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
     /// ```
     fn evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<()> {
         // If no channel ID, bypass cache
-        if context.channel_id().is_none() || context.channel_id().unwrap().is_empty() {
+        if context.channel_id().is_none_or(str::is_empty) {
             debug!("No channel ID, bypassing cache");
-            return tokio::runtime::Handle::current().block_on(self.base.do_evaluate(context));
+            return block_on_base_authorization(&self.base, context);
         }
 
         let cache_key = self.build_key(context);
 
         // Check cache
         {
-            let cache = self.auth_cache.read().unwrap();
-            if let Some(cached_result) = cache.get(&cache_key) {
-                if !cached_result.is_expired(self.cache_ttl) {
-                    debug!("Cache hit for key: {}", cache_key);
-                    self.metrics.record_cache_hit();
-                    return if cached_result.granted {
-                        Ok(())
-                    } else {
-                        Err(AuthorizationError::InternalError(
-                            cached_result
-                                .error
-                                .clone()
-                                .unwrap_or_else(|| "Authorization denied (cached)".to_string()),
-                        ))
-                    };
-                } else {
-                    debug!("Cache entry expired for key: {}", cache_key);
+            match self.auth_cache.read() {
+                Ok(cache) => {
+                    if let Some(cached_result) = cache.get(&cache_key) {
+                        if !cached_result.is_expired(self.cache_ttl) {
+                            debug!("Cache hit for key: {}", cache_key);
+                            self.metrics.record_cache_hit();
+                            return if cached_result.granted {
+                                Ok(())
+                            } else {
+                                Err(AuthorizationError::InternalError(
+                                    cached_result
+                                        .error
+                                        .clone()
+                                        .unwrap_or_else(|| "Authorization denied (cached)".to_string()),
+                                ))
+                            };
+                        } else {
+                            debug!("Cache entry expired for key: {}", cache_key);
+                        }
+                    }
+                }
+                Err(poisoned) => {
+                    drop(poisoned);
+                    self.recover_poisoned_cache();
+                    debug!("Cache unavailable for key after poison recovery: {}", cache_key);
                 }
             }
         }
@@ -357,13 +400,13 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
         debug!("Cache miss for key: {}", cache_key);
         self.metrics.record_cache_miss();
 
-        let result = tokio::runtime::Handle::current().block_on(self.base.do_evaluate(context));
+        let result = block_on_base_authorization(&self.base, context);
 
         // Cache the result
         {
             self.evict_if_full();
 
-            let mut cache = self.auth_cache.write().unwrap();
+            let mut cache = self.write_cache_recovering();
             let cached_result = match &result {
                 Ok(()) => CachedAuthResult::new_granted(),
                 Err(e) => CachedAuthResult::new_denied(e.clone()),
@@ -512,5 +555,47 @@ mod tests {
 
         let cache = strategy.auth_cache.read().unwrap();
         assert!(cache.keys().all(|key| key.starts_with("1#")));
+    }
+
+    #[test]
+    fn poisoned_authorization_cache_is_cleared_and_evaluation_continues() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let config = create_test_config();
+        let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
+        let cache = strategy.auth_cache.clone();
+
+        let poison_result = std::thread::spawn(move || {
+            let _guard = cache.write().unwrap();
+            panic!("poison authorization cache for test");
+        })
+        .join();
+        assert!(poison_result.is_err());
+
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_channel_id("ch-poison".to_string());
+
+        assert!(strategy.evaluate(&context).is_ok());
+        assert_eq!(strategy.cache_size(), 1);
+        assert!(strategy.auth_cache.read().is_ok());
+    }
+
+    #[test]
+    fn evaluate_cache_miss_inside_current_thread_runtime_without_nested_block_on_panic() {
+        let config = create_test_config();
+        let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_channel_id("ch-current-thread".to_string());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            assert!(strategy.evaluate(&context).is_ok());
+        });
+
+        assert_eq!(strategy.cache_size(), 1);
     }
 }

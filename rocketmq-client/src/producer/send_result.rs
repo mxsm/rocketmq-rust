@@ -19,6 +19,10 @@ use serde::Serialize;
 
 use crate::producer::send_status::SendStatus;
 
+fn java_option_to_string<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value.map_or_else(|| "null".to_string(), ToString::to_string)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendResult {
     pub send_status: SendStatus,
@@ -101,8 +105,26 @@ impl SendResult {
     }
 
     #[inline]
+    pub fn encoder_send_result_to_json<T>(obj: &T) -> serde_json::Result<String>
+    where
+        T: Serialize,
+    {
+        serde_json::to_string(obj)
+    }
+
+    #[inline]
+    pub fn decoder_send_result_from_json(json: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(json)
+    }
+
+    #[inline]
     pub fn set_trace_on(&mut self, trace_on: bool) {
         self.trace_on = trace_on;
+    }
+
+    #[inline]
+    pub fn get_region_id(&self) -> Option<&str> {
+        self.region_id.as_deref()
     }
 
     #[inline]
@@ -111,8 +133,18 @@ impl SendResult {
     }
 
     #[inline]
+    pub fn get_msg_id(&self) -> Option<&CheetahString> {
+        self.msg_id.as_ref()
+    }
+
+    #[inline]
     pub fn set_msg_id(&mut self, msg_id: CheetahString) {
         self.msg_id = Some(msg_id);
+    }
+
+    #[inline]
+    pub fn get_send_status(&self) -> SendStatus {
+        self.send_status
     }
 
     #[inline]
@@ -121,8 +153,18 @@ impl SendResult {
     }
 
     #[inline]
+    pub fn get_message_queue(&self) -> Option<&MessageQueue> {
+        self.message_queue.as_ref()
+    }
+
+    #[inline]
     pub fn set_message_queue(&mut self, message_queue: MessageQueue) {
         self.message_queue = Some(message_queue);
+    }
+
+    #[inline]
+    pub fn get_queue_offset(&self) -> u64 {
+        self.queue_offset
     }
 
     #[inline]
@@ -131,8 +173,18 @@ impl SendResult {
     }
 
     #[inline]
+    pub fn get_transaction_id(&self) -> Option<&str> {
+        self.transaction_id.as_deref()
+    }
+
+    #[inline]
     pub fn set_transaction_id(&mut self, transaction_id: String) {
         self.transaction_id = Some(transaction_id);
+    }
+
+    #[inline]
+    pub fn get_offset_msg_id(&self) -> Option<&str> {
+        self.offset_msg_id.as_deref()
     }
 
     #[inline]
@@ -151,6 +203,11 @@ impl SendResult {
     }
 
     #[inline]
+    pub fn get_recall_handle(&self) -> Option<&str> {
+        self.recall_handle()
+    }
+
+    #[inline]
     pub fn set_raw_resp_body(&mut self, body: Vec<u8>) {
         self.raw_resp_body = Some(body);
     }
@@ -166,8 +223,13 @@ impl std::fmt::Display for SendResult {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "SendResult [sendStatus={:?}, msgId={:?}, offsetMsgId={:?}, messageQueue={:?}, queueOffset={}]",
-            self.send_status, self.msg_id, self.offset_msg_id, self.message_queue, self.queue_offset,
+            "SendResult [sendStatus={}, msgId={}, offsetMsgId={}, messageQueue={}, queueOffset={}, recallHandle={}]",
+            self.send_status,
+            java_option_to_string(self.msg_id.as_ref()),
+            java_option_to_string(self.offset_msg_id.as_ref()),
+            java_option_to_string(self.message_queue.as_ref()),
+            self.queue_offset,
+            java_option_to_string(self.recall_handle.as_ref()),
         )
     }
 }
@@ -260,28 +322,36 @@ mod tests {
 
         result.set_region_id("region_id".to_string());
         assert_eq!(result.region_id, Some("region_id".to_string()));
+        assert_eq!(result.get_region_id(), Some("region_id"));
 
         result.set_msg_id(CheetahString::from("msg_id"));
         assert_eq!(result.msg_id, Some(CheetahString::from("msg_id")));
+        assert_eq!(result.get_msg_id(), Some(&CheetahString::from("msg_id")));
 
         result.set_send_status(SendStatus::FlushDiskTimeout);
         assert_eq!(result.send_status, SendStatus::FlushDiskTimeout);
+        assert_eq!(result.get_send_status(), SendStatus::FlushDiskTimeout);
 
         let mq = MessageQueue::default();
         result.set_message_queue(mq.clone());
         assert_eq!(result.message_queue, Some(mq));
+        assert!(result.get_message_queue().is_some());
 
         result.set_queue_offset(456);
         assert_eq!(result.queue_offset, 456);
+        assert_eq!(result.get_queue_offset(), 456);
 
         result.set_transaction_id("transaction_id".to_string());
         assert_eq!(result.transaction_id, Some("transaction_id".to_string()));
+        assert_eq!(result.get_transaction_id(), Some("transaction_id"));
 
         result.set_offset_msg_id("offset_msg_id".to_string());
         assert_eq!(result.offset_msg_id, Some("offset_msg_id".to_string()));
+        assert_eq!(result.get_offset_msg_id(), Some("offset_msg_id"));
 
         result.set_recall_handle("recall_handle".to_string());
         assert_eq!(result.recall_handle(), Some("recall_handle"));
+        assert_eq!(result.get_recall_handle(), Some("recall_handle"));
 
         let body = vec![1, 2, 3];
         result.set_raw_resp_body(body.clone());
@@ -320,12 +390,54 @@ mod tests {
     }
 
     #[test]
+    fn send_result_json_aliases_match_java_static_facade_shape() {
+        let result = SendResult::new_with_additional_fields(
+            SendStatus::SendOk,
+            Some(CheetahString::from("msg_id")),
+            Some(MessageQueue::default()),
+            123,
+            Some("transaction_id".to_string()),
+            Some("offset_msg_id".to_string()),
+            Some("region_id".to_string()),
+        );
+
+        let json = SendResult::encoder_send_result_to_json(&result).expect("send result should encode");
+        let decoded = SendResult::decoder_send_result_from_json(&json).expect("send result should decode");
+
+        assert_eq!(decoded.get_send_status(), SendStatus::SendOk);
+        assert_eq!(decoded.get_msg_id(), Some(&CheetahString::from("msg_id")));
+        assert_eq!(decoded.get_queue_offset(), 123);
+        assert_eq!(decoded.get_transaction_id(), Some("transaction_id"));
+        assert_eq!(decoded.get_offset_msg_id(), Some("offset_msg_id"));
+        assert_eq!(decoded.get_region_id(), Some("region_id"));
+    }
+
+    #[test]
     fn test_send_result_display() {
         let result = SendResult::default();
         let display = format!("{}", result);
         assert_eq!(
             display,
-            "SendResult [sendStatus=SendOk, msgId=None, offsetMsgId=None, messageQueue=None, queueOffset=0]"
+            "SendResult [sendStatus=SEND_OK, msgId=null, offsetMsgId=null, messageQueue=null, queueOffset=0, \
+             recallHandle=null]"
+        );
+    }
+
+    #[test]
+    fn send_result_display_matches_java_to_string_shape_with_values() {
+        let mut result = SendResult::new(
+            SendStatus::FlushDiskTimeout,
+            Some(CheetahString::from("msg-a")),
+            Some("offset-a".to_string()),
+            Some(MessageQueue::from_parts("TopicA", "BrokerA", 2)),
+            42,
+        );
+        result.set_recall_handle("recall-a".to_string());
+
+        assert_eq!(
+            result.to_string(),
+            "SendResult [sendStatus=FLUSH_DISK_TIMEOUT, msgId=msg-a, offsetMsgId=offset-a, messageQueue=MessageQueue \
+             [topic=TopicA, brokerName=BrokerA, queueId=2], queueOffset=42, recallHandle=recall-a]"
         );
     }
 }

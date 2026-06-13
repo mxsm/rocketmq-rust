@@ -31,7 +31,6 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
-use crate::common::compression::compression_type::CompressionType;
 use crate::common::compression::compressor_factory::CompressorFactory;
 use crate::common::message::message_client_ext::MessageClientExt;
 use crate::common::message::message_ext::MessageExt;
@@ -61,6 +60,73 @@ pub const PHY_POS_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8;
 pub const QUEUE_OFFSET_POSITION: usize = 4 + 4 + 4 + 4 + 4;
 pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
+
+fn get_i16_checked(buffer: &mut Bytes) -> Option<i16> {
+    if buffer.remaining() < 2 {
+        None
+    } else {
+        Some(buffer.get_i16())
+    }
+}
+
+fn get_u8_checked(buffer: &mut Bytes) -> Option<u8> {
+    if buffer.remaining() < 1 {
+        None
+    } else {
+        Some(buffer.get_u8())
+    }
+}
+
+fn get_i32_checked(buffer: &mut Bytes) -> Option<i32> {
+    if buffer.remaining() < 4 {
+        None
+    } else {
+        Some(buffer.get_i32())
+    }
+}
+
+fn get_u32_checked(buffer: &mut Bytes) -> Option<u32> {
+    if buffer.remaining() < 4 {
+        None
+    } else {
+        Some(buffer.get_u32())
+    }
+}
+
+fn get_i64_checked(buffer: &mut Bytes) -> Option<i64> {
+    if buffer.remaining() < 8 {
+        None
+    } else {
+        Some(buffer.get_i64())
+    }
+}
+
+fn split_to_checked(buffer: &mut Bytes, len: usize) -> Option<Bytes> {
+    if buffer.remaining() < len {
+        None
+    } else {
+        Some(buffer.split_to(len))
+    }
+}
+
+fn copy_to_array_checked<const N: usize>(buffer: &mut Bytes) -> Option<[u8; N]> {
+    if buffer.remaining() < N {
+        None
+    } else {
+        let mut bytes = [0; N];
+        buffer.copy_to_slice(&mut bytes);
+        Some(bytes)
+    }
+}
+
+fn get_topic_length_checked(version: MessageVersion, buffer: &mut Bytes) -> Option<usize> {
+    match version {
+        MessageVersion::V1 => get_u8_checked(buffer).map(usize::from),
+        MessageVersion::V2 => {
+            get_i16_checked(buffer).and_then(|value| if value < 0 { None } else { Some(value as usize) })
+        }
+    }
+}
 
 pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<CheetahString, CheetahString> {
     let mut map = HashMap::new();
@@ -171,61 +237,59 @@ pub fn decode(
     is_set_properties_string: bool,
     check_crc: bool,
 ) -> Option<MessageExt> {
-    let mut msg_ext = if is_client {
-        unimplemented!()
-    } else {
-        MessageExt::default()
-    };
+    let initial_remaining = byte_buffer.remaining();
+    let mut msg_ext = MessageExt::default();
 
     // 1 TOTALSIZE
-    let store_size = byte_buffer.get_i32();
+    let store_size = get_i32_checked(byte_buffer)?;
+    if store_size <= 0 || store_size as usize > initial_remaining {
+        return None;
+    }
     msg_ext.set_store_size(store_size);
 
     // 2 MAGICCODE
-    let magic_code = byte_buffer.get_i32();
-    let version = MessageVersion::value_of_magic_code(magic_code).unwrap();
+    let magic_code = get_i32_checked(byte_buffer)?;
+    let version = MessageVersion::value_of_magic_code(magic_code).ok()?;
 
     // 3 BODYCRC
-    let body_crc = byte_buffer.get_u32();
+    let body_crc = get_u32_checked(byte_buffer)?;
     msg_ext.set_body_crc(body_crc);
 
     // 4 QUEUEID
-    let queue_id = byte_buffer.get_i32();
+    let queue_id = get_i32_checked(byte_buffer)?;
     msg_ext.set_queue_id(queue_id);
 
     // 5 FLAG
-    let flag = byte_buffer.get_i32();
+    let flag = get_i32_checked(byte_buffer)?;
     msg_ext.message.set_flag(flag);
 
     // 6 QUEUEOFFSET
-    let queue_offset = byte_buffer.get_i64();
+    let queue_offset = get_i64_checked(byte_buffer)?;
     msg_ext.set_queue_offset(queue_offset);
 
     // 7 PHYSICALOFFSET
-    let physic_offset = byte_buffer.get_i64();
+    let physic_offset = get_i64_checked(byte_buffer)?;
     msg_ext.set_commit_log_offset(physic_offset);
 
     // 8 SYSFLAG
-    let sys_flag = byte_buffer.get_i32();
+    let sys_flag = get_i32_checked(byte_buffer)?;
     msg_ext.set_sys_flag(sys_flag);
 
     // 9 BORNTIMESTAMP
-    let born_time_stamp = byte_buffer.get_i64();
+    let born_time_stamp = get_i64_checked(byte_buffer)?;
     msg_ext.set_born_timestamp(born_time_stamp);
 
     // 10 BORNHOST
     let (born_host_address, born_host_ip_length) = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG != 0 {
-        let mut born_host = [0; 16];
-        byte_buffer.copy_to_slice(&mut born_host);
-        let port = byte_buffer.get_i32();
+        let born_host = copy_to_array_checked::<16>(byte_buffer)?;
+        let port = get_i32_checked(byte_buffer)?;
         (
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(born_host), port as u16, 0, 0)),
             16,
         )
     } else {
-        let mut born_host = [0; 4];
-        byte_buffer.copy_to_slice(&mut born_host);
-        let port = byte_buffer.get_i32();
+        let born_host = copy_to_array_checked::<4>(byte_buffer)?;
+        let port = get_i32_checked(byte_buffer)?;
         (
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(born_host), port as u16)),
             4,
@@ -234,22 +298,20 @@ pub fn decode(
     msg_ext.set_born_host(born_host_address);
 
     // 11 STORETIMESTAMP
-    let store_timestamp = byte_buffer.get_i64();
+    let store_timestamp = get_i64_checked(byte_buffer)?;
     msg_ext.set_store_timestamp(store_timestamp);
 
     // 12 STOREHOST
     let (store_host_address, store_host_ip_length) = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG != 0 {
-        let mut store_host = [0; 16];
-        byte_buffer.copy_to_slice(&mut store_host);
-        let port = byte_buffer.get_i32();
+        let store_host = copy_to_array_checked::<16>(byte_buffer)?;
+        let port = get_i32_checked(byte_buffer)?;
         (
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(store_host), port as u16, 0, 0)),
             16,
         )
     } else {
-        let mut store_host = [0; 4];
-        byte_buffer.copy_to_slice(&mut store_host);
-        let port = byte_buffer.get_i32();
+        let store_host = copy_to_array_checked::<4>(byte_buffer)?;
+        let port = get_i32_checked(byte_buffer)?;
         (
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(store_host), port as u16)),
             4,
@@ -258,71 +320,64 @@ pub fn decode(
     msg_ext.set_store_host(store_host_address);
 
     // 13 RECONSUMETIMES
-    let reconsume_times = byte_buffer.get_i32();
+    let reconsume_times = get_i32_checked(byte_buffer)?;
     msg_ext.set_reconsume_times(reconsume_times);
 
     // 14 Prepared Transaction Offset
-    let prepared_transaction_offset = byte_buffer.get_i64();
+    let prepared_transaction_offset = get_i64_checked(byte_buffer)?;
     msg_ext.set_prepared_transaction_offset(prepared_transaction_offset);
 
     // 15 BODY
-    let body_len = byte_buffer.get_i32();
+    let body_len = get_i32_checked(byte_buffer)?;
+    if body_len < 0 {
+        return None;
+    }
+    let body_len = body_len as usize;
     if body_len > 0 {
         // Handle reading and processing body
         if read_body {
-            let mut body = vec![0; body_len as usize];
-            byte_buffer.copy_to_slice(&mut body);
+            let body = split_to_checked(byte_buffer, body_len)?;
             if check_crc {
                 let crc = crc32(&body);
                 if crc != body_crc {
                     return None;
                 }
             }
-            let mut body_bytes = Bytes::from(body);
+            let mut body_bytes = body;
             if de_compress_body && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
-                let compression_type =
-                    CompressionType::find_by_value((flag & MessageSysFlag::COMPRESSION_TYPE_COMPARATOR) >> 8);
-                body_bytes = compression_type.decompression(&body_bytes)
+                let compression_type = MessageSysFlag::try_get_compression_type(sys_flag).ok()?;
+                body_bytes = compression_type.try_decompression(&body_bytes).ok()?;
             }
             msg_ext.message.set_body(Some(body_bytes));
         } else {
-            let _ = byte_buffer.split_to(
-                BORN_TIMESTAMP_POSITION
-                    + born_host_ip_length
-                    + 4
-                    + 8
-                    + store_host_ip_length
-                    + 4
-                    + 4
-                    + 8
-                    + 4
-                    + body_len as usize,
-            );
+            let _ = split_to_checked(byte_buffer, body_len)?;
         }
     }
 
     // 16 TOPIC
-    let topic_len = version.get_topic_length(byte_buffer);
-    let mut topic = vec![0; topic_len];
-    byte_buffer.copy_to_slice(&mut topic);
-    let topic_str = str::from_utf8(&topic).unwrap();
+    let _address_len = born_host_ip_length + store_host_ip_length;
+    let topic_len = get_topic_length_checked(version, byte_buffer)?;
+    let topic = split_to_checked(byte_buffer, topic_len)?;
+    let topic_str = str::from_utf8(&topic).ok()?;
     msg_ext.message.set_topic(CheetahString::from_slice(topic_str));
 
     // 17 properties
-    let properties_length = byte_buffer.get_i16();
+    let properties_length = get_i16_checked(byte_buffer)?;
+    if properties_length < 0 {
+        return None;
+    }
     if properties_length > 0 {
         // Handle reading and processing properties
-        let mut properties = vec![0; properties_length as usize];
-        byte_buffer.copy_to_slice(&mut properties);
+        let properties = split_to_checked(byte_buffer, properties_length as usize)?;
         if !is_set_properties_string {
             //can optimize later
             let properties_string =
-                CheetahString::from_string(String::from_utf8_lossy(properties.as_slice()).to_string());
+                CheetahString::from_string(String::from_utf8_lossy(properties.as_ref()).to_string());
             let message_properties = string_to_message_properties(Some(&properties_string));
             *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
         } else {
             let properties_string =
-                CheetahString::from_string(String::from_utf8_lossy(properties.as_slice()).to_string());
+                CheetahString::from_string(String::from_utf8_lossy(properties.as_ref()).to_string());
             let mut message_properties = string_to_message_properties(Some(&properties_string));
             message_properties.insert(CheetahString::from_static_str("propertiesString"), properties_string);
             *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
@@ -330,10 +385,6 @@ pub fn decode(
     }
     let msg_id = build_message_id(store_host_address, physic_offset);
     msg_ext.set_msg_id(CheetahString::from_string(msg_id));
-
-    if is_client {
-        unimplemented!()
-    }
 
     Some(msg_ext)
 }
@@ -368,7 +419,8 @@ pub fn encode_messages(messages: &[Message]) -> Bytes {
 }
 
 pub fn encode_message(message: &Message) -> Bytes {
-    let body = message.get_body().unwrap();
+    let empty_body = Bytes::new();
+    let body = message.get_body().unwrap_or(&empty_body);
     let body_len = body.len();
     let properties = message_properties_to_string(message.properties().as_map());
     let properties_bytes = properties.as_bytes();
@@ -431,7 +483,10 @@ pub fn decodes_batch_client(byte_buffer: &mut Bytes, read_body: bool, decompress
 }
 
 pub fn decode_messages_from(mut message_ext: MessageExt, vec_: &mut Vec<MessageExt>) {
-    let messages = decode_messages(message_ext.message.body_mut().raw_mut().as_mut().unwrap());
+    let Some(body) = message_ext.message.body_mut().raw_mut().as_mut() else {
+        return;
+    };
+    let messages = decode_messages(body);
     for message in messages {
         let mut message_ext_inner = MessageExt {
             message,
@@ -458,41 +513,56 @@ pub fn decode_messages_from(mut message_ext: MessageExt, vec_: &mut Vec<MessageE
 pub fn decode_messages(buffer: &mut Bytes) -> Vec<Message> {
     let mut messages = Vec::new();
     while buffer.has_remaining() {
-        let message = decode_message(buffer);
+        let Some(message) = try_decode_message(buffer) else {
+            break;
+        };
         messages.push(message);
     }
     messages
 }
 
 pub fn decode_message(buffer: &mut Bytes) -> Message {
+    try_decode_message(buffer).unwrap_or_default()
+}
+
+fn try_decode_message(buffer: &mut Bytes) -> Option<Message> {
     // 1 TOTALSIZE
-    let _ = buffer.get_i32();
+    let store_size = get_i32_checked(buffer)?;
+    if store_size <= 0 {
+        return None;
+    }
 
     // 2 MAGICCODE
-    let _ = buffer.get_i32();
+    let _ = get_i32_checked(buffer)?;
 
     // 3 BODYCRC
-    let _ = buffer.get_i32();
+    let _ = get_i32_checked(buffer)?;
 
     // 4 FLAG
-    let flag = buffer.get_i32();
+    let flag = get_i32_checked(buffer)?;
 
     // 5 BODY
-    let body_len = buffer.get_i32();
-    let body = buffer.split_to(body_len as usize);
+    let body_len = get_i32_checked(buffer)?;
+    if body_len < 0 {
+        return None;
+    }
+    let body = split_to_checked(buffer, body_len as usize)?;
 
     // 6 properties
-    let properties_length = buffer.get_i16();
-    let properties = buffer.split_to(properties_length as usize);
+    let properties_length = get_i16_checked(buffer)?;
+    if properties_length < 0 {
+        return None;
+    }
+    let properties = split_to_checked(buffer, properties_length as usize)?;
     //string_to_message_properties(Some(&String::from_utf8_lossy(properties.as_ref()).
     // to_string()));
-    let message_properties = str_to_message_properties(Some(str::from_utf8(&properties).unwrap()));
+    let message_properties = str_to_message_properties(Some(str::from_utf8(&properties).ok()?));
 
     let mut message = Message::default();
     message.set_body(Some(body));
     message.set_properties(message_properties);
     message.set_flag(flag);
-    message
+    Some(message)
 }
 
 const MSG_ID_IPV4_LEN: usize = 32;
@@ -543,7 +613,9 @@ pub fn decode_message_id(msg_id: &str) -> Result<MessageId, String> {
 }
 
 pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
-    let body = message_ext.get_body().unwrap();
+    let body = message_ext
+        .get_body()
+        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("message body is required"))?;
     let topic = message_ext.topic().as_bytes();
     let topic_len = topic.len();
     let properties = message_properties_to_string(message_ext.get_properties());
@@ -561,18 +633,17 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::
         20
     };
     let new_body = if need_compress && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
-        let compressor = CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
+        let compressor = CompressorFactory::get_compressor(MessageSysFlag::try_get_compression_type(sys_flag)?);
         let compressed_body = compressor.compress(body, 5)?;
         Some(compressed_body)
     } else {
         None
     };
     let body_len = new_body.as_ref().map_or(body.len(), |b| b.len());
-    let store_size = message_ext.store_size;
-    let mut byte_buffer = if store_size > 0 {
-        BytesMut::with_capacity(store_size as usize)
+    let store_size = if message_ext.store_size > 0 {
+        message_ext.store_size as usize
     } else {
-        let store_size = 4 // 1 TOTALSIZE
+        4 // 1 TOTALSIZE
              + 4 // 2 MAGICCODE
              + 4 // 3 BODYCRC
              + 4 // 4 QUEUEID
@@ -588,12 +659,12 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::
              + 8 // 14 Prepared Transaction Offset
              + 4 + body_len // 14 BODY
              + 1 + topic_len // 15 TOPIC
-             + 2 + properties_length; // 16 propertiesLength
-        BytesMut::with_capacity(store_size)
+             + 2 + properties_length // 16 propertiesLength
     };
+    let mut byte_buffer = BytesMut::with_capacity(store_size);
 
     // 1 TOTALSIZE
-    byte_buffer.put_i32(store_size);
+    byte_buffer.put_i32(store_size as i32);
 
     // 2 MAGICCODE
     byte_buffer.put_i32(MESSAGE_MAGIC_CODE);
@@ -668,7 +739,9 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::
 }
 
 pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
-    let body = message_ext.get_body().unwrap();
+    let body = message_ext
+        .get_body()
+        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("message body is required"))?;
     let topics = message_ext.topic().as_bytes();
     let topic_len = topics.len();
     let properties = message_properties_to_string(message_ext.get_properties());
@@ -681,18 +754,17 @@ pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketm
         20
     };
     let new_body = if need_compress && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
-        let compressor = CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
+        let compressor = CompressorFactory::get_compressor(MessageSysFlag::try_get_compression_type(sys_flag)?);
         let compressed_body = compressor.compress(body, 5)?;
         Some(compressed_body)
     } else {
         None
     };
     let body_len = new_body.as_ref().map_or(body.len(), |b| b.len());
-    let store_size = message_ext.store_size;
-    let mut byte_buffer = if store_size > 0 {
-        BytesMut::with_capacity((store_size - 8) as usize)
+    let store_size = if message_ext.store_size > 0 {
+        message_ext.store_size as usize
     } else {
-        let store_size = 4 // 1 TOTALSIZE
+        4 // 1 TOTALSIZE
              + 4 // 2 MAGICCODE
              + 4 // 3 BODYCRC
              + 4 // 4 QUEUEID
@@ -706,12 +778,17 @@ pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketm
              + 8 // 12 Prepared Transaction Offset
              + 4 + body_len // 13 BODY
              + 1 + topic_len // 14 TOPIC
-             + 2 + properties_length; // 15 propertiesLength
-        BytesMut::with_capacity(store_size)
+             + 2 + properties_length // 15 propertiesLength
     };
+    let capacity = if message_ext.store_size > 0 {
+        store_size.saturating_sub(8)
+    } else {
+        store_size
+    };
+    let mut byte_buffer = BytesMut::with_capacity(capacity);
 
     // 1 TOTALSIZE
-    byte_buffer.put_i32(store_size);
+    byte_buffer.put_i32(store_size as i32);
 
     // 2 MAGICCODE
     byte_buffer.put_i32(MESSAGE_MAGIC_CODE);
@@ -931,6 +1008,38 @@ mod tests {
         assert!(result.is_ok());
         let bytes = result.unwrap();
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_with_unknown_compression_type_returns_error() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_body(Bytes::from_static(b"Hello, World!"));
+        message_ext.set_sys_flag(MessageSysFlag::COMPRESSED_FLAG | (0x7 << 8));
+
+        let result = encode(&message_ext, true);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_compressed_body_uses_sys_flag_compression_type() {
+        let body = Bytes::from_static(b"Hello from compressed RocketMQ body");
+
+        for compression_flag in [
+            MessageSysFlag::COMPRESSION_LZ4_TYPE,
+            MessageSysFlag::COMPRESSION_ZSTD_TYPE,
+            MessageSysFlag::COMPRESSION_ZLIB_TYPE,
+        ] {
+            let mut message_ext = MessageExt::default();
+            message_ext.set_body(body.clone());
+            message_ext.set_sys_flag(MessageSysFlag::COMPRESSED_FLAG | compression_flag);
+            let mut encoded = encode(&message_ext, true).expect("compressed message should encode");
+
+            let decoded =
+                decode(&mut encoded, true, true, false, false, false).expect("compressed message should decode");
+
+            assert_eq!(decoded.get_body(), Some(&body));
+        }
     }
 
     #[test]

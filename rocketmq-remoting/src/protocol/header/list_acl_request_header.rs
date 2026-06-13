@@ -24,6 +24,8 @@ pub struct ListAclRequestHeader {
     pub resource_filter: CheetahString,
 }
 
+pub type ListAclsRequestHeader = ListAclRequestHeader;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +76,16 @@ mod tests {
 
         assert_eq!(header.subject_filter, cloned_header.subject_filter);
         assert_eq!(header.resource_filter, cloned_header.resource_filter);
+    }
+
+    #[test]
+    fn list_acls_request_header_alias_matches_java_name() {
+        let header = ListAclsRequestHeader {
+            subject_filter: CheetahString::from("subject"),
+            resource_filter: CheetahString::from("resource"),
+        };
+
+        assert_eq!(header.subject_filter, "subject");
+        assert_eq!(header.resource_filter, "resource");
     }
 }

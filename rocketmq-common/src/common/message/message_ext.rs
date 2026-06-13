@@ -254,9 +254,9 @@ impl Default for MessageExt {
             queue_offset: 0,
             sys_flag: 0,
             born_timestamp: 0,
-            born_host: "127.0.0.1:10911".parse().unwrap(),
+            born_host: SocketAddr::from(([127, 0, 0, 1], 10911)),
             store_timestamp: 0,
-            store_host: "127.0.0.1:10911".parse().unwrap(),
+            store_host: SocketAddr::from(([127, 0, 0, 1], 10911)),
             msg_id: CheetahString::default(),
             commit_log_offset: 0,
             body_crc: 0,
@@ -270,10 +270,9 @@ impl fmt::Display for MessageExt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MessageExt {{ message: {}, broker_name: {}, queue_id: {}, store_size: {}, queue_offset: {}, sys_flag: \
-             {}, born_timestamp: {}, born_host: {}, store_timestamp: {}, store_host: {}, msg_id: {}, \
-             commit_log_offset: {}, body_crc: {}, reconsume_times: {}, prepared_transaction_offset: {} }}",
-            self.message,
+            "MessageExt [brokerName={}, queueId={}, storeSize={}, queueOffset={}, sysFlag={}, bornTimestamp={}, \
+             bornHost={}, storeTimestamp={}, storeHost={}, msgId={}, commitLogOffset={}, bodyCRC={}, \
+             reconsumeTimes={}, preparedTransactionOffset={}, toString()={}]",
             self.broker_name,
             self.queue_id,
             self.store_size,
@@ -287,7 +286,8 @@ impl fmt::Display for MessageExt {
             self.commit_log_offset,
             self.body_crc,
             self.reconsume_times,
-            self.prepared_transaction_offset
+            self.prepared_transaction_offset,
+            self.message
         )
     }
 }
@@ -458,5 +458,32 @@ mod tests {
         let transaction_id = <MessageExt as MessageTrait>::transaction_id(&message_ext);
 
         assert_eq!(transaction_id, Some(&CheetahString::from_static_str("tx-123")));
+    }
+
+    #[test]
+    fn message_ext_display_matches_java_to_string_shape() {
+        let mut message_ext = MessageExt::default();
+        message_ext.set_broker_name(CheetahString::from_static_str("BrokerA"));
+        message_ext.set_queue_id(3);
+        message_ext.set_store_size(128);
+        message_ext.set_queue_offset(42);
+        message_ext.set_sys_flag(1);
+        message_ext.set_born_timestamp(10);
+        message_ext.set_store_timestamp(20);
+        message_ext.set_msg_id(CheetahString::from_static_str("MSGID"));
+        message_ext.set_commit_log_offset(1000);
+        message_ext.set_body_crc(99);
+        message_ext.set_reconsume_times(2);
+        message_ext.set_prepared_transaction_offset(7);
+        message_ext.set_topic(CheetahString::from_static_str("TopicA"));
+        message_ext.set_body(Bytes::from_static(&[1, 255]));
+
+        assert_eq!(
+            message_ext.to_string(),
+            "MessageExt [brokerName=BrokerA, queueId=3, storeSize=128, queueOffset=42, sysFlag=1, bornTimestamp=10, \
+             bornHost=127.0.0.1:10911, storeTimestamp=20, storeHost=127.0.0.1:10911, msgId=MSGID, \
+             commitLogOffset=1000, bodyCRC=99, reconsumeTimes=2, preparedTransactionOffset=7, \
+             toString()=Message{topic='TopicA', flag=0, properties={}, body=[1, -1], transactionId='null'}]"
+        );
     }
 }

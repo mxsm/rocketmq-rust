@@ -58,8 +58,31 @@ impl std::fmt::Display for ConsumeReturnType {
             ConsumeReturnType::Success => write!(f, "SUCCESS"),
             ConsumeReturnType::TimeOut => write!(f, "TIME_OUT"),
             ConsumeReturnType::Exception => write!(f, "EXCEPTION"),
-            ConsumeReturnType::ReturnNull => write!(f, "RETURN_NULL"),
+            ConsumeReturnType::ReturnNull => write!(f, "RETURNNULL"),
             ConsumeReturnType::Failed => write!(f, "FAILED"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_matches_java_enum_names() {
+        assert_eq!(ConsumeReturnType::Success.to_string(), "SUCCESS");
+        assert_eq!(ConsumeReturnType::TimeOut.to_string(), "TIME_OUT");
+        assert_eq!(ConsumeReturnType::Exception.to_string(), "EXCEPTION");
+        assert_eq!(ConsumeReturnType::ReturnNull.to_string(), "RETURNNULL");
+        assert_eq!(ConsumeReturnType::Failed.to_string(), "FAILED");
+    }
+
+    #[test]
+    fn ordinals_match_java_declaration_order() {
+        assert_eq!(i32::from(ConsumeReturnType::Success), 0);
+        assert_eq!(i32::from(ConsumeReturnType::TimeOut), 1);
+        assert_eq!(i32::from(ConsumeReturnType::Exception), 2);
+        assert_eq!(i32::from(ConsumeReturnType::ReturnNull), 3);
+        assert_eq!(i32::from(ConsumeReturnType::Failed), 4);
     }
 }

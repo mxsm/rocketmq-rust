@@ -67,13 +67,8 @@ impl ConsumeMessageTraceHookImpl {
                 }
             }
 
-            // Extract region ID (all messages assumed to share the same region)
-            if region_id.is_empty() {
-                if let Some(region) =
-                    msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION))
-                {
-                    region_id = region.clone();
-                }
+            if let Some(region) = msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION)) {
+                region_id = region.clone();
             }
 
             // Build trace bean for this message
@@ -139,6 +134,16 @@ impl ConsumeMessageTraceHookImpl {
             .map(i32::from)
             .unwrap_or(0) // Default to Success if not found or invalid
     }
+
+    #[inline]
+    fn average_cost_time_millis(now_millis: u64, start_millis: u64, message_count: usize) -> i32 {
+        if message_count == 0 {
+            return 0;
+        }
+
+        let average = now_millis.saturating_sub(start_millis) / message_count as u64;
+        i32::try_from(average).unwrap_or(i32::MAX)
+    }
 }
 
 impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
@@ -177,7 +182,7 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
                 rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter::create_uniq_id(),
             ),
             context_code: 0,
-            access_channel: context.access_channel,
+            access_channel: None,
             trace_beans: Some(beans),
         });
 
@@ -227,8 +232,9 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
             return;
         }
 
-        // Calculate average consumption cost time
-        let cost_time = ((current_millis() - sub_before_context.time_stamp) as usize / context.msg_list.len()) as i32;
+        let now_millis = current_millis();
+        let cost_time =
+            Self::average_cost_time_millis(now_millis, sub_before_context.time_stamp, context.msg_list.len());
 
         // Parse consumption return type from context properties
         let context_code = self.parse_context_code(context);
@@ -236,7 +242,7 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
         // Create SubAfter trace context (reuses data from SubBefore)
         let sub_after_context = TraceContext {
             trace_type: Some(TraceType::SubAfter),
-            time_stamp: current_millis(),
+            time_stamp: now_millis,
             region_id: sub_before_context.region_id.clone(),
             region_name: sub_before_context.region_name.clone(),
             group_name: sub_before_context.group_name.clone(),
@@ -255,5 +261,159 @@ impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
                 context.consumer_group
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_rust::ArcMut;
+
+    use super::*;
+    use crate::base::access_channel::AccessChannel;
+    use crate::trace::trace_dispatcher::TraceDispatcher;
+
+    struct CapturingTraceDispatcher {
+        contexts: Mutex<Vec<TraceContext>>,
+    }
+
+    impl CapturingTraceDispatcher {
+        fn new() -> Self {
+            Self {
+                contexts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn contexts(&self) -> Vec<TraceContext> {
+            self.contexts.lock().expect("capture lock").clone()
+        }
+    }
+
+    impl TraceDispatcher for CapturingTraceDispatcher {
+        fn start(&self, _name_srv_addr: &str, _access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()> {
+            Ok(())
+        }
+
+        fn append(&self, ctx: &dyn Any) -> bool {
+            let Some(trace_context) = ctx.downcast_ref::<TraceContext>() else {
+                return false;
+            };
+            self.contexts.lock().expect("capture lock").push(trace_context.clone());
+            true
+        }
+
+        fn flush(&self) -> rocketmq_error::RocketMQResult<()> {
+            Ok(())
+        }
+
+        fn shutdown(&self) {}
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_mut_any(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    fn message(topic: &str, msg_id: &str, region: &str, trace_on: Option<&str>) -> ArcMut<MessageExt> {
+        let mut msg = MessageExt::default();
+        msg.set_topic(CheetahString::from_string(topic.to_string()));
+        msg.set_msg_id(CheetahString::from_string(msg_id.to_string()));
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
+            CheetahString::from_string(region.to_string()),
+        );
+        if let Some(trace_on) = trace_on {
+            msg.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
+                CheetahString::from_string(trace_on.to_string()),
+            );
+        }
+        ArcMut::new(msg)
+    }
+
+    #[test]
+    fn consume_trace_uses_last_enabled_message_region_like_java() {
+        let dispatcher = Arc::new(CapturingTraceDispatcher::new());
+        let hook = ConsumeMessageTraceHookImpl::new(dispatcher.clone());
+        let messages = vec![
+            message("ns%TopicA", "msg-a", "RegionA", None),
+            message("ns%TopicB", "msg-b", "RegionDisabled", Some("false")),
+            message("ns%TopicC", "msg-c", "RegionC", None),
+        ];
+        let mut context = ConsumeMessageContext::new(CheetahString::from_static_str("ns%ConsumerGroup"), &messages)
+            .with_access_channel(AccessChannel::Cloud)
+            .with_success(false);
+
+        hook.consume_message_before(&mut context);
+        hook.consume_message_after(&mut context);
+
+        let contexts = dispatcher.contexts();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].trace_type, Some(TraceType::SubBefore));
+        assert_eq!(contexts[0].region_id.as_str(), "RegionC");
+        assert_eq!(contexts[0].group_name.as_str(), "ConsumerGroup");
+        assert_eq!(contexts[0].trace_beans.as_ref().map(Vec::len), Some(2));
+        assert_eq!(contexts[0].access_channel, None);
+        assert_eq!(contexts[1].trace_type, Some(TraceType::SubAfter));
+        assert_eq!(contexts[1].region_id.as_str(), "RegionC");
+        assert_eq!(contexts[1].access_channel, Some(AccessChannel::Cloud));
+        assert!(!contexts[1].is_success);
+    }
+
+    #[test]
+    fn consume_trace_after_handles_future_timestamp_without_underflow() {
+        let dispatcher = Arc::new(CapturingTraceDispatcher::new());
+        let hook = ConsumeMessageTraceHookImpl::new(dispatcher.clone());
+        let messages = vec![message("TopicA", "msg-a", "RegionA", None)];
+        let future_before_context = TraceContext {
+            trace_type: Some(TraceType::SubBefore),
+            time_stamp: current_millis().saturating_add(60_000),
+            region_id: CheetahString::from_static_str("RegionA"),
+            region_name: CheetahString::new(),
+            group_name: CheetahString::from_static_str("ConsumerGroup"),
+            cost_time: 0,
+            is_success: true,
+            request_id: CheetahString::from_static_str("request-a"),
+            context_code: 0,
+            access_channel: None,
+            trace_beans: Some(vec![TraceBean::default()]),
+        };
+        let mut context = ConsumeMessageContext::new(CheetahString::from_static_str("ConsumerGroup"), &messages)
+            .with_trace_context(Arc::new(future_before_context));
+
+        hook.consume_message_after(&mut context);
+
+        let contexts = dispatcher.contexts();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].trace_type, Some(TraceType::SubAfter));
+        assert_eq!(contexts[0].cost_time, 0);
+    }
+
+    #[test]
+    fn average_cost_time_uses_java_per_message_shape_without_panics() {
+        assert_eq!(
+            ConsumeMessageTraceHookImpl::average_cost_time_millis(1_100, 1_000, 4),
+            25
+        );
+        assert_eq!(
+            ConsumeMessageTraceHookImpl::average_cost_time_millis(1_000, 1_100, 4),
+            0
+        );
+        assert_eq!(
+            ConsumeMessageTraceHookImpl::average_cost_time_millis(1_100, 1_000, 0),
+            0
+        );
+        assert_eq!(
+            ConsumeMessageTraceHookImpl::average_cost_time_millis(u64::MAX, 0, 1),
+            i32::MAX
+        );
     }
 }

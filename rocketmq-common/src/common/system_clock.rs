@@ -19,8 +19,24 @@ pub struct SystemClock;
 
 impl SystemClock {
     pub fn now() -> u128 {
-        let now = SystemTime::now();
-        let duration = now.duration_since(UNIX_EPOCH).expect("Time went backwards");
-        duration.as_millis()
+        millis_since_epoch(SystemTime::now())
+    }
+}
+
+fn millis_since_epoch(now: SystemTime) -> u128 {
+    now.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn millis_since_epoch_saturates_when_clock_is_before_epoch() {
+        assert_eq!(millis_since_epoch(UNIX_EPOCH - Duration::from_millis(1)), 0);
     }
 }

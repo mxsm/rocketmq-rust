@@ -17,8 +17,7 @@ pub mod allocate_message_queue_averagely_by_circle;
 pub mod allocate_message_queue_by_config;
 pub mod allocate_message_queue_by_machine_room;
 pub mod allocate_message_queue_by_machine_room_nearby;
-
-use std::collections::HashSet;
+pub mod allocate_message_queue_consistent_hash;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -40,8 +39,7 @@ pub fn check(
         return Err(mq_client_err!("cidAll is null or cidAll empty".to_string()));
     }
 
-    let cid_set: HashSet<_> = cid_all.iter().collect();
-    if !cid_set.contains(current_cid) {
+    if !cid_all.iter().any(|cid| cid == current_cid) {
         info!(
             "[BUG] ConsumerGroup: {} The consumerId: {} not in cidAll: {:?}",
             consumer_group, current_cid, cid_all

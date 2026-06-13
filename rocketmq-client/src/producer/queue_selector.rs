@@ -13,7 +13,10 @@
 //  limitations under the License.
 
 pub mod select_message_queue_by_hash;
+pub mod select_message_queue_by_machine_room;
 pub mod select_message_queue_by_random;
 
+pub use select_message_queue_by_hash::JavaHashCode;
 pub use select_message_queue_by_hash::SelectMessageQueueByHash;
+pub use select_message_queue_by_machine_room::SelectMessageQueueByMachineRoom;
 pub use select_message_queue_by_random::SelectMessageQueueByRandom;

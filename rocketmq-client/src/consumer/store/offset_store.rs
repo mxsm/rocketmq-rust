@@ -14,6 +14,14 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
@@ -33,6 +41,16 @@ pub enum OffsetStore {
     Remote(RemoteBrokerOffsetStore),
     /// Offsets persisted to and retrieved from a local file.
     Local(LocalFileOffsetStore),
+    #[cfg(test)]
+    Test(TestOffsetStore),
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub struct TestOffsetStore {
+    offsets: Arc<Mutex<HashMap<MessageQueue, i64>>>,
+    persisted_offsets: Arc<Mutex<HashMap<MessageQueue, i64>>>,
+    persist_all_count: Arc<AtomicUsize>,
 }
 
 impl OffsetStore {
@@ -46,6 +64,27 @@ impl OffsetStore {
         Self::Local(local_file_offset_store)
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_test() -> Self {
+        Self::Test(TestOffsetStore::default())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_persist_all_count(&self) -> usize {
+        match self {
+            Self::Test(store) => store.persist_all_count.load(Ordering::Acquire),
+            Self::Remote(_) | Self::Local(_) => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_persisted_offset(&self, mq: &MessageQueue) -> Option<i64> {
+        match self {
+            Self::Test(store) => store.persisted_offset(mq),
+            Self::Remote(_) | Self::Local(_) => None,
+        }
+    }
+
     /// Asynchronously loads persisted offsets from the underlying storage backend.
     ///
     /// # Errors
@@ -56,6 +95,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.load().await,
             Self::Local(store) => store.load().await,
+            #[cfg(test)]
+            Self::Test(_) => Ok(()),
         }
     }
 
@@ -67,6 +108,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.update_offset(mq, offset, increase_only).await,
             Self::Local(store) => store.update_offset(mq, offset, increase_only).await,
+            #[cfg(test)]
+            Self::Test(store) => store.update_offset(mq, offset, increase_only),
         }
     }
 
@@ -76,6 +119,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.update_and_freeze_offset(mq, offset).await,
             Self::Local(store) => store.update_and_freeze_offset(mq, offset).await,
+            #[cfg(test)]
+            Self::Test(store) => store.update_offset(mq, offset, false),
         }
     }
 
@@ -87,6 +132,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.read_offset(mq, type_).await,
             Self::Local(store) => store.read_offset(mq, type_).await,
+            #[cfg(test)]
+            Self::Test(store) => store.read_offset(mq),
         }
     }
 
@@ -96,6 +143,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.persist_all(mqs).await,
             Self::Local(store) => store.persist_all(mqs).await,
+            #[cfg(test)]
+            Self::Test(store) => store.persist_all(mqs),
         }
     }
 
@@ -105,6 +154,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.persist(mq).await,
             Self::Local(store) => store.persist(mq).await,
+            #[cfg(test)]
+            Self::Test(store) => store.persist(mq),
         }
     }
 
@@ -113,6 +164,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.remove_offset(mq).await,
             Self::Local(store) => store.remove_offset(mq).await,
+            #[cfg(test)]
+            Self::Test(store) => store.remove_offset(mq),
         }
     }
 
@@ -121,6 +174,8 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.clone_offset_table(topic).await,
             Self::Local(store) => store.clone_offset_table(topic).await,
+            #[cfg(test)]
+            Self::Test(store) => store.clone_offset_table(topic),
         }
     }
 
@@ -140,7 +195,77 @@ impl OffsetStore {
         match self {
             Self::Remote(store) => store.update_consume_offset_to_broker(mq, offset, is_oneway).await,
             Self::Local(store) => store.update_consume_offset_to_broker(mq, offset, is_oneway).await,
+            #[cfg(test)]
+            Self::Test(store) => {
+                store.update_offset(mq, offset, false);
+                Ok(())
+            }
         }
+    }
+}
+
+#[cfg(test)]
+impl TestOffsetStore {
+    fn update_offset(&self, mq: &MessageQueue, offset: i64, increase_only: bool) {
+        let mut offsets = self.offsets.lock().expect("test offset store lock");
+        if increase_only {
+            offsets
+                .entry(mq.clone())
+                .and_modify(|current| {
+                    if offset > *current {
+                        *current = offset;
+                    }
+                })
+                .or_insert(offset);
+        } else {
+            offsets.insert(mq.clone(), offset);
+        }
+    }
+
+    fn read_offset(&self, mq: &MessageQueue) -> i64 {
+        self.offsets
+            .lock()
+            .expect("test offset store lock")
+            .get(mq)
+            .copied()
+            .unwrap_or(-1)
+    }
+
+    fn persist_all(&self, mqs: &HashSet<MessageQueue>) {
+        let offsets = self.offsets.lock().expect("test offset store lock");
+        let mut persisted_offsets = self.persisted_offsets.lock().expect("test persisted offset store lock");
+        for mq in mqs {
+            if let Some(offset) = offsets.get(mq) {
+                persisted_offsets.insert(mq.clone(), *offset);
+            }
+        }
+        self.persist_all_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn persist(&self, mq: &MessageQueue) {
+        self.persist_all(&HashSet::from([mq.clone()]));
+    }
+
+    fn remove_offset(&self, mq: &MessageQueue) {
+        self.offsets.lock().expect("test offset store lock").remove(mq);
+    }
+
+    fn persisted_offset(&self, mq: &MessageQueue) -> Option<i64> {
+        self.persisted_offsets
+            .lock()
+            .expect("test persisted offset store lock")
+            .get(mq)
+            .copied()
+    }
+
+    fn clone_offset_table(&self, topic: &str) -> HashMap<MessageQueue, i64> {
+        self.offsets
+            .lock()
+            .expect("test offset store lock")
+            .iter()
+            .filter(|(mq, _)| mq.topic() == topic)
+            .map(|(mq, offset)| (mq.clone(), *offset))
+            .collect()
     }
 }
 
@@ -149,7 +274,7 @@ impl OffsetStore {
 /// Implementations are responsible for loading, updating, persisting, and querying
 /// per-queue consume offsets. The two standard backends are
 /// [`RemoteBrokerOffsetStore`] and [`LocalFileOffsetStore`].
-pub trait OffsetStoreTrait {
+pub(crate) trait OffsetStoreTrait {
     /// Asynchronously loads persisted offsets from the underlying storage.
     ///
     /// # Errors

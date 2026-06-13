@@ -49,6 +49,12 @@ pub struct NotificationRequestHeader {
     #[serde(rename = "attemptId", skip_serializing_if = "Option::is_none")]
     pub attempt_id: Option<CheetahString>,
 
+    #[serde(rename = "expType", skip_serializing_if = "Option::is_none")]
+    pub exp_type: Option<CheetahString>,
+
+    #[serde(rename = "exp", skip_serializing_if = "Option::is_none")]
+    pub exp: Option<CheetahString>,
+
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -69,14 +75,20 @@ mod tests {
             born_time: 1234567891,
             order: true,
             attempt_id: Some(CheetahString::from("attempt_1")),
+            exp_type: Some(CheetahString::from("TAG")),
+            exp: Some(CheetahString::from("tag-a")),
             topic_request_header: None,
         };
 
         let serialized = serde_json::to_string(&header).expect("Failed to serialize header");
+        assert!(serialized.contains("\"expType\":\"TAG\""));
+        assert!(serialized.contains("\"exp\":\"tag-a\""));
 
         let deserialized: NotificationRequestHeader =
             serde_json::from_str(&serialized).expect("Failed to deserialize header");
         assert_eq!(header.queue_id, deserialized.queue_id);
+        assert_eq!(deserialized.exp_type.as_deref(), Some("TAG"));
+        assert_eq!(deserialized.exp.as_deref(), Some("tag-a"));
     }
 
     #[test]
@@ -89,6 +101,8 @@ mod tests {
             born_time: 1234567891,
             order: false, // Defaults to false
             attempt_id: None,
+            exp_type: None,
+            exp: None,
             topic_request_header: None,
         };
 

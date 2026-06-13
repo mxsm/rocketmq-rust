@@ -303,7 +303,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_container_addr: CheetahString,
         broker_config: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .add_broker_to_container(broker_container_addr, broker_config)
+            .await
     }
 
     async fn remove_broker_from_container(
@@ -313,7 +315,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_name: CheetahString,
         broker_id: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .remove_broker_from_container(broker_container_addr, cluster_name, broker_name, broker_id)
+            .await
     }
 
     async fn update_broker_config(
@@ -358,7 +362,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         config: PlainAccessConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_and_update_plain_access_config(addr, config)
+            .await
     }
 
     async fn delete_plain_access_config(
@@ -366,7 +372,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         access_key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .delete_plain_access_config(addr, access_key)
+            .await
     }
 
     async fn update_global_white_addr_config(
@@ -375,14 +383,18 @@ impl MQAdminExt for DefaultMQAdminExt {
         global_white_addrs: CheetahString,
         acl_file_full_path: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_global_white_addr_config(addr, global_white_addrs, acl_file_full_path)
+            .await
     }
 
     async fn examine_broker_cluster_acl_version_info(
         &self,
         addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_broker_cluster_acl_version_info(addr)
+            .await
     }
 
     async fn create_and_update_subscription_group_config(
@@ -436,7 +448,9 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .fetch_topics_by_cluster(cluster_name)
+            .await
     }
 
     async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
@@ -526,7 +540,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
-        todo!()
+        self.default_mqadmin_ext_impl.get_kv_list_by_namespace(namespace).await
     }
 
     async fn delete_topic(
@@ -603,7 +617,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         timestamp: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .reset_offset_new(consumer_group, topic, timestamp)
+            .await
     }
 
     async fn get_consume_status(
@@ -633,11 +649,13 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
-        todo!()
+        self.default_mqadmin_ext_impl.query_topics_by_consumer(group).await
     }
 
     async fn query_topics_by_consumer_concurrent(&self, group: CheetahString) -> AdminToolResult<TopicList> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .query_topics_by_consumer_concurrent(group)
+            .await
     }
 
     async fn query_subscription(
@@ -645,7 +663,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         group: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<SubscriptionData> {
-        todo!()
+        self.default_mqadmin_ext_impl.query_subscription(group, topic).await
     }
 
     async fn clean_expired_consumer_queue(
@@ -653,7 +671,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .clean_expired_consumer_queue(cluster, addr)
+            .await
+    }
+
+    async fn clean_expired_consumer_queue_by_addr(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
+        self.default_mqadmin_ext_impl
+            .clean_expired_consumer_queue_by_addr(addr)
+            .await
     }
 
     async fn delete_expired_commit_log(
@@ -661,7 +687,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .delete_expired_commit_log(cluster, addr)
+            .await
+    }
+
+    async fn delete_expired_commit_log_by_addr(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
+        self.default_mqadmin_ext_impl
+            .delete_expired_commit_log_by_addr(addr)
+            .await
     }
 
     async fn clean_unused_topic(
@@ -669,7 +703,11 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        todo!()
+        self.default_mqadmin_ext_impl.clean_unused_topic(cluster, addr).await
+    }
+
+    async fn clean_unused_topic_by_addr(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
+        self.default_mqadmin_ext_impl.clean_unused_topic_by_addr(addr).await
     }
 
     async fn get_consumer_running_info(
@@ -716,11 +754,13 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         is_offline: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .clone_group_offset(src_group, dest_group, topic, is_offline)
+            .await
     }
 
     async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
-        todo!()
+        self.default_mqadmin_ext_impl.get_cluster_list(topic).await
     }
 
     async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
@@ -755,7 +795,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         mq: MessageQueue,
         offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_consume_offset(broker_addr, consume_group, mq, offset)
+            .await
     }
 
     async fn update_name_server_config(
@@ -784,7 +826,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .resume_check_half_message(topic, msg_id)
+            .await
     }
 
     async fn set_message_request_mode(
@@ -816,7 +860,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         queue_id: i32,
         reset_offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .reset_offset_by_queue_id(broker_addr, consumer_group, topic_name, queue_id, reset_offset)
+            .await
     }
 
     async fn examine_topic_config(
@@ -835,7 +881,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         mapping_detail: TopicQueueMappingDetail,
         force: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_static_topic(addr, default_topic, topic_config, mapping_detail, force)
+            .await
     }
 
     async fn get_controller_meta_data(
@@ -910,14 +958,18 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         consumer_group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .remove_cold_data_flow_ctr_group_config(broker_addr, consumer_group)
+            .await
     }
 
     async fn get_cold_data_flow_ctr_info(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_cold_data_flow_ctr_info(broker_addr)
+            .await
     }
 
     async fn set_commit_log_read_ahead_mode(
@@ -925,7 +977,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         mode: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .set_commit_log_read_ahead_mode(broker_addr, mode)
+            .await
     }
 
     async fn create_user(
@@ -970,7 +1024,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_acl(broker_addr, subject, resources, actions, source_ips, decision)
+            .await
     }
 
     async fn update_acl(
@@ -1000,190 +1056,238 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn create_lite_pull_topic(
         &self,
-        _addr: CheetahString,
-        _topic: CheetahString,
-        _queue_num: i32,
-        _topic_sys_flag: i32,
-        _read_queue_nums: i32,
-        _write_queue_nums: i32,
+        addr: CheetahString,
+        topic: CheetahString,
+        queue_num: i32,
+        topic_sys_flag: i32,
+        read_queue_nums: i32,
+        write_queue_nums: i32,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("create_lite_pull_topic not implemented yet")
+        self.default_mqadmin_ext_impl
+            .create_lite_pull_topic(
+                addr,
+                topic,
+                queue_num,
+                topic_sys_flag,
+                read_queue_nums,
+                write_queue_nums,
+            )
+            .await
     }
 
     async fn update_lite_pull_topic(
         &self,
-        _addr: CheetahString,
-        _topic: CheetahString,
-        _read_queue_nums: i32,
-        _write_queue_nums: i32,
+        addr: CheetahString,
+        topic: CheetahString,
+        read_queue_nums: i32,
+        write_queue_nums: i32,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("update_lite_pull_topic not implemented yet")
+        self.default_mqadmin_ext_impl
+            .update_lite_pull_topic(addr, topic, read_queue_nums, write_queue_nums)
+            .await
     }
 
     async fn get_lite_pull_topic(
         &self,
-        _addr: CheetahString,
-        _topic: CheetahString,
+        addr: CheetahString,
+        topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        unimplemented!("get_lite_pull_topic not implemented yet")
+        self.default_mqadmin_ext_impl.get_lite_pull_topic(addr, topic).await
     }
 
     async fn delete_lite_pull_topic(
         &self,
-        _addr: CheetahString,
-        _cluster_name: CheetahString,
-        _topic: CheetahString,
+        addr: CheetahString,
+        cluster_name: CheetahString,
+        topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("delete_lite_pull_topic not implemented yet")
+        self.default_mqadmin_ext_impl
+            .delete_lite_pull_topic(addr, cluster_name, topic)
+            .await
     }
 
-    async fn query_lite_pull_topic_list(&self, _addr: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
-        unimplemented!("query_lite_pull_topic_list not implemented yet")
+    async fn query_lite_pull_topic_list(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
+        self.default_mqadmin_ext_impl.query_lite_pull_topic_list(addr).await
     }
 
     async fn query_lite_pull_topic_by_cluster(
         &self,
-        _cluster_name: CheetahString,
+        cluster_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicList> {
-        unimplemented!("query_lite_pull_topic_by_cluster not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_lite_pull_topic_by_cluster(cluster_name)
+            .await
     }
 
     async fn query_lite_pull_subscription_list(
         &self,
-        _addr: CheetahString,
-        _topic: CheetahString,
+        addr: CheetahString,
+        topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GroupList> {
-        unimplemented!("query_lite_pull_subscription_list not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_lite_pull_subscription_list(addr, topic)
+            .await
     }
 
     async fn update_lite_pull_consumer_offset(
         &self,
-        _addr: CheetahString,
-        _topic: CheetahString,
-        _group: CheetahString,
-        _queue_id: i32,
-        _offset: u64,
+        addr: CheetahString,
+        topic: CheetahString,
+        group: CheetahString,
+        queue_id: i32,
+        offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("update_lite_pull_consumer_offset not implemented yet")
+        self.default_mqadmin_ext_impl
+            .update_lite_pull_consumer_offset(addr, topic, group, queue_id, offset)
+            .await
     }
 
     async fn examine_consume_stats_with_queue(
         &self,
-        _consumer_group: CheetahString,
-        _topic: Option<CheetahString>,
-        _queue_id: Option<i32>,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+        queue_id: Option<i32>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
-        unimplemented!("examine_consume_stats_with_queue not implemented yet")
+        self.default_mqadmin_ext_impl
+            .examine_consume_stats_with_queue(consumer_group, topic, queue_id)
+            .await
     }
 
     async fn examine_consume_stats_concurrent(
         &self,
-        _consumer_group: CheetahString,
-        _topic: Option<CheetahString>,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
     ) -> AdminToolResult<ConsumeStats> {
-        unimplemented!("examine_consume_stats_concurrent not implemented yet")
+        self.default_mqadmin_ext_impl
+            .examine_consume_stats_concurrent(consumer_group, topic)
+            .await
     }
 
     async fn examine_consume_stats_concurrent_with_cluster(
         &self,
-        _consumer_group: CheetahString,
-        _topic: Option<CheetahString>,
-        _cluster_name: Option<CheetahString>,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+        cluster_name: Option<CheetahString>,
     ) -> AdminToolResult<ConsumeStats> {
-        unimplemented!("examine_consume_stats_concurrent_with_cluster not implemented yet")
+        self.default_mqadmin_ext_impl
+            .examine_consume_stats_concurrent_with_cluster(consumer_group, topic, cluster_name)
+            .await
     }
 
     async fn export_rocksdb_consumer_offset_to_json(
         &self,
-        _broker_addr: CheetahString,
-        _file_path: CheetahString,
+        broker_addr: CheetahString,
+        file_path: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("export_rocksdb_consumer_offset_to_json not implemented yet")
+        self.default_mqadmin_ext_impl
+            .export_rocksdb_consumer_offset_to_json(broker_addr, file_path)
+            .await
     }
 
     async fn export_rocksdb_consumer_offset_from_memory(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        unimplemented!("export_rocksdb_consumer_offset_from_memory not implemented yet")
+        self.default_mqadmin_ext_impl
+            .export_rocksdb_consumer_offset_from_memory(broker_addr)
+            .await
     }
 
     async fn sync_broker_member_group(
         &self,
-        _controller_addr: CheetahString,
-        _cluster_name: CheetahString,
-        _broker_name: CheetahString,
+        controller_addr: CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("sync_broker_member_group not implemented yet")
+        self.default_mqadmin_ext_impl
+            .sync_broker_member_group(controller_addr, cluster_name, broker_name)
+            .await
     }
 
     async fn get_topic_config_by_topic_name(
         &self,
-        _broker_addr: CheetahString,
-        _topic_name: CheetahString,
+        broker_addr: CheetahString,
+        topic_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        unimplemented!("get_topic_config_by_topic_name not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_topic_config_by_topic_name(broker_addr, topic_name)
+            .await
     }
 
     async fn notify_min_broker_id_changed(
         &self,
-        _cluster_name: CheetahString,
-        _broker_name: CheetahString,
-        _min_broker_id: u64,
-        _min_broker_addr: CheetahString,
-        _offline_broker_addr: Option<CheetahString>,
-        _ha_broker_addr: Option<CheetahString>,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        min_broker_id: u64,
+        min_broker_addr: CheetahString,
+        offline_broker_addr: Option<CheetahString>,
+        ha_broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("notify_min_broker_id_changed not implemented yet")
+        self.default_mqadmin_ext_impl
+            .notify_min_broker_id_changed(
+                cluster_name,
+                broker_name,
+                min_broker_id,
+                min_broker_addr,
+                offline_broker_addr,
+                ha_broker_addr,
+            )
+            .await
     }
 
     async fn get_topic_stats_info(
         &self,
-        _broker_addr: CheetahString,
-        _topic: CheetahString,
+        broker_addr: CheetahString,
+        topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
-        unimplemented!("get_topic_stats_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_topic_stats_info(broker_addr, topic)
+            .await
     }
 
     async fn query_broker_has_topic(
         &self,
-        _broker_addr: CheetahString,
-        _topic: CheetahString,
+        broker_addr: CheetahString,
+        topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        unimplemented!("query_broker_has_topic not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_broker_has_topic(broker_addr, topic)
+            .await
     }
 
     async fn get_system_topic_list_from_broker(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicList> {
-        unimplemented!("get_system_topic_list_from_broker not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_system_topic_list_from_broker(broker_addr)
+            .await
     }
 
     async fn examine_topic_route_info_with_timeout(
         &self,
-        _topic: CheetahString,
-        _timeout_millis: u64,
+        topic: CheetahString,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
-        unimplemented!("examine_topic_route_info_with_timeout not implemented yet")
+        self.default_mqadmin_ext_impl
+            .examine_topic_route_info_with_timeout(topic, timeout_millis)
+            .await
     }
 
-    async fn export_pop_records(
-        &self,
-        _broker_addr: CheetahString,
-        _timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        Err(rocketmq_error::RocketMQError::Internal(
-            "export_pop_records not implemented yet".to_string(),
-        ))
+    async fn export_pop_records(&self, broker_addr: CheetahString, timeout: u64) -> rocketmq_error::RocketMQResult<()> {
+        self.default_mqadmin_ext_impl
+            .export_pop_records(broker_addr, timeout)
+            .await
     }
 
     async fn switch_timer_engine(
         &self,
-        _broker_addr: CheetahString,
-        _des_timer_engine: CheetahString,
+        broker_addr: CheetahString,
+        des_timer_engine: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("switch_timer_engine not implemented yet")
+        self.default_mqadmin_ext_impl
+            .switch_timer_engine(broker_addr, des_timer_engine)
+            .await
     }
 
     async fn trigger_lite_dispatch(
@@ -1252,10 +1356,12 @@ impl MQAdminExt for DefaultMQAdminExt {
     #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(
         &self,
-        _addrs: HashSet<CheetahString>,
-        _topic: CheetahString,
+        addrs: HashSet<CheetahString>,
+        topic: CheetahString,
     ) -> AdminToolResult<BrokerOperatorResult> {
-        unimplemented!("delete_topic_in_broker_concurrent not implemented yet")
+        self.default_mqadmin_ext_impl
+            .delete_topic_in_broker_concurrent(addrs, topic)
+            .await
     }
 
     async fn reset_offset_by_timestamp_old(
@@ -1273,27 +1379,33 @@ impl MQAdminExt for DefaultMQAdminExt {
     #[allow(deprecated)]
     async fn reset_offset_new_concurrent(
         &self,
-        _group: CheetahString,
-        _topic: CheetahString,
-        _timestamp: u64,
+        group: CheetahString,
+        topic: CheetahString,
+        timestamp: u64,
     ) -> AdminToolResult<BrokerOperatorResult> {
-        unimplemented!("reset_offset_new_concurrent not implemented yet")
+        self.default_mqadmin_ext_impl
+            .reset_offset_new_concurrent(group, topic, timestamp)
+            .await
     }
 
     async fn query_consume_time_span(
         &self,
-        _topic: CheetahString,
-        _group: CheetahString,
+        topic: CheetahString,
+        group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<QueueTimeSpan>> {
-        unimplemented!("query_consume_time_span not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_consume_time_span(topic, group)
+            .await
     }
 
     async fn query_consume_time_span_concurrent(
         &self,
-        _topic: CheetahString,
-        _group: CheetahString,
+        topic: CheetahString,
+        group: CheetahString,
     ) -> AdminToolResult<Vec<QueueTimeSpan>> {
-        unimplemented!("query_consume_time_span_concurrent not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_consume_time_span_concurrent(topic, group)
+            .await
     }
     #[allow(deprecated)]
     async fn message_track_detail(&self, msg: MessageExt) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
@@ -1317,11 +1429,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn fetch_consume_stats_in_broker(
         &self,
-        _broker_addr: CheetahString,
-        _is_order: bool,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        is_order: bool,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<ConsumeStatsList> {
-        unimplemented!("fetch_consume_stats_in_broker not implemented yet")
+        self.default_mqadmin_ext_impl
+            .fetch_consume_stats_in_broker(broker_addr, is_order, timeout_millis)
+            .await
     }
 
     async fn get_all_subscription_group(
@@ -1360,12 +1474,14 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn update_and_get_group_read_forbidden(
         &self,
-        _broker_addr: CheetahString,
-        _group_name: CheetahString,
-        _topic_name: CheetahString,
-        _readable: Option<bool>,
+        broker_addr: CheetahString,
+        group_name: CheetahString,
+        topic_name: CheetahString,
+        readable: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<GroupForbidden> {
-        unimplemented!("update_and_get_group_read_forbidden not implemented yet")
+        self.default_mqadmin_ext_impl
+            .update_and_get_group_read_forbidden(broker_addr, group_name, topic_name, readable)
+            .await
     }
 
     async fn query_message(
@@ -1402,30 +1518,36 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn elect_master(
         &self,
-        _controller_addr: CheetahString,
-        _cluster_name: CheetahString,
-        _broker_name: CheetahString,
-        _broker_id: Option<u64>,
+        controller_addr: CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)> {
-        unimplemented!("elect_master not implemented yet")
+        self.default_mqadmin_ext_impl
+            .elect_master(controller_addr, cluster_name, broker_name, broker_id)
+            .await
     }
 
     async fn create_user_with_info(
         &self,
-        _broker_addr: CheetahString,
-        _username: CheetahString,
-        _password: CheetahString,
+        broker_addr: CheetahString,
+        username: CheetahString,
+        password: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("create_user_with_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .create_user_with_info(broker_addr, username, password)
+            .await
     }
 
     async fn update_user_with_info(
         &self,
-        _broker_addr: CheetahString,
-        _username: CheetahString,
-        _password: CheetahString,
+        broker_addr: CheetahString,
+        username: CheetahString,
+        password: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("update_user_with_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .update_user_with_info(broker_addr, username, password)
+            .await
     }
 
     async fn get_user(
@@ -1446,18 +1568,22 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn create_acl_with_info(
         &self,
-        _broker_addr: CheetahString,
-        _subject: CheetahString,
+        broker_addr: CheetahString,
+        subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("create_acl_with_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .create_acl_with_info(broker_addr, subject)
+            .await
     }
 
     async fn update_acl_with_info(
         &self,
-        _broker_addr: CheetahString,
-        _subject: CheetahString,
+        broker_addr: CheetahString,
+        subject: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("update_acl_with_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .update_acl_with_info(broker_addr, subject)
+            .await
     }
 
     async fn get_acl(
@@ -1533,10 +1659,12 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn export_rocksdb_config_to_json(
         &self,
-        _broker_addr: CheetahString,
-        _config_types: Vec<CheetahString>,
+        broker_addr: CheetahString,
+        config_types: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!("export_rocksdb_config_to_json not implemented yet")
+        self.default_mqadmin_ext_impl
+            .export_rocksdb_config_to_json(broker_addr, config_types)
+            .await
     }
 }
 
@@ -1604,6 +1732,42 @@ mod tests {
             )
             .await
             .expect_err("unstarted admin should return an error instead of panicking");
+
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+    }
+
+    #[tokio::test]
+    async fn by_addr_cleanup_delegates_to_inner_impl() {
+        let admin = DefaultMQAdminExt::new();
+        let broker_addr = CheetahString::from("127.0.0.1:10911");
+
+        let error = admin
+            .clean_expired_consumer_queue_by_addr(broker_addr.clone())
+            .await
+            .expect_err("unstarted admin should return an error instead of panicking");
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+
+        let error = admin
+            .delete_expired_commit_log_by_addr(broker_addr.clone())
+            .await
+            .expect_err("unstarted admin should return an error instead of panicking");
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+
+        let error = admin
+            .clean_unused_topic_by_addr(broker_addr)
+            .await
+            .expect_err("unstarted admin should return an error instead of panicking");
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+    }
+
+    #[tokio::test]
+    async fn export_pop_records_delegates_to_inner_impl() {
+        let admin = DefaultMQAdminExt::new();
+
+        let error = admin
+            .export_pop_records(CheetahString::from("127.0.0.1:10911"), 3000)
+            .await
+            .expect_err("unstarted admin should return an error instead of a fixed not-implemented error");
 
         assert!(matches!(error, RocketMQError::ClientNotStarted));
     }

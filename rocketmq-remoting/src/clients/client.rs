@@ -12,10 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::IpAddr;
+use std::net::SocketAddr;
+#[cfg(feature = "tls")]
+use std::sync::Arc as StdArc;
+
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
+use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
+#[cfg(feature = "tls")]
+use tokio_rustls::rustls::pki_types::ServerName;
+#[cfg(feature = "tls")]
+use tokio_rustls::TlsConnector;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
@@ -64,23 +74,31 @@ impl<PR> ClientInner<PR>
 where
     PR: RequestProcessor + Sync + 'static,
 {
-    pub async fn connect<T>(
-        addr: T,
+    pub async fn connect(
+        addr: String,
         cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         notify: broadcast::Receiver<()>,
-    ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner<PR>>)>
-    where
-        T: tokio::net::ToSocketAddrs,
-    {
-        let tcp_stream = tokio::net::TcpStream::connect(addr).await;
-        if tcp_stream.is_err() {
-            return Err(io_error(tcp_stream.err().unwrap()));
-        }
-        let stream = tcp_stream?;
+        use_tls: bool,
+    ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner<PR>>)> {
+        let stream = TcpStream::connect(addr.as_str()).await.map_err(io_error)?;
         let local_addr = stream.local_addr()?;
         let remote_address = stream.peer_addr()?;
-        let connection = Connection::new(stream);
+        let connection = if use_tls {
+            #[cfg(feature = "tls")]
+            {
+                let server_name = server_name_from_addr(addr.as_str());
+                let tls_stream = connect_tls_stream(stream, &server_name).await?;
+                Connection::new_with_stream(tls_stream)
+            }
+            #[cfg(not(feature = "tls"))]
+            {
+                let _ = stream;
+                return Err(tls_disabled_error());
+            }
+        } else {
+            Connection::new(stream)
+        };
         let channel_inner = ArcMut::new(ChannelInner::new(connection, cmd_handler.response_table.clone()));
         let channel = Channel::new(channel_inner, local_addr, remote_address);
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
@@ -181,17 +199,15 @@ where
     /// # Returns
     ///
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
-    pub(crate) async fn connect<T>(
-        addr: T,
+    pub(crate) async fn connect(
+        addr: String,
         cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    ) -> RocketMQResult<Client<PR>>
-    where
-        T: tokio::net::ToSocketAddrs,
-    {
+        use_tls: bool,
+    ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
-        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver).await?;
+        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver, use_tls).await?;
         Ok(Client {
             inner,
             notify_shutdown,
@@ -230,14 +246,19 @@ where
     ///
     /// # Arguments
     ///
-    /// * `_request` - The `RemotingCommand` representing the request.
-    /// * `_func` - The callback function to handle the response.
-    ///
-    /// This method is a placeholder and currently does not perform any functionality.
-    pub async fn invoke_with_callback<F>(&self, _request: RemotingCommand, _func: F)
+    /// * `request` - The `RemotingCommand` representing the request.
+    /// * `func` - The callback function to run after the response future completes.
+    pub async fn invoke_with_callback<F>(&self, request: RemotingCommand, mut func: F)
     where
         F: FnMut(),
     {
+        let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
+        if self.tx.send((request, Some(tx), None)).await.is_err() {
+            return;
+        }
+
+        let _ = rx.await;
+        func();
     }
 
     /// Sends a request to the remote remoting_server.
@@ -369,30 +390,124 @@ where
     /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
     /// reading the response fails.
     async fn read(&mut self) -> RocketMQResult<RemotingCommand> {
-        /*match self.inner.channel.0.connection.receive_command().await {
-            None => {
-                // Connection state is automatically managed by receive_command()
-                Err(ConnectionInvalid("connection disconnection".to_string()))
+        match self.inner.ctx.connection_mut().receive_command().await {
+            Some(Ok(response)) => Ok(response),
+            Some(Err(error)) => {
+                if matches!(error, rocketmq_error::RocketMQError::IO(_)) {
+                    Err(connection_invalid(error.to_string()))
+                } else {
+                    Err(error)
+                }
             }
-            Some(result) => match result {
-                Ok(response) => Ok(response),
-                Err(error) => match error {
-                    Io(value) => {
-                        // Connection state is automatically marked degraded by I/O operations
-                        Err(ConnectionInvalid(value.to_string()))
-                    }
-                    _ => Err(error),
-                },
-            },
-        }*/
-        unimplemented!("read unimplemented")
+            None => Err(connection_invalid("connection disconnected")),
+        }
     }
 
     pub fn connection(&self) -> &Connection {
         self.inner.ctx.connection_ref()
     }
 
+    pub fn remote_address(&self) -> SocketAddr {
+        self.inner.ctx.channel.remote_address()
+    }
+
     pub fn connection_mut(&mut self) -> &mut Connection {
         self.inner.ctx.connection_mut()
+    }
+}
+
+fn server_name_from_addr(addr: &str) -> String {
+    if let Some(rest) = addr.strip_prefix('[') {
+        if let Some((host, _)) = rest.split_once(']') {
+            return host.to_string();
+        }
+    }
+
+    match addr.rsplit_once(':') {
+        Some((host, _)) if !host.contains(':') => host.to_string(),
+        _ => addr.to_string(),
+    }
+}
+
+#[cfg(feature = "tls")]
+async fn connect_tls_stream(
+    stream: TcpStream,
+    server_name: &str,
+) -> RocketMQResult<tokio_rustls::client::TlsStream<TcpStream>> {
+    let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
+    let cert_result = rustls_native_certs::load_native_certs();
+    let mut added_roots = 0usize;
+
+    for cert in cert_result.certs {
+        root_store
+            .add(cert)
+            .map_err(|error| rocketmq_error::RocketMQError::ConfigInvalidValue {
+                key: "tls.root_certificates",
+                value: "native-certs".to_string(),
+                reason: format!("failed to add native root certificate: {error}"),
+            })?;
+        added_roots += 1;
+    }
+
+    for error in cert_result.errors {
+        tracing::warn!("failed to load a native TLS root certificate: {error}");
+    }
+
+    if added_roots == 0 {
+        return Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
+            key: "tls.root_certificates",
+            value: "native-certs".to_string(),
+            reason: "no native root certificates were loaded".to_string(),
+        });
+    }
+
+    let config = tokio_rustls::rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(StdArc::new(config));
+    connector
+        .connect(parse_server_name(server_name)?, stream)
+        .await
+        .map_err(|error| {
+            rocketmq_error::RocketMQError::network_connection_failed(
+                server_name,
+                format!("TLS handshake failed: {error}"),
+            )
+        })
+}
+
+#[cfg(feature = "tls")]
+fn parse_server_name(server_name: &str) -> RocketMQResult<ServerName<'static>> {
+    let value = server_name.trim_matches(['[', ']']);
+    if let Ok(ip_addr) = value.parse::<IpAddr>() {
+        return Ok(ServerName::IpAddress(ip_addr.into()));
+    }
+
+    ServerName::try_from(value.to_string()).map_err(|error| rocketmq_error::RocketMQError::ConfigInvalidValue {
+        key: "tls.server_name",
+        value: server_name.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+#[cfg(not(feature = "tls"))]
+fn tls_disabled_error() -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::ConfigInvalidValue {
+        key: "use_tls",
+        value: "true".to_string(),
+        reason: "rocketmq-remoting was compiled without the tls feature".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::server_name_from_addr;
+
+    #[test]
+    fn server_name_parser_handles_common_socket_forms() {
+        assert_eq!(server_name_from_addr("broker.example.com:10911"), "broker.example.com");
+        assert_eq!(server_name_from_addr("127.0.0.1:10911"), "127.0.0.1");
+        assert_eq!(server_name_from_addr("[::1]:10911"), "::1");
+        assert_eq!(server_name_from_addr("::1"), "::1");
     }
 }

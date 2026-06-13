@@ -73,7 +73,7 @@ mod tests {
         let mapping = TopicConfigAndQueueMapping::new(topic_config, Some(ArcMut::new(mapping_detail)));
 
         let json = serde_json::to_string(&mapping).unwrap();
-        let expected = r#"{"topicName":"test_topic","readQueueNums":16,"writeQueueNums":16,"perm":6,"topicFilterType":"SINGLE_TAG","topicSysFlag":0,"order":false,"attributes":{},"mappingDetail":{"topic":"test_topic","scope":"__global__","totalQueues":0,"bname":null,"epoch":0,"dirty":false,"currIdMap":null,"hostedQueues":null}}"#;
+        let expected = r#"{"topicName":"test_topic","readQueueNums":16,"writeQueueNums":16,"perm":6,"topicFilterType":"SINGLE_TAG","topicSysFlag":0,"order":false,"attributes":{},"mappingDetail":{"topic":"test_topic","scope":"__global__","totalQueues":0,"bname":null,"epoch":0,"dirty":false,"currIdMap":null,"hostedQueues":{}}}"#;
         assert_eq!(json, expected);
 
         let deserialized: TopicConfigAndQueueMapping = serde_json::from_str(&json).unwrap();

@@ -390,6 +390,7 @@ where
                 // Remote broker - make RPC call
                 let mut remote_request_header = SearchOffsetRequestHeader {
                     topic: mapping_context.topic.clone(),
+                    lite_topic: None,
                     queue_id: item.queue_id,
                     timestamp,
                     boundary_type: request_header.boundary_type,

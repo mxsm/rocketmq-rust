@@ -15,13 +15,13 @@
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 
-pub(crate) struct MessageListener {
+pub struct MessageListener {
     pub(crate) message_listener_concurrently: Option<ArcMessageListenerConcurrently>,
     pub(crate) message_listener_orderly: Option<ArcMessageListenerOrderly>,
 }
 
 impl MessageListener {
-    pub(crate) fn new(
+    pub fn new(
         message_listener_concurrently: Option<ArcMessageListenerConcurrently>,
         message_listener_orderly: Option<ArcMessageListenerOrderly>,
     ) -> Self {
@@ -29,5 +29,13 @@ impl MessageListener {
             message_listener_concurrently,
             message_listener_orderly,
         }
+    }
+
+    pub fn is_concurrently(&self) -> bool {
+        self.message_listener_concurrently.is_some()
+    }
+
+    pub fn is_orderly(&self) -> bool {
+        self.message_listener_orderly.is_some()
     }
 }

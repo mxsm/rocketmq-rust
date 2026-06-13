@@ -39,11 +39,7 @@ impl AckResult {
 
 impl std::fmt::Display for AckResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "AckResult [AckStatus={:?}, extraInfo={}]",
-            self.status, self.extra_info
-        )
+        write!(f, "AckResult [AckStatus={},extraInfo={}]", self.status, self.extra_info)
     }
 }
 
@@ -62,7 +58,7 @@ mod tests {
         };
         assert_eq!(
             format!("{}", ack_result),
-            "AckResult [AckStatus=Ok, extraInfo=extra info]"
+            "AckResult [AckStatus=OK,extraInfo=extra info]"
         );
     }
 
@@ -75,7 +71,7 @@ mod tests {
         };
         assert_eq!(
             format!("{}", ack_result),
-            "AckResult [AckStatus=NotExist, extraInfo=extra info]"
+            "AckResult [AckStatus=NO_EXIST,extraInfo=extra info]"
         );
     }
 
@@ -86,7 +82,7 @@ mod tests {
             extra_info: CheetahString::from(""),
             pop_time: 123456789,
         };
-        assert_eq!(format!("{}", ack_result), "AckResult [AckStatus=Ok, extraInfo=]");
+        assert_eq!(format!("{}", ack_result), "AckResult [AckStatus=OK,extraInfo=]");
     }
 
     #[test]
@@ -98,7 +94,7 @@ mod tests {
         };
         assert_eq!(
             format!("{}", ack_result),
-            "AckResult [AckStatus=Ok, extraInfo=extra info]"
+            "AckResult [AckStatus=OK,extraInfo=extra info]"
         );
     }
 }

@@ -128,7 +128,7 @@ impl fmt::Display for MessageQueue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MessageQueue [topic={}, broker_name={}, queue_id={}]",
+            "MessageQueue [topic={}, brokerName={}, queueId={}]",
             self.topic, self.broker_name, self.queue_id
         )
     }
@@ -214,7 +214,7 @@ mod test {
         let mq = MessageQueue::from_parts("topic1", "broker1", 1);
         assert_eq!(
             format!("{}", mq),
-            "MessageQueue [topic=topic1, broker_name=broker1, queue_id=1]"
+            "MessageQueue [topic=topic1, brokerName=broker1, queueId=1]"
         );
     }
 }

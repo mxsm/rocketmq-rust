@@ -66,7 +66,7 @@ impl MQProducerInnerImpl {
         if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
             return default_mqproducer_impl_inner.get_check_listener();
         }
-        unreachable!("default_mqproducer_impl_inner is None")
+        None
     }
 
     pub fn check_transaction_state(
@@ -91,5 +91,19 @@ impl MQProducerInnerImpl {
             return default_mqproducer_impl_inner.is_unit_mode();
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_inner_returns_none_for_check_listener_instead_of_panicking() {
+        let inner = MQProducerInnerImpl {
+            default_mqproducer_impl_inner: None,
+        };
+
+        assert!(inner.get_check_listener().is_none());
     }
 }

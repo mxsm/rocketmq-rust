@@ -15,11 +15,13 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -45,9 +47,7 @@ use crate::base::access_channel::AccessChannel;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::producer::default_mq_producer::DefaultMQProducer;
-use crate::producer::mq_producer::MQProducer;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
-use crate::producer::send_result::SendResult;
 use crate::trace::trace_constants::TraceConstants;
 use crate::trace::trace_context::TraceContext;
 use crate::trace::trace_data_encoder::TraceDataEncoder;
@@ -64,7 +64,7 @@ struct TraceDispatcherConfig {
     max_msg_size: usize,
     flush_interval: Duration,
     trace_topic_name: String,
-    rpc_hook: Option<Arc<dyn RPCHook + Send + Sync>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
 }
 
 // Shared state for the async trace dispatcher.
@@ -96,6 +96,20 @@ impl DispatcherState {
     }
 }
 
+enum TraceTaskHandle {
+    Tokio(JoinHandle<()>),
+    Thread(thread::JoinHandle<()>),
+}
+
+impl TraceTaskHandle {
+    fn abort(self) {
+        match self {
+            Self::Tokio(handle) => handle.abort(),
+            Self::Thread(handle) => drop(handle),
+        }
+    }
+}
+
 /// Asynchronous trace dispatcher for RocketMQ message tracing.
 ///
 /// Collects trace contexts from producers and consumers, batches them according
@@ -119,9 +133,10 @@ impl DispatcherState {
 pub struct AsyncTraceDispatcher {
     config: TraceDispatcherConfig,
     state: Arc<DispatcherState>,
+    use_tls: AtomicBool,
     tx: mpsc::Sender<TraceContext>,
     rx: Mutex<Option<mpsc::Receiver<TraceContext>>>,
-    worker_handle: Mutex<Option<JoinHandle<()>>>,
+    worker_handle: Mutex<Option<TraceTaskHandle>>,
     trace_producer: RwLock<Option<Arc<tokio::sync::Mutex<DefaultMQProducer>>>>,
     instance_counter: Arc<AtomicUsize>,
 }
@@ -144,7 +159,7 @@ impl AsyncTraceDispatcher {
         type_: Type,
         batch_num: usize,
         trace_topic_name: &str,
-        rpc_hook: Option<Arc<dyn RPCHook + Send + Sync>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
         let (tx, rx) = mpsc::channel(2048);
 
@@ -167,6 +182,7 @@ impl AsyncTraceDispatcher {
         Self {
             config,
             state: Arc::new(DispatcherState::new()),
+            use_tls: AtomicBool::new(false),
             tx,
             rx: Mutex::new(Some(rx)),
             worker_handle: Mutex::new(None),
@@ -213,6 +229,11 @@ impl AsyncTraceDispatcher {
         self.state.is_stopped.load(Ordering::SeqCst)
     }
 
+    /// Returns the configured maximum number of trace contexts per batch.
+    pub fn batch_num(&self) -> usize {
+        self.config.batch_num
+    }
+
     /// Associates the dispatcher with a host producer implementation.
     ///
     /// The host producer reference is stored for potential future use in trace context enrichment.
@@ -232,12 +253,33 @@ impl AsyncTraceDispatcher {
         *self.state.namespace_v2.write() = namespace_v2;
     }
 
+    /// Sets whether the internal trace producer should use TLS.
+    pub fn set_use_tls(&self, use_tls: bool) {
+        self.use_tls.store(use_tls, Ordering::Release);
+    }
+
+    pub fn is_use_tls(&self) -> bool {
+        self.use_tls.load(Ordering::Acquire)
+    }
+
     /// Returns a reference to the internal trace producer.
     ///
     /// The producer is available only after the dispatcher has been started.
     pub fn get_trace_producer(&self) -> Option<Arc<tokio::sync::Mutex<DefaultMQProducer>>> {
         self.trace_producer.read().clone()
     }
+
+    pub fn trace_topic_name(&self) -> &str {
+        self.config.trace_topic_name.as_str()
+    }
+
+    pub fn register_shutdown_hook(&self) {}
+
+    pub fn register_shut_down_hook(&self) {
+        self.register_shutdown_hook();
+    }
+
+    pub fn remove_shutdown_hook(&self) {}
 }
 
 impl TraceDispatcher for AsyncTraceDispatcher {
@@ -273,13 +315,19 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         client_config.set_namesrv_addr(CheetahString::from_string(name_srv_addr.to_string()));
         client_config.set_enable_trace(false); // Prevents recursive trace operations
         client_config.set_vip_channel_enabled(false); // Disable VIP channel (matches Java implementation)
+        client_config.set_use_tls(self.use_tls.load(Ordering::Acquire));
 
-        let producer = DefaultMQProducer::builder()
+        let mut builder = DefaultMQProducer::builder()
             .producer_group(&producer_group)
             .client_config(client_config)
             .send_msg_timeout(5000)
-            .max_message_size(self.config.max_msg_size as u32)
-            .build();
+            .max_message_size(self.config.max_msg_size as u32);
+
+        if let Some(rpc_hook) = self.config.rpc_hook.clone() {
+            builder = builder.rpc_hook(rpc_hook);
+        }
+
+        let producer = builder.build();
 
         info!("Trace producer initialized: group={}", producer_group);
 
@@ -305,11 +353,17 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         let state = self.state.clone();
         let config = self.config.clone();
 
-        let handle = tokio::spawn(async move {
+        let handle = match spawn_trace_task("rocketmq-client-trace-worker", async move {
             if let Err(e) = worker_loop(rx, state, producer, config).await {
                 error!("Worker loop failed: {:?}", e);
             }
-        });
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.state.is_started.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        };
 
         *self.worker_handle.lock() = Some(handle);
 
@@ -403,7 +457,9 @@ impl TraceDispatcher for AsyncTraceDispatcher {
             error!("Flush failed during shutdown: {:?}", e);
         }
 
-        self.worker_handle.lock().take();
+        if let Some(handle) = self.worker_handle.lock().take() {
+            handle.abort();
+        }
 
         if let Some(_producer) = self.trace_producer.read().as_ref() {
             info!("Trace producer shut down");
@@ -423,6 +479,18 @@ impl TraceDispatcher for AsyncTraceDispatcher {
     fn as_mut_any(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn trace_topic_name(&self) -> Option<&str> {
+        Some(self.config.trace_topic_name.as_str())
+    }
+
+    fn trace_client_host(&self) -> Option<CheetahString> {
+        self.state
+            .host_producer
+            .read()
+            .as_ref()
+            .and_then(|producer| producer.client_id())
+    }
 }
 
 impl Drop for AsyncTraceDispatcher {
@@ -435,6 +503,28 @@ impl Drop for AsyncTraceDispatcher {
             }
             self.shutdown();
         }
+    }
+}
+
+fn spawn_trace_task<F>(thread_name: &'static str, task: F) -> RocketMQResult<TraceTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return Ok(TraceTaskHandle::Tokio(handle.spawn(task)));
+    }
+
+    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || runtime.block_on(task))
+            .map(TraceTaskHandle::Thread)
+            .map_err(|error| {
+                RocketMQError::Internal(format!("failed to spawn {thread_name} background thread: {error}"))
+            }),
+        Err(error) => Err(RocketMQError::Internal(format!(
+            "failed to build {thread_name} runtime: {error}"
+        ))),
     }
 }
 
@@ -514,8 +604,7 @@ async fn worker_loop(
     Ok(())
 }
 
-// Flushes the buffer by spawning an async send task.
-// Takes ownership of buffer contents via zero-copy swap and spawns a non-blocking send task.
+// Flushes the buffer by awaiting the trace send in the worker task.
 async fn flush_buffer(
     buffer: &mut Vec<TraceContext>,
     state: &Arc<DispatcherState>,
@@ -529,17 +618,9 @@ async fn flush_buffer(
     // Take ownership of buffer contents (zero-copy swap)
     let contexts = std::mem::take(buffer);
 
-    // Clone Arc references for the spawned task
-    let state_clone = state.clone();
-    let producer_clone = producer.clone();
-    let config_clone = config.clone();
-
-    // Spawn async send task (non-blocking)
-    tokio::spawn(async move {
-        if let Err(e) = send_trace_data(contexts, &state_clone, &producer_clone, &config_clone).await {
-            error!("send_trace_data failed: {:?}", e);
-        }
-    });
+    if let Err(error) = send_trace_data(contexts, state, producer, config).await {
+        error!("send_trace_data failed: {:?}", error);
+    }
 }
 
 // Processes and sends trace data in batches.
@@ -663,7 +744,7 @@ async fn send_trace_message(
         .topic(trace_topic)
         .body(Bytes::from(data.as_bytes().to_vec()))
         .keys(keys)
-        .build_unchecked();
+        .build()?;
 
     debug!(
         "Sending trace message: topic={}, size={}, keys={}",
@@ -685,31 +766,21 @@ async fn send_trace_message(
         queues.get(pos).cloned()
     };
 
-    let callback =
-        Arc::new(
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
-                (Some(r), None) => {
-                    debug!(
-                        "Trace message sent successfully: msgId={}, status={:?}",
-                        r.msg_id.as_ref().map_or("N/A", |id| id.as_str()),
-                        r.send_status
-                    );
-                }
-                (None, Some(e)) => {
-                    error!("Failed to send trace message: {:?}", e);
-                }
-                _ => {
-                    warn!("Trace message send completed with unknown state");
-                }
-            },
-        );
-
-    // Use send_with_selector_callback_timeout (5 seconds timeout)
-    producer
+    // The worker already runs off the application send path, so wait for the
+    // trace send here to make shutdown/flush deterministic.
+    let result = producer
         .lock()
         .await
-        .send_with_selector_callback_timeout(message, selector, (), Some(callback), 5000)
+        .send_with_selector_timeout(message, selector, (), 5000)
         .await?;
+    debug!(
+        "Trace message sent successfully: msgId={}, status={:?}",
+        result
+            .as_ref()
+            .and_then(|send_result| send_result.msg_id.as_ref())
+            .map_or("N/A", |id| id.as_str()),
+        result.as_ref().map(|send_result| send_result.send_status)
+    );
 
     Ok(())
 }
@@ -717,6 +788,23 @@ async fn send_trace_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spawn_trace_task_without_tokio_runtime_runs_on_fallback_thread() {
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let handle = spawn_trace_task("rocketmq-client-trace-test", async move {
+            tx.send(std::thread::current().name().unwrap_or_default().to_string())
+                .expect("test receiver should be alive");
+        })
+        .expect("fallback trace runtime should start");
+
+        let thread_name = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("trace task should run on fallback runtime");
+        assert_eq!(thread_name, "rocketmq-client-trace-test");
+        handle.abort();
+    }
 
     #[test]
     fn test_new_dispatcher() {
@@ -815,6 +903,18 @@ mod tests {
         // Should return error since not started
         let result = dispatcher.flush();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn java_shutdown_hook_aliases_are_noop_under_drop_based_shutdown() {
+        let dispatcher = AsyncTraceDispatcher::new("TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+
+        dispatcher.register_shutdown_hook();
+        dispatcher.register_shut_down_hook();
+        dispatcher.remove_shutdown_hook();
+
+        assert!(!dispatcher.is_started());
+        assert!(!dispatcher.is_stopped());
     }
 
     #[tokio::test]

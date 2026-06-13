@@ -164,6 +164,7 @@ impl RPCHook for AclClientRpcHook {
             .ext_fields()
             .into_iter()
             .flat_map(|fields| fields.iter())
+            .filter(|(key, _)| key.as_str() != SIGNATURE)
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<BTreeMap<_, _>>();
         let content = DefaultAuthenticationContextBuilder::combine_request_content(request, &sorted_fields);
@@ -282,6 +283,24 @@ mod tests {
         assert_eq!(fields.get("SecurityToken").map(CheetahString::as_str), Some("token"));
         assert_eq!(
             fields.get("Signature").map(CheetahString::as_str),
+            Some(expected_signature.as_str())
+        );
+    }
+
+    #[test]
+    fn do_before_request_excludes_existing_signature_when_resigning_like_java() {
+        let hook = AclClientRpcHook::new("alice", "secret", Some("token"), SignatureAlgorithm::HmacSha1).unwrap();
+        let mut request = RemotingCommand::create_request_command(10, EmptyHeader {}).set_ext_fields(HashMap::from([
+            (CheetahString::from("topic"), CheetahString::from("topic-a")),
+            (CheetahString::from(SIGNATURE), CheetahString::from("stale-signature")),
+        ]));
+
+        hook.do_before_request(remote_addr(), &mut request).unwrap();
+
+        let fields = request.ext_fields().unwrap();
+        let expected_signature = acl_signer::cal_signature(b"alicetokentopic-a", "secret").unwrap();
+        assert_eq!(
+            fields.get(SIGNATURE).map(CheetahString::as_str),
             Some(expected_signature.as_str())
         );
     }

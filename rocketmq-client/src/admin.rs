@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 pub mod mq_admin_ext_async;
 pub mod mq_admin_ext_async_inner;
 pub mod mq_admin_ext_inner;
+
+pub use default_mq_admin_ext::DefaultMQAdminExt;
+pub use default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
+pub use mq_admin_ext_async::MQAdminExt;
+pub use mq_admin_ext_async_inner::MQAdminExtInnerImpl;
+pub use mq_admin_ext_inner::MQAdminExtInner;

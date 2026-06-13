@@ -491,4 +491,56 @@ mod tests {
 
         assert!(validate_broker_config(&broker_config, &message_store_config).is_ok());
     }
+
+    #[test]
+    fn parse_config_file_reads_camel_case_broker_and_store_paths() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config_file = temp_dir.path().join("broker.toml");
+        let store_root = temp_dir.path().join("store");
+        let commit_log = store_root.join("commitlog");
+        let store_root = store_root.to_string_lossy().replace('\\', "/");
+        let commit_log = commit_log.to_string_lossy().replace('\\', "/");
+        let content = format!(
+            r#"namesrvAddr = "127.0.0.1:9876"
+brokerIp1 = "127.0.0.1"
+listenPort = 11911
+storePathRootDir = "{}"
+storePathCommitLog = "{}"
+enableControllerMode = false
+
+[brokerServerConfig]
+listenPort = 11911
+bindAddress = "0.0.0.0"
+
+[brokerIdentity]
+brokerName = "rust-local-broker"
+brokerClusterName = "DefaultCluster"
+brokerId = 0
+"#,
+            store_root, commit_log
+        );
+        std::fs::write(&config_file, content).expect("write broker config");
+
+        let args = Args {
+            config_file: Some(config_file),
+            print_config_item: false,
+            print_important_config: false,
+            namesrv_addr: None,
+        };
+
+        let (broker_config, message_store_config) = parse_config_file(&args).expect("parse broker config");
+
+        assert_eq!(broker_config.broker_identity.broker_name.as_str(), "rust-local-broker");
+        assert_eq!(broker_config.listen_port, 11911);
+        assert_eq!(broker_config.broker_server_config.listen_port, 11911);
+        assert_eq!(broker_config.store_path_root_dir.as_str(), store_root);
+        assert_eq!(message_store_config.store_path_root_dir.as_str(), store_root);
+        assert_eq!(
+            message_store_config
+                .store_path_commit_log
+                .as_ref()
+                .map(|path| path.as_str()),
+            Some(commit_log.as_str())
+        );
+    }
 }

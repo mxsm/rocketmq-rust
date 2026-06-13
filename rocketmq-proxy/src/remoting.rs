@@ -990,7 +990,7 @@ where
         )
         .await?;
         let locked = client
-            .get_mq_client_api_impl()
+            .get_mq_client_api_impl()?
             .lock_batch_mq(
                 broker_addr.as_str(),
                 request_body,
@@ -1020,7 +1020,7 @@ where
         )
         .await?;
         client
-            .get_mq_client_api_impl()
+            .get_mq_client_api_impl()?
             .unlock_batch_mq(
                 &broker_addr,
                 request_body,
@@ -2198,6 +2198,7 @@ mod tests {
             PullMessageRequestHeader {
                 consumer_group: CheetahString::from("GroupA"),
                 topic: CheetahString::from("TopicA"),
+                lite_topic: None,
                 queue_id: 2,
                 queue_offset: 7,
                 max_msg_nums: 16,
@@ -2292,6 +2293,7 @@ mod tests {
             RequestCode::SearchOffsetByTimestamp,
             SearchOffsetRequestHeader {
                 topic: CheetahString::from("TopicA"),
+                lite_topic: None,
                 queue_id: 1,
                 timestamp: 99,
                 boundary_type: BoundaryType::Lower,

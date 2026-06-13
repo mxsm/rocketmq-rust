@@ -34,7 +34,6 @@ use dashmap::DashMap;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::utils::util_all;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -268,16 +267,10 @@ impl Rebalance for RebalanceLitePullImpl {
                         })?;
                         client.mq_admin_impl.max_offset(mq).await?
                     } else {
-                        let timestamp = util_all::parse_date(
-                            self.consumer_config
-                                .consume_timestamp
-                                .as_deref()
-                                .unwrap_or(util_all::YYYYMMDDHHMMSS),
-                            util_all::YYYYMMDDHHMMSS,
-                        )
-                        .unwrap()
-                        .and_utc()
-                        .timestamp();
+                        let timestamp = super::parse_consume_timestamp_millis(
+                            self.consumer_config.consume_timestamp.as_deref(),
+                            mq,
+                        )?;
                         let client = self.rebalance_impl_inner.client_instance.as_mut().ok_or_else(|| {
                             error!("Client instance not initialised for mq: {}", mq);
                             mq_client_err!(
@@ -285,7 +278,7 @@ impl Rebalance for RebalanceLitePullImpl {
                                 format!("Client instance not initialised for mq: {}", mq)
                             )
                         })?;
-                        client.mq_admin_impl.search_offset(mq, timestamp as u64).await?
+                        client.mq_admin_impl.search_offset(mq, timestamp).await?
                     }
                 } else {
                     -1

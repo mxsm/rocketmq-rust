@@ -37,7 +37,7 @@ impl OriginalThreadLocalIndex {
 
 #[test]
 fn test_thread_local_index_basic() {
-    let idx = ThreadLocalIndex;
+    let idx = ThreadLocalIndex::new();
     let val1 = idx.increment_and_get();
     let val2 = idx.increment_and_get();
 
@@ -51,7 +51,7 @@ fn test_thread_local_index_basic() {
 
 #[test]
 fn test_thread_local_index_reset() {
-    let idx = ThreadLocalIndex;
+    let idx = ThreadLocalIndex::new();
     let _ = idx.increment_and_get();
     idx.reset();
     let val = idx.increment_and_get();
@@ -82,7 +82,7 @@ fn test_performance_comparison() {
     // Optimized - first call
     let start = Instant::now();
     for _ in 0..iterations {
-        let idx = ThreadLocalIndex;
+        let idx = ThreadLocalIndex::new();
         idx.reset();
         let _ = idx.increment_and_get();
     }
@@ -109,7 +109,8 @@ fn test_performance_comparison() {
 
     // Initialize
     let _ = OriginalThreadLocalIndex.increment_and_get();
-    let _ = ThreadLocalIndex.increment_and_get();
+    let optimized_idx = ThreadLocalIndex::new();
+    let _ = optimized_idx.increment_and_get();
 
     let iterations = 100_000;
 
@@ -123,7 +124,7 @@ fn test_performance_comparison() {
     // Optimized - hot
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = ThreadLocalIndex.increment_and_get();
+        let _ = optimized_idx.increment_and_get();
     }
     let optimized_hot = start.elapsed();
 
@@ -172,7 +173,7 @@ fn test_thread_safety() {
     for _ in 0..4 {
         let counter_clone = counter.clone();
         let handle = std::thread::spawn(move || {
-            let idx = ThreadLocalIndex;
+            let idx = ThreadLocalIndex::new();
             for _ in 0..1000 {
                 let val = idx.increment_and_get();
                 assert!(val >= 0);

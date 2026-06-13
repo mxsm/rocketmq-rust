@@ -76,7 +76,7 @@ impl TopicQueueMappingUtils {
         if items.is_empty() || current_item.is_none() {
             return None;
         }
-        let current_item = current_item.unwrap();
+        let current_item = current_item?;
         for i in 0..items.len() {
             let item = &items[i];
             if ignore_negative && item.logic_offset < 0 {
@@ -788,11 +788,9 @@ impl TopicQueueMappingUtils {
         let mut brokers_to_map_in: HashSet<CheetahString> = HashSet::new();
 
         for (queue_id, broker) in &expected_id_to_broker {
-            let topic_queue_mapping_one = global_id_map.get(queue_id);
-            if topic_queue_mapping_one.is_none() {
+            let Some(topic_queue_mapping_one) = global_id_map.get(queue_id) else {
                 continue;
-            }
-            let topic_queue_mapping_one = topic_queue_mapping_one.unwrap();
+            };
             if topic_queue_mapping_one.bname() == broker.as_str() {
                 continue;
             }
@@ -803,9 +801,8 @@ impl TopicQueueMappingUtils {
             brokers_to_map_in.insert(map_in_broker.clone());
             brokers_to_map_out.insert(map_out_broker.clone());
 
-            let map_in_config = broker_config_map.get_mut(&map_in_broker);
-            if map_in_config.is_none() {
-                let new_config = TopicConfigAndQueueMapping::new(
+            let map_in_config = broker_config_map.entry(map_in_broker.clone()).or_insert_with(|| {
+                TopicConfigAndQueueMapping::new(
                     TopicConfig::with_queues(topic, 0, 0),
                     Some(ArcMut::new(TopicQueueMappingDetail {
                         topic_queue_mapping_info: TopicQueueMappingInfo::new(
@@ -816,11 +813,8 @@ impl TopicQueueMappingUtils {
                         ),
                         hosted_queues: Some(HashMap::new()),
                     })),
-                );
-                broker_config_map.insert(map_in_broker.clone(), new_config);
-            }
-
-            let map_in_config = broker_config_map.get_mut(&map_in_broker).unwrap();
+                )
+            });
             map_in_config.topic_config.write_queue_nums += 1;
             map_in_config.topic_config.read_queue_nums += 1;
 
@@ -948,5 +942,15 @@ mod tests {
         assert!(TopicQueueMappingUtils::check_if_leader(&leader_items, &detail));
         assert!(!TopicQueueMappingUtils::check_if_leader(&follower_items, &detail));
         assert!(!TopicQueueMappingUtils::check_if_leader(&[], &detail));
+    }
+
+    #[test]
+    fn find_next_returns_none_without_current_item() {
+        let items = vec![LogicQueueMappingItem {
+            gen: 1,
+            ..Default::default()
+        }];
+
+        assert!(TopicQueueMappingUtils::find_next(&items, None, true).is_none());
     }
 }

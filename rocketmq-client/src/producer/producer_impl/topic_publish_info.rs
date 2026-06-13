@@ -34,7 +34,7 @@ impl TopicPublishInfo {
             order_topic: false,
             have_topic_router_info: false,
             message_queue_list: vec![],
-            send_which_queue: ThreadLocalIndex,
+            send_which_queue: ThreadLocalIndex::new(),
             topic_route_data: None,
         }
     }
@@ -54,14 +54,15 @@ impl TopicPublishInfo {
 
     pub fn select_one_message_queue_by_broker(&self, last_broker_name: Option<&CheetahString>) -> Option<MessageQueue> {
         if let Some(last_broker_name) = last_broker_name {
-            for mq in &self.message_queue_list {
+            for _ in 0..self.message_queue_list.len() {
+                let mq = self.select_one_message_queue()?;
                 if mq.broker_name() != last_broker_name {
-                    return Some(mq.clone());
+                    return Some(mq);
                 }
             }
-            self.select_one_message_queue_filters(&[])
+            self.select_one_message_queue()
         } else {
-            self.select_one_message_queue_filters(&[])
+            self.select_one_message_queue()
         }
     }
 
@@ -96,14 +97,32 @@ impl TopicPublishInfo {
             return None;
         }
 
-        // If no filters are provided, select a message queue randomly
+        // If no filters are provided, select a message queue by the Java-compatible thread-local
+        // round-robin index.
         let index = send_queue.increment_and_get() as usize % message_queue_list.len();
         Some(message_queue_list[index].clone())
     }
 
     pub fn select_one_message_queue(&self) -> Option<MessageQueue> {
+        if self.message_queue_list.is_empty() {
+            return None;
+        }
+
         let index = self.send_which_queue.increment_and_get() as usize;
         let pos = index % self.message_queue_list.len();
         self.message_queue_list.get(pos).cloned()
+    }
+
+    pub fn get_write_queue_nums_by_broker(&self, broker_name: &str) -> i32 {
+        let Some(topic_route_data) = &self.topic_route_data else {
+            return -1;
+        };
+
+        topic_route_data
+            .queue_datas
+            .iter()
+            .find(|queue_data| queue_data.broker_name().as_str() == broker_name)
+            .and_then(|queue_data| i32::try_from(queue_data.write_queue_nums()).ok())
+            .unwrap_or(-1)
     }
 }

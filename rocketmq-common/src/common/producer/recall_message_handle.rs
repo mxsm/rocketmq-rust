@@ -66,7 +66,10 @@ impl RecallMessageHandle {
         let raw_string = String::from_utf8(raw_bytes)
             .map_err(|_| RocketMQError::deserialization_failed("RecallHandle", "invalid UTF-8 encoding"))?;
 
-        let items: Vec<&str> = raw_string.split(SEPARATOR).collect();
+        let mut items: Vec<&str> = raw_string.split(SEPARATOR).collect();
+        while items.len() > 1 && items.last().is_some_and(|item| item.is_empty()) {
+            items.pop();
+        }
 
         if items.is_empty() || items[0] != VERSION_1 || items.len() < 5 {
             return Err(RocketMQError::deserialization_failed(
@@ -263,6 +266,15 @@ mod tests {
     #[test]
     fn test_handle_invalid_too_few_parts() {
         let invalid_handle = URL_SAFE.encode("v1 a b c");
+        let result = RecallMessageHandle::decode_handle(&invalid_handle);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("4 parts") || err.to_string().contains("invalid format"));
+    }
+
+    #[test]
+    fn test_handle_invalid_empty_message_id_matches_java_split() {
+        let invalid_handle = HandleV1::build_handle("test_topic", "broker-0", "1707111111111", "");
         let result = RecallMessageHandle::decode_handle(&invalid_handle);
         assert!(result.is_err());
         let err = result.unwrap_err();

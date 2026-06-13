@@ -94,9 +94,28 @@ impl PopCallback for DefaultPopCallback {
     async fn on_success(&mut self, pop_result: PopResult) {
         let mut push_consumer_impl = self.push_consumer_impl.clone();
 
-        let message_queue_inner = self.message_queue_inner.take().unwrap();
-        let subscription_data = self.subscription_data.take().unwrap();
-        let pop_request = self.pop_request.take().unwrap();
+        let Some(message_queue_inner) = self.message_queue_inner.take() else {
+            warn!("pop callback success ignored: message queue is missing");
+            return;
+        };
+        let Some(subscription_data) = self.subscription_data.take() else {
+            warn!(
+                "pop callback success ignored: subscription data is missing, mq={}",
+                message_queue_inner
+            );
+            if let Some(pop_request) = self.pop_request.take() {
+                let delay = push_consumer_impl.pull_time_delay_mills_when_exception;
+                push_consumer_impl.execute_pop_request_later(pop_request, delay);
+            }
+            return;
+        };
+        let Some(pop_request) = self.pop_request.take() else {
+            warn!(
+                "pop callback success ignored: pop request is missing, mq={}",
+                message_queue_inner
+            );
+            return;
+        };
 
         let pop_result = push_consumer_impl
             .process_pop_result(pop_result, &subscription_data)
@@ -106,10 +125,17 @@ impl PopCallback for DefaultPopCallback {
                 if pop_result.msg_found_list.as_ref().is_none_or(|value| value.is_empty()) {
                     push_consumer_impl.execute_pop_request_immediately(pop_request).await;
                 } else {
-                    push_consumer_impl
-                        .consume_message_pop_service
-                        .as_mut()
-                        .unwrap()
+                    let Some(consume_message_pop_service) = push_consumer_impl.consume_message_pop_service.as_mut()
+                    else {
+                        warn!(
+                            "pop callback found messages but ConsumeMessagePopService is not initialized, mq={}",
+                            message_queue_inner
+                        );
+                        let delay = push_consumer_impl.pull_time_delay_mills_when_exception;
+                        push_consumer_impl.execute_pop_request_later(pop_request, delay);
+                        return;
+                    };
+                    consume_message_pop_service
                         .submit_pop_consume_request(
                             pop_result.msg_found_list.unwrap_or_default(),
                             pop_request.get_pop_process_queue(),
@@ -137,8 +163,17 @@ impl PopCallback for DefaultPopCallback {
     fn on_error(&mut self, err: Box<dyn std::error::Error + Send>) {
         let mut push_consumer_impl = self.push_consumer_impl.clone();
 
-        let message_queue_inner = self.message_queue_inner.take().unwrap();
-        let pop_request = self.pop_request.take().unwrap();
+        let Some(message_queue_inner) = self.message_queue_inner.take() else {
+            warn!("pop callback exception ignored: message queue is missing, error={err}");
+            return;
+        };
+        let Some(pop_request) = self.pop_request.take() else {
+            warn!(
+                "pop callback exception ignored: pop request is missing, mq={}, error={}",
+                message_queue_inner, err
+            );
+            return;
+        };
         let topic = message_queue_inner.topic_str();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if let Some(er) = err.downcast_ref::<RocketmqError>() {
@@ -186,5 +221,102 @@ impl PopCallback for DefaultPopCallback {
         };
 
         push_consumer_impl.execute_pop_request_later(pop_request, time_delay);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+
+    use super::*;
+    use crate::base::client_config::ClientConfig;
+    use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+
+    fn message_queue() -> MessageQueue {
+        MessageQueue::from_parts("topic", "broker-a", 0)
+    }
+
+    fn pop_request() -> PopRequest {
+        PopRequest::new(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("group"),
+            message_queue(),
+            PopProcessQueue::new(),
+            0,
+        )
+    }
+
+    fn new_callback() -> DefaultPopCallback {
+        let consumer_config = ArcMut::new(ConsumerConfig::default());
+        let push_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ));
+        DefaultPopCallback {
+            push_consumer_impl,
+            message_queue_inner: None,
+            subscription_data: None,
+            pop_request: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn success_without_message_queue_is_ignored_without_panic() {
+        let mut callback = new_callback();
+
+        PopCallback::on_success(&mut callback, PopResult::default()).await;
+    }
+
+    #[tokio::test]
+    async fn success_without_subscription_data_is_delayed_without_panic() {
+        let mut callback = new_callback();
+        callback.message_queue_inner = Some(message_queue());
+        callback.pop_request = Some(pop_request());
+
+        PopCallback::on_success(&mut callback, PopResult::default()).await;
+    }
+
+    #[tokio::test]
+    async fn success_without_pop_request_is_ignored_without_panic() {
+        let mut callback = new_callback();
+        callback.message_queue_inner = Some(message_queue());
+        callback.subscription_data = Some(SubscriptionData::default());
+
+        PopCallback::on_success(&mut callback, PopResult::default()).await;
+    }
+
+    #[tokio::test]
+    async fn found_messages_without_pop_service_are_delayed_without_panic() {
+        let mut callback = new_callback();
+        callback.message_queue_inner = Some(message_queue());
+        callback.subscription_data = Some(SubscriptionData::default());
+        callback.pop_request = Some(pop_request());
+        let pop_result = PopResult {
+            msg_found_list: Some(vec![MessageExt::default()]),
+            pop_status: PopStatus::Found,
+            ..Default::default()
+        };
+
+        PopCallback::on_success(&mut callback, pop_result).await;
+    }
+
+    #[test]
+    fn error_without_message_queue_is_ignored_without_panic() {
+        let mut callback = new_callback();
+
+        PopCallback::on_error(&mut callback, Box::new(io::Error::other("test error")));
+    }
+
+    #[test]
+    fn error_without_pop_request_is_ignored_without_panic() {
+        let mut callback = new_callback();
+        callback.message_queue_inner = Some(message_queue());
+
+        PopCallback::on_error(&mut callback, Box::new(io::Error::other("test error")));
     }
 }

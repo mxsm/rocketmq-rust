@@ -24,6 +24,23 @@ pub enum CommunicationMode {
     Oneway,
 }
 
+impl CommunicationMode {
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CommunicationMode::Sync => "SYNC",
+            CommunicationMode::Async => "ASYNC",
+            CommunicationMode::Oneway => "ONEWAY",
+        }
+    }
+}
+
+impl std::fmt::Display for CommunicationMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +104,13 @@ mod tests {
 
         let oneway_debug = format!("{:?}", CommunicationMode::Oneway);
         assert_eq!(oneway_debug, "Oneway");
+    }
+
+    #[test]
+    fn display_matches_java_enum_names() {
+        assert_eq!(CommunicationMode::Sync.to_string(), "SYNC");
+        assert_eq!(CommunicationMode::Async.to_string(), "ASYNC");
+        assert_eq!(CommunicationMode::Oneway.to_string(), "ONEWAY");
     }
 
     /// Test pattern matching on CommunicationMode variants

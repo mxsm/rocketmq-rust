@@ -15,6 +15,8 @@
 use std::collections::HashSet;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::utils::util_all;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -26,6 +28,30 @@ pub(crate) mod rebalance_impl;
 pub(crate) mod rebalance_lite_pull_impl;
 pub(crate) mod rebalance_push_impl;
 pub(crate) mod rebalance_service;
+
+pub(crate) fn parse_consume_timestamp_millis(
+    consume_timestamp: Option<&str>,
+    mq: &MessageQueue,
+) -> rocketmq_error::RocketMQResult<u64> {
+    let Some(consume_timestamp) = consume_timestamp else {
+        return Err(crate::mq_client_err!(
+            ResponseCode::SystemError as i32,
+            format!("Consume timestamp is not configured for mq: {}", mq)
+        ));
+    };
+    let timestamp = util_all::parse_date_to_millis(consume_timestamp, util_all::YYYYMMDDHHMMSS).ok_or_else(|| {
+        crate::mq_client_err!(
+            ResponseCode::SystemError as i32,
+            format!("Failed to parse consume timestamp for mq: {}", mq)
+        )
+    })?;
+    u64::try_from(timestamp).map_err(|_| {
+        crate::mq_client_err!(
+            ResponseCode::SystemError as i32,
+            format!("Consume timestamp is before Unix epoch for mq: {}", mq)
+        )
+    })
+}
 
 #[trait_variant::make(Rebalance: Send)]
 pub trait RebalanceLocal {
@@ -194,4 +220,32 @@ pub trait RebalanceLocal {
 
     /// Destroys the rebalancer.
     fn destroy(&mut self);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_consume_timestamp_uses_java_millis_in_local_timezone() {
+        let mq = MessageQueue::from_parts("topic-a", "broker-a", 0);
+
+        let timestamp =
+            parse_consume_timestamp_millis(Some("20250102030405"), &mq).expect("Java consume timestamp should parse");
+
+        assert_eq!(
+            timestamp,
+            util_all::parse_date_to_millis("20250102030405", util_all::YYYYMMDDHHMMSS)
+                .expect("Java consume timestamp should parse") as u64
+        );
+        assert!(timestamp > 1_000_000_000_000);
+    }
+
+    #[test]
+    fn parse_consume_timestamp_rejects_missing_or_invalid_values() {
+        let mq = MessageQueue::from_parts("topic-a", "broker-a", 0);
+
+        assert!(parse_consume_timestamp_millis(None, &mq).is_err());
+        assert!(parse_consume_timestamp_millis(Some("2025-01-02 03:04:05"), &mq).is_err());
+    }
 }

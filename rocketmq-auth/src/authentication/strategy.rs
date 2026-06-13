@@ -23,6 +23,13 @@ pub mod authentication_strategy;
 pub mod stateful_authentication_strategy;
 pub mod stateless_authentication_strategy;
 
+use rocketmq_error::AuthError;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+
+use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
+use crate::authentication::provider::AuthenticationProvider;
+
 // Re-export the main trait and implementations for convenience
 pub use abstract_authentication_strategy::AbstractAuthenticationStrategy;
 pub use abstract_authentication_strategy::AuthenticationStrategyFactory;
@@ -31,3 +38,43 @@ pub use allow_all::AllowAllAuthenticationStrategy;
 pub use authentication_strategy::AuthenticationStrategy;
 pub use stateful_authentication_strategy::StatefulAuthenticationStrategy;
 pub use stateless_authentication_strategy::StatelessAuthenticationStrategy;
+
+fn authenticate_provider_on_current_thread_runtime<P>(
+    provider: &P,
+    context: &DefaultAuthenticationContext,
+) -> RocketMQResult<()>
+where
+    P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            RocketMQError::authentication_failed(format!("failed to create authentication runtime: {error}"))
+        })?;
+
+    runtime.block_on(provider.authenticate(context))
+}
+
+pub(super) fn block_on_authentication_provider<P>(
+    provider: &P,
+    context: &DefaultAuthenticationContext,
+) -> Result<(), AuthError>
+where
+    P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
+{
+    let auth_result = match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(provider.authenticate(context)))
+        }
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| authenticate_provider_on_current_thread_runtime(provider, context))
+                .join()
+                .map_err(|_| RocketMQError::authentication_failed("authentication provider thread panicked"))?
+        }),
+        Err(_) => authenticate_provider_on_current_thread_runtime(provider, context),
+    };
+
+    auth_result.map_err(|error| AuthError::AuthenticationFailed(error.to_string()))
+}

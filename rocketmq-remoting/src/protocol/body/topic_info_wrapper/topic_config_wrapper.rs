@@ -86,12 +86,17 @@ mod tests {
         let wrapper = TopicConfigAndMappingSerializeWrapper::default();
         assert!(wrapper.topic_queue_mapping_info_map.is_empty());
         assert!(wrapper.topic_queue_mapping_detail_map.is_empty());
-        assert_eq!(wrapper.mapping_data_version, DataVersion::new());
+        assert_eq!(wrapper.mapping_data_version.get_state_version(), 0);
+        assert_eq!(wrapper.mapping_data_version.get_counter(), 0);
         assert!(wrapper.topic_config_serialize_wrapper().topic_config_table().is_empty());
         assert_eq!(
-            wrapper.topic_config_serialize_wrapper().data_version(),
-            &DataVersion::new()
+            wrapper
+                .topic_config_serialize_wrapper()
+                .data_version()
+                .get_state_version(),
+            0
         );
+        assert_eq!(wrapper.topic_config_serialize_wrapper().data_version().get_counter(), 0);
     }
 
     #[test]
@@ -103,6 +108,7 @@ mod tests {
         let data_version = DataVersion::default();
 
         let topic_config_serialize_wrapper = TopicConfigSerializeWrapper::default();
+        wrapper.mapping_data_version = data_version.clone();
         wrapper.topic_config_serialize_wrapper = topic_config_serialize_wrapper.clone();
         wrapper
             .topic_queue_mapping_info_map

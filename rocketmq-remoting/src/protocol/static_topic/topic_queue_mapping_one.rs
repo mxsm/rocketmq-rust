@@ -104,7 +104,7 @@ mod tests {
         );
 
         let json = serde_json::to_string(&mapping_one).unwrap();
-        let expected = r#"{"topic":"topic","bname":"broker","global_id":1,"items":[{"gen":0,"queueId":0,"bname":null,"logicOffset":0,"startOffset":0,"endOffset":-1,"timeOfStart":-1,"timeOfEnd":-1}],"mapping_detail":{"topic":null,"scope":"__global__","totalQueues":0,"bname":null,"epoch":0,"dirty":false,"currIdMap":null,"hostedQueues":null}}"#;
+        let expected = r#"{"topic":"topic","bname":"broker","global_id":1,"items":[{"gen":0,"queueId":0,"bname":null,"logicOffset":0,"startOffset":0,"endOffset":-1,"timeOfStart":-1,"timeOfEnd":-1}],"mapping_detail":{"topic":null,"scope":"__global__","totalQueues":0,"bname":null,"epoch":0,"dirty":false,"currIdMap":null,"hostedQueues":{}}}"#;
         assert_eq!(json, expected);
 
         let deserialized = serde_json::from_str::<TopicQueueMappingOne>(&json).unwrap();

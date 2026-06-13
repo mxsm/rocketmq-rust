@@ -22,7 +22,7 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct UnregisterClientRequestHeader {
     #[required]
-    #[serde(rename = "clientID")]
+    #[serde(rename = "clientID", alias = "clientId")]
     pub client_id: CheetahString,
     pub producer_group: Option<CheetahString>,
     pub consumer_group: Option<CheetahString>,
@@ -55,7 +55,7 @@ mod tests {
             "test_consumer_group"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("clientId")).unwrap(),
+            map.get(&CheetahString::from_static_str("clientID")).unwrap(),
             "test_client_id"
         );
         assert_eq!(
@@ -73,7 +73,7 @@ mod tests {
             CheetahString::from_static_str("test_consumer_group"),
         );
         map.insert(
-            CheetahString::from_static_str("clientId"),
+            CheetahString::from_static_str("clientID"),
             CheetahString::from_static_str("test_client_id"),
         );
         map.insert(
@@ -90,13 +90,26 @@ mod tests {
     fn un_register_client_request_header_missing_optional_fields() {
         let mut map = HashMap::new();
         map.insert(
-            CheetahString::from_static_str("clientId"),
+            CheetahString::from_static_str("clientID"),
             CheetahString::from_static_str("test_client_id"),
         );
 
         let header: UnregisterClientRequestHeader = <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.client_id, "test_client_id");
         assert!(header.rpc_request_header.is_some());
+    }
+
+    #[test]
+    fn un_register_client_request_header_accepts_legacy_client_id_key() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("clientId"),
+            CheetahString::from_static_str("test_client_id"),
+        );
+
+        let header: UnregisterClientRequestHeader = <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
+
+        assert_eq!(header.client_id, "test_client_id");
     }
 
     #[test]

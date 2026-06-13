@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -28,11 +31,20 @@ pub trait MachineRoomResolver: Send + Sync {
 pub struct AllocateMessageQueueByMachineRoomNearby {
     strategy: Box<dyn AllocateMessageQueueStrategy>,
     resolver: Box<dyn MachineRoomResolver>,
+    name: &'static str,
 }
+
+/// Java-compatible name for `AllocateMachineRoomNearby`.
+pub type AllocateMachineRoomNearby = AllocateMessageQueueByMachineRoomNearby;
 
 impl AllocateMessageQueueByMachineRoomNearby {
     pub fn new(strategy: Box<dyn AllocateMessageQueueStrategy>, resolver: Box<dyn MachineRoomResolver>) -> Self {
-        Self { strategy, resolver }
+        let name = cached_strategy_name(strategy.get_name());
+        Self {
+            strategy,
+            resolver,
+            name,
+        }
     }
 }
 
@@ -53,21 +65,25 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
         // Group MQs by machine room
         let mut mr2mq: BTreeMap<CheetahString, Vec<MessageQueue>> = BTreeMap::new();
         for mq in mq_all {
-            if let Some(broker_machine_room) = self.resolver.broker_deploy_in(mq) {
-                mr2mq.entry(broker_machine_room).or_default().push(mq.clone());
-            } else {
+            let Some(broker_machine_room) = self.resolver.broker_deploy_in(mq) else {
+                return Err(mq_client_err!(format!("Machine room is null for mq {mq}")));
+            };
+            if broker_machine_room.is_empty() {
                 return Err(mq_client_err!(format!("Machine room is null for mq {mq}")));
             }
+            mr2mq.entry(broker_machine_room).or_default().push(mq.clone());
         }
 
         // Group consumers by machine room
         let mut mr2c: BTreeMap<CheetahString, Vec<CheetahString>> = BTreeMap::new();
         for cid in cid_all {
-            if let Some(consumer_machine_room) = self.resolver.consumer_deploy_in(cid) {
-                mr2c.entry(consumer_machine_room).or_default().push(cid.clone());
-            } else {
+            let Some(consumer_machine_room) = self.resolver.consumer_deploy_in(cid) else {
+                return Err(mq_client_err!(format!("Machine room is null for consumer id {cid}")));
+            };
+            if consumer_machine_room.is_empty() {
                 return Err(mq_client_err!(format!("Machine room is null for consumer id {cid}")));
             }
+            mr2c.entry(consumer_machine_room).or_default().push(cid.clone());
         }
 
         // 1. Allocate MQs in the same machine room as current consumer
@@ -95,9 +111,25 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
     }
 
     fn get_name(&self) -> &'static str {
-        // TODO: find a better way to do this
-        format!("MACHINE_ROOM_NEARBY-{}", self.strategy.get_name()).leak()
+        self.name
     }
+}
+
+fn cached_strategy_name(inner_name: &'static str) -> &'static str {
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, &'static str>>> = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut names = match cache.lock() {
+        Ok(names) => names,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(name) = names.get(inner_name) {
+        return name;
+    }
+
+    let name = Box::leak(format!("MACHINE_ROOM_NEARBY-{inner_name}").into_boxed_str());
+    names.insert(inner_name, name);
+    name
 }
 
 #[cfg(test)]
@@ -117,6 +149,10 @@ mod tests {
     #[derive(Clone)]
     struct TestMachineRoomResolver;
 
+    struct EmptyBrokerMachineRoomResolver;
+
+    struct EmptyConsumerMachineRoomResolver;
+
     impl MachineRoomResolver for TestMachineRoomResolver {
         fn broker_deploy_in(&self, message_queue: &MessageQueue) -> Option<CheetahString> {
             let parts: Vec<&str> = message_queue.broker_name().split('-').collect();
@@ -126,6 +162,26 @@ mod tests {
         fn consumer_deploy_in(&self, client_id: &CheetahString) -> Option<CheetahString> {
             let parts: Vec<&str> = client_id.as_str().split('-').collect();
             Some(CheetahString::from(parts[0]))
+        }
+    }
+
+    impl MachineRoomResolver for EmptyBrokerMachineRoomResolver {
+        fn broker_deploy_in(&self, _message_queue: &MessageQueue) -> Option<CheetahString> {
+            Some(CheetahString::new())
+        }
+
+        fn consumer_deploy_in(&self, _client_id: &CheetahString) -> Option<CheetahString> {
+            Some(CheetahString::from("IDC1"))
+        }
+    }
+
+    impl MachineRoomResolver for EmptyConsumerMachineRoomResolver {
+        fn broker_deploy_in(&self, _message_queue: &MessageQueue) -> Option<CheetahString> {
+            Some(CheetahString::from("IDC1"))
+        }
+
+        fn consumer_deploy_in(&self, _client_id: &CheetahString) -> Option<CheetahString> {
+            Some(CheetahString::new())
         }
     }
 
@@ -173,7 +229,7 @@ mod tests {
     fn test_when_idc_size_equals(idc_size: usize, queue_size: usize, consumer_size: usize) {
         let strategy = Box::new(AllocateMessageQueueAveragelyByCircle);
         let resolver = Box::new(TestMachineRoomResolver);
-        let allocator = AllocateMessageQueueByMachineRoomNearby::new(strategy, resolver);
+        let allocator = AllocateMachineRoomNearby::new(strategy, resolver);
 
         let cid_all = prepare_consumer(idc_size, consumer_size);
         let mq_all = prepare_mq(idc_size, queue_size);
@@ -204,7 +260,7 @@ mod tests {
     ) {
         let strategy = Box::new(AllocateMessageQueueAveragelyByCircle);
         let resolver = Box::new(TestMachineRoomResolver);
-        let allocator = AllocateMessageQueueByMachineRoomNearby::new(strategy, resolver);
+        let allocator = AllocateMachineRoomNearby::new(strategy, resolver);
 
         let mut broker_idc_with_consumer = BTreeSet::new();
         let cid_all = prepare_consumer(broker_idc_size + consumer_more, consumer_size);
@@ -244,7 +300,7 @@ mod tests {
     ) {
         let strategy = Box::new(AllocateMessageQueueAveragelyByCircle);
         let resolver = Box::new(TestMachineRoomResolver);
-        let allocator = AllocateMessageQueueByMachineRoomNearby::new(strategy, resolver);
+        let allocator = AllocateMachineRoomNearby::new(strategy, resolver);
 
         let mut healthy_idc = BTreeSet::new();
         let cid_all = prepare_consumer(broker_idc_size - consumer_idc_less, consumer_size);
@@ -286,6 +342,54 @@ mod tests {
         test_when_idc_size_equals(5, 20, 20);
         test_when_idc_size_equals(5, 20, 30);
         test_when_idc_size_equals(5, 20, 0);
+    }
+
+    #[test]
+    fn get_name_matches_java_and_reuses_cached_name() {
+        let first = AllocateMachineRoomNearby::new(
+            Box::new(AllocateMessageQueueAveragelyByCircle),
+            Box::new(TestMachineRoomResolver),
+        );
+        let second = AllocateMachineRoomNearby::new(
+            Box::new(AllocateMessageQueueAveragelyByCircle),
+            Box::new(TestMachineRoomResolver),
+        );
+
+        assert_eq!(first.get_name(), "MACHINE_ROOM_NEARBY-AVG_BY_CIRCLE");
+        assert_eq!(second.get_name(), first.get_name());
+        assert_eq!(first.get_name().as_ptr(), second.get_name().as_ptr());
+    }
+
+    #[test]
+    fn allocate_rejects_empty_broker_machine_room_like_java() {
+        let allocator = AllocateMachineRoomNearby::new(
+            Box::new(AllocateMessageQueueAveragelyByCircle),
+            Box::new(EmptyBrokerMachineRoomResolver),
+        );
+        let cid_all = create_consumer_id_list("IDC1", 1);
+        let mq_all = create_message_queue_list("IDC1", 1);
+
+        let err = allocator
+            .allocate(&CheetahString::from("Test-C-G"), &cid_all[0], &mq_all, &cid_all)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Machine room is null for mq"));
+    }
+
+    #[test]
+    fn allocate_rejects_empty_consumer_machine_room_like_java() {
+        let allocator = AllocateMachineRoomNearby::new(
+            Box::new(AllocateMessageQueueAveragelyByCircle),
+            Box::new(EmptyConsumerMachineRoomResolver),
+        );
+        let cid_all = create_consumer_id_list("IDC1", 1);
+        let mq_all = create_message_queue_list("IDC1", 1);
+
+        let err = allocator
+            .allocate(&CheetahString::from("Test-C-G"), &cid_all[0], &mq_all, &cid_all)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Machine room is null for consumer id"));
     }
 
     #[test]

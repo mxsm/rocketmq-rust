@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
@@ -44,8 +46,8 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
 /// - Manages lifecycle of background pull tasks
 ///
 /// # Thread Model
-/// - Main loop: Single Tokio task
-/// - Delayed tasks: Individual tokio::spawn tasks
+/// - Main loop: Single Tokio task when a runtime is available
+/// - Delayed tasks: Tokio tasks, with a current-thread runtime fallback for synchronous callers
 ///
 /// # Shutdown Semantics
 /// - `shutdown()` sends stop signal and waits for graceful termination
@@ -114,7 +116,7 @@ impl PullMessageService {
         self.tx_shutdown = Some(tx_shutdown);
         self.stopped.store(false, Ordering::Release);
 
-        tokio::spawn(async move {
+        spawn_pull_message_task("rocketmq-client-pull-message-service", async move {
             info!("{} service started", "PullMessageService");
 
             loop {
@@ -208,7 +210,7 @@ impl PullMessageService {
         let request = pull_request.clone();
 
         // Use a one-shot scheduled task
-        tokio::spawn(async move {
+        spawn_pull_message_task("rocketmq-client-pull-request-delay", async move {
             tokio::time::sleep(Duration::from_millis(time_delay)).await;
 
             if this.is_stopped() {
@@ -256,7 +258,7 @@ impl PullMessageService {
         let request = pop_request.clone();
 
         // Use a one-shot scheduled task
-        tokio::spawn(async move {
+        spawn_pull_message_task("rocketmq-client-pop-request-delay", async move {
             tokio::time::sleep(Duration::from_millis(time_delay)).await;
 
             if this.is_stopped() {
@@ -304,8 +306,12 @@ impl PullMessageService {
             return;
         }
 
-        tokio::spawn(async move {
+        let stopped = self.stopped.clone();
+        spawn_pull_message_task("rocketmq-client-pull-task-delay", async move {
             tokio::time::sleep(Duration::from_millis(time_delay)).await;
+            if stopped.load(Ordering::Acquire) {
+                return;
+            }
             task();
         });
     }
@@ -320,7 +326,7 @@ impl PullMessageService {
             return;
         }
 
-        tokio::spawn(async move {
+        spawn_pull_message_task("rocketmq-client-pull-task", async move {
             task();
         });
     }
@@ -383,5 +389,54 @@ impl PullMessageService {
 impl Default for PullMessageService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn spawn_pull_message_task<F>(thread_name: &'static str, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        drop(handle.spawn(task));
+        return;
+    }
+
+    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
+        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(runtime) => runtime.block_on(task),
+            Err(error) => error!("Failed to build {} runtime: {}", thread_name, error),
+        }
+    }) {
+        Ok(_handle) => {}
+        Err(error) => error!("Failed to spawn {} background thread: {}", thread_name, error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_task_without_tokio_runtime_does_not_spawn_panic() {
+        let service = PullMessageService::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = ran.clone();
+
+        service.execute_task(move || ran_clone.store(true, Ordering::Release));
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn execute_task_later_without_tokio_runtime_does_not_spawn_panic() {
+        let service = PullMessageService::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = ran.clone();
+
+        service.execute_task_later(move || ran_clone.store(true, Ordering::Release), 1);
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(ran.load(Ordering::Acquire));
     }
 }

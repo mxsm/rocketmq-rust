@@ -827,6 +827,8 @@ async fn end_transaction(
     let transaction_state_table_offset = request
         .transaction_state_table_offset
         .ok_or_else(|| ProxyError::invalid_transaction_id("missing transactional message offset for endTransaction"))?;
+    let transaction_state_table_offset = i64::try_from(transaction_state_table_offset)
+        .map_err(|_| ProxyError::invalid_transaction_id("transaction state table offset exceeds Java long range"))?;
     let commit_log_message_id = request
         .commit_log_message_id
         .as_deref()
@@ -840,7 +842,7 @@ async fn end_transaction(
         topic: CheetahString::from(request.topic.to_string()),
         producer_group: CheetahString::from(producer_group),
         tran_state_table_offset: transaction_state_table_offset,
-        commit_log_offset: broker_message_id.offset as u64,
+        commit_log_offset: broker_message_id.offset,
         commit_or_rollback: transaction_resolution_flag(request.resolution),
         from_transaction_check: matches!(request.source, TransactionSource::ServerCheck),
         msg_id: CheetahString::from(request.message_id.as_str()),
@@ -923,6 +925,10 @@ async fn ack_message_entry_via_broker(
         queue_id: parsed.queue_id,
         extra_info: parsed.raw.clone(),
         offset: parsed.queue_offset,
+        lite_topic: entry
+            .lite_topic
+            .as_ref()
+            .map(|topic| CheetahString::from(topic.as_str())),
         topic_request_header: Some(TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {
                 broker_name: Some(parsed.broker_name.clone()),
@@ -1001,6 +1007,11 @@ async fn change_invisible_duration_via_broker(
         extra_info: parsed.raw.clone(),
         offset: parsed.queue_offset,
         invisible_time: request.invisible_duration.as_millis().clamp(1, i64::MAX as u128) as i64,
+        lite_topic: request
+            .lite_topic
+            .as_ref()
+            .map(|topic| CheetahString::from(topic.as_str())),
+        suspend: request.suspend.unwrap_or(false),
         topic_request_header: Some(TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {
                 broker_name: Some(parsed.broker_name.clone()),
@@ -1139,6 +1150,7 @@ async fn query_offset_via_broker(
         QueryOffsetPolicy::Timestamp => {
             let header = SearchOffsetRequestHeader {
                 topic: CheetahString::from(request.target.topic.to_string()),
+                lite_topic: None,
                 queue_id: request.target.queue_id,
                 timestamp: request
                     .timestamp_ms
@@ -1259,6 +1271,7 @@ fn build_pull_request_header(broker_name: &str, request: &PullMessageRequest) ->
     PullMessageRequestHeader {
         consumer_group: CheetahString::from(request.group.to_string()),
         topic: CheetahString::from(request.target.topic.to_string()),
+        lite_topic: None,
         queue_id: request.target.queue_id,
         queue_offset: request.offset,
         max_msg_nums: request.batch_size.min(i32::MAX as u32) as i32,
@@ -1781,6 +1794,7 @@ fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessa
         TopicMessageType::Transaction => ProxyTopicMessageType::Transaction,
         TopicMessageType::Mixed => ProxyTopicMessageType::Mixed,
         TopicMessageType::Lite => ProxyTopicMessageType::Lite,
+        TopicMessageType::Priority => ProxyTopicMessageType::Priority,
     }
 }
 
@@ -1815,6 +1829,10 @@ mod tests {
         assert_eq!(
             convert_topic_message_type(TopicMessageType::Lite),
             ProxyTopicMessageType::Lite
+        );
+        assert_eq!(
+            convert_topic_message_type(TopicMessageType::Priority),
+            ProxyTopicMessageType::Priority
         );
     }
 }

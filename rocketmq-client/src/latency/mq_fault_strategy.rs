@@ -31,26 +31,30 @@ pub struct MQFaultStrategy {
     latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
     start_detector_enable: AtomicBool,
-    latency_max: &'static [u64],
-    not_available_duration: &'static [u64],
+    latency_max: Vec<u64>,
+    not_available_duration: Vec<u64>,
     reachable_filter: Box<dyn QueueFilter>,
     available_filter: Box<dyn QueueFilter>,
 }
 
 impl MQFaultStrategy {
+    pub const DEFAULT_LATENCY_MAX: [u64; 7] = [50, 100, 550, 1800, 3000, 5000, 15000];
+    pub const DEFAULT_NOT_AVAILABLE_DURATION: [u64; 7] = [0, 0, 2000, 5000, 6000, 10000, 30000];
     /// Latency penalty applied when a broker is isolated (10 seconds).
     const ISOLATION_LATENCY_MS: u64 = 10_000;
 
     pub fn new(client_config: &ClientConfig) -> Self {
         let mut tolerance_impl = LatencyFaultToleranceImpl::new();
+        tolerance_impl.set_detect_interval(client_config.detect_interval);
+        tolerance_impl.set_detect_timeout(client_config.detect_timeout);
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
         let latency_fault_tolerance = ArcMut::new(tolerance_impl);
         Self {
             latency_fault_tolerance: ArcMut::clone(&latency_fault_tolerance),
             send_latency_fault_enable: AtomicBool::new(client_config.send_latency_enable),
             start_detector_enable: AtomicBool::new(client_config.start_detector_enable),
-            latency_max: &[50, 100, 550, 1800, 3000, 5000, 15000],
-            not_available_duration: &[0, 0, 2000, 5000, 6000, 10000, 30000],
+            latency_max: Self::DEFAULT_LATENCY_MAX.to_vec(),
+            not_available_duration: Self::DEFAULT_NOT_AVAILABLE_DURATION.to_vec(),
             reachable_filter: Box::new(ReachableFilter {
                 latency_fault_tolerance: ArcMut::clone(&latency_fault_tolerance),
             }),
@@ -64,11 +68,11 @@ impl MQFaultStrategy {
         LatencyFaultTolerance::start_detector(self.latency_fault_tolerance.clone());
     }
 
-    pub fn set_resolve(&mut self, resolver: DefaultResolver) {
+    pub(crate) fn set_resolve(&mut self, resolver: DefaultResolver) {
         self.latency_fault_tolerance.set_resolver(resolver);
     }
 
-    pub fn set_service_detector(&mut self, service_detector: DefaultServiceDetector) {
+    pub(crate) fn set_service_detector(&mut self, service_detector: DefaultServiceDetector) {
         self.latency_fault_tolerance.set_service_detector(service_detector);
     }
 
@@ -97,9 +101,7 @@ impl MQFaultStrategy {
         last_broker_name: Option<&CheetahString>,
         reset_index: bool,
     ) -> Option<MessageQueue> {
-        let broker_filter = BrokerFilter {
-            last_broker_name: last_broker_name.cloned(),
-        };
+        let broker_filter = BrokerFilter::with_last_broker_name(last_broker_name.cloned());
 
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
             if reset_index {
@@ -125,12 +127,20 @@ impl MQFaultStrategy {
         tp_info.select_one_message_queue_filters(&[])
     }
 
-    pub fn get_latency_max(&self) -> &'static [u64] {
-        self.latency_max
+    pub fn get_latency_max(&self) -> &[u64] {
+        &self.latency_max
     }
 
-    pub fn get_not_available_duration(&self) -> &'static [u64] {
-        self.not_available_duration
+    pub fn set_latency_max(&mut self, latency_max: impl Into<Vec<u64>>) {
+        self.latency_max = latency_max.into();
+    }
+
+    pub fn get_not_available_duration(&self) -> &[u64] {
+        &self.not_available_duration
+    }
+
+    pub fn set_not_available_duration(&mut self, not_available_duration: impl Into<Vec<u64>>) {
+        self.not_available_duration = not_available_duration.into();
     }
 
     pub async fn update_fault_item(
@@ -154,7 +164,8 @@ impl MQFaultStrategy {
     }
 
     fn compute_not_available_duration(&self, current_latency: u64) -> u64 {
-        for i in (0..self.latency_max.len()).rev() {
+        let len = self.latency_max.len().min(self.not_available_duration.len());
+        for i in (0..len).rev() {
             if current_latency >= self.latency_max[i] {
                 return self.not_available_duration[i];
             }
@@ -169,9 +180,35 @@ impl MQFaultStrategy {
     }
 }
 
-#[derive(Default)]
-struct BrokerFilter {
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BrokerFilter {
     last_broker_name: Option<CheetahString>,
+}
+
+impl BrokerFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_last_broker_name(last_broker_name: Option<CheetahString>) -> Self {
+        Self { last_broker_name }
+    }
+
+    pub fn last_broker_name(&self) -> Option<&CheetahString> {
+        self.last_broker_name.as_ref()
+    }
+
+    pub fn get_last_broker_name(&self) -> Option<&CheetahString> {
+        self.last_broker_name()
+    }
+
+    pub fn set_last_broker_name(&mut self, last_broker_name: impl Into<CheetahString>) {
+        self.last_broker_name = Some(last_broker_name.into());
+    }
+
+    pub fn clear_last_broker_name(&mut self) {
+        self.last_broker_name = None;
+    }
 }
 
 impl QueueFilter for BrokerFilter {
@@ -201,5 +238,48 @@ struct AvailableFilter {
 impl QueueFilter for AvailableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
         self.latency_fault_tolerance.is_available(message_queue.broker_name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_filter_matches_java_last_broker_name_rule() {
+        let mq = MessageQueue::from_parts("topic", "broker-a", 0);
+        let mut filter = BrokerFilter::new();
+
+        assert!(filter.filter(&mq));
+        assert!(filter.get_last_broker_name().is_none());
+
+        filter.set_last_broker_name("broker-a");
+        assert_eq!(
+            filter.get_last_broker_name(),
+            Some(&CheetahString::from_static_str("broker-a"))
+        );
+        assert!(!filter.filter(&mq));
+
+        filter.set_last_broker_name("broker-b");
+        assert!(filter.filter(&mq));
+
+        filter.clear_last_broker_name();
+        assert!(filter.filter(&mq));
+    }
+
+    #[test]
+    fn mq_fault_strategy_copies_detector_config_like_java_constructor() {
+        let mut client_config = ClientConfig::default();
+        client_config.set_detect_interval(12_345);
+        client_config.set_detect_timeout(321);
+        client_config.set_start_detector_enable(true);
+
+        let strategy = MQFaultStrategy::new(&client_config);
+        let (detect_interval, detect_timeout) = strategy.latency_fault_tolerance.detector_config_for_test();
+
+        assert_eq!(detect_interval, 12_345);
+        assert_eq!(detect_timeout, 321);
+        assert!(strategy.is_start_detector_enable());
+        assert!(strategy.latency_fault_tolerance.is_start_detector_enable());
     }
 }

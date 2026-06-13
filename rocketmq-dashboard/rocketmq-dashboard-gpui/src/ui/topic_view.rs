@@ -256,12 +256,12 @@ impl TopicView {
         ];
 
         let mut container = div().flex().flex_wrap().gap_2();
-        
+
         for topic_type in &topic_types {
             let is_active = self.active_filters.contains(topic_type);
             container = container.child(self.render_filter_checkbox(topic_type, is_active, cx));
         }
-        
+
         container
     }
 

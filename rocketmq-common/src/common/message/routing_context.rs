@@ -91,7 +91,7 @@ impl RoutingContext {
 impl Default for RoutingContext {
     fn default() -> Self {
         Self {
-            born_host: "127.0.0.1:0".parse().unwrap(),
+            born_host: SocketAddr::from(([127, 0, 0, 1], 0)),
             born_timestamp: 0,
             sys_flag: 0,
         }

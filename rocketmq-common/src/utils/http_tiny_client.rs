@@ -35,15 +35,25 @@ use crate::TimeUtils::current_millis;
 /// Reuses connections across requests for better performance
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
+fn build_http_client() -> RocketMQResult<Client> {
+    Client::builder()
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(16)
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| RocketMQError::network_request_failed("http-client", e.to_string()))
+}
+
 /// Initialize the global HTTP client (called lazily on first use)
-fn get_http_client() -> &'static Client {
-    HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .pool_idle_timeout(Duration::from_secs(90))
-            .pool_max_idle_per_host(16)
-            .connect_timeout(Duration::from_secs(3))
-            .build()
-            .expect("Failed to build HTTP client")
+fn get_http_client() -> RocketMQResult<&'static Client> {
+    if let Some(client) = HTTP_CLIENT.get() {
+        return Ok(client);
+    }
+
+    let client = build_http_client()?;
+    let _ = HTTP_CLIENT.set(client);
+    HTTP_CLIENT.get().ok_or_else(|| {
+        RocketMQError::network_request_failed("http-client", "HTTP client initialization did not complete")
     })
 }
 
@@ -88,7 +98,7 @@ impl std::fmt::Display for HttpResult {
 
 impl HttpTinyClient {
     /// Get the shared HTTP client with connection pool
-    fn client() -> &'static Client {
+    fn client() -> RocketMQResult<&'static Client> {
         get_http_client()
     }
 
@@ -176,6 +186,15 @@ impl HttpTinyClient {
         Ok(())
     }
 
+    fn ensure_not_in_tokio_runtime(operation: &str) -> io::Result<()> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(io::Error::other(format!(
+                "{operation} cannot run inside an active Tokio runtime; use the async API instead"
+            )));
+        }
+        Ok(())
+    }
+
     /// Perform HTTP GET request (async version)
     ///
     /// # Arguments
@@ -207,7 +226,7 @@ impl HttpTinyClient {
             url.to_string()
         };
 
-        let client = Self::client();
+        let client = Self::client()?;
 
         let mut request_builder = client.get(&full_url);
         request_builder = request_builder.timeout(Duration::from_millis(read_timeout_ms));
@@ -258,7 +277,7 @@ impl HttpTinyClient {
 
         let encoded_content = Self::encoding_params(param_values, encoding)?.unwrap_or_default();
 
-        let client = Self::client();
+        let client = Self::client()?;
 
         let mut request_builder = client.post(url);
         request_builder = request_builder.timeout(Duration::from_millis(read_timeout_ms));
@@ -309,6 +328,7 @@ impl HttpTinyClient {
         encoding: &str,
         read_timeout_ms: u64,
     ) -> Result<HttpResult, io::Error> {
+        Self::ensure_not_in_tokio_runtime("http_get")?;
         // Use tokio::runtime to bridge to async world
         tokio::runtime::Runtime::new()
             .map_err(io::Error::other)?
@@ -344,6 +364,7 @@ impl HttpTinyClient {
         encoding: &str,
         read_timeout_ms: u64,
     ) -> Result<HttpResult, io::Error> {
+        Self::ensure_not_in_tokio_runtime("http_post")?;
         // Use tokio::runtime to bridge to async world
         tokio::runtime::Runtime::new()
             .map_err(io::Error::other)?
@@ -415,6 +436,11 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
+
+    #[test]
+    fn shared_http_client_initializes_without_panicking() {
+        assert!(HttpTinyClient::client().is_ok());
+    }
 
     async fn spawn_http_server<F>(handler: F) -> String
     where
@@ -551,6 +577,24 @@ mod tests {
         assert!(response.is_success());
         assert!(response.content.contains("username=testuser"));
         assert!(response.content.contains("password=testpass"));
+    }
+
+    #[tokio::test]
+    async fn blocking_http_get_inside_tokio_runtime_returns_error_without_panic() {
+        #[allow(deprecated)]
+        let error = HttpTinyClient::http_get("http://127.0.0.1", None, None, "UTF-8", 100)
+            .expect_err("blocking http_get should reject async runtime contexts");
+
+        assert!(error.to_string().contains("use the async API instead"));
+    }
+
+    #[tokio::test]
+    async fn blocking_http_post_inside_tokio_runtime_returns_error_without_panic() {
+        #[allow(deprecated)]
+        let error = HttpTinyClient::http_post("http://127.0.0.1", None, None, "UTF-8", 100)
+            .expect_err("blocking http_post should reject async runtime contexts");
+
+        assert!(error.to_string().contains("use the async API instead"));
     }
 
     #[tokio::test]

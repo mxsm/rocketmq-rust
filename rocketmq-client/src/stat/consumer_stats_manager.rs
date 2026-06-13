@@ -12,8 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_remoting::protocol::body::consume_status::ConsumeStatus;
+use tracing::warn;
 
 const TOPIC_AND_GROUP_CONSUME_OK_TPS: &str = "CONSUME_OK_TPS";
 const TOPIC_AND_GROUP_CONSUME_FAILED_TPS: &str = "CONSUME_FAILED_TPS";
@@ -32,6 +40,7 @@ pub struct ConsumerStatsManager {
     topic_and_group_consume_failed_tps: StatsItemSet,
     topic_and_group_pull_tps: StatsItemSet,
     topic_and_group_pull_rt: StatsItemSet,
+    shutdown_signal: Arc<AtomicBool>,
 }
 
 impl Default for ConsumerStatsManager {
@@ -49,19 +58,22 @@ impl ConsumerStatsManager {
             topic_and_group_consume_failed_tps: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_FAILED_TPS.to_string()),
             topic_and_group_pull_tps: StatsItemSet::new(TOPIC_AND_GROUP_PULL_TPS.to_string()),
             topic_and_group_pull_rt: StatsItemSet::new(TOPIC_AND_GROUP_PULL_RT.to_string()),
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Starts background sampling tasks.
     ///
-    /// Spawns three Tokio tasks that advance the sliding-window snapshots used
+    /// Spawns three background tasks that advance the sliding-window snapshots used
     /// by [`consume_status`](Self::consume_status):
     ///
-    /// - every 10 s  → `cs_list_minute` (drives per-minute stats)
-    /// - every 10 min → `cs_list_hour`   (drives per-hour stats)
-    /// - every 1 h   → `cs_list_day`    (drives per-day stats)
+    /// - every 10 s: `cs_list_minute` (drives per-minute stats)
+    /// - every 10 min: `cs_list_hour` (drives per-hour stats)
+    /// - every 1 h: `cs_list_day` (drives per-day stats)
     pub fn start(&self) {
-        // 10-second tick — drives cs_list_minute on each StatsItem.
+        self.shutdown_signal.store(false, Ordering::Release);
+
+        // 10-second tick drives cs_list_minute on each StatsItem.
         let sets_sec = [
             self.topic_and_group_consume_ok_tps.clone(),
             self.topic_and_group_consume_rt.clone(),
@@ -69,17 +81,22 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_tps.clone(),
             self.topic_and_group_pull_rt.clone(),
         ];
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        let shutdown_signal = self.shutdown_signal.clone();
+        spawn_stats_task("rocketmq-client-consumer-stats-seconds", async move {
             loop {
-                interval.tick().await;
+                if shutdown_signal.load(Ordering::Acquire) {
+                    break;
+                }
                 for set in &sets_sec {
                     set.sampling_in_seconds();
+                }
+                if !sleep_or_shutdown(&shutdown_signal, Duration::from_secs(10)).await {
+                    break;
                 }
             }
         });
 
-        // 10-minute tick — drives cs_list_hour on each StatsItem.
+        // 10-minute tick drives cs_list_hour on each StatsItem.
         let sets_min = [
             self.topic_and_group_consume_ok_tps.clone(),
             self.topic_and_group_consume_rt.clone(),
@@ -87,17 +104,22 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_tps.clone(),
             self.topic_and_group_pull_rt.clone(),
         ];
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+        let shutdown_signal = self.shutdown_signal.clone();
+        spawn_stats_task("rocketmq-client-consumer-stats-minutes", async move {
             loop {
-                interval.tick().await;
+                if shutdown_signal.load(Ordering::Acquire) {
+                    break;
+                }
                 for set in &sets_min {
                     set.sampling_in_minutes();
+                }
+                if !sleep_or_shutdown(&shutdown_signal, Duration::from_secs(10 * 60)).await {
+                    break;
                 }
             }
         });
 
-        // 1-hour tick — drives cs_list_day on each StatsItem.
+        // 1-hour tick drives cs_list_day on each StatsItem.
         let sets_hour = [
             self.topic_and_group_consume_ok_tps.clone(),
             self.topic_and_group_consume_rt.clone(),
@@ -105,19 +127,26 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_tps.clone(),
             self.topic_and_group_pull_rt.clone(),
         ];
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        let shutdown_signal = self.shutdown_signal.clone();
+        spawn_stats_task("rocketmq-client-consumer-stats-hours", async move {
             loop {
-                interval.tick().await;
+                if shutdown_signal.load(Ordering::Acquire) {
+                    break;
+                }
                 for set in &sets_hour {
                     set.sampling_in_hours();
+                }
+                if !sleep_or_shutdown(&shutdown_signal, Duration::from_secs(3600)).await {
+                    break;
                 }
             }
         });
     }
 
     /// Shuts down the stats manager.
-    pub fn shutdown(&self) {}
+    pub fn shutdown(&self) {
+        self.shutdown_signal.store(true, Ordering::Release);
+    }
 
     /// Records a single pull response-time observation in milliseconds.
     pub fn inc_pull_rt(&self, group: &str, topic: &str, rt: u64) {
@@ -141,6 +170,12 @@ impl ConsumerStatsManager {
     pub fn inc_consume_ok_tps(&self, group: &str, topic: &str, msgs: u64) {
         self.topic_and_group_consume_ok_tps
             .add_value(&stats_key(topic, group), msgs as i64, 1);
+    }
+
+    /// Java-compatible acronym spelling for `incConsumeOKTPS`.
+    #[inline]
+    pub fn inc_consume_oktps(&self, group: &str, topic: &str, msgs: u64) {
+        self.inc_consume_ok_tps(group, topic, msgs);
     }
 
     /// Records `msgs` messages that failed consumption in one batch.
@@ -203,6 +238,45 @@ fn stats_key(topic: &str, group: &str) -> String {
     format!("{topic}@{group}")
 }
 
+fn spawn_stats_task<F>(thread_name: &'static str, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        drop(handle.spawn(task));
+        return;
+    }
+
+    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => {
+            if let Err(error) = thread::Builder::new()
+                .name(thread_name.to_string())
+                .spawn(move || runtime.block_on(task))
+            {
+                warn!("Failed to spawn {} background thread: {}", thread_name, error);
+            }
+        }
+        Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
+    }
+}
+
+async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, delay: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + delay;
+
+    loop {
+        if shutdown_signal.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return true;
+        }
+
+        tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +294,19 @@ mod tests {
     fn smoke_inc_consume_ok_tps() {
         let mgr = make_manager();
         mgr.inc_consume_ok_tps("GroupA", "TopicA", 5);
+    }
+
+    #[test]
+    fn java_acronym_alias_inc_consume_oktps_records_ok_tps() {
+        let mgr = make_manager();
+        mgr.inc_consume_oktps("GroupA", "TopicA", 5);
+        let item = mgr
+            .topic_and_group_consume_ok_tps
+            .get_stats_item(&stats_key("TopicA", "GroupA"))
+            .expect("alias should record the same stats item as inc_consume_ok_tps");
+
+        assert_eq!(item.get_value(), 5);
+        assert_eq!(item.get_times(), 1);
     }
 
     #[test]
@@ -264,6 +351,14 @@ mod tests {
         // Verifies start() does not panic in a Tokio runtime context.
         mgr.start();
         mgr.shutdown();
+    }
+
+    #[test]
+    fn start_without_tokio_runtime_does_not_panic() {
+        let mgr = make_manager();
+        mgr.start();
+        mgr.shutdown();
+        thread::sleep(Duration::from_millis(80));
     }
 
     #[test]

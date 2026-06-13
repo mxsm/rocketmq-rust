@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -62,6 +64,7 @@ use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
 use crate::factory::mq_client_instance::MQClientInstance;
@@ -70,6 +73,7 @@ use crate::hook::check_forbidden_hook::CheckForbiddenHook;
 use crate::hook::end_transaction_context::EndTransactionContext;
 use crate::hook::end_transaction_hook::EndTransactionHook;
 use crate::hook::send_message_context::SendMessageContext;
+use crate::hook::send_message_context::SendMessageTraceSnapshot;
 use crate::hook::send_message_hook::SendMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
@@ -77,6 +81,8 @@ use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
 use crate::producer::default_mq_producer::ProducerConfig;
+use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM;
+use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE;
 use crate::producer::local_transaction_state::LocalTransactionState;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
@@ -92,6 +98,7 @@ use crate::producer::transaction_send_result::TransactionSendResult;
 use tokio::task::JoinHandle;
 
 type Topic = CheetahString;
+const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 
 /// Producer state machine (atomic)
 #[repr(u8)]
@@ -102,6 +109,7 @@ enum ProducerState {
     Running = 2,
     Stopping = 3,
     Stopped = 4,
+    StartFailed = 5,
 }
 
 impl ProducerState {
@@ -112,6 +120,8 @@ impl ProducerState {
             1 => Self::Starting,
             2 => Self::Running,
             3 => Self::Stopping,
+            4 => Self::Stopped,
+            5 => Self::StartFailed,
             _ => Self::Stopped,
         }
     }
@@ -135,6 +145,37 @@ impl ProducerRuntime {
             let _ = handle.await;
         }
     }
+}
+
+#[derive(Clone)]
+struct TransactionCheckEnv {
+    request_slots: Arc<Semaphore>,
+    worker_slots: Arc<Semaphore>,
+}
+
+fn spawn_producer_task<F>(
+    executor: Option<&tokio::runtime::Handle>,
+    thread_name: &'static str,
+    task: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Some(executor) = executor {
+        drop(executor.spawn(task));
+        return Ok(());
+    }
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        drop(handle.spawn(task));
+        return Ok(());
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || runtime.block_on(task))?;
+    Ok(())
 }
 
 /// Send context - encapsulates mutable state during message sending
@@ -267,6 +308,8 @@ pub struct DefaultMQProducerImpl {
     semaphore_async_send_size: Arc<Semaphore>,
     default_mqproducer_impl_inner: Option<WeakArcMut<DefaultMQProducerImpl>>,
     transaction_listener: Option<ArcTransactionListener>,
+    transaction_executor_service: Option<tokio::runtime::Handle>,
+    transaction_check_env: Option<TransactionCheckEnv>,
 }
 
 #[allow(unused_must_use)]
@@ -277,10 +320,16 @@ impl DefaultMQProducerImpl {
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let semaphore_async_send_num =
-            Semaphore::new(producer_config.back_pressure_for_async_send_num().max(10) as usize);
-        let semaphore_async_send_size =
-            Semaphore::new(producer_config.back_pressure_for_async_send_size().max(1024 * 1024) as usize);
+        let semaphore_async_send_num = Semaphore::new(
+            producer_config
+                .back_pressure_for_async_send_num()
+                .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM) as usize,
+        );
+        let semaphore_async_send_size = Semaphore::new(
+            producer_config
+                .back_pressure_for_async_send_size()
+                .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize,
+        );
         let topic_publish_info_table = Arc::new(DashMap::new());
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
@@ -295,14 +344,211 @@ impl DefaultMQProducerImpl {
             pending_send_hooks: ParkingLotMutex::new(Some(Vec::new())),
             pending_end_transaction_hooks: ParkingLotMutex::new(Some(Vec::new())),
             pending_forbidden_hooks: ParkingLotMutex::new(Some(Vec::new())),
-            rpc_hook: None,
+            rpc_hook,
             client_instance: None,
             mq_fault_strategy: ArcMut::new(MQFaultStrategy::new(&client_config)),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
             default_mqproducer_impl_inner: None,
             transaction_listener: None,
+            transaction_executor_service: None,
+            transaction_check_env: None,
         }
+    }
+
+    #[inline]
+    pub(crate) fn is_use_tls(&self) -> bool {
+        self.client_config.is_use_tls()
+    }
+
+    #[inline]
+    pub(crate) fn set_use_tls(&mut self, use_tls: bool) {
+        self.client_config.set_use_tls(use_tls);
+    }
+
+    #[inline]
+    fn message_body_len_for_backpressure<T: MessageTrait>(msg: &T) -> usize {
+        msg.get_body().map_or(1, |body| body.len())
+    }
+
+    fn select_message_queue_with_user_message<M, S, T>(
+        client_config: &mut ClientConfig,
+        message_queue_list: &[MessageQueue],
+        msg: &mut M,
+        selector: &S,
+        arg: &T,
+    ) -> Option<MessageQueue>
+    where
+        M: MessageTrait,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue>,
+    {
+        let original_topic = msg.topic().clone();
+        let user_topic = NamespaceUtil::without_namespace_with_namespace(
+            original_topic.as_str(),
+            client_config.get_namespace().unwrap_or_default().as_str(),
+        );
+        msg.set_topic(CheetahString::from_string(user_topic));
+        let selected = selector(message_queue_list, msg, arg).map(|mq| client_config.queue_with_namespace(mq));
+        msg.set_topic(original_topic);
+        selected
+    }
+
+    #[inline]
+    fn notify_callback_exception(send_callback: &Option<ArcSendCallback>, error: &dyn std::error::Error) {
+        if let Some(send_callback) = send_callback.as_ref() {
+            send_callback.on_exception(error);
+        } else {
+            tracing::error!("Async send failed without callback: {}", error);
+        }
+    }
+
+    #[inline]
+    fn remaining_async_timeout(timeout: u64, elapsed: u64) -> Option<u64> {
+        timeout.checked_sub(elapsed).filter(|remaining| *remaining > 0)
+    }
+
+    #[inline]
+    fn remaining_request_timeout(timeout: u64, elapsed: u64) -> rocketmq_error::RocketMQResult<u64> {
+        Self::remaining_async_timeout(timeout, elapsed).ok_or(rocketmq_error::RocketMQError::Timeout {
+            operation: "send request message",
+            timeout_ms: timeout,
+        })
+    }
+
+    #[inline]
+    fn client_instance(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
+        self.client_instance
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| mq_client_err!("MQClientInstance is not available; producer has not been started"))
+    }
+
+    pub fn get_mq_client_factory(&self) -> rocketmq_error::RocketMQResult<ArcMut<MQClientInstance>> {
+        self.client_instance()
+    }
+
+    #[inline]
+    pub(crate) fn client_id(&self) -> Option<CheetahString> {
+        self.client_instance
+            .as_ref()
+            .map(|client_instance| client_instance.client_id.clone())
+    }
+
+    #[inline]
+    pub(crate) fn producer_config(&self) -> &ProducerConfig {
+        self.producer_config.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn enable_backpressure_for_async_mode(&self) -> bool {
+        self.producer_config.enable_backpressure_for_async_mode()
+    }
+
+    #[inline]
+    pub(crate) fn back_pressure_for_async_send_num(&self) -> u32 {
+        self.producer_config.back_pressure_for_async_send_num()
+    }
+
+    #[inline]
+    pub(crate) fn back_pressure_for_async_send_size(&self) -> u32 {
+        self.producer_config.back_pressure_for_async_send_size()
+    }
+
+    pub fn set_enable_backpressure_for_async_mode(&mut self, enable_backpressure_for_async_mode: bool) {
+        Arc::make_mut(&mut self.producer_config)
+            .set_enable_backpressure_for_async_mode(enable_backpressure_for_async_mode);
+    }
+
+    pub fn replace_producer_config(&mut self, producer_config: ProducerConfig) {
+        let old_num_total = self
+            .producer_config
+            .back_pressure_for_async_send_num()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM) as usize;
+        let old_size_total = self
+            .producer_config
+            .back_pressure_for_async_send_size()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize;
+        let new_num_total = producer_config
+            .back_pressure_for_async_send_num()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM) as usize;
+        let new_size_total = producer_config
+            .back_pressure_for_async_send_size()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize;
+
+        self.producer_config = Arc::new(producer_config);
+        Self::resize_available_permits(&self.semaphore_async_send_num, old_num_total, new_num_total);
+        Self::resize_available_permits(&self.semaphore_async_send_size, old_size_total, new_size_total);
+    }
+
+    pub fn set_back_pressure_for_async_send_num(&mut self, back_pressure_for_async_send_num: u32) {
+        let old_total = self
+            .producer_config
+            .back_pressure_for_async_send_num()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM) as usize;
+        let new_total = back_pressure_for_async_send_num.max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM) as usize;
+        Arc::make_mut(&mut self.producer_config).set_back_pressure_for_async_send_num(back_pressure_for_async_send_num);
+        Self::resize_available_permits(&self.semaphore_async_send_num, old_total, new_total);
+    }
+
+    pub fn set_back_pressure_for_async_send_size(&mut self, back_pressure_for_async_send_size: u32) {
+        let old_total = self
+            .producer_config
+            .back_pressure_for_async_send_size()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize;
+        let new_total = back_pressure_for_async_send_size.max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize;
+        Arc::make_mut(&mut self.producer_config)
+            .set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
+        Self::resize_available_permits(&self.semaphore_async_send_size, old_total, new_total);
+    }
+
+    pub fn semaphore_processor(&self) {}
+
+    pub fn semaphore_async_adjust(
+        &mut self,
+        semaphore_async_num: i32,
+        semaphore_async_size: i32,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let current_num = self.producer_config.back_pressure_for_async_send_num() as i64;
+        let current_size = self.producer_config.back_pressure_for_async_send_size() as i64;
+        let new_num = current_num + semaphore_async_num as i64;
+        let new_size = current_size + semaphore_async_size as i64;
+
+        if new_num <= 0 || new_num > u32::MAX as i64 {
+            return Err(rocketmq_error::RocketMQError::IllegalArgument(format!(
+                "semaphoreAsyncNum adjustment out of range: current={}, delta={}",
+                current_num, semaphore_async_num
+            )));
+        }
+        if new_size <= 0 || new_size > u32::MAX as i64 {
+            return Err(rocketmq_error::RocketMQError::IllegalArgument(format!(
+                "semaphoreAsyncSize adjustment out of range: current={}, delta={}",
+                current_size, semaphore_async_size
+            )));
+        }
+
+        self.set_back_pressure_for_async_send_num(new_num as u32);
+        self.set_back_pressure_for_async_send_size(new_size as u32);
+        Ok(())
+    }
+
+    fn resize_available_permits(semaphore: &Semaphore, old_total: usize, new_total: usize) {
+        let available = semaphore.available_permits();
+        let in_flight = old_total.saturating_sub(available);
+        let target_available = new_total.saturating_sub(in_flight);
+
+        match target_available.cmp(&available) {
+            std::cmp::Ordering::Greater => semaphore.add_permits(target_available - available),
+            std::cmp::Ordering::Less => {
+                let _ = semaphore.forget_permits(available - target_available);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+
+    #[inline]
+    fn request_correlation_id<M: MessageTrait>(msg: &M) -> rocketmq_error::RocketMQResult<CheetahString> {
+        msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .ok_or_else(|| mq_client_err!("Request correlation id was not set before sending request message"))
     }
 
     #[inline]
@@ -378,13 +624,10 @@ impl DefaultMQProducerImpl {
     {
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
-        self.send_default_impl(
-            &mut msg,
-            CommunicationMode::Oneway,
-            None,
-            self.producer_config.send_msg_timeout() as u64,
-        )
-        .await?;
+
+        let timeout = self.producer_config.send_msg_timeout() as u64;
+        self.send_kernel_impl(&mut msg, &mq, CommunicationMode::Oneway, None, None, timeout)
+            .await?;
         Ok(())
     }
 
@@ -457,12 +700,15 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync + 'static,
     {
-        let client_instance = self.client_instance.as_ref().unwrap().clone();
+        let Ok(client_instance) = self.client_instance() else {
+            tracing::debug!("Oneway batch send skipped: MQClientInstance is not available");
+            return;
+        };
         let producer_config = self.producer_config.clone();
         let client_config = self.client_config.clone();
         let topic_publish_info = Arc::new(topic_publish_info);
 
-        tokio::spawn(async move {
+        let task = async move {
             // Prepare message in background task
             let mut msg = msg;
 
@@ -470,11 +716,9 @@ impl DefaultMQProducerImpl {
             let broker_name = client_instance.get_broker_name_from_message_queue(&mq).await;
             let broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
 
-            if broker_addr.is_none() {
-                return; // Silently skip in oneway mode
-            }
-
-            let broker_addr = broker_addr.unwrap();
+            let Some(broker_addr) = broker_addr else {
+                return;
+            };
             let broker_addr = mix_all::broker_vip_channel(client_config.vip_channel_enabled, broker_addr.as_str());
 
             // Build request (simplified for oneway)
@@ -493,14 +737,22 @@ impl DefaultMQProducerImpl {
             };
 
             // Fire and forget (use unbounded method for maximum batch throughput)
-            if let Err(e) = client_instance
-                .get_mq_client_api_impl()
-                .send_oneway_unbounded(&broker_addr, request)
-                .await
-            {
-                tracing::debug!("Oneway batch send failed: {:?}", e);
+            match client_instance.get_mq_client_api_impl() {
+                Ok(mut mq_client_api) => {
+                    if let Err(e) = mq_client_api.send_oneway_unbounded(&broker_addr, request).await {
+                        tracing::debug!("Oneway batch send failed: {:?}", e);
+                    }
+                }
+                Err(e) => tracing::debug!("Oneway batch send skipped: {:?}", e),
             }
-        });
+        };
+        if let Err(error) = spawn_producer_task(
+            self.producer_config.async_sender_executor(),
+            "rocketmq-client-producer-oneway-batch",
+            task,
+        ) {
+            warn!("Failed to spawn batch oneway send task: {}", error);
+        }
     }
     #[inline]
     pub async fn sync_send_with_message_queue_timeout<T>(
@@ -517,11 +769,7 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
         if msg.topic() != mq.topic_str() {
-            return Err(mq_client_err!(format!(
-                "message topic [{}] is not equal with message queue topic [{}]",
-                msg.topic(),
-                mq.topic()
-            )));
+            return Err(mq_client_err!("message's topic not equal mq's topic"));
         }
         let cost_time = begin_start_time.elapsed().as_millis() as u64;
         if timeout < cost_time {
@@ -530,7 +778,8 @@ impl DefaultMQProducerImpl {
                 timeout_ms: timeout,
             });
         }
-        self.send_kernel_impl(&mut msg, &mq, CommunicationMode::Sync, None, None, timeout - cost_time)
+        // Java send(msg, mq, timeout) uses cost time only as a pre-check here.
+        self.send_kernel_impl(&mut msg, &mq, CommunicationMode::Sync, None, None, timeout)
             .await
     }
 
@@ -576,20 +825,17 @@ impl DefaultMQProducerImpl {
                     "Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available"
                 )
             })?;
-        let msg_len = if msg.get_body().is_some() {
-            msg.get_body().unwrap().len()
-        } else {
-            1
-        };
+        let msg_len = Self::message_body_len_for_backpressure(&msg);
         let send_callback_clone = send_callback.clone();
         let future = async move {
             let cost_time = begin_start_time.elapsed().as_millis() as u64;
-            if timeout <= cost_time {
-                send_callback_clone
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error);
-            }
+            let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
+                Self::notify_callback_exception(
+                    &send_callback_clone,
+                    &RemotingTooMuchRequestError("call timeout".to_string()),
+                );
+                return Ok(None);
+            };
 
             producer_impl
                 .send_select_impl(
@@ -598,7 +844,7 @@ impl DefaultMQProducerImpl {
                     arg,
                     CommunicationMode::Async,
                     send_callback_clone,
-                    timeout - cost_time,
+                    remaining_timeout,
                 )
                 .await
         };
@@ -649,19 +895,18 @@ impl DefaultMQProducerImpl {
         let topic_publish_info = self.try_to_find_topic_publish_info(msg.topic()).await;
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
-                let message_queue_list = self
-                    .client_instance
-                    .as_mut()
-                    .unwrap()
+                let client_instance = self.client_instance()?;
+                let message_queue_list = client_instance
+                    .mut_from_ref()
                     .mq_admin_impl
                     .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
-                let mut user_message = MessageAccessor::clone_message(&msg);
-                let user_topic = NamespaceUtil::without_namespace_with_namespace(
-                    user_message.topic(),
-                    self.client_config.get_namespace().unwrap_or_default().as_str(),
+                let message_queue = Self::select_message_queue_with_user_message(
+                    &mut self.client_config,
+                    &message_queue_list,
+                    &mut msg,
+                    &selector,
+                    &arg,
                 );
-                user_message.set_topic(CheetahString::from_string(user_topic));
-                let message_queue = selector(&message_queue_list, &msg, &arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
                     return Err(rocketmq_error::RocketMQError::Timeout {
@@ -710,38 +955,30 @@ impl DefaultMQProducerImpl {
             })?;
         let begin_start_time = Instant::now();
         let send_callback_inner = send_callback.clone();
-        let msg_len = if msg.get_body().is_some() {
-            msg.get_body().unwrap().len()
-        } else {
-            1
-        };
+        let msg_len = Self::message_body_len_for_backpressure(&msg);
         let future = async move {
             if let Err(err) = producer_impl.make_sure_state_ok() {
-                send_callback_inner
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(&err as &dyn std::error::Error);
+                Self::notify_callback_exception(&send_callback_inner, &err);
+                return;
+            }
+            if let Err(err) = Validators::check_message(Some(&msg), producer_impl.producer_config.as_ref()) {
+                Self::notify_callback_exception(&send_callback_inner, &err);
                 return;
             }
             if msg.topic() != mq.topic_str() {
-                send_callback_inner
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
-                        "message topic [{}] is not equal with message queue topic [{}]",
-                        msg.topic(),
-                        mq.topic_str()
-                    ))) as &dyn std::error::Error);
+                let err = mq_client_err!("Topic of the message does not match its target message queue");
+                Self::notify_callback_exception(&send_callback_inner, &err);
                 return;
             }
 
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            if timeout <= cost_time {
-                send_callback_inner
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error);
-            }
+            let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
+                Self::notify_callback_exception(
+                    &send_callback_inner,
+                    &RemotingTooMuchRequestError("call timeout".to_string()),
+                );
+                return;
+            };
             let result = producer_impl
                 .send_kernel_impl(
                     &mut msg,
@@ -749,16 +986,13 @@ impl DefaultMQProducerImpl {
                     CommunicationMode::Async,
                     send_callback_inner.clone(),
                     None,
-                    timeout,
+                    remaining_timeout,
                 )
                 .await;
             match result {
                 Ok(_) => {}
                 Err(err) => {
-                    send_callback_inner
-                        .as_ref()
-                        .unwrap()
-                        .on_exception(&err as &dyn std::error::Error);
+                    Self::notify_callback_exception(&send_callback_inner, &err);
                 }
             }
         };
@@ -787,32 +1021,29 @@ impl DefaultMQProducerImpl {
             })?;
         let begin_start_time = Instant::now();
         let send_callback_inner = send_callback.clone();
-        let msg_len = if msg.get_body().is_some() {
-            msg.get_body().unwrap().len()
-        } else {
-            1
-        };
+        let msg_len = Self::message_body_len_for_backpressure(&msg);
         let future = async move {
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            if timeout <= cost_time {
-                send_callback_inner
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(
-                        &RemotingTooMuchRequestError("asyncSend call timeout".to_string()) as &dyn std::error::Error
-                    );
-            }
+            let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
+                Self::notify_callback_exception(
+                    &send_callback_inner,
+                    &RemotingTooMuchRequestError("asyncSend call timeout".to_string()),
+                );
+                return;
+            };
 
             let result = producer_impl
-                .send_default_impl(&mut msg, CommunicationMode::Async, send_callback_inner.clone(), timeout)
+                .send_default_impl(
+                    &mut msg,
+                    CommunicationMode::Async,
+                    send_callback_inner.clone(),
+                    remaining_timeout,
+                )
                 .await;
             match result {
                 Ok(_) => {}
                 Err(err) => {
-                    send_callback_inner
-                        .as_ref()
-                        .unwrap()
-                        .on_exception(&err as &dyn std::error::Error);
+                    Self::notify_callback_exception(&send_callback_inner, &err);
                 }
             }
         };
@@ -838,82 +1069,74 @@ impl DefaultMQProducerImpl {
         let (acquire_value_num, acquire_value_size) = if is_enable_backpressure_for_async_mode {
             //back pressure
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let is_semaphore_async_numb_acquired = (timeout - cost_time) > 0;
-            if !is_semaphore_async_numb_acquired {
-                send_callback
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(&RemotingTooMuchRequestError(
-                        "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                    ) as &dyn std::error::Error);
+            let Some(remaining_timeout) = timeout.checked_sub(cost_time).filter(|remaining| *remaining > 0) else {
+                Self::notify_callback_exception(
+                    &send_callback,
+                    &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncNum timeout".to_string()),
+                );
                 return Ok(());
-            }
+            };
             let result = tokio::time::timeout(
-                Duration::from_millis(timeout - cost_time),
-                self.semaphore_async_send_num.acquire(),
+                Duration::from_millis(remaining_timeout),
+                self.semaphore_async_send_num.clone().acquire_owned(),
             )
             .await;
             let acquire_value_num = match result {
                 Ok(acquire_value) => match acquire_value {
                     Ok(value) => Some(value),
                     Err(_) => {
-                        send_callback
-                            .as_ref()
-                            .unwrap()
-                            .on_exception(&RemotingTooMuchRequestError(
+                        Self::notify_callback_exception(
+                            &send_callback,
+                            &RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                            ) as &dyn std::error::Error);
+                            ),
+                        );
                         return Ok(());
                     }
                 },
                 Err(_) => {
-                    send_callback
-                        .as_ref()
-                        .unwrap()
-                        .on_exception(&RemotingTooMuchRequestError(
-                            "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                        ) as &dyn std::error::Error);
+                    Self::notify_callback_exception(
+                        &send_callback,
+                        &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncNum timeout".to_string()),
+                    );
                     return Ok(());
                 }
             };
 
             //message size
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let is_semaphore_async_size_acquired = (timeout - cost_time) > 0;
-            if !is_semaphore_async_size_acquired {
-                send_callback
-                    .as_ref()
-                    .unwrap()
-                    .on_exception(&RemotingTooMuchRequestError(
-                        "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                    ) as &dyn std::error::Error);
+            let Some(remaining_timeout) = timeout.checked_sub(cost_time).filter(|remaining| *remaining > 0) else {
+                Self::notify_callback_exception(
+                    &send_callback,
+                    &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncSize timeout".to_string()),
+                );
                 return Ok(());
-            }
+            };
             let result = tokio::time::timeout(
-                Duration::from_millis(timeout - cost_time),
-                self.semaphore_async_send_size.acquire_many(msg_len as u32),
+                Duration::from_millis(remaining_timeout),
+                self.semaphore_async_send_size
+                    .clone()
+                    .acquire_many_owned(msg_len as u32),
             )
             .await;
             let acquire_value_size = match result {
                 Ok(acquire_value) => match acquire_value {
                     Ok(value) => Some(value),
                     Err(_) => {
-                        send_callback
-                            .as_ref()
-                            .unwrap()
-                            .on_exception(&RemotingTooMuchRequestError(
+                        Self::notify_callback_exception(
+                            &send_callback,
+                            &RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                            ) as &dyn std::error::Error);
+                            ),
+                        );
                         return Ok(());
                     }
                 },
                 Err(_) => {
-                    send_callback
-                        .as_ref()
-                        .unwrap()
-                        .on_exception(&RemotingTooMuchRequestError(
-                            "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                        ) as &dyn std::error::Error);
+                    Self::notify_callback_exception(
+                        &send_callback,
+                        &RemotingTooMuchRequestError("send message tryAcquire semaphoreAsyncSize timeout".to_string()),
+                    );
                     return Ok(());
                 }
             };
@@ -921,8 +1144,22 @@ impl DefaultMQProducerImpl {
         } else {
             (None, None)
         };
-        tokio::spawn(f);
-        drop((acquire_value_num, acquire_value_size));
+        let task = async move {
+            let _acquire_value_num = acquire_value_num;
+            let _acquire_value_size = acquire_value_size;
+            f.await;
+        };
+        if let Err(error) = spawn_producer_task(
+            self.producer_config.async_sender_executor(),
+            "rocketmq-client-producer-async-send",
+            task,
+        ) {
+            Self::notify_callback_exception(
+                &send_callback,
+                &mq_client_err!(format!("failed to spawn async send task: {error}")),
+            );
+            return Err(mq_client_err!(format!("failed to spawn async send task: {error}")));
+        }
         Ok(())
     }
 
@@ -937,6 +1174,7 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         self.make_sure_state_ok()?;
+        Validators::check_message(Some(&*msg), self.producer_config.as_ref())?;
 
         let topic = msg.topic().clone();
         let topic_publish_info = self.try_to_find_topic_publish_info(&topic).await;
@@ -999,6 +1237,8 @@ impl DefaultMQProducerImpl {
             ctx.check_timeout()?;
 
             // Send to broker
+            let remaining_timeout = ctx.remaining_timeout();
+            let request_timeout = self.send_timeout_for_attempt(remaining_timeout, attempt, retry_times);
             let send_start = Instant::now();
             let result = self
                 .send_kernel_impl(
@@ -1007,7 +1247,7 @@ impl DefaultMQProducerImpl {
                     ctx.communication_mode,
                     send_callback.clone(),
                     Some(topic_publish_info),
-                    ctx.remaining_timeout(),
+                    request_timeout,
                 )
                 .await;
 
@@ -1050,11 +1290,21 @@ impl DefaultMQProducerImpl {
     /// Get retry times based on communication mode
     #[inline]
     fn get_retry_times(&self, mode: CommunicationMode) -> u32 {
-        if mode == CommunicationMode::Sync {
-            1
-        } else {
-            self.producer_config.retry_times_when_send_failed() + 1
+        match mode {
+            CommunicationMode::Sync => self.producer_config.retry_times_when_send_failed() + 1,
+            CommunicationMode::Async | CommunicationMode::Oneway => 1,
         }
+    }
+
+    #[inline]
+    fn send_timeout_for_attempt(&self, remaining_timeout: u64, attempt: u32, retry_times: u32) -> u64 {
+        let can_retry_again = attempt < retry_times.saturating_sub(1);
+        if can_retry_again {
+            if let Some(max_timeout_per_request) = self.producer_config.send_msg_max_timeout_per_request() {
+                return remaining_timeout.min(max_timeout_per_request as u64);
+            }
+        }
+        remaining_timeout
     }
 
     /// Prepare message for retry (reset topic with namespace)
@@ -1144,7 +1394,7 @@ impl DefaultMQProducerImpl {
     {
         let begin_start_time = Instant::now();
 
-        let client_instance = self.client_instance.as_ref().unwrap();
+        let client_instance = self.client_instance()?;
 
         // Get broker info with a single lookup path
         let mut broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
@@ -1156,12 +1406,9 @@ impl DefaultMQProducerImpl {
             broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
         }
 
-        if broker_addr.is_none() {
+        let Some(mut broker_addr) = broker_addr else {
             return Err(mq_client_err!(format!("The broker[{}] not exist", broker_name,)));
-        }
-
-        //safe to unwrap because we just checked for None
-        let mut broker_addr = broker_addr.unwrap();
+        };
         broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr.as_str());
 
         let batch = msg.as_any().downcast_ref::<MessageBatch>().is_some();
@@ -1292,8 +1539,10 @@ impl DefaultMQProducerImpl {
                         born_host,
                         broker_addr: Some(broker_addr.clone()),
                         message: None, // Don't store message reference to avoid borrow conflicts
+                        message_trace_snapshot: Some(SendMessageTraceSnapshot::from_message($msg_ref)),
                         mq: Some(mq),
                         namespace: namespace.clone(),
+                        trace_start_time: Some(current_millis()),
                         ..Default::default()
                     };
 
@@ -1332,7 +1581,7 @@ impl DefaultMQProducerImpl {
                     });
                 }
                 client_instance
-                    .get_mq_client_api_impl()
+                    .get_mq_client_api_impl()?
                     .send_message(
                         &broker_addr,
                         &broker_name,
@@ -1358,7 +1607,7 @@ impl DefaultMQProducerImpl {
                     });
                 }
                 client_instance
-                    .get_mq_client_api_impl()
+                    .get_mq_client_api_impl()?
                     .send_message_simple(
                         &broker_addr,
                         &broker_name,
@@ -1376,17 +1625,18 @@ impl DefaultMQProducerImpl {
         match send_result {
             Ok(result) => {
                 if self.has_send_message_hook() {
-                    let smc = send_message_context.as_mut().unwrap();
-                    smc.send_result = result.as_ref();
+                    if let Some(smc) = send_message_context.as_mut() {
+                        smc.send_result = result.as_ref();
+                    }
                     self.execute_send_message_hook_after(&send_message_context);
                 }
                 Ok(result)
             }
             Err(err) => {
                 if self.has_send_message_hook() {
-                    // Note: RocketMQError does not implement Clone, so we cannot set exception
-                    // This is a known limitation compared to Java implementation
-                    // TODO: Consider making RocketMQError cloneable or use Arc from the start
+                    if let Some(smc) = send_message_context.as_mut() {
+                        smc.exception = Some(Self::boxed_context_error(err.to_string()));
+                    }
                     self.execute_send_message_hook_after(&send_message_context);
                 }
                 Err(err)
@@ -1416,6 +1666,10 @@ impl DefaultMQProducerImpl {
         !self.send_message_hook_list.is_empty()
     }
 
+    fn boxed_context_error(message: String) -> Arc<Box<dyn std::error::Error + Send + Sync>> {
+        Arc::new(Box::new(std::io::Error::other(message)))
+    }
+
     #[inline]
     pub fn has_check_forbidden_hook(&self) -> bool {
         !self.check_forbidden_hook_list.is_empty()
@@ -1443,12 +1697,11 @@ impl DefaultMQProducerImpl {
         if let Some(message) = msg.as_any_mut().downcast_mut::<Message>() {
             let body_len = message.body_slice().len();
             if body_len >= self.producer_config.compress_msg_body_over_howmuch() as usize {
-                match self
-                    .producer_config
-                    .compressor()
-                    .unwrap()
-                    .compress(message.body_slice(), self.producer_config.compress_level())
-                {
+                let Some(compressor) = self.producer_config.compressor() else {
+                    tracing::error!("tryToCompressMessage exception: compressor is not configured");
+                    return false;
+                };
+                match compressor.compress(message.body_slice(), self.producer_config.compress_level()) {
                     Ok(data) => {
                         // Store the compressed data to compressed_body field
                         // (Rust design: preserve original body + store compressed separately)
@@ -1480,7 +1733,7 @@ impl DefaultMQProducerImpl {
     }
 
     fn validate_name_server_setting(&self) -> rocketmq_error::RocketMQResult<()> {
-        let binding = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
+        let binding = self.client_instance()?.get_mq_client_api_impl()?;
         let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
             return Err(mq_client_err!(
@@ -1496,26 +1749,36 @@ impl DefaultMQProducerImpl {
 
     async fn try_to_find_topic_publish_info(&self, topic: &Topic) -> Option<TopicPublishInfo> {
         let mut topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
-        if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
+        if !topic_publish_info.as_ref().is_some_and(TopicPublishInfo::ok) {
             self.topic_publish_info_table
                 .insert(topic.clone(), TopicPublishInfo::new());
-            self.client_instance
-                .as_ref()
-                .unwrap()
+            let Ok(client_instance) = self.client_instance() else {
+                tracing::debug!(
+                    "Skip topic route refresh for {} because MQClientInstance is not available",
+                    topic
+                );
+                return self.topic_publish_info_table.get(topic).map(|v| v.clone());
+            };
+            client_instance
                 .mut_from_ref()
                 .update_topic_route_info_from_name_server_topic(topic)
                 .await;
             topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
         }
 
-        let topic_publish_info_ref = topic_publish_info.as_ref().unwrap();
+        let topic_publish_info_ref = topic_publish_info.as_ref()?;
         if topic_publish_info_ref.have_topic_router_info || topic_publish_info_ref.ok() {
             return topic_publish_info;
         }
 
-        self.client_instance
-            .as_ref()
-            .unwrap()
+        let Ok(client_instance) = self.client_instance() else {
+            tracing::debug!(
+                "Skip default topic route refresh for {} because MQClientInstance is not available",
+                topic
+            );
+            return topic_publish_info;
+        };
+        client_instance
             .mut_from_ref()
             .update_topic_route_info_from_name_server_default(topic, true, Some(&self.producer_config))
             .await;
@@ -1573,7 +1836,7 @@ impl DefaultMQProducerImpl {
 
     pub async fn invoke_message_queue_selector<M, S, T>(
         &mut self,
-        msg: &M,
+        msg: &mut M,
         selector: S,
         arg: &T,
         timeout: u64,
@@ -1589,19 +1852,18 @@ impl DefaultMQProducerImpl {
         let topic_publish_info = self.try_to_find_topic_publish_info(msg.topic()).await;
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
-                let message_queue_list = self
-                    .client_instance
-                    .as_mut()
-                    .unwrap()
+                let client_instance = self.client_instance()?;
+                let message_queue_list = client_instance
+                    .mut_from_ref()
                     .mq_admin_impl
                     .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
-                let mut user_message = MessageAccessor::clone_message(msg);
-                let user_topic = NamespaceUtil::without_namespace_with_namespace(
-                    user_message.topic(),
-                    self.client_config.get_namespace().unwrap_or_default().as_str(),
+                let message_queue = Self::select_message_queue_with_user_message(
+                    &mut self.client_config,
+                    &message_queue_list,
+                    msg,
+                    &selector,
+                    arg,
                 );
-                user_message.set_topic(CheetahString::from_string(user_topic));
-                let message_queue = selector(&message_queue_list, msg, arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
                     return Err(rocketmq_error::RocketMQError::Timeout {
@@ -1610,12 +1872,12 @@ impl DefaultMQProducerImpl {
                     });
                 }
                 if let Some(message_queue) = message_queue {
-                    return Ok(message_queue);
+                    return Ok(self.client_config.queue_with_namespace(message_queue));
                 }
                 return Err(mq_client_err!("select message queue return None."));
             }
         }
-        self.validate_name_server_setting();
+        self.validate_name_server_setting()?;
         Err(mq_client_err!("select message queue return null."))
     }
 
@@ -1640,12 +1902,116 @@ impl DefaultMQProducerImpl {
         topic: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         self.make_sure_state_ok()?;
-        let client_instance = self.client_instance.as_mut().unwrap().mq_client_api_impl.clone();
-        self.client_instance
-            .as_mut()
-            .unwrap()
+        let client_instance = self.client_instance()?;
+        let mq_client_api_impl = client_instance
+            .mq_client_api_impl
+            .clone()
+            .ok_or_else(|| mq_client_err!("MQClientAPIImpl is not available; producer has not been started"))?;
+        client_instance
+            .mut_from_ref()
             .mq_admin_impl
-            .fetch_publish_message_queues(topic, client_instance.unwrap(), &mut self.client_config)
+            .fetch_publish_message_queues(topic, mq_client_api_impl, &mut self.client_config)
+            .await
+    }
+
+    pub async fn create_topic(
+        &mut self,
+        key: &str,
+        new_topic: &str,
+        queue_num: i32,
+        topic_sys_flag: i32,
+        attributes: HashMap<String, String>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.make_sure_state_ok()?;
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .create_topic(key, new_topic, queue_num, topic_sys_flag, attributes)
+            .await
+    }
+
+    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+        self.make_sure_state_ok()?;
+        let mq = self.client_config.queue_with_namespace(mq.clone());
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .search_offset(&mq, timestamp)
+            .await
+    }
+
+    pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        self.make_sure_state_ok()?;
+        let mq = self.client_config.queue_with_namespace(mq.clone());
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .max_offset(&mq)
+            .await
+    }
+
+    pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        self.make_sure_state_ok()?;
+        let mq = self.client_config.queue_with_namespace(mq.clone());
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .min_offset(&mq)
+            .await
+    }
+
+    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        self.make_sure_state_ok()?;
+        let mq = self.client_config.queue_with_namespace(mq.clone());
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .earliest_msg_store_time(&mq)
+            .await
+    }
+
+    pub async fn query_message(
+        &mut self,
+        topic: &str,
+        key: &str,
+        max_num: i32,
+        begin: u64,
+        end: u64,
+    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+        self.make_sure_state_ok()?;
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .query_message(topic, key, max_num, begin, end)
+            .await
+    }
+
+    pub async fn query_message_by_uniq_key(
+        &mut self,
+        topic: &str,
+        uniq_key: &str,
+    ) -> rocketmq_error::RocketMQResult<MessageExt> {
+        self.make_sure_state_ok()?;
+        let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
+        let result = self
+            .client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .query_message_with_unique_flag(topic, uniq_key, 32, begin, i64::MAX as u64, true)
+            .await?;
+        result
+            .message_list()
+            .first()
+            .cloned()
+            .ok_or_else(|| mq_client_err!("query message by uniq key finished, but no message."))
+    }
+
+    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+        self.make_sure_state_ok()?;
+        self.client_instance()?
+            .mut_from_ref()
+            .mq_admin_impl
+            .view_message(topic, msg_id)
             .await
     }
 
@@ -1662,15 +2028,14 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
-        self.prepare_send_request(&mut msg, timeout).await;
-        let correlation_id = msg
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            .unwrap();
+        self.prepare_send_request(&mut msg, timeout).await?;
+        let correlation_id = Self::request_correlation_id(&msg)?;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
         let request_response_future_inner = request_response_future.clone();
         let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
@@ -1686,17 +2051,23 @@ impl DefaultMQProducerImpl {
             }
         };
         let topic = msg.topic().clone();
-        let _ = self
+        let send_result = self
             .send_select_impl(
                 msg,
                 selector,
                 arg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
-                timeout - cost,
+                remaining_timeout,
             )
-            .await?;
-        let result = self.wait_response(&topic, timeout, request_response_future, cost).await;
+            .await;
+        if let Err(error) = send_result {
+            REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+            return Err(error);
+        }
+        let result = self
+            .wait_response(&topic, timeout, request_response_future, remaining_timeout)
+            .await;
 
         REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
         result
@@ -1716,10 +2087,10 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
-        self.prepare_send_request(&mut msg, timeout).await;
-        let correlation_id = msg
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            .unwrap();
+        self.prepare_send_request(&mut msg, timeout).await?;
+        let correlation_id = Self::request_correlation_id(&msg)?;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
             timeout,
@@ -1728,11 +2099,9 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
-                request_response_future.execute_request_callback();
                 return;
             }
             if let Some(error) = err {
@@ -1749,7 +2118,7 @@ impl DefaultMQProducerImpl {
                 arg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
-                timeout - cost,
+                remaining_timeout,
             )
             .await?;
         Ok(())
@@ -1765,15 +2134,14 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
-        self.prepare_send_request(&mut msg, timeout).await;
-        let correlation_id = msg
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            .unwrap();
+        self.prepare_send_request(&mut msg, timeout).await?;
+        let correlation_id = Self::request_correlation_id(&msg)?;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
         let request_response_future_inner = request_response_future.clone();
         let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
@@ -1789,17 +2157,23 @@ impl DefaultMQProducerImpl {
             }
         };
         let topic = msg.topic().clone();
-        let _ = self
+        let send_result = self
             .send_kernel_impl(
                 &mut msg,
                 &mq,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
                 None,
-                timeout - cost,
+                remaining_timeout,
             )
-            .await?;
-        let result = self.wait_response(&topic, timeout, request_response_future, cost).await;
+            .await;
+        if let Err(error) = send_result {
+            REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+            return Err(error);
+        }
+        let result = self
+            .wait_response(&topic, timeout, request_response_future, remaining_timeout)
+            .await;
 
         REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
         result
@@ -1816,10 +2190,10 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
-        self.prepare_send_request(&mut msg, timeout).await;
-        let correlation_id = msg
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            .unwrap();
+        self.prepare_send_request(&mut msg, timeout).await?;
+        let correlation_id = Self::request_correlation_id(&msg)?;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
             timeout,
@@ -1828,7 +2202,6 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
@@ -1848,7 +2221,7 @@ impl DefaultMQProducerImpl {
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
                 None,
-                timeout - cost,
+                remaining_timeout,
             )
             .await?;
         Ok(())
@@ -1864,10 +2237,10 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
-        self.prepare_send_request(&mut msg, timeout).await;
-        let correlation_id = msg
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            .unwrap();
+        self.prepare_send_request(&mut msg, timeout).await?;
+        let correlation_id = Self::request_correlation_id(&msg)?;
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
             timeout,
@@ -1876,7 +2249,6 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
         let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
@@ -1894,14 +2266,14 @@ impl DefaultMQProducerImpl {
             &mut msg,
             CommunicationMode::Async,
             Some(Arc::new(send_callback)),
-            timeout - cost,
+            remaining_timeout,
         )
         .await?;
         Ok(())
     }
 
     async fn request_fail(correlation_id: &str) {
-        let request_response_future = REQUEST_FUTURE_HOLDER.get_request(correlation_id).await;
+        let request_response_future = REQUEST_FUTURE_HOLDER.remove_request_and_get(correlation_id).await;
         if let Some(request_response_future) = request_response_future {
             request_response_future.set_send_request_ok(false);
             request_response_future.put_response_message(None);
@@ -1918,10 +2290,11 @@ impl DefaultMQProducerImpl {
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
-        self.prepare_send_request(&mut msg, timeout).await;
-        let correlation_id = msg
-            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
-            .unwrap();
+        self.prepare_send_request(&mut msg, timeout).await?;
+        let correlation_id = Self::request_correlation_id(&msg)?;
+        let topic = msg.topic().clone();
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
@@ -1940,17 +2313,22 @@ impl DefaultMQProducerImpl {
                 )) as Box<dyn std::error::Error + Send + Sync>);
             }
         };
-        let topic = msg.topic().clone();
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        self.send_default_impl(
-            &mut msg,
-            CommunicationMode::Async,
-            Some(Arc::new(send_callback)),
-            timeout - cost,
-        )
-        .await?;
+        let send_result = self
+            .send_default_impl(
+                &mut msg,
+                CommunicationMode::Async,
+                Some(Arc::new(send_callback)),
+                remaining_timeout,
+            )
+            .await;
+        if let Err(error) = send_result {
+            REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+            return Err(error);
+        }
 
-        let result = self.wait_response(&topic, timeout, request_response_future, cost).await;
+        let result = self
+            .wait_response(&topic, timeout, request_response_future, remaining_timeout)
+            .await;
 
         REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
         result
@@ -1961,10 +2339,10 @@ impl DefaultMQProducerImpl {
         topic: &CheetahString,
         timeout: u64,
         request_response_future: Arc<RequestResponseFuture>,
-        cost: u64,
+        remaining_timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>> {
         let response_message = request_response_future
-            .wait_response_message(Duration::from_millis(timeout - cost))
+            .wait_response_message(Duration::from_millis(remaining_timeout))
             .await;
 
         if let Some(response_message) = response_message {
@@ -1985,12 +2363,13 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    async fn prepare_send_request<M>(&mut self, msg: &mut M, timeout: u64)
+    async fn prepare_send_request<M>(&mut self, msg: &mut M, timeout: u64) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait,
     {
         let correlation_id = CorrelationIdUtil::create_correlation_id();
-        let request_client_id = self.client_instance.as_mut().unwrap().client_id.clone();
+        let client_instance = self.client_instance()?;
+        let request_client_id = client_instance.client_id.clone();
         MessageAccessor::put_property(
             msg,
             CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
@@ -2006,18 +2385,12 @@ impl DefaultMQProducerImpl {
             CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),
             CheetahString::from_string(timeout.to_string()),
         );
-        let has_route_data = self
-            .client_instance
-            .as_mut()
-            .unwrap()
-            .topic_route_table
-            .contains_key(msg.topic().as_str());
+        let has_route_data = client_instance.topic_route_table.contains_key(msg.topic().as_str());
         if !has_route_data {
             let begin_timestamp = Instant::now();
             self.try_to_find_topic_publish_info(msg.topic()).await;
-            self.client_instance
-                .as_mut()
-                .unwrap()
+            client_instance
+                .mut_from_ref()
                 .send_heartbeat_to_all_broker_with_lock()
                 .await;
             let cost = begin_timestamp.elapsed().as_millis() as u64;
@@ -2025,6 +2398,7 @@ impl DefaultMQProducerImpl {
                 warn!("prepare send request for <{}> cost {} ms", msg.topic(), cost);
             }
         }
+        Ok(())
     }
 
     pub async fn send_message_in_transaction<M>(
@@ -2035,6 +2409,11 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
+        let transaction_listener = self
+            .transaction_listener
+            .clone()
+            .ok_or_else(|| mq_client_err!("tranExecutor is null"))?;
+
         // Ensure transactional messages do not support delayed delivery
         self.ensure_not_delayed_for_transactional(&msg)?;
 
@@ -2053,15 +2432,12 @@ impl DefaultMQProducerImpl {
             CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP),
             self.producer_config.producer_group().to_owned(),
         );
-        let result = self.send(&mut msg).await;
-        if let Err(e) = result {
-            return Err(mq_client_err!(format!("send message in transaction error, {}", e)));
-        }
-        let send_result = match result.unwrap() {
-            Some(res) => res,
-            None => return Err(mq_client_err!("send result is none")),
-        };
-        let local_transaction_state = match send_result.send_status {
+        let send_result = self
+            .send(&mut msg)
+            .await
+            .map_err(|e| mq_client_err!(format!("send message in transaction error, {}", e)))?
+            .ok_or_else(|| mq_client_err!("send result is none"))?;
+        let (local_transaction_state, local_exception) = match send_result.send_status {
             SendStatus::SendOk => {
                 if let Some(ref transaction_id) = send_result.transaction_id {
                     msg.put_user_property(
@@ -2076,16 +2452,16 @@ impl DefaultMQProducerImpl {
                 if let Some(transaction_id) = transaction_id {
                     msg.set_transaction_id(transaction_id);
                 }
-                self.transaction_listener
-                    .as_ref()
-                    .unwrap()
-                    .execute_local_transaction(&msg, arg.as_deref())
+                Self::execute_local_transaction_branch(&transaction_listener, &msg, arg.as_deref())
             }
             SendStatus::FlushDiskTimeout | SendStatus::FlushSlaveTimeout | SendStatus::SlaveNotAvailable => {
-                LocalTransactionState::RollbackMessage
+                (LocalTransactionState::RollbackMessage, None)
             }
         };
-        if let Err(e) = self.end_transaction(&msg, &send_result, local_transaction_state).await {
+        if let Err(e) = self
+            .end_transaction(&msg, &send_result, local_transaction_state, local_exception)
+            .await
+        {
             warn!(
                 "local transaction execute {}, but end broker transaction failed,{}",
                 local_transaction_state,
@@ -2099,41 +2475,97 @@ impl DefaultMQProducerImpl {
         Ok(transaction_send_result)
     }
 
+    fn execute_local_transaction_branch(
+        transaction_listener: &ArcTransactionListener,
+        msg: &dyn MessageTrait,
+        arg: Option<&(dyn Any + Send + Sync)>,
+    ) -> (LocalTransactionState, Option<CheetahString>) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            transaction_listener.execute_local_transaction(msg, arg)
+        })) {
+            Ok(state) => (state, None),
+            Err(error) => {
+                let error_message = Self::panic_payload_to_string(error.as_ref());
+                tracing::error!(
+                    "executeLocalTransactionBranch panic, messageTopic: {} transactionId: {:?}: {}",
+                    msg.topic(),
+                    msg.transaction_id(),
+                    error_message
+                );
+                (
+                    LocalTransactionState::Unknown,
+                    Some(CheetahString::from_string(format!(
+                        "executeLocalTransactionBranch exception: {}",
+                        error_message
+                    ))),
+                )
+            }
+        }
+    }
+
+    fn panic_payload_to_string(error: &(dyn Any + Send)) -> String {
+        if let Some(message) = error.downcast_ref::<&'static str>() {
+            (*message).to_string()
+        } else if let Some(message) = error.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            "non-string panic payload".to_string()
+        }
+    }
+
+    fn u64_to_java_long_field(
+        operation: &'static str,
+        field: &'static str,
+        value: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        i64::try_from(value).map_err(|_| {
+            rocketmq_error::RocketMQError::IllegalArgument(format!("{operation} {field} exceeds Java long range"))
+        })
+    }
+
     pub async fn end_transaction(
         &mut self,
         msg: &dyn MessageTrait,
         send_result: &SendResult,
         local_transaction_state: LocalTransactionState,
+        local_exception: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let id = if let Some(ref offset_msg_id) = send_result.offset_msg_id {
             MessageDecoder::decode_message_id(offset_msg_id).map_err(|e| {
                 rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
             })?
         } else {
-            MessageDecoder::decode_message_id(send_result.msg_id.as_ref().unwrap()).map_err(|e| {
+            let msg_id = send_result
+                .msg_id
+                .as_ref()
+                .ok_or_else(|| mq_client_err!("send result missing msg_id for end transaction"))?;
+            MessageDecoder::decode_message_id(msg_id).map_err(|e| {
                 rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
             })?
         };
         let transaction_id = send_result.transaction_id.clone();
-        let queue = self
-            .client_config
-            .queue_with_namespace(send_result.message_queue.clone().unwrap());
-        let dest_broker_name = self
+        let message_queue = send_result
+            .message_queue
+            .clone()
+            .ok_or_else(|| mq_client_err!("send result missing message_queue for end transaction"))?;
+        let queue = self.client_config.queue_with_namespace(message_queue);
+        let client_instance = self
             .client_instance
-            .as_mut()
-            .unwrap()
-            .get_broker_name_from_message_queue(&queue)
-            .await;
-        let broker_addr = self
-            .client_instance
-            .as_mut()
-            .unwrap()
-            .find_broker_address_in_publish(dest_broker_name.as_ref());
+            .as_ref()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
+        let dest_broker_name = client_instance.get_broker_name_from_message_queue(&queue).await;
+        let broker_addr = client_instance
+            .find_broker_address_in_publish(dest_broker_name.as_ref())
+            .ok_or_else(|| mq_client_err!(format!("broker address not found for {}", dest_broker_name)))?;
         let request_header = EndTransactionRequestHeader {
             topic: CheetahString::from_string(msg.topic().to_string()),
             producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
-            tran_state_table_offset: send_result.queue_offset,
-            commit_log_offset: id.offset as u64,
+            tran_state_table_offset: Self::u64_to_java_long_field(
+                "endTransaction",
+                "tranStateTableOffset",
+                send_result.queue_offset,
+            )?,
+            commit_log_offset: id.offset,
             commit_or_rollback: match local_transaction_state {
                 LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
                 LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
@@ -2147,16 +2579,25 @@ impl DefaultMQProducerImpl {
                 ..Default::default()
             },
         };
+        if let Some(message) = msg.as_any().downcast_ref::<Message>() {
+            self.do_execute_end_transaction_hook(
+                message,
+                &request_header.msg_id,
+                &broker_addr,
+                local_transaction_state,
+                false,
+            );
+        }
         self.client_instance
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?
             .mq_client_api_impl
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"))?
             .end_transaction_oneway(
-                broker_addr.as_ref().unwrap(),
+                &broker_addr,
                 request_header,
-                CheetahString::from_static_str(""),
+                local_exception.unwrap_or_default(),
                 self.producer_config.send_msg_timeout() as u64,
             )
             .await;
@@ -2203,8 +2644,8 @@ impl DefaultMQProducerImpl {
         EndTransactionRequestHeader {
             topic: check_request_header.topic.clone().unwrap_or_default(),
             producer_group,
-            tran_state_table_offset: check_request_header.tran_state_table_offset as u64,
-            commit_log_offset: check_request_header.commit_log_offset as u64,
+            tran_state_table_offset: check_request_header.tran_state_table_offset,
+            commit_log_offset: check_request_header.commit_log_offset,
             commit_or_rollback: match transaction_state {
                 LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
                 LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
@@ -2233,6 +2674,10 @@ impl DefaultMQProducerImpl {
 
     pub fn set_transaction_listener(&mut self, transaction_listener: ArcTransactionListener) {
         self.transaction_listener = Some(transaction_listener);
+    }
+
+    pub fn check_listener(&self) -> Option<ArcTransactionListener> {
+        self.transaction_listener.clone()
     }
 }
 
@@ -2276,73 +2721,122 @@ impl MQProducerInner for DefaultMQProducerImpl {
         let broker_addr = broker_addr.clone();
         let group = self.producer_config.producer_group().clone();
 
-        // Use spawn_blocking to avoid blocking Tokio worker threads (matches Java's ExecutorService
-        // behavior)
-        tokio::task::spawn_blocking(move || {
-            let unique_key = msg
-                .property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ))
-                .unwrap_or_else(|| msg.msg_id.clone());
+        let Some(transaction_check_env) = self.transaction_check_env.clone() else {
+            warn!("Transaction check env is not initialized, cannot check transaction state");
+            return;
+        };
+        let Ok(request_slot) = transaction_check_env.request_slots.clone().try_acquire_owned() else {
+            warn!(
+                "Transaction check request rejected: hold queue is full for producer group {}",
+                group
+            );
+            return;
+        };
+        let worker_slots = transaction_check_env.worker_slots.clone();
+        let executor_service = self.transaction_executor_service.clone();
+        let task_executor = executor_service.clone();
+        let group_for_spawn_error = group.clone();
 
-            // Check local transaction state with exception handling (synchronous execution)
-            let transaction_state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                transaction_listener.check_local_transaction(&msg)
-            })) {
-                Ok(state) => state,
-                Err(e) => {
-                    tracing::error!(
-                        "Broker call checkTransactionState, but checkLocalTransaction panic: {:?}, group: {}",
-                        e,
-                        group
-                    );
-                    LocalTransactionState::Unknown
-                }
+        let task = async move {
+            let _request_slot = request_slot;
+            let Ok(_worker_slot) = worker_slots.acquire_owned().await else {
+                tracing::warn!(
+                    "Transaction check worker limiter was closed for producer group {}",
+                    group
+                );
+                return;
             };
 
-            // Switch back to async context for network I/O
-            let handle = tokio::runtime::Handle::current();
-            handle.spawn(async move {
-                let request_header = Self::build_end_transaction_header_for_check(
-                    producer_impl_inner.producer_config.producer_group().clone(),
-                    &check_request_header,
-                    unique_key.clone(),
-                    transaction_state,
-                );
-                // Execute end transaction hook
-                producer_impl_inner.do_execute_end_transaction_hook(
-                    &msg.message,
-                    &unique_key,
-                    &broker_addr,
-                    transaction_state,
-                    true,
-                );
+            // Use spawn_blocking to avoid blocking Tokio worker threads (matches Java's
+            // ExecutorService behavior)
+            let check_group = group.clone();
+            let check_task = move || {
+                let unique_key = msg
+                    .property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                    ))
+                    .unwrap_or_else(|| msg.msg_id.clone());
 
-                // Send end transaction request with error handling
-                let Some(client_instance) = producer_impl_inner.client_instance.as_mut() else {
-                    tracing::warn!("endTransactionOneway skipped: client instance is not available");
-                    return;
+                // Check local transaction state with exception handling (synchronous execution)
+                let transaction_state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    transaction_listener.check_local_transaction(&msg)
+                })) {
+                    Ok(state) => state,
+                    Err(e) => {
+                        tracing::error!(
+                            "Broker call checkTransactionState, but checkLocalTransaction panic: {:?}, group: {}",
+                            e,
+                            check_group
+                        );
+                        LocalTransactionState::Unknown
+                    }
                 };
-                let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
-                    tracing::warn!("endTransactionOneway skipped: MQClientAPIImpl is not available");
-                    return;
-                };
-                if let Err(e) = mq_client_api_impl
-                    .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
-                    .await
-                {
-                    tracing::error!("endTransactionOneway exception: {:?}", e);
-                }
-            });
-        });
+
+                (msg, unique_key, transaction_state)
+            };
+            let check_result = if let Some(executor) = task_executor {
+                executor.spawn_blocking(check_task).await
+            } else {
+                tokio::task::spawn_blocking(check_task).await
+            };
+
+            let Ok((msg, unique_key, transaction_state)) = check_result else {
+                tracing::error!("Transaction check task join failed for producer group {}", group);
+                return;
+            };
+
+            let request_header = Self::build_end_transaction_header_for_check(
+                producer_impl_inner.producer_config.producer_group().clone(),
+                &check_request_header,
+                unique_key.clone(),
+                transaction_state,
+            );
+            // Execute end transaction hook
+            producer_impl_inner.do_execute_end_transaction_hook(
+                &msg.message,
+                &unique_key,
+                &broker_addr,
+                transaction_state,
+                true,
+            );
+
+            // Send end transaction request with error handling
+            let Some(client_instance) = producer_impl_inner.client_instance.as_mut() else {
+                tracing::warn!("endTransactionOneway skipped: client instance is not available");
+                return;
+            };
+            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                tracing::warn!("endTransactionOneway skipped: MQClientAPIImpl is not available");
+                return;
+            };
+            if let Err(e) = mq_client_api_impl
+                .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
+                .await
+            {
+                tracing::error!("endTransactionOneway exception: {:?}", e);
+            }
+        };
+        if let Err(error) = spawn_producer_task(
+            executor_service.as_ref(),
+            "rocketmq-client-producer-transaction-check",
+            task,
+        ) {
+            warn!(
+                "Failed to spawn transaction check task for producer group {}: {}",
+                group_for_spawn_error, error
+            );
+        }
     }
 
     fn update_topic_publish_info(&mut self, topic: impl Into<CheetahString>, info: Option<TopicPublishInfo>) {
         let topic = topic.into();
-        if topic.is_empty() || info.is_none() {
+        if topic.is_empty() {
             return;
         }
-        self.topic_publish_info_table.insert(topic, info.unwrap());
+        let Some(info) = info else {
+            return;
+        };
+        self.topic_publish_info_table.insert(topic, info);
     }
 
     fn is_unit_mode(&self) -> bool {
@@ -2371,7 +2865,10 @@ impl DefaultMQProducerImpl {
                 // Freeze hook lists (convert from mutable Vec to immutable Arc<[_]>)
                 self.freeze_hook_lists();
 
-                self.check_config()?;
+                if let Err(error) = self.check_config() {
+                    self.state.store(ProducerState::StartFailed as u8, Ordering::SeqCst);
+                    return Err(error);
+                }
 
                 if self.producer_config.producer_group() != CLIENT_INNER_PRODUCER_GROUP {
                     self.client_config.change_instance_name_to_pid();
@@ -2389,7 +2886,7 @@ impl DefaultMQProducerImpl {
                 };
                 self.mq_fault_strategy.set_resolve(resolver);
                 self.mq_fault_strategy.set_service_detector(service_detector);
-                self.client_instance = Some(client_instance);
+                self.client_instance = Some(client_instance.clone());
                 let self_clone = self
                     .default_mqproducer_impl_inner
                     .clone()
@@ -2398,11 +2895,16 @@ impl DefaultMQProducerImpl {
                         mq_client_err!(
                             "Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available"
                         )
-                    })?;
-                let register_ok = self
-                    .client_instance
-                    .as_mut()
-                    .unwrap()
+                    });
+                let self_clone = match self_clone {
+                    Ok(self_clone) => self_clone,
+                    Err(error) => {
+                        self.state.store(ProducerState::StartFailed as u8, Ordering::SeqCst);
+                        return Err(error);
+                    }
+                };
+                let register_ok = client_instance
+                    .mut_from_ref()
                     .register_producer(
                         self.producer_config.producer_group(),
                         MQProducerInnerImpl {
@@ -2412,6 +2914,7 @@ impl DefaultMQProducerImpl {
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
+                    self.state.store(ProducerState::Created as u8, Ordering::SeqCst);
                     return Err(mq_client_err!(format!(
                         "The producer group[{}] has been created before, specify another name please. {}",
                         self.producer_config.producer_group(),
@@ -2419,9 +2922,10 @@ impl DefaultMQProducerImpl {
                     )));
                 }
                 if start_factory {
-                    let cloned = self.client_instance.as_mut().cloned().unwrap();
-                    Box::pin(self.client_instance.as_mut().unwrap().start(cloned)).await?;
-                    //self.client_instance.as_mut().unwrap().start().await;
+                    if let Err(error) = Box::pin(client_instance.mut_from_ref().start(client_instance.clone())).await {
+                        self.state.store(ProducerState::StartFailed as u8, Ordering::SeqCst);
+                        return Err(error);
+                    }
                 }
 
                 self.init_topic_route().await;
@@ -2430,6 +2934,9 @@ impl DefaultMQProducerImpl {
                 // Update both states
                 self.service_state = ServiceState::Running;
                 self.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+                REQUEST_FUTURE_HOLDER
+                    .start_scheduled_task(self.producer_config.producer_group().to_string())
+                    .await;
 
                 tracing::info!(
                     "Producer [{}] started successfully",
@@ -2452,6 +2959,11 @@ impl DefaultMQProducerImpl {
                         self.ensure_running()
                     }
                     ProducerState::Stopped => Err(mq_client_err!("The producer service state is ShutdownAlready")),
+                    ProducerState::StartFailed => Err(mq_client_err!(format!(
+                        "The producer service state not OK, maybe started once, {:?} {}",
+                        state,
+                        FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
+                    ))),
                     _ => Err(mq_client_err!(format!("Cannot start producer in state {:?}", state))),
                 }
             }
@@ -2499,6 +3011,10 @@ impl DefaultMQProducerImpl {
                         // Not started, nothing to do
                         Ok(())
                     }
+                    ProducerState::StartFailed => {
+                        // Java shutdown() falls through for START_FAILED.
+                        Ok(())
+                    }
                     ProducerState::Stopping => {
                         // Another thread is stopping, wait for completion
                         while self.state.load(Ordering::SeqCst) == ProducerState::Stopping as u8 {
@@ -2514,12 +3030,16 @@ impl DefaultMQProducerImpl {
 
     /// Internal shutdown logic
     async fn do_shutdown_internal(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+        let producer_group = self.producer_config.producer_group().to_string();
+
         // 1. Unregister producer from client instance
         if let Some(client_instance) = self.client_instance.as_mut() {
             client_instance
                 .unregister_producer(self.producer_config.producer_group())
                 .await;
         }
+
+        REQUEST_FUTURE_HOLDER.shutdown(producer_group.as_str()).await;
 
         // 2. Stop fault strategy detector
         self.mq_fault_strategy.shutdown();
@@ -2585,6 +3105,19 @@ impl DefaultMQProducerImpl {
         }
     }
 
+    pub fn set_rpc_hook(&mut self, rpc_hook: Arc<dyn RPCHook>) {
+        let current_state = ProducerState::from_u8(self.state.load(Ordering::Relaxed));
+        if current_state != ProducerState::Created {
+            tracing::warn!(
+                "Cannot update RPC hook after producer started (state: {:?})",
+                current_state
+            );
+            return;
+        }
+
+        self.rpc_hook = Some(rpc_hook);
+    }
+
     #[inline]
     fn check_config(&self) -> rocketmq_error::RocketMQResult<()> {
         Validators::check_group(self.producer_config.producer_group())?;
@@ -2602,7 +3135,7 @@ impl DefaultMQProducerImpl {
             let new_topic =
                 NamespaceUtil::wrap_namespace(self.client_config.get_namespace().unwrap_or_default().as_str(), topic);
             let topic_publish_info = self.try_to_find_topic_publish_info(&new_topic).await;
-            if topic_publish_info.is_none() || !topic_publish_info.unwrap().ok() {
+            if !topic_publish_info.as_ref().is_some_and(TopicPublishInfo::ok) {
                 warn!(
                     "No route info of this topic: {} {}",
                     new_topic,
@@ -2614,8 +3147,72 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     pub fn set_send_latency_fault_enable(&mut self, send_latency_fault_enable: bool) {
+        self.client_config.set_send_latency_enable(send_latency_fault_enable);
         self.mq_fault_strategy
             .set_send_latency_fault_enable(send_latency_fault_enable);
+    }
+
+    #[inline]
+    pub fn is_send_latency_fault_enable(&self) -> bool {
+        self.mq_fault_strategy.is_send_latency_fault_enable()
+    }
+
+    #[inline]
+    pub fn set_start_detector_enable(&mut self, start_detector_enable: bool) {
+        self.client_config.set_start_detector_enable(start_detector_enable);
+        self.mq_fault_strategy.set_start_detector_enable(start_detector_enable);
+    }
+
+    #[inline]
+    pub fn is_start_detector_enable(&self) -> bool {
+        self.mq_fault_strategy.is_start_detector_enable()
+    }
+
+    #[inline]
+    pub fn is_send_message_with_vip_channel(&self) -> bool {
+        self.client_config.is_vip_channel_enabled()
+    }
+
+    #[inline]
+    pub fn set_send_message_with_vip_channel(&mut self, send_message_with_vip_channel: bool) {
+        self.client_config
+            .set_vip_channel_enabled(send_message_with_vip_channel);
+    }
+
+    #[inline]
+    pub fn latency_max(&self) -> &[u64] {
+        self.mq_fault_strategy.get_latency_max()
+    }
+
+    #[inline]
+    pub fn set_latency_max(&mut self, latency_max: impl Into<Vec<u64>>) {
+        self.mq_fault_strategy.set_latency_max(latency_max);
+    }
+
+    #[inline]
+    pub fn not_available_duration(&self) -> &[u64] {
+        self.mq_fault_strategy.get_not_available_duration()
+    }
+
+    #[inline]
+    pub fn set_not_available_duration(&mut self, not_available_duration: impl Into<Vec<u64>>) {
+        self.mq_fault_strategy
+            .set_not_available_duration(not_available_duration);
+    }
+
+    #[inline]
+    pub fn set_callback_executor(&mut self, callback_executor: tokio::runtime::Handle) {
+        Arc::make_mut(&mut self.producer_config).set_callback_executor(callback_executor);
+    }
+
+    #[inline]
+    pub fn set_async_sender_executor(&mut self, async_sender_executor: tokio::runtime::Handle) {
+        Arc::make_mut(&mut self.producer_config).set_async_sender_executor(async_sender_executor);
+    }
+
+    #[inline]
+    pub fn set_transaction_executor_service(&mut self, executor_service: Option<tokio::runtime::Handle>) {
+        self.transaction_executor_service = executor_service;
     }
 
     /// Ensure transactional messages do not support delayed delivery
@@ -2627,13 +3224,13 @@ impl DefaultMQProducerImpl {
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
             .is_some()
             || msg
-                .property(&CheetahString::from_static_str("TIMER_DELAY_MS"))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS))
                 .is_some()
             || msg
-                .property(&CheetahString::from_static_str("TIMER_DELAY_SEC"))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC))
                 .is_some()
             || msg
-                .property(&CheetahString::from_static_str("TIMER_DELIVER_MS"))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
                 .is_some()
         {
             return Err(mq_client_err!("Transactional messages do not support delayed delivery"));
@@ -2641,9 +3238,42 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
+    pub fn init_transaction_env(
+        &mut self,
+        check_thread_pool_min_size: u32,
+        check_thread_pool_max_size: u32,
+        check_request_hold_max: u32,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        if check_thread_pool_min_size == 0 || check_thread_pool_max_size == 0 {
+            return Err(mq_client_err!(
+                "transaction check thread pool min and max size must be greater than 0"
+            ));
+        }
+        if check_thread_pool_min_size > check_thread_pool_max_size {
+            return Err(mq_client_err!(
+                "transaction check thread pool min size cannot exceed max size"
+            ));
+        }
+        if check_request_hold_max == 0 {
+            return Err(mq_client_err!(
+                "transaction check request hold max must be greater than 0"
+            ));
+        }
+
+        self.transaction_check_env = Some(TransactionCheckEnv {
+            request_slots: Arc::new(Semaphore::new(check_request_hold_max as usize)),
+            worker_slots: Arc::new(Semaphore::new(check_thread_pool_max_size as usize)),
+        });
+        Ok(())
+    }
+
     pub async fn destroy_transaction_env(&mut self) {
-        // Transaction check tasks are independent, no cleanup needed
-        // Tasks will complete naturally when spawned
+        self.transaction_check_env = None;
+    }
+
+    #[cfg(test)]
+    fn is_transaction_env_initialized(&self) -> bool {
+        self.transaction_check_env.is_some()
     }
 
     pub async fn recall_message(
@@ -2671,19 +3301,14 @@ impl DefaultMQProducerImpl {
         self.try_to_find_topic_publish_info(&topic).await;
 
         let broker_name_cs = CheetahString::from_string(handle_entity.broker_name().to_string());
-        let mut broker_addr = self
+        let client_instance = self
             .client_instance
             .as_ref()
-            .unwrap()
-            .find_broker_address_in_publish(&broker_name_cs);
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientInstance"))?;
+        let mut broker_addr = client_instance.find_broker_address_in_publish(&broker_name_cs);
 
         if broker_addr.is_none() {
-            broker_addr = self
-                .client_instance
-                .as_ref()
-                .unwrap()
-                .find_broker_addr_by_topic(&topic)
-                .await;
+            broker_addr = client_instance.find_broker_addr_by_topic(&topic).await;
         }
 
         let broker_addr = broker_addr.ok_or_else(|| {
@@ -2710,10 +3335,8 @@ impl DefaultMQProducerImpl {
             lo: None,
         });
 
-        self.client_instance
-            .as_ref()
-            .unwrap()
-            .get_mq_client_api_impl()
+        client_instance
+            .get_mq_client_api_impl()?
             .recall_message(
                 &broker_addr,
                 request_header,
@@ -2824,7 +3447,644 @@ impl Resolver for DefaultResolver {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use super::*;
+    use crate::producer::default_mq_producer::DefaultMQProducer;
+    use crate::producer::transaction_listener::TransactionListener;
+
+    fn running_producer_without_client() -> DefaultMQProducerImpl {
+        let mut producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        producer.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+        producer.service_state = ServiceState::Running;
+        producer
+    }
+
+    fn running_producer_arc_with_self_inner() -> ArcMut<DefaultMQProducerImpl> {
+        let producer = ArcMut::new(running_producer_without_client());
+        producer
+            .mut_from_ref()
+            .set_default_mqproducer_impl_inner(ArcMut::downgrade(&producer));
+        producer
+    }
+
+    #[test]
+    fn spawn_producer_task_without_tokio_runtime_runs_on_fallback_thread() {
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        spawn_producer_task(None, "rocketmq-client-producer-test", async move {
+            let current_thread = std::thread::current();
+            let thread_name = current_thread.name().unwrap_or_default().to_string();
+            tx.send(thread_name).expect("test receiver should still be open");
+        })
+        .expect("producer task should spawn without an ambient Tokio runtime");
+
+        let thread_name = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fallback producer task should complete");
+        assert_eq!(thread_name, "rocketmq-client-producer-test");
+    }
+
+    struct PanicTransactionListener;
+
+    impl TransactionListener for PanicTransactionListener {
+        fn execute_local_transaction(
+            &self,
+            _msg: &dyn MessageTrait,
+            _arg: Option<&(dyn Any + Send + Sync)>,
+        ) -> LocalTransactionState {
+            std::panic::panic_any(String::from("local transaction boom"));
+        }
+
+        fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
+            LocalTransactionState::Unknown
+        }
+    }
+
+    struct NoopTransactionListener;
+
+    impl TransactionListener for NoopTransactionListener {
+        fn execute_local_transaction(
+            &self,
+            _msg: &dyn MessageTrait,
+            _arg: Option<&(dyn Any + Send + Sync)>,
+        ) -> LocalTransactionState {
+            LocalTransactionState::Unknown
+        }
+
+        fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
+            LocalTransactionState::Unknown
+        }
+    }
+
+    struct CapturingSendHook {
+        exception_message: Arc<std::sync::Mutex<Option<String>>>,
+    }
+
+    impl SendMessageHook for CapturingSendHook {
+        fn hook_name(&self) -> &'static str {
+            "CapturingSendHook"
+        }
+
+        fn send_message_before(&self, _context: &Option<SendMessageContext<'_>>) {}
+
+        fn send_message_after(&self, context: &Option<SendMessageContext<'_>>) {
+            let Some(exception) = context.as_ref().and_then(|context| context.exception.as_ref()) else {
+                return;
+            };
+            *self
+                .exception_message
+                .lock()
+                .expect("exception message lock should not be poisoned") = Some(exception.to_string());
+        }
+    }
+
+    #[test]
+    fn send_message_after_hook_observes_exception_like_java() {
+        let mut producer = running_producer_without_client();
+        let exception_message = Arc::new(std::sync::Mutex::new(None));
+        let hook: Arc<dyn SendMessageHook> = Arc::new(CapturingSendHook {
+            exception_message: exception_message.clone(),
+        });
+        producer.send_message_hook_list = vec![hook].into();
+        let context = Some(SendMessageContext {
+            exception: Some(DefaultMQProducerImpl::boxed_context_error(
+                "sendKernelImpl exception".to_string(),
+            )),
+            ..Default::default()
+        });
+
+        producer.execute_send_message_hook_after(&context);
+
+        assert_eq!(
+            exception_message
+                .lock()
+                .expect("exception message lock should not be poisoned")
+                .as_deref(),
+            Some("sendKernelImpl exception")
+        );
+    }
+
+    #[tokio::test]
+    async fn start_failure_enters_start_failed_and_shutdown_noops_like_java() {
+        let mut producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+
+        let start_result = producer.start().await;
+        assert!(start_result.is_err());
+        assert_eq!(
+            ProducerState::from_u8(producer.state.load(Ordering::SeqCst)),
+            ProducerState::StartFailed
+        );
+        assert_eq!(producer.service_state, ServiceState::StartFailed);
+
+        tokio::time::timeout(Duration::from_millis(100), producer.shutdown())
+            .await
+            .expect("shutdown after start failure should not wait forever like Starting")
+            .expect("shutdown after Java START_FAILED should be a no-op");
+        assert_eq!(
+            ProducerState::from_u8(producer.state.load(Ordering::SeqCst)),
+            ProducerState::StartFailed
+        );
+        assert_eq!(producer.service_state, ServiceState::StartFailed);
+    }
+
+    #[tokio::test]
+    async fn producer_selector_paths_without_client_return_error_instead_of_panicking() {
+        let mut producer = running_producer_without_client();
+        let mut msg = Message::builder().topic("TopicTest").empty_body().build_unchecked();
+
+        let selector_result = producer
+            .invoke_message_queue_selector(&mut msg, |_queues, _msg, _arg| None, &(), 3000)
+            .await;
+        assert!(selector_result.is_err());
+
+        let fetch_result = producer.fetch_publish_message_queues(&"TopicTest".into()).await;
+        assert!(fetch_result.is_err());
+        assert!(fetch_result
+            .err()
+            .is_some_and(|error| error.to_string().contains("MQClientInstance is not available")));
+    }
+
+    #[tokio::test]
+    async fn request_fail_removes_future_and_executes_callback_once_like_java() {
+        let correlation_id = format!("request-fail-{}", current_millis());
+        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_inner = Arc::clone(&calls);
+        let callback: RequestCallbackFn = Arc::new(move |response, error| {
+            assert!(response.is_none());
+            assert!(error.is_none());
+            calls_inner.fetch_add(1, Ordering::SeqCst);
+        });
+        let future = Arc::new(RequestResponseFuture::new(
+            correlation_id.as_str().into(),
+            3_000,
+            Some(callback),
+        ));
+        REQUEST_FUTURE_HOLDER.put_request(correlation_id.clone(), future).await;
+
+        DefaultMQProducerImpl::request_fail(correlation_id.as_str()).await;
+        DefaultMQProducerImpl::request_fail(correlation_id.as_str()).await;
+
+        assert!(REQUEST_FUTURE_HOLDER
+            .get_request(correlation_id.as_str())
+            .await
+            .is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn selector_helper_uses_user_topic_and_restores_namespace_like_java() {
+        let mut client_config = ClientConfig::default();
+        client_config.set_namespace(CheetahString::from_static_str("ns-a"));
+        let queues = vec![MessageQueue::from_parts("TopicTest", "broker-a", 0)];
+        let mut msg = Message::builder()
+            .topic("ns-a%TopicTest")
+            .empty_body()
+            .build_unchecked();
+        let seen_topic = std::sync::Mutex::new(None);
+
+        let selected = DefaultMQProducerImpl::select_message_queue_with_user_message(
+            &mut client_config,
+            &queues,
+            &mut msg,
+            &|queues, msg, _arg| {
+                *seen_topic.lock().expect("seen topic lock should not be poisoned") = Some(msg.topic().clone());
+                queues.first().cloned()
+            },
+            &(),
+        )
+        .expect("selector should return a queue");
+
+        assert_eq!(
+            seen_topic
+                .into_inner()
+                .expect("seen topic lock should not be poisoned")
+                .as_deref(),
+            Some("TopicTest")
+        );
+        assert_eq!(msg.topic(), "ns-a%TopicTest");
+        assert_eq!(selected.topic(), "ns-a%TopicTest");
+    }
+
+    #[test]
+    fn default_send_retry_attempts_match_java_communication_mode() {
+        let producer = running_producer_without_client();
+
+        assert_eq!(
+            producer.get_retry_times(CommunicationMode::Sync),
+            producer.producer_config.retry_times_when_send_failed() + 1
+        );
+        assert_eq!(producer.get_retry_times(CommunicationMode::Async), 1);
+        assert_eq!(producer.get_retry_times(CommunicationMode::Oneway), 1);
+    }
+
+    #[test]
+    fn send_timeout_for_attempt_caps_only_retryable_attempts_like_java() {
+        let mut producer = running_producer_without_client();
+        let configured = DefaultMQProducer::builder()
+            .producer_group("retry-timeout-group")
+            .send_msg_max_timeout_per_request(500)
+            .build();
+        producer.replace_producer_config(configured.producer_config().clone());
+
+        assert_eq!(producer.send_timeout_for_attempt(3_000, 0, 3), 500);
+        assert_eq!(producer.send_timeout_for_attempt(3_000, 1, 3), 500);
+        assert_eq!(producer.send_timeout_for_attempt(3_000, 2, 3), 3_000);
+        assert_eq!(producer.send_timeout_for_attempt(3_000, 0, 1), 3_000);
+
+        let producer_without_cap = running_producer_without_client();
+        assert_eq!(producer_without_cap.send_timeout_for_attempt(3_000, 0, 3), 3_000);
+    }
+
+    #[test]
+    fn async_remaining_timeout_requires_positive_budget_like_java() {
+        assert_eq!(DefaultMQProducerImpl::remaining_async_timeout(3_000, 2_999), Some(1));
+        assert_eq!(DefaultMQProducerImpl::remaining_async_timeout(3_000, 3_000), None);
+        assert_eq!(DefaultMQProducerImpl::remaining_async_timeout(3_000, 3_001), None);
+    }
+
+    #[test]
+    fn request_remaining_timeout_returns_typed_error_instead_of_underflow() {
+        assert_eq!(
+            DefaultMQProducerImpl::remaining_request_timeout(3_000, 2_999).expect("one ms remains"),
+            1
+        );
+
+        for elapsed in [3_000, 3_001] {
+            let error = DefaultMQProducerImpl::remaining_request_timeout(3_000, elapsed)
+                .expect_err("exhausted request budget should be a typed timeout");
+            assert!(matches!(
+                error,
+                rocketmq_error::RocketMQError::Timeout {
+                    operation: "send request message",
+                    timeout_ms: 3_000
+                }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn send_oneway_with_message_queue_does_not_reject_topic_mismatch_before_kernel_like_java() {
+        let mut producer = running_producer_without_client();
+        let msg = Message::builder().topic("TopicA").body_slice(b"body").build_unchecked();
+        let mq = MessageQueue::from_parts("TopicB", "broker-a", 0);
+
+        let result = producer.send_oneway_with_message_queue(msg, mq).await;
+
+        let error = result.expect_err("kernel path should fail without a client instance");
+        assert!(error.to_string().contains("MQClientInstance is not available"));
+        assert!(!error.to_string().contains("is not equal with message queue topic"));
+    }
+
+    #[tokio::test]
+    async fn sync_send_to_queue_topic_mismatch_uses_java_error_message() {
+        let mut producer = running_producer_without_client();
+        let msg = Message::builder().topic("TopicA").body_slice(b"body").build_unchecked();
+        let mq = MessageQueue::from_parts("TopicB", "broker-a", 0);
+
+        let error = producer
+            .sync_send_with_message_queue_timeout(msg, mq, 3_000)
+            .await
+            .expect_err("topic mismatch should fail before broker lookup");
+
+        assert!(error.to_string().contains("message's topic not equal mq's topic"));
+    }
+
+    #[tokio::test]
+    async fn async_send_to_queue_validates_message_before_kernel_like_java() {
+        let producer = running_producer_arc_with_self_inner();
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
+        let notify_for_callback = notify.clone();
+        let seen_for_callback = seen_error.clone();
+        let callback: ArcSendCallback = Arc::new(
+            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+                if let Some(error) = error {
+                    *seen_for_callback
+                        .lock()
+                        .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                    notify_for_callback.notify_one();
+                }
+            },
+        );
+        let msg = Message::builder().topic("TopicTest").empty_body().build_unchecked();
+        let mq = MessageQueue::from_parts("TopicTest", "broker-a", 0);
+
+        producer
+            .mut_from_ref()
+            .async_send_batch_to_queue_with_callback_timeout(msg, mq, Some(callback), 3_000)
+            .await
+            .expect("async send should schedule validation");
+        tokio::time::timeout(Duration::from_secs(1), notify.notified())
+            .await
+            .expect("validation error should reach callback");
+
+        let error = seen_error
+            .lock()
+            .expect("seen error lock should not be poisoned")
+            .clone()
+            .expect("callback should record validation error");
+        assert!(error.contains("message body is null") || error.contains("message body length is zero"));
+        assert!(!error.contains("MQClientInstance is not available"));
+    }
+
+    #[tokio::test]
+    async fn async_send_to_queue_topic_mismatch_uses_java_callback_error_message() {
+        let producer = running_producer_arc_with_self_inner();
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
+        let notify_for_callback = notify.clone();
+        let seen_for_callback = seen_error.clone();
+        let callback: ArcSendCallback = Arc::new(
+            move |_result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+                if let Some(error) = error {
+                    *seen_for_callback
+                        .lock()
+                        .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                    notify_for_callback.notify_one();
+                }
+            },
+        );
+        let msg = Message::builder().topic("TopicA").body_slice(b"body").build_unchecked();
+        let mq = MessageQueue::from_parts("TopicB", "broker-a", 0);
+
+        producer
+            .mut_from_ref()
+            .async_send_batch_to_queue_with_callback_timeout(msg, mq, Some(callback), 3_000)
+            .await
+            .expect("async send should schedule mismatch validation");
+        tokio::time::timeout(Duration::from_secs(1), notify.notified())
+            .await
+            .expect("topic mismatch should reach callback");
+
+        let error = seen_error
+            .lock()
+            .expect("seen error lock should not be poisoned")
+            .clone()
+            .expect("callback should record topic mismatch");
+        assert!(
+            error.contains("Topic of the message does not match its target message queue"),
+            "unexpected callback error: {error}"
+        );
+        assert!(!error.contains("MQClientInstance is not available"));
+    }
+
+    #[tokio::test]
+    async fn invoke_selector_uses_user_message_and_returns_namespaced_queue_like_java() {
+        let mut client_config = ClientConfig::default();
+        client_config.set_namespace(CheetahString::from_static_str("ns-a"));
+        let client_instance = MQClientInstance::new_arc(client_config.clone(), 0, "selector-namespace-client", None);
+        let mut producer = DefaultMQProducerImpl::new(client_config.clone(), ProducerConfig::default(), None);
+        producer.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+        producer.service_state = ServiceState::Running;
+        producer.client_instance = Some(client_instance);
+        producer.topic_publish_info_table.insert(
+            CheetahString::from_static_str("ns-a%TopicTest"),
+            TopicPublishInfo {
+                have_topic_router_info: true,
+                message_queue_list: vec![MessageQueue::from_parts("ns-a%TopicTest", "broker-a", 0)],
+                ..Default::default()
+            },
+        );
+        let mut msg = Message::builder()
+            .topic("ns-a%TopicTest")
+            .body_slice(b"selector")
+            .build_unchecked();
+        let seen = std::sync::Mutex::new((None::<CheetahString>, None::<CheetahString>));
+
+        let selected = producer
+            .invoke_message_queue_selector(
+                &mut msg,
+                |queues, msg, seen| {
+                    let mut seen = seen.lock().expect("seen lock should not be poisoned");
+                    seen.0 = Some(msg.topic().clone());
+                    seen.1 = queues.first().map(|queue| queue.topic().clone());
+                    queues.first().cloned()
+                },
+                &seen,
+                3000,
+            )
+            .await
+            .expect("selector should resolve from cached route info");
+
+        let seen = seen.into_inner().expect("seen lock should not be poisoned");
+        assert_eq!(seen.0.as_deref(), Some("TopicTest"));
+        assert_eq!(seen.1.as_deref(), Some("TopicTest"));
+        assert_eq!(msg.topic(), "ns-a%TopicTest");
+        assert_eq!(selected.topic(), "ns-a%TopicTest");
+    }
+
+    #[tokio::test]
+    async fn producer_request_prepare_without_client_returns_error_instead_of_panicking() {
+        let mut producer = running_producer_without_client();
+        let mut msg = Message::builder().topic("TopicTest").empty_body().build_unchecked();
+
+        let result = producer.prepare_send_request(&mut msg, 3000).await;
+
+        assert!(result.is_err());
+        assert!(result
+            .err()
+            .is_some_and(|error| error.to_string().contains("MQClientInstance is not available")));
+    }
+
+    #[test]
+    fn backpressure_setters_clamp_and_resize_permits_like_java() {
+        let mut producer = running_producer_without_client();
+
+        producer.set_enable_backpressure_for_async_mode(true);
+        producer.set_back_pressure_for_async_send_num(1);
+        producer.set_back_pressure_for_async_send_size(128);
+
+        assert!(producer.enable_backpressure_for_async_mode());
+        assert_eq!(
+            producer.back_pressure_for_async_send_num(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM
+        );
+        assert_eq!(
+            producer.back_pressure_for_async_send_size(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE
+        );
+        assert_eq!(
+            producer.semaphore_async_send_num.available_permits(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM as usize
+        );
+        assert_eq!(
+            producer.semaphore_async_send_size.available_permits(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE as usize
+        );
+    }
+
+    #[test]
+    fn semaphore_async_adjust_updates_backpressure_limits_like_java_callback() {
+        let mut producer = running_producer_without_client();
+        producer.set_back_pressure_for_async_send_num(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM);
+        producer.set_back_pressure_for_async_send_size(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE);
+
+        producer
+            .semaphore_async_adjust(2, 16)
+            .expect("positive semaphore adjustment should be accepted");
+
+        assert_eq!(
+            producer.back_pressure_for_async_send_num(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM + 2
+        );
+        assert_eq!(
+            producer.back_pressure_for_async_send_size(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE + 16
+        );
+        assert_eq!(
+            producer.semaphore_async_send_num.available_permits(),
+            (MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM + 2) as usize
+        );
+        assert_eq!(
+            producer.semaphore_async_send_size.available_permits(),
+            (MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE + 16) as usize
+        );
+
+        producer.semaphore_processor();
+    }
+
+    #[test]
+    fn check_listener_alias_returns_transaction_listener() {
+        let mut producer = running_producer_without_client();
+
+        assert!(producer.check_listener().is_none());
+        producer.set_transaction_listener(Arc::new(NoopTransactionListener));
+
+        assert!(producer.check_listener().is_some());
+    }
+
+    #[tokio::test]
+    async fn async_backpressure_permits_are_held_until_task_finishes_like_java() {
+        let mut producer = running_producer_without_client();
+        producer.set_enable_backpressure_for_async_mode(true);
+        producer.set_back_pressure_for_async_send_num(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM);
+        producer.set_back_pressure_for_async_send_size(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE);
+
+        let msg_len = 8;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+
+        producer
+            .execute_async_message_send(
+                async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                },
+                None,
+                1000,
+                Instant::now(),
+                msg_len,
+            )
+            .await
+            .expect("backpressure execution should spawn task");
+        started_rx.await.expect("spawned task should start");
+
+        assert_eq!(
+            producer.semaphore_async_send_num.available_permits(),
+            (MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM - 1) as usize
+        );
+        assert_eq!(
+            producer.semaphore_async_send_size.available_permits(),
+            MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE as usize - msg_len
+        );
+
+        release_tx.send(()).expect("spawned task should still be waiting");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if producer.semaphore_async_send_num.available_permits()
+                    == MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM as usize
+                    && producer.semaphore_async_send_size.available_permits()
+                        == MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE as usize
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("permits should be released after async task finishes");
+    }
+
+    #[tokio::test]
+    async fn transaction_env_initializes_and_destroys_java_lifecycle_state() {
+        let mut producer = running_producer_without_client();
+
+        producer.init_transaction_env(1, 2, 3).unwrap();
+        assert!(producer.is_transaction_env_initialized());
+
+        producer.destroy_transaction_env().await;
+        assert!(!producer.is_transaction_env_initialized());
+    }
+
+    #[test]
+    fn transaction_env_rejects_invalid_java_executor_config() {
+        let mut producer = running_producer_without_client();
+
+        let min_over_max = producer.init_transaction_env(2, 1, 3);
+        assert!(min_over_max
+            .err()
+            .is_some_and(|error| error.to_string().contains("min size cannot exceed max size")));
+
+        let zero_pool = producer.init_transaction_env(0, 1, 3);
+        assert!(zero_pool
+            .err()
+            .is_some_and(|error| error.to_string().contains("must be greater than 0")));
+
+        let zero_hold = producer.init_transaction_env(1, 1, 0);
+        assert!(zero_hold
+            .err()
+            .is_some_and(|error| error.to_string().contains("hold max must be greater than 0")));
+    }
+
+    #[tokio::test]
+    async fn transaction_send_without_impl_listener_fails_before_send_like_java() {
+        let mut producer = running_producer_without_client();
+        let msg = Message::builder().topic("TopicTest").empty_body().build_unchecked();
+
+        let result = producer.send_message_in_transaction(msg, None).await;
+
+        assert!(result
+            .err()
+            .is_some_and(|error| error.to_string().contains("tranExecutor is null")));
+    }
+
+    #[tokio::test]
+    async fn transaction_send_delay_millis_fails_before_send_like_java() {
+        let mut producer = running_producer_without_client();
+        producer.set_transaction_listener(Arc::new(NoopTransactionListener));
+        let msg = Message::builder()
+            .topic("TopicTest")
+            .body_slice(b"transaction")
+            .delay_millis(3000)
+            .build_unchecked();
+
+        let result = producer.send_message_in_transaction(msg, None).await;
+
+        assert!(result.err().is_some_and(|error| {
+            error
+                .to_string()
+                .contains("Transactional messages do not support delayed delivery")
+        }));
+    }
+
+    #[test]
+    fn local_transaction_listener_panic_becomes_unknown_like_java() {
+        let listener: ArcTransactionListener = Arc::new(PanicTransactionListener);
+        let msg = Message::builder()
+            .topic("TopicTest")
+            .body_slice(b"transaction")
+            .build_unchecked();
+
+        let (state, remark) = DefaultMQProducerImpl::execute_local_transaction_branch(&listener, &msg, None);
+
+        assert_eq!(state, LocalTransactionState::Unknown);
+        assert!(remark
+            .as_ref()
+            .is_some_and(|remark| remark.as_str().contains("local transaction boom")));
+    }
 
     #[test]
     fn transaction_check_end_header_preserves_java_offsets() {
@@ -2857,6 +4117,46 @@ mod tests {
         assert_eq!(end_header.msg_id, "unique-msg-id");
         assert_eq!(end_header.transaction_id.as_deref(), Some("tx-id"));
         assert_eq!(end_header.rpc_request_header.broker_name.as_deref(), Some("broker-a"));
+    }
+
+    #[test]
+    fn transaction_check_end_header_preserves_negative_java_offsets_without_wrapping() {
+        let check_header = CheckTransactionStateRequestHeader {
+            topic: Some(CheetahString::from_static_str("TopicA")),
+            tran_state_table_offset: -123,
+            commit_log_offset: -456,
+            ..Default::default()
+        };
+
+        let end_header = DefaultMQProducerImpl::build_end_transaction_header_for_check(
+            CheetahString::from_static_str("ProducerA"),
+            &check_header,
+            CheetahString::from_static_str("msg-id"),
+            LocalTransactionState::Unknown,
+        );
+
+        assert_eq!(end_header.tran_state_table_offset, -123);
+        assert_eq!(end_header.commit_log_offset, -456);
+    }
+
+    #[test]
+    fn end_transaction_send_result_queue_offset_must_fit_java_long() {
+        assert_eq!(
+            DefaultMQProducerImpl::u64_to_java_long_field("endTransaction", "tranStateTableOffset", i64::MAX as u64)
+                .expect("i64 max should fit Java long"),
+            i64::MAX
+        );
+
+        let error = DefaultMQProducerImpl::u64_to_java_long_field(
+            "endTransaction",
+            "tranStateTableOffset",
+            i64::MAX as u64 + 1,
+        )
+        .expect_err("queue offsets larger than Java long must not wrap");
+
+        assert!(error
+            .to_string()
+            .contains("endTransaction tranStateTableOffset exceeds Java long range"));
     }
 
     #[test]

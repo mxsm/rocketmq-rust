@@ -155,7 +155,7 @@ pub fn string_to_properties(input: &str) -> Option<HashMap<CheetahString, Cheeta
 
     for line in input.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
             // Skip empty lines or comments
             continue;
         }
@@ -167,11 +167,15 @@ pub fn string_to_properties(input: &str) -> Option<HashMap<CheetahString, Cheeta
             (None, None) => None,
         };
 
-        let separator_index = separator_index?;
-        let (key, value) = line.split_at(separator_index);
-        let value = &value[1..];
-        let key = CheetahString::from(key.trim());
-        let value = CheetahString::from(value.trim());
+        let (key, value) = match separator_index {
+            Some(separator_index) => {
+                let (key, value) = line.split_at(separator_index);
+                (key.trim(), value[1..].trim())
+            }
+            None => (line.trim(), ""),
+        };
+        let key = CheetahString::from(key);
+        let value = CheetahString::from(value);
         properties.insert(key, value);
     }
 
@@ -286,13 +290,22 @@ mod tests {
     }
 
     #[test]
-    fn test_string_to_properties_invalid_line() {
+    fn test_string_to_properties_matches_java_empty_value_line() {
         let input = r#"
              key1=value1
              invalid_line
+             ! bang comments are also supported by java.util.Properties
          "#;
 
-        let result = string_to_properties(input);
-        assert!(result.is_none(), "Parsing should fail for invalid input");
+        let result = string_to_properties(input).expect("Parsing should succeed");
+
+        assert_eq!(
+            result.get(&CheetahString::from("key1")),
+            Some(&CheetahString::from("value1"))
+        );
+        assert_eq!(
+            result.get(&CheetahString::from("invalid_line")),
+            Some(&CheetahString::new())
+        );
     }
 }

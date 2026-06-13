@@ -24,6 +24,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 // Field key constants to avoid repeated allocations
@@ -41,6 +42,11 @@ const FIELD_K: &str = "k";
 const FIELD_L: &str = "l";
 const FIELD_M: &str = "m";
 const FIELD_N: &str = "n";
+const FIELD_BROKER_NAME: &str = "brokerName";
+const FIELD_NAMESPACE: &str = "namespace";
+const FIELD_NAMESPACED: &str = "namespaced";
+const FIELD_ONEWAY: &str = "oneway";
+const FIELD_LO: &str = "lo";
 
 const KEY_A: CheetahString = CheetahString::from_static_str(FIELD_A);
 const KEY_B: CheetahString = CheetahString::from_static_str(FIELD_B);
@@ -180,6 +186,25 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         if let Some(ref value) = self.n {
             self.write_if_not_null(out, FIELD_N, value.as_str());
         }
+        if let Some(ref header) = self.topic_request_header {
+            if let Some(ref rpc_header) = header.rpc_request_header {
+                if let Some(ref value) = rpc_header.broker_name {
+                    self.write_if_not_null(out, FIELD_BROKER_NAME, value.as_str());
+                }
+                if let Some(ref value) = rpc_header.namespace {
+                    self.write_if_not_null(out, FIELD_NAMESPACE, value.as_str());
+                }
+                if let Some(value) = rpc_header.namespaced {
+                    self.write_if_not_null(out, FIELD_NAMESPACED, if value { "true" } else { "false" });
+                }
+                if let Some(value) = rpc_header.oneway {
+                    self.write_if_not_null(out, FIELD_ONEWAY, if value { "true" } else { "false" });
+                }
+            }
+            if let Some(value) = header.lo {
+                self.write_if_not_null(out, FIELD_LO, if value { "true" } else { "false" });
+            }
+        }
     }
 
     fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
@@ -224,7 +249,12 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_J)) {
-            self.j = Some(v.parse().unwrap());
+            self.j = Some(v.parse().map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: "Parse field j error".to_string(),
+                })
+            })?);
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_K)) {
@@ -300,8 +330,20 @@ impl FromMap for SendMessageRequestHeaderV2 {
         }
 
         #[inline(always)]
-        fn optional_parse<T: FromStr>(map: &HashMap<CheetahString, CheetahString>, key: &CheetahString) -> Option<T> {
-            map.get(key)?.as_str().parse::<T>().ok()
+        fn optional_parse<T: FromStr>(
+            map: &HashMap<CheetahString, CheetahString>,
+            key: &CheetahString,
+            field: &'static str,
+        ) -> Result<Option<T>, rocketmq_error::RocketMQError> {
+            match map.get(key) {
+                Some(value) => value.as_str().parse::<T>().map(Some).map_err(|_| {
+                    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: format!("Parse {} field error", field),
+                    })
+                }),
+                None => Ok(None),
+            }
         }
 
         Ok(SendMessageRequestHeaderV2 {
@@ -316,10 +358,10 @@ impl FromMap for SendMessageRequestHeaderV2 {
             h: parse_required::<i32>(map, &KEY_H, FIELD_H)?,
 
             i: map.get(&KEY_I).cloned(),
-            j: optional_parse::<i32>(map, &KEY_J),
-            k: optional_parse::<bool>(map, &KEY_K),
-            l: optional_parse::<i32>(map, &KEY_L),
-            m: optional_parse::<bool>(map, &KEY_M),
+            j: optional_parse::<i32>(map, &KEY_J, FIELD_J)?,
+            k: optional_parse::<bool>(map, &KEY_K, FIELD_K)?,
+            l: optional_parse::<i32>(map, &KEY_L, FIELD_L)?,
+            m: optional_parse::<bool>(map, &KEY_M, FIELD_M)?,
             n: map.get(&KEY_N).cloned(),
             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
@@ -328,6 +370,14 @@ impl FromMap for SendMessageRequestHeaderV2 {
 
 impl SendMessageRequestHeaderV2 {
     pub fn create_send_message_request_header_v1(this: &Self) -> SendMessageRequestHeader {
+        let topic_request_header = this.n.as_ref().map(|broker_name| TopicRequestHeader {
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(broker_name.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
         SendMessageRequestHeader {
             producer_group: this.a.clone(),
             topic: this.b.clone(),
@@ -342,7 +392,7 @@ impl SendMessageRequestHeaderV2 {
             unit_mode: this.k,
             batch: this.m,
             max_reconsume_times: this.l,
-            topic_request_header: None,
+            topic_request_header,
         }
     }
 
@@ -391,13 +441,24 @@ impl SendMessageRequestHeaderV2 {
             topic_request_header: v1.topic_request_header,
         }
     }
+
+    #[inline]
+    fn topic_request_header_mut(&mut self) -> &mut TopicRequestHeader {
+        self.topic_request_header
+            .get_or_insert_with(TopicRequestHeader::default)
+    }
+
+    #[inline]
+    fn rpc_request_header_mut(&mut self) -> &mut RpcRequestHeader {
+        self.topic_request_header_mut()
+            .rpc_request_header
+            .get_or_insert_with(RpcRequestHeader::default)
+    }
 }
 
 impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
     fn set_lo(&mut self, lo: Option<bool>) {
-        if let Some(header) = self.topic_request_header.as_mut() {
-            header.lo = lo;
-        }
+        self.topic_request_header_mut().lo = lo;
     }
 
     fn lo(&self) -> Option<bool> {
@@ -414,19 +475,15 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
 
     fn broker_name(&self) -> Option<&CheetahString> {
         self.topic_request_header
-            .as_ref()?
-            .rpc_request_header
-            .as_ref()?
-            .broker_name
             .as_ref()
+            .and_then(|header| header.rpc_request_header.as_ref())
+            .and_then(|rpc_header| rpc_header.broker_name.as_ref())
+            .or(self.n.as_ref())
     }
 
     fn set_broker_name(&mut self, broker_name: CheetahString) {
-        if let Some(header) = self.topic_request_header.as_mut() {
-            if let Some(rpc_header) = header.rpc_request_header.as_mut() {
-                rpc_header.broker_name = Some(broker_name);
-            }
-        }
+        self.n = Some(broker_name.clone());
+        self.rpc_request_header_mut().broker_name = Some(broker_name);
     }
 
     fn namespace(&self) -> Option<&str> {
@@ -439,11 +496,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
     }
 
     fn set_namespace(&mut self, namespace: CheetahString) {
-        if let Some(header) = self.topic_request_header.as_mut() {
-            if let Some(rpc_header) = header.rpc_request_header.as_mut() {
-                rpc_header.namespace = Some(namespace);
-            }
-        }
+        self.rpc_request_header_mut().namespace = Some(namespace);
     }
 
     fn namespaced(&self) -> Option<bool> {
@@ -457,11 +510,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
     }
 
     fn set_namespaced(&mut self, namespaced: bool) {
-        if let Some(header) = self.topic_request_header.as_mut() {
-            if let Some(rpc_header) = header.rpc_request_header.as_mut() {
-                rpc_header.namespaced = Some(namespaced);
-            }
-        }
+        self.rpc_request_header_mut().namespaced = Some(namespaced);
     }
 
     fn oneway(&self) -> Option<bool> {
@@ -475,11 +524,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeaderV2 {
     }
 
     fn set_oneway(&mut self, oneway: bool) {
-        if let Some(header) = self.topic_request_header.as_mut() {
-            if let Some(rpc_header) = header.rpc_request_header.as_mut() {
-                rpc_header.oneway = Some(oneway);
-            }
-        }
+        self.rpc_request_header_mut().oneway = Some(oneway);
     }
 
     fn queue_id(&self) -> i32 {
@@ -498,6 +543,26 @@ mod tests {
     use cheetah_string::CheetahString;
 
     use super::*;
+
+    fn minimal_header_v2() -> SendMessageRequestHeaderV2 {
+        SendMessageRequestHeaderV2 {
+            a: CheetahString::from_static_str("test_producer_group"),
+            b: CheetahString::from_static_str("test_topic"),
+            c: CheetahString::from_static_str("test_default_topic"),
+            d: 8,
+            e: 1,
+            f: 0,
+            g: 1622547800000,
+            h: 0,
+            i: None,
+            j: None,
+            k: None,
+            l: None,
+            m: None,
+            n: None,
+            topic_request_header: None,
+        }
+    }
 
     #[test]
     fn send_message_request_header_v2_serializes_correctly() {
@@ -544,6 +609,55 @@ mod tests {
         assert_eq!(
             map.get(&CheetahString::from_static_str("n")).unwrap(),
             "test_broker_name"
+        );
+    }
+
+    #[test]
+    fn topic_request_header_setters_initialize_missing_nested_headers_and_fast_codec_fields() {
+        let mut header = minimal_header_v2();
+
+        header.set_lo(Some(true));
+        header.set_broker_name(CheetahString::from_static_str("broker-a"));
+        header.set_namespace(CheetahString::from_static_str("ns-a"));
+        header.set_namespaced(true);
+        header.set_oneway(true);
+
+        assert_eq!(header.lo(), Some(true));
+        assert_eq!(header.broker_name().map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(header.namespace(), Some("ns-a"));
+        assert_eq!(header.namespaced(), Some(true));
+        assert_eq!(header.oneway(), Some(true));
+
+        let map = header.to_map().expect("header should encode");
+        assert_eq!(map.get("n").map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(map.get("lo").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("brokerName").map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(map.get("namespace").map(CheetahString::as_str), Some("ns-a"));
+        assert_eq!(map.get("namespaced").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("oneway").map(CheetahString::as_str), Some("true"));
+
+        let mut encoded = BytesMut::new();
+        header.encode_fast(&mut encoded);
+        let encoded = String::from_utf8_lossy(&encoded);
+        assert!(encoded.contains("n"));
+        assert!(encoded.contains("broker-a"));
+        assert!(encoded.contains("namespace"));
+        assert!(encoded.contains("ns-a"));
+        assert!(encoded.contains("namespaced"));
+        assert!(encoded.contains("oneway"));
+        assert!(encoded.contains("lo"));
+    }
+
+    #[test]
+    fn create_v1_preserves_java_v2_broker_name_field() {
+        let mut header = minimal_header_v2();
+        header.n = Some(CheetahString::from_static_str("broker-from-v2"));
+
+        let converted = SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header);
+
+        assert_eq!(
+            converted.broker_name().map(CheetahString::as_str),
+            Some("broker-from-v2")
         );
     }
 
@@ -684,6 +798,67 @@ mod tests {
         );
 
         let result = <SendMessageRequestHeaderV2 as FromMap>::from(&map);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_fast_rejects_invalid_optional_reconsume_times_without_panic() {
+        let mut fields = HashMap::new();
+        fields.insert(
+            CheetahString::from_static_str("a"),
+            CheetahString::from_static_str("producer"),
+        );
+        fields.insert(
+            CheetahString::from_static_str("b"),
+            CheetahString::from_static_str("topic"),
+        );
+        fields.insert(
+            CheetahString::from_static_str("c"),
+            CheetahString::from_static_str("TBW102"),
+        );
+        fields.insert(CheetahString::from_static_str("d"), CheetahString::from_static_str("4"));
+        fields.insert(CheetahString::from_static_str("e"), CheetahString::from_static_str("0"));
+        fields.insert(CheetahString::from_static_str("f"), CheetahString::from_static_str("0"));
+        fields.insert(CheetahString::from_static_str("g"), CheetahString::from_static_str("1"));
+        fields.insert(CheetahString::from_static_str("h"), CheetahString::from_static_str("0"));
+        fields.insert(
+            CheetahString::from_static_str("j"),
+            CheetahString::from_static_str("bad"),
+        );
+
+        let mut header = minimal_header_v2();
+        let result = header.decode_fast(&fields);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_map_rejects_invalid_optional_reconsume_times() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("a"),
+            CheetahString::from_static_str("producer"),
+        );
+        map.insert(
+            CheetahString::from_static_str("b"),
+            CheetahString::from_static_str("topic"),
+        );
+        map.insert(
+            CheetahString::from_static_str("c"),
+            CheetahString::from_static_str("TBW102"),
+        );
+        map.insert(CheetahString::from_static_str("d"), CheetahString::from_static_str("4"));
+        map.insert(CheetahString::from_static_str("e"), CheetahString::from_static_str("0"));
+        map.insert(CheetahString::from_static_str("f"), CheetahString::from_static_str("0"));
+        map.insert(CheetahString::from_static_str("g"), CheetahString::from_static_str("1"));
+        map.insert(CheetahString::from_static_str("h"), CheetahString::from_static_str("0"));
+        map.insert(
+            CheetahString::from_static_str("j"),
+            CheetahString::from_static_str("bad"),
+        );
+
+        let result = <SendMessageRequestHeaderV2 as FromMap>::from(&map);
+
         assert!(result.is_err());
     }
 }

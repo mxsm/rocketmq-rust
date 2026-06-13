@@ -95,11 +95,14 @@ impl StatsItem {
     pub fn compute_stats_data(cs_list: &Mutex<LinkedList<CallSnapshot>>) -> StatsSnapshot {
         let mut stats_snapshot = StatsSnapshot::new();
         let cs_list = cs_list.lock();
-        if !cs_list.is_empty() {
-            let first = cs_list.front().unwrap();
-            let last = cs_list.back().unwrap();
+        if let (Some(first), Some(last)) = (cs_list.front(), cs_list.back()) {
             let sum = last.get_value() - first.get_value();
-            let tps = (sum as f64 * 1000.0) / (last.get_timestamp() - first.get_timestamp()) as f64;
+            let time_diff = last.get_timestamp().saturating_sub(first.get_timestamp());
+            let tps = if time_diff > 0 {
+                (sum as f64 * 1000.0) / time_diff as f64
+            } else {
+                0.0
+            };
             let times_diff = last.get_times() - first.get_times();
             let avgpt = if times_diff > 0 {
                 sum as f64 / times_diff as f64

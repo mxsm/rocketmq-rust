@@ -25,6 +25,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::time;
 use tracing::error;
@@ -331,12 +332,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
         loop {
             // OPTIMIZATION: Acquire permit BEFORE accept() to provide backpressure
             // If at capacity, accept() won't be called until a slot frees up
-            let permit = self
-                .limit_connections
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("Semaphore closed unexpectedly");
+            let permit = acquire_connection_permit(&self.limit_connections).await?;
 
             // Accept next connection (with exponential backoff on errors)
             let (socket, remote_addr) = self.accept().await?;
@@ -459,6 +455,14 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     }
 }
 
+async fn acquire_connection_permit(limit_connections: &Arc<Semaphore>) -> anyhow::Result<OwnedSemaphorePermit> {
+    limit_connections
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|err| anyhow::anyhow!("connection limit semaphore closed: {err}"))
+}
+
 pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
     rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
@@ -498,7 +502,13 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
         S: Future,
     {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
-        let listener = TcpListener::bind(&addr).await.unwrap();
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                error!(addr = %addr, error = %err, "failed to bind remoting_server");
+                return;
+            }
+        };
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
@@ -605,5 +615,42 @@ impl Shutdown {
 
         // Remember that the signal has been received.
         self.is_shutdown = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+    use std::sync::Arc;
+
+    use rocketmq_common::common::server::config::ServerConfig;
+
+    use super::*;
+    use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+
+    #[tokio::test]
+    async fn acquire_connection_permit_closed_semaphore_returns_error_without_panicking() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        semaphore.close();
+
+        let error = match acquire_connection_permit(&semaphore).await {
+            Ok(_) => panic!("closed semaphore should return an error"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("connection limit semaphore closed"));
+    }
+
+    #[tokio::test]
+    async fn run_with_shutdown_bind_error_returns_without_panicking() {
+        let config = Arc::new(ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 70000,
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+
+        server
+            .run_with_shutdown(DefaultRemotingRequestProcessor, None, future::pending::<()>())
+            .await;
     }
 }

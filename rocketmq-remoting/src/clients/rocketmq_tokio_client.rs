@@ -178,6 +178,25 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// Used for monitoring and metrics collection
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
 }
+
+impl<PR> Clone for RocketmqDefaultClient<PR> {
+    fn clone(&self) -> Self {
+        Self {
+            tokio_client_config: self.tokio_client_config.clone(),
+            connection_tables: self.connection_tables.clone(),
+            namesrv_addr_list: self.namesrv_addr_list.clone(),
+            namesrv_addr_choosed: self.namesrv_addr_choosed.clone(),
+            available_namesrv_addr_set: self.available_namesrv_addr_set.clone(),
+            latency_tracker: self.latency_tracker.clone(),
+            circuit_breakers: self.circuit_breakers.clone(),
+            connection_pool: self.connection_pool.clone(),
+            shutdown_token: self.shutdown_token.clone(),
+            cmd_handler: self.cmd_handler.clone(),
+            tx: self.tx.clone(),
+        }
+    }
+}
+
 impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     pub fn new(tokio_client_config: Arc<TokioClientConfig>, processor: PR) -> Self {
         Self::new_with_cl(tokio_client_config, processor, None)
@@ -206,6 +225,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             cmd_handler: ArcMut::new(handler),
             tx,
         }
+    }
+
+    /// Returns whether newly created outbound connections use TLS.
+    #[inline]
+    pub fn is_use_tls(&self) -> bool {
+        self.tokio_client_config.use_tls
     }
 }
 
@@ -485,9 +510,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
 
         let addr_inner = addr.to_string();
+        let use_tls = self.tokio_client_config.use_tls;
 
         let connect_result = time::timeout(duration, async {
-            Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref()).await
+            Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref(), use_tls).await
         })
         .await;
 
@@ -937,6 +963,17 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             return Err(rocketmq_error::RocketMQError::ClientNotStarted);
         }
 
+        let mut request = request;
+        let remote_address = client.remote_address();
+        let request_for_after = if self.cmd_handler.has_rpc_hooks() {
+            request.make_custom_header_to_net();
+            self.cmd_handler
+                .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))?;
+            Some(request.clone())
+        } else {
+            None
+        };
+
         let send_result = time::timeout(
             Duration::from_millis(timeout_millis),
             client.send_read(request, timeout_millis),
@@ -946,7 +983,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         let latency = start.elapsed();
 
         match send_result {
-            Ok(Ok(response)) => {
+            Ok(Ok(mut response)) => {
+                if let Some(request) = request_for_after.as_ref() {
+                    self.cmd_handler
+                        .do_after_rpc_hooks_with_addr(remote_address, request, Some(&mut response))?;
+                }
+
                 if let Some(ref addr) = target_addr {
                     let latency_ms = latency.as_millis() as u64;
                     self.latency_tracker.record_success(addr, latency);
@@ -994,6 +1036,18 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 error!("invokeOneway: get client for {} failed", addr);
             }
             Some(mut client) => {
+                let mut request = request;
+                if self.cmd_handler.has_rpc_hooks() {
+                    let remote_address = client.remote_address();
+                    request.make_custom_header_to_net();
+                    if let Err(error) = self
+                        .cmd_handler
+                        .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))
+                    {
+                        warn!("invokeOneway: before RPC hook failed for {}: {:?}", addr, error);
+                        return;
+                    }
+                }
                 let addr_clone = addr.clone();
                 tokio::spawn(async move {
                     match time::timeout(Duration::from_millis(timeout_millis), async move {
@@ -1020,18 +1074,42 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     }
 
     fn invoke_oneway_unbounded(&self, addr: CheetahString, request: RemotingCommand) {
-        let connection_tables = self.connection_tables.clone();
+        let client_owner = self.clone();
 
         tokio::spawn(async move {
-            // Clone client value and drop the DashMap guard before awaiting
-            let client = connection_tables.get(&addr).map(|r| r.value().clone());
+            if client_owner.shutdown_token.is_cancelled() {
+                tracing::debug!(
+                    "invoke_oneway_unbounded: client is shut down, skipping send to {}",
+                    addr
+                );
+                return;
+            }
 
-            if let Some(mut client) = client {
-                let mut request = request;
-                request.mark_oneway_rpc_ref();
-                let _ = client.send(request).await;
-            } else {
-                tracing::debug!("No cached client for oneway send to {}, skipping fire-and-forget", addr);
+            let Some(mut client) = client_owner.get_and_create_client(Some(&addr)).await else {
+                tracing::warn!("invoke_oneway_unbounded: failed to get or create client for {}", addr);
+                return;
+            };
+
+            let mut request = request;
+            request.mark_oneway_rpc_ref();
+            if client_owner.cmd_handler.has_rpc_hooks() {
+                let remote_address = client.remote_address();
+                request.make_custom_header_to_net();
+                if let Err(error) = client_owner
+                    .cmd_handler
+                    .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))
+                {
+                    tracing::warn!(
+                        "invoke_oneway_unbounded: before RPC hook failed for {}: {:?}",
+                        addr,
+                        error
+                    );
+                    return;
+                }
+            }
+
+            if let Err(error) = client.send(request).await {
+                tracing::warn!("invoke_oneway_unbounded: send request to {} failed: {:?}", addr, error);
             }
         });
     }
@@ -1060,6 +1138,160 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     }
 
     fn register_processor(&mut self, processor: impl RequestProcessor + Sync) {
-        todo!()
+        let _ = &processor;
+        warn!("dynamic request processor registration is not supported by RocketmqDefaultClient after construction");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use rocketmq_error::RocketMQResult;
+    use tokio::net::TcpListener;
+
+    use super::*;
+    use crate::code::request_code::RequestCode;
+    use crate::code::response_code::ResponseCode;
+    use crate::connection::Connection;
+    use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+    use crate::runtime::config::client_config::TokioClientConfig;
+
+    #[derive(Default)]
+    struct CountingHook {
+        before_count: AtomicUsize,
+        after_count: AtomicUsize,
+    }
+
+    impl RPCHook for CountingHook {
+        fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> RocketMQResult<()> {
+            self.before_count.fetch_add(1, Ordering::SeqCst);
+            request.ensure_ext_fields_initialized();
+            request.add_ext_field("hooked", "true");
+            Ok(())
+        }
+
+        fn do_after_response(
+            &self,
+            _remote_addr: SocketAddr,
+            _request: &RemotingCommand,
+            response: &mut RemotingCommand,
+        ) -> RocketMQResult<()> {
+            self.after_count.fetch_add(1, Ordering::SeqCst);
+            response.ensure_ext_fields_initialized();
+            response.add_ext_field("afterHook", "true");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn is_use_tls_reflects_client_config() {
+        let config = TokioClientConfig {
+            use_tls: true,
+            ..Default::default()
+        };
+        let client = RocketmqDefaultClient::new(Arc::new(config), DefaultRemotingRequestProcessor);
+
+        assert!(client.is_use_tls());
+    }
+
+    #[tokio::test]
+    async fn invoke_request_runs_outbound_rpc_hooks() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept client");
+            let mut connection = Connection::new(socket);
+            let request = connection
+                .receive_command()
+                .await
+                .expect("request frame")
+                .expect("request command");
+            let hooked = request
+                .ext_fields()
+                .and_then(|fields| fields.get("hooked"))
+                .map(|value| value.as_str());
+            assert_eq!(hooked, Some("true"));
+
+            let mut response = RemotingCommand::create_response_command_with_code(ResponseCode::Success);
+            response.set_opaque_mut(request.opaque());
+            connection.send_command(response).await.expect("send response");
+        });
+
+        let hook = Arc::new(CountingHook::default());
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+        client.register_rpc_hook(hook.clone());
+
+        let target = CheetahString::from_string(addr.to_string());
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
+        let response = client
+            .invoke_request(Some(&target), request, 3_000)
+            .await
+            .expect("invoke request");
+
+        assert_eq!(hook.before_count.load(Ordering::SeqCst), 1);
+        assert_eq!(hook.after_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            response
+                .ext_fields()
+                .and_then(|fields| fields.get("afterHook"))
+                .map(|value| value.as_str()),
+            Some("true")
+        );
+
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn invoke_oneway_unbounded_creates_connection_before_sending() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept client");
+            let mut connection = Connection::new(socket);
+            let request = time::timeout(Duration::from_secs(3), connection.receive_command())
+                .await
+                .expect("oneway request should arrive")
+                .expect("request frame")
+                .expect("request command");
+            let hooked = request
+                .ext_fields()
+                .and_then(|fields| fields.get("hooked"))
+                .map(|value| value.as_str() == "true")
+                .unwrap_or(false);
+
+            let _ = received_tx.send((request.code(), request.is_oneway_rpc(), hooked));
+        });
+
+        let hook = Arc::new(CountingHook::default());
+        let mut client =
+            RocketmqDefaultClient::new(Arc::new(TokioClientConfig::default()), DefaultRemotingRequestProcessor);
+        client.register_rpc_hook(hook.clone());
+
+        let target = CheetahString::from_string(addr.to_string());
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
+        client.invoke_oneway_unbounded(target, request);
+
+        let (code, is_oneway, hooked) = time::timeout(Duration::from_secs(3), received_rx)
+            .await
+            .expect("server should receive unbounded oneway request")
+            .expect("server should report received request");
+
+        assert_eq!(code, RequestCode::GetBrokerClusterInfo.to_i32());
+        assert!(is_oneway);
+        assert!(hooked);
+        assert_eq!(hook.before_count.load(Ordering::SeqCst), 1);
+        assert_eq!(hook.after_count.load(Ordering::SeqCst), 0);
+
+        server.await.expect("server task");
+        client.shutdown();
     }
 }

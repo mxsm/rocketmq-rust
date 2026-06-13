@@ -18,6 +18,22 @@ export class ApiClientError extends Error {
   }
 }
 
+function emptyResponseMessage(path: string, response: Response) {
+  if (response.ok) {
+    return `The dashboard backend returned an empty response for ${path}.`;
+  }
+
+  return `The dashboard backend is unavailable or returned an empty response for ${path} (${response.status} ${response.statusText || 'HTTP error'}).`;
+}
+
+function invalidJsonMessage(path: string, response: Response) {
+  if (response.ok) {
+    return `The dashboard backend returned an invalid JSON response for ${path}.`;
+  }
+
+  return `The dashboard backend returned a non-JSON error response for ${path} (${response.status} ${response.statusText || 'HTTP error'}).`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const sessionId = authSessionStore.get();
   const response = await fetch(`${apiBaseUrl}${path}`, {
@@ -28,7 +44,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers
     }
   });
-  const payload = (await response.json()) as ApiResponse<T>;
+  const responseText = await response.text();
+  if (responseText.trim() === '') {
+    throw new ApiClientError(response.ok ? 'EMPTY_RESPONSE' : String(response.status), emptyResponseMessage(path, response));
+  }
+
+  let payload: ApiResponse<T>;
+  try {
+    payload = JSON.parse(responseText) as ApiResponse<T>;
+  } catch {
+    throw new ApiClientError(response.ok ? 'INVALID_JSON' : String(response.status), invalidJsonMessage(path, response));
+  }
+
   if (!response.ok || !payload.success) {
     if (payload.code === 'AUTH_ERROR') {
       authSessionStore.clear();

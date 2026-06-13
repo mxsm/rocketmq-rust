@@ -22,6 +22,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use md5::Digest;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 
 use super::hash_function::HashFunction;
 use super::node::Node;
@@ -114,6 +116,12 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
         Self::new_with_hash_function(physical_nodes, virtual_node_count, Arc::new(MD5Hash::new()))
     }
 
+    /// Create a new consistent hash router and return a typed error when the configuration is
+    /// invalid.
+    pub fn try_new(physical_nodes: Vec<T>, virtual_node_count: i32) -> RocketMQResult<Self> {
+        Self::try_new_with_hash_function(physical_nodes, virtual_node_count, Arc::new(MD5Hash::new()))
+    }
+
     /// Create a new consistent hash router with a custom hash function
     ///
     /// # Arguments
@@ -124,13 +132,22 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
     /// # Returns
     /// A new ConsistentHashRouter instance
     ///
-    /// # Panics
-    /// Panics if `virtual_node_count` is negative
+    /// # Invalid configuration
+    /// This method returns an empty router when `virtual_node_count` is negative. Use
+    /// [`Self::try_new_with_hash_function`] when invalid configuration must be reported to the
+    /// caller.
     pub fn new_with_hash_function(
         physical_nodes: Vec<T>,
         virtual_node_count: i32,
         hash_function: Arc<dyn HashFunction>,
     ) -> Self {
+        if virtual_node_count < 0 {
+            return Self {
+                ring: BTreeMap::new(),
+                hash_function,
+            };
+        }
+
         let mut router = Self {
             ring: BTreeMap::new(),
             hash_function,
@@ -143,6 +160,31 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
         router
     }
 
+    /// Create a new consistent hash router with a custom hash function and return a typed error
+    /// when `virtual_node_count` is negative.
+    pub fn try_new_with_hash_function(
+        physical_nodes: Vec<T>,
+        virtual_node_count: i32,
+        hash_function: Arc<dyn HashFunction>,
+    ) -> RocketMQResult<Self> {
+        if virtual_node_count < 0 {
+            return Err(RocketMQError::illegal_argument(format!(
+                "illegal virtual node counts: {virtual_node_count}"
+            )));
+        }
+
+        let mut router = Self {
+            ring: BTreeMap::new(),
+            hash_function,
+        };
+
+        for node in physical_nodes {
+            router.try_add_node(node, virtual_node_count)?;
+        }
+
+        Ok(router)
+    }
+
     /// Add a physical node to the hash ring with virtual nodes
     ///
     /// # Arguments
@@ -150,8 +192,9 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
     /// * `virtual_node_count` - The number of virtual nodes for this physical node. Value should be
     ///   greater than or equal to 0
     ///
-    /// # Panics
-    /// Panics if `virtual_node_count` is negative
+    /// # Invalid configuration
+    /// This method is a no-op when `virtual_node_count` is negative. Use [`Self::try_add_node`]
+    /// when invalid configuration must be reported to the caller.
     ///
     /// # Example
     /// ```
@@ -176,8 +219,16 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
     /// router.add_node(node, 100);
     /// ```
     pub fn add_node(&mut self, physical_node: T, virtual_node_count: i32) {
+        let _ = self.try_add_node(physical_node, virtual_node_count);
+    }
+
+    /// Add a physical node to the hash ring, returning a typed error when `virtual_node_count` is
+    /// negative.
+    pub fn try_add_node(&mut self, physical_node: T, virtual_node_count: i32) -> RocketMQResult<()> {
         if virtual_node_count < 0 {
-            panic!("illegal virtual node counts: {}", virtual_node_count);
+            return Err(RocketMQError::illegal_argument(format!(
+                "illegal virtual node counts: {virtual_node_count}"
+            )));
         }
 
         let existing_replicas = self.get_existing_replicas(&physical_node);
@@ -186,6 +237,8 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
             let hash = self.hash_function.hash(virtual_node.get_key());
             self.ring.insert(hash, virtual_node);
         }
+
+        Ok(())
     }
 
     /// Remove a physical node from the hash ring
@@ -264,7 +317,7 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
     /// let node = router.route_node("my-key");
     /// assert!(node.is_some());
     /// ```
-    pub fn route_node(&self, object_key: &str) -> Option<T> {
+    pub fn route_node_ref(&self, object_key: &str) -> Option<&T> {
         if self.ring.is_empty() {
             return None;
         }
@@ -279,7 +332,11 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
             .or_else(|| self.ring.iter().next())
             .map(|(_, vnode)| vnode)?;
 
-        Some(virtual_node.physical_node().clone())
+        Some(virtual_node.physical_node())
+    }
+
+    pub fn route_node(&self, object_key: &str) -> Option<T> {
+        self.route_node_ref(object_key).cloned()
     }
 
     /// Get the number of existing virtual nodes for a physical node
@@ -412,10 +469,37 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "illegal virtual node counts")]
-    fn test_add_node_negative_count() {
+    fn test_add_node_negative_count_is_noop_without_panic() {
         let mut router = ConsistentHashRouter::new(vec![], 0);
         router.add_node(TestNode::new("node1"), -1);
+        assert!(router.is_empty());
+    }
+
+    #[test]
+    fn test_try_add_node_negative_count_returns_error() {
+        let mut router = ConsistentHashRouter::new(vec![], 0);
+        let error = router
+            .try_add_node(TestNode::new("node1"), -1)
+            .expect_err("negative virtual node count should error");
+
+        assert!(error.to_string().contains("illegal virtual node counts: -1"));
+        assert!(router.is_empty());
+    }
+
+    #[test]
+    fn test_try_new_negative_count_returns_error() {
+        let Err(error) = ConsistentHashRouter::try_new(vec![TestNode::new("node1")], -1) else {
+            panic!("negative virtual node count should error");
+        };
+
+        assert!(error.to_string().contains("illegal virtual node counts: -1"));
+    }
+
+    #[test]
+    fn test_new_negative_count_is_empty_without_panic() {
+        let router = ConsistentHashRouter::new(vec![TestNode::new("node1")], -1);
+
+        assert!(router.is_empty());
     }
 
     #[test]
@@ -455,6 +539,18 @@ mod tests {
         let node1 = router.route_node(key).unwrap();
         let node2 = router.route_node(key).unwrap();
         assert_eq!(node1.get_key(), node2.get_key());
+    }
+
+    #[test]
+    fn test_route_node_ref_matches_owned_route() {
+        let nodes = vec![TestNode::new("node1"), TestNode::new("node2"), TestNode::new("node3")];
+        let router = ConsistentHashRouter::new(nodes, 10);
+
+        let key = "borrowed-route-key";
+        let routed_ref = router.route_node_ref(key).unwrap();
+        let routed_owned = router.route_node(key).unwrap();
+
+        assert_eq!(routed_ref.get_key(), routed_owned.get_key());
     }
 
     #[test]

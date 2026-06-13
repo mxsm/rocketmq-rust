@@ -13,9 +13,17 @@
 // limitations under the License.
 
 mod controllable_offset;
-pub(crate) mod local_file_offset_store;
+pub mod local_file_offset_store;
 mod offset_serialize;
 mod offset_serialize_wrapper;
-pub(crate) mod offset_store;
-pub(crate) mod read_offset_type;
-pub(crate) mod remote_broker_offset_store;
+pub mod offset_store;
+pub mod read_offset_type;
+pub mod remote_broker_offset_store;
+
+pub use controllable_offset::ControllableOffset;
+pub use local_file_offset_store::LocalFileOffsetStore;
+pub use offset_serialize::OffsetSerialize;
+pub use offset_serialize_wrapper::OffsetSerializeWrapper;
+pub use offset_store::OffsetStore;
+pub use read_offset_type::ReadOffsetType;
+pub use remote_broker_offset_store::RemoteBrokerOffsetStore;

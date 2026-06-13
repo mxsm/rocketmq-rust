@@ -37,8 +37,8 @@ use super::client_config_validation::ClientConfigValidator;
 ///     .instance_name("my_producer")
 ///     .enable_tls(true)
 ///     .poll_name_server_interval(60_000)
-///     .build()
-///     .unwrap();
+///     .build()?;
+/// # Ok::<(), rocketmq_error::RocketMQError>(())
 /// ```
 pub struct ClientConfigBuilder {
     config: ClientConfig,

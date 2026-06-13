@@ -196,11 +196,13 @@ impl AttributeUtil {
             return Err(AttributeError::KvStringFormatWrong);
         }
 
-        let prefix = key.chars().next().unwrap();
-        if prefix != '+' && prefix != '-' {
+        let Some(real_key) = key.strip_prefix('+').or_else(|| key.strip_prefix('-')) else {
             return Err(AttributeError::WrongFormatKey(key.to_string()));
+        };
+        if real_key.is_empty() {
+            return Err(AttributeError::KvStringFormatWrong);
         }
-        Ok(key[1..].to_string().into())
+        Ok(real_key.to_string().into())
     }
 }
 

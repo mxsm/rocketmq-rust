@@ -127,7 +127,15 @@ export default function ProducerListPage() {
           <span>
             <strong>*</strong> TOPIC
           </span>
-          <SelectMenu value={topic} options={topicOptions(topics, topic)} onChange={setTopic} ariaLabel="Select topic for producer query" className="producer-topic-select" />
+          <SelectMenu
+            value={topic}
+            options={topicOptions(topics, topic)}
+            onChange={setTopic}
+            ariaLabel="Select topic for producer query"
+            className="producer-topic-select"
+            searchable
+            searchPlaceholder="Search topics"
+          />
         </label>
         <label className="producer-query-field producer-group-field">
           <span>

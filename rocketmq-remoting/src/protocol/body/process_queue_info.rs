@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Debug, Clone, Copy)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessQueueInfo {
-    pub commit_offset: u64,
+    pub commit_offset: i64,
     pub cached_msg_min_offset: u64,
     pub cached_msg_max_offset: u64,
     pub cached_msg_count: u32,

@@ -53,6 +53,14 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 fn bench_signature(c: &mut Criterion) {
     let mut group = c.benchmark_group("auth_signature");
     let content = b"aliceTopicAqueueId0clientIdCID-123body-bytes";
+    let content_segments: [&[u8]; 6] = [
+        b"alice".as_slice(),
+        b"TopicA".as_slice(),
+        b"queueId0".as_slice(),
+        b"clientId".as_slice(),
+        b"CID-123".as_slice(),
+        b"body-bytes".as_slice(),
+    ];
     let secret = "benchmark-secret";
 
     for algorithm in [
@@ -61,7 +69,7 @@ fn bench_signature(c: &mut Criterion) {
         SignatureAlgorithm::HmacMd5,
     ] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(algorithm.java_name()),
+            BenchmarkId::new(algorithm.java_name(), "contiguous"),
             &algorithm,
             |b, algorithm| {
                 b.iter(|| {
@@ -71,6 +79,20 @@ fn bench_signature(c: &mut Criterion) {
                         black_box(*algorithm),
                     )
                     .expect("benchmark signature should calculate")
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new(algorithm.java_name(), "segmented"),
+            &algorithm,
+            |b, algorithm| {
+                b.iter(|| {
+                    acl_signer::cal_signature_segments_with_algorithm(
+                        black_box(content_segments),
+                        black_box(secret),
+                        black_box(*algorithm),
+                    )
+                    .expect("benchmark segmented signature should calculate")
                 })
             },
         );

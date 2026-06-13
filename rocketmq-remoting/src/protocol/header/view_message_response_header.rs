@@ -17,4 +17,4 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default)]
-pub struct ViewMessageResponseHeader;
+pub struct ViewMessageResponseHeader {}

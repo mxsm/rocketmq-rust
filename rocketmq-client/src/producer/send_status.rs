@@ -82,6 +82,17 @@ impl<'de> Deserialize<'de> for SendStatus {
     }
 }
 
+impl fmt::Display for SendStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SendStatus::SendOk => "SEND_OK",
+            SendStatus::FlushDiskTimeout => "FLUSH_DISK_TIMEOUT",
+            SendStatus::FlushSlaveTimeout => "FLUSH_SLAVE_TIMEOUT",
+            SendStatus::SlaveNotAvailable => "SLAVE_NOT_AVAILABLE",
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +146,14 @@ mod tests {
             let serialized = serde_json::to_string(&original).unwrap();
             let deserialized: SendStatus = serde_json::from_str(&serialized).unwrap();
             assert_eq!(original, deserialized);
+        }
+    }
+
+    #[test]
+    fn send_status_display_matches_java_enum_name() {
+        for (&status, &expected_json) in ALL_SEND_STATUS.iter().zip(ALL_SEND_STATUS_SERIALIZED.iter()) {
+            let expected = expected_json.trim_matches('"');
+            assert_eq!(status.to_string(), expected);
         }
     }
 }

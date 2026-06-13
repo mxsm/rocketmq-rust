@@ -274,9 +274,16 @@ impl RocketMQSerializable {
         header_buffer: &mut BytesMut,
         header_len: usize,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        const FIXED_HEADER_LEN: usize = 13;
+        const LENGTH_FIELD_LEN: usize = 4;
+
+        if header_buffer.remaining() < FIXED_HEADER_LEN {
+            return Err(RocketmqError::DecodingError(FIXED_HEADER_LEN, header_buffer.remaining()).into());
+        }
+
         let cmd = RemotingCommand::default()
             .set_code(header_buffer.get_i16())
-            .set_language(LanguageCode::value_of(header_buffer.get_u8()).unwrap())
+            .set_language(LanguageCode::from(header_buffer.get_u8()))
             .set_version(header_buffer.get_i16() as i32)
             .set_opaque(header_buffer.get_i32())
             .set_flag(header_buffer.get_i32());
@@ -284,10 +291,18 @@ impl RocketMQSerializable {
         let remark = Self::read_str(header_buffer, false, header_len)?;
 
         // HashMap<String, String> extFields
-        let ext_fields_length = header_buffer.get_i32() as usize;
+        if header_buffer.remaining() < LENGTH_FIELD_LEN {
+            return Err(RocketmqError::DecodingError(LENGTH_FIELD_LEN, header_buffer.remaining()).into());
+        }
+
+        let ext_fields_length = header_buffer.get_i32();
         let ext = if ext_fields_length > 0 {
+            let ext_fields_length = ext_fields_length as usize;
             if ext_fields_length > header_len {
                 return Err(RocketmqError::DecodingError(ext_fields_length, header_len).into());
+            }
+            if ext_fields_length > header_buffer.remaining() {
+                return Err(RocketmqError::DecodingError(ext_fields_length, header_buffer.remaining()).into());
             }
             Self::map_deserialize(header_buffer, ext_fields_length)?
         } else {
@@ -305,6 +320,9 @@ impl RocketMQSerializable {
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
         if len == 0 {
             return Ok(HashMap::new());
+        }
+        if len > buffer.remaining() {
+            return Err(RocketmqError::DecodingError(len, buffer.remaining()).into());
         }
 
         // Pre-allocate HashMap with estimated capacity (assume ~50 bytes per entry)
@@ -329,9 +347,21 @@ impl RocketMQSerializable {
 
 #[cfg(test)]
 mod tests {
+    use bytes::BufMut;
     use bytes::BytesMut;
 
     use super::*;
+
+    fn minimal_header_without_ext_len() -> BytesMut {
+        let mut buf = BytesMut::new();
+        buf.put_i16(0);
+        buf.put_u8(LanguageCode::JAVA.get_code());
+        buf.put_i16(0);
+        buf.put_i32(0);
+        buf.put_i32(0);
+        buf.put_i32(0);
+        buf
+    }
 
     #[test]
     fn write_str_short_length() {
@@ -400,5 +430,32 @@ mod tests {
         let mut buf = BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 5, 118, 97, 108, 117, 101][..]);
         let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 14).unwrap();
         assert_eq!(deserialized, [("key".into(), "value".into())].iter().cloned().collect());
+    }
+
+    #[test]
+    fn rocketmq_protocol_decode_rejects_short_fixed_header_without_panic() {
+        let mut buf = BytesMut::from(&[0_u8; 12][..]);
+        if RocketMQSerializable::rocket_mq_protocol_decode(&mut buf, 12).is_ok() {
+            panic!("short fixed header should decode to error");
+        }
+    }
+
+    #[test]
+    fn rocketmq_protocol_decode_rejects_missing_ext_length_without_panic() {
+        let mut buf = minimal_header_without_ext_len();
+        let header_len = buf.len();
+        if RocketMQSerializable::rocket_mq_protocol_decode(&mut buf, header_len).is_ok() {
+            panic!("missing ext length should decode to error");
+        }
+    }
+
+    #[test]
+    fn rocketmq_protocol_decode_rejects_truncated_ext_fields_without_panic() {
+        let mut buf = minimal_header_without_ext_len();
+        buf.put_i32(10);
+        let header_len = buf.len();
+        if RocketMQSerializable::rocket_mq_protocol_decode(&mut buf, header_len).is_ok() {
+            panic!("truncated ext fields should decode to error");
+        }
     }
 }

@@ -18,6 +18,7 @@ use std::sync::atomic::Ordering;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 
@@ -31,10 +32,14 @@ impl From<OffsetSerializeWrapper> for OffsetSerialize {
     fn from(wrapper: OffsetSerializeWrapper) -> Self {
         let mut offset_table = HashMap::new();
         for (k, v) in wrapper.offset_table {
-            let result = k
-                .serialize_json()
-                .expect("OffsetSerialize::from OffsetSerializeWrapper");
-            offset_table.insert(result, v.load(Ordering::Relaxed));
+            match k.serialize_json() {
+                Ok(result) => {
+                    offset_table.insert(result, v.load(Ordering::Relaxed));
+                }
+                Err(err) => {
+                    warn!("skip offset entry because message queue serialization failed: {err}");
+                }
+            }
         }
         OffsetSerialize { offset_table }
     }

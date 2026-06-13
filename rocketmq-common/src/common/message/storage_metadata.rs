@@ -179,7 +179,7 @@ impl Default for StorageMetadata {
             queue_offset: 0,
             commit_log_offset: 0,
             store_timestamp: 0,
-            store_host: "127.0.0.1:10911".parse().unwrap(),
+            store_host: SocketAddr::from(([127, 0, 0, 1], 10911)),
             store_size: 0,
         }
     }

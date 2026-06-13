@@ -43,7 +43,7 @@ struct BatchMetadata {
 ///
 /// - All messages must have the same topic
 /// - All messages must have the same `wait_store_msg_ok` property
-/// - Delayed messages (delay_time_level > 0) are not supported
+/// - Delayed messages are not supported
 /// - Retry topics are not supported
 ///
 /// # Examples
@@ -75,6 +75,14 @@ pub struct MessageBatchV2 {
 }
 
 impl MessageBatchV2 {
+    #[inline]
+    fn has_delay_property(message: &Message) -> bool {
+        message.delay_time_level() > 0
+            || message.properties().delay_time_ms().unwrap_or(0) > 0
+            || message.properties().delay_time_sec().unwrap_or(0) > 0
+            || message.properties().deliver_time_ms().unwrap_or(0) > 0
+    }
+
     /// Creates a batch message
     ///
     /// # Errors
@@ -105,9 +113,9 @@ impl MessageBatchV2 {
     fn validate_batch_messages(messages: &[Message], first: &Message) -> RocketMQResult<()> {
         for message in messages {
             // Delayed messages not supported
-            if message.delay_time_level() > 0 {
+            if Self::has_delay_property(message) {
                 return Err(RocketMQError::illegal_argument(
-                    "TimeDelayLevel is not supported for batching",
+                    "Delayed messages are not supported for batching",
                 ));
             }
 
@@ -270,7 +278,52 @@ mod tests {
         let result = MessageBatchV2::new(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("TimeDelayLevel"));
+        assert!(err.to_string().contains("Delayed messages"));
+    }
+
+    #[test]
+    fn test_batch_delay_millis_message_error_matches_java() {
+        let msg1 = create_test_message("topic1");
+        let msg2 = Message::builder()
+            .topic("topic1")
+            .body_slice(b"test body")
+            .delay_millis(1000)
+            .build_unchecked();
+
+        let result = MessageBatchV2::new(vec![msg1, msg2]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Delayed messages"));
+    }
+
+    #[test]
+    fn test_batch_delay_secs_message_error_matches_java() {
+        let msg1 = create_test_message("topic1");
+        let msg2 = Message::builder()
+            .topic("topic1")
+            .body_slice(b"test body")
+            .delay_secs(1)
+            .build_unchecked();
+
+        let result = MessageBatchV2::new(vec![msg1, msg2]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Delayed messages"));
+    }
+
+    #[test]
+    fn test_batch_deliver_time_message_error_matches_java() {
+        let msg1 = create_test_message("topic1");
+        let msg2 = Message::builder()
+            .topic("topic1")
+            .body_slice(b"test body")
+            .deliver_time_ms(1000)
+            .build_unchecked();
+
+        let result = MessageBatchV2::new(vec![msg1, msg2]);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Delayed messages"));
     }
 
     #[test]

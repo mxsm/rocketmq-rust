@@ -5925,6 +5925,7 @@ accounts:
 
         let search_header = SearchOffsetRequestHeader {
             topic: topic.clone(),
+            lite_topic: None,
             queue_id: 0,
             timestamp: 0,
             boundary_type: BoundaryType::Lower,

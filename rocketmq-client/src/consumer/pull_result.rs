@@ -77,12 +77,27 @@ impl std::fmt::Display for PullResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PullResult [pull_status: {:?}, next_begin_offset: {}, min_offset: {}, max_offset: {}, msg_found_list: {}]",
+            "PullResult [pullStatus={}, nextBeginOffset={}, minOffset={}, maxOffset={}, msgFoundList={}]",
             self.pull_status,
             self.next_begin_offset,
             self.min_offset,
             self.max_offset,
             self.msg_found_list.as_ref().map_or(0, |v| v.len()),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pull_result_display_matches_java_to_string_shape() {
+        let pull_result = PullResult::new(PullStatus::NoNewMsg, 12, 3, 45, None);
+
+        assert_eq!(
+            pull_result.to_string(),
+            "PullResult [pullStatus=NO_NEW_MSG, nextBeginOffset=12, minOffset=3, maxOffset=45, msgFoundList=0]"
+        );
     }
 }

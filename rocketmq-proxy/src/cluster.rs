@@ -35,7 +35,6 @@ use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
 use rocketmq_client_rust::implementation::mq_client_manager::MQClientManager;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -934,7 +933,7 @@ async fn query_assignment_inner(
     let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
         name: topic_name.clone(),
     })?;
-    let mut api = client.get_mq_client_api_impl();
+    let mut api = client.get_mq_client_api_impl()?;
     let assignments = api
         .query_assignment(
             &broker_addr,
@@ -1252,7 +1251,7 @@ async fn forward_message_to_dead_letter_queue_inner(
     client
         .consumer_send_message_back(
             broker_addr.as_str(),
-            actual_broker_name.as_str(),
+            Some(actual_broker_name.as_str()),
             &message,
             group_name.as_str(),
             -1,
@@ -1408,7 +1407,7 @@ async fn fetch_topic_route(
     }
 
     let route = client
-        .get_mq_client_api_impl()
+        .get_mq_client_api_impl()?
         .get_topic_route_info_from_name_server(topic_name, config.mq_client_api_timeout_ms)
         .await?
         .ok_or_else(|| RocketMQError::route_not_found(topic_name.to_owned()))?;
@@ -1635,7 +1634,7 @@ async fn pop_message(
 ) -> ProxyResult<PopResult> {
     let (sender, receiver) = oneshot::channel();
     client
-        .get_mq_client_api_impl()
+        .get_mq_client_api_impl()?
         .pop_message_async(
             broker_name,
             broker_addr,
@@ -1704,6 +1703,10 @@ async fn ack_message_entry_inner(
         queue_id: parsed.queue_id,
         extra_info: parsed.raw.clone(),
         offset: parsed.queue_offset,
+        lite_topic: entry
+            .lite_topic
+            .as_ref()
+            .map(|topic| CheetahString::from(topic.as_str())),
         topic_request_header: Some(TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {
                 broker_name: Some(parsed.broker_name.clone()),
@@ -1724,7 +1727,7 @@ async fn ack_message(
 ) -> ProxyResult<AckResult> {
     let (sender, receiver) = oneshot::channel();
     client
-        .get_mq_client_api_impl()
+        .get_mq_client_api_impl()?
         .ack_message_async(broker_addr, request_header, timeout_ms, AckResultCallback::new(sender))
         .await?;
 
@@ -1760,6 +1763,11 @@ async fn change_invisible_duration_inner(
         extra_info: parsed.raw.clone(),
         offset: parsed.queue_offset,
         invisible_time: request.invisible_duration.as_millis().clamp(1, i64::MAX as u128) as i64,
+        lite_topic: request
+            .lite_topic
+            .as_ref()
+            .map(|topic| CheetahString::from(topic.as_str())),
+        suspend: request.suspend.unwrap_or(false),
         topic_request_header: Some(TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {
                 broker_name: Some(parsed.broker_name.clone()),
@@ -1786,7 +1794,7 @@ async fn change_invisible_time(
 ) -> ProxyResult<AckResult> {
     let (sender, receiver) = oneshot::channel();
     client
-        .get_mq_client_api_impl()
+        .get_mq_client_api_impl()?
         .change_invisible_time_async(
             broker_name,
             broker_addr,
@@ -1822,6 +1830,8 @@ async fn end_transaction_inner(
     let transaction_state_table_offset = request
         .transaction_state_table_offset
         .ok_or_else(|| ProxyError::invalid_transaction_id("missing transactional message offset for endTransaction"))?;
+    let transaction_state_table_offset = i64::try_from(transaction_state_table_offset)
+        .map_err(|_| ProxyError::invalid_transaction_id("transaction state table offset exceeds Java long range"))?;
     let broker_message_id = decode_end_transaction_message_id(
         request
             .commit_log_message_id
@@ -1832,7 +1842,7 @@ async fn end_transaction_inner(
         topic: CheetahString::from(topic_name),
         producer_group: CheetahString::from(producer_group),
         tran_state_table_offset: transaction_state_table_offset,
-        commit_log_offset: broker_message_id.offset as u64,
+        commit_log_offset: broker_message_id.offset,
         commit_or_rollback: transaction_resolution_flag(request.resolution),
         from_transaction_check: matches!(request.source, TransactionSource::ServerCheck),
         msg_id: CheetahString::from(request.message_id.as_str()),
@@ -1841,7 +1851,7 @@ async fn end_transaction_inner(
     };
 
     client
-        .get_mq_client_api_impl()
+        .get_mq_client_api_impl()?
         .end_transaction_oneway(
             &broker_addr,
             request_header,
@@ -1883,6 +1893,7 @@ fn build_pull_request_header(broker_name: &CheetahString, request: &PullMessageR
     PullMessageRequestHeader {
         consumer_group: CheetahString::from(request.group.to_string()),
         topic: CheetahString::from(request.target.topic.to_string()),
+        lite_topic: None,
         queue_id: request.target.queue_id,
         queue_offset: request.offset,
         max_msg_nums: request.batch_size.min(i32::MAX as u32) as i32,
@@ -2312,6 +2323,7 @@ fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessa
         TopicMessageType::Transaction => ProxyTopicMessageType::Transaction,
         TopicMessageType::Mixed => ProxyTopicMessageType::Mixed,
         TopicMessageType::Lite => ProxyTopicMessageType::Lite,
+        TopicMessageType::Priority => ProxyTopicMessageType::Priority,
     }
 }
 
@@ -2406,6 +2418,10 @@ mod tests {
         assert_eq!(
             convert_topic_message_type(TopicMessageType::Lite),
             ProxyTopicMessageType::Lite
+        );
+        assert_eq!(
+            convert_topic_message_type(TopicMessageType::Priority),
+            ProxyTopicMessageType::Priority
         );
     }
 

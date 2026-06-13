@@ -199,7 +199,7 @@ impl MessageExtBrokerInner {
 
     #[inline]
     pub fn body_len(&self) -> usize {
-        self.message_ext_inner.message.get_body().unwrap().len()
+        self.message_ext_inner.message.body_slice().len()
     }
 }
 
@@ -422,5 +422,12 @@ mod tests {
 
         let decoded = string_to_message_properties(Some(&CheetahString::from(message.properties_string())));
         assert_eq!(decoded.get("k").map(CheetahString::as_str), Some("v"));
+    }
+
+    #[test]
+    fn message_ext_broker_inner_body_len_returns_zero_for_empty_body() {
+        let message = MessageExtBrokerInner::default();
+
+        assert_eq!(message.body_len(), 0);
     }
 }

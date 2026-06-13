@@ -27,6 +27,8 @@ pub struct SearchOffsetRequestHeader {
     #[required]
     pub topic: CheetahString,
 
+    pub lite_topic: Option<CheetahString>,
+
     #[required]
     pub queue_id: i32,
 
@@ -130,11 +132,14 @@ impl TopicRequestHeaderTrait for SearchOffsetRequestHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn search_offset_request_header_default() {
         let header = SearchOffsetRequestHeader::default();
         assert_eq!(header.topic, CheetahString::default());
+        assert!(header.lite_topic.is_none());
         assert_eq!(header.queue_id, 0);
         assert_eq!(header.timestamp, 0);
         assert_eq!(header.boundary_type, BoundaryType::Lower);
@@ -144,6 +149,7 @@ mod tests {
     fn search_offset_request_header_creation() {
         let header = SearchOffsetRequestHeader {
             topic: CheetahString::from("test_topic"),
+            lite_topic: None,
             queue_id: 1,
             timestamp: 1702345678000,
             boundary_type: BoundaryType::Upper,
@@ -151,15 +157,37 @@ mod tests {
         };
 
         assert_eq!(header.topic, CheetahString::from("test_topic"));
+        assert!(header.lite_topic.is_none());
         assert_eq!(header.queue_id, 1);
         assert_eq!(header.timestamp, 1702345678000);
         assert_eq!(header.boundary_type, BoundaryType::Upper);
     }
 
     #[test]
+    fn search_offset_request_header_maps_lite_topic_like_java_fast_header() {
+        let header = SearchOffsetRequestHeader {
+            topic: CheetahString::from("parent_topic"),
+            lite_topic: Some(CheetahString::from("lite_topic")),
+            queue_id: 2,
+            timestamp: 1702345678999,
+            boundary_type: BoundaryType::Upper,
+            topic_request_header: None,
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(map.get("topic").map(|value| value.as_str()), Some("parent_topic"));
+        assert_eq!(map.get("liteTopic").map(|value| value.as_str()), Some("lite_topic"));
+
+        let decoded = <SearchOffsetRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(decoded.topic, "parent_topic");
+        assert_eq!(decoded.lite_topic.as_deref(), Some("lite_topic"));
+    }
+
+    #[test]
     fn search_offset_request_header_serializes_to_json() {
         let header = SearchOffsetRequestHeader {
             topic: CheetahString::from("my_topic"),
+            lite_topic: Some(CheetahString::from("my_lite_topic")),
             queue_id: 2,
             timestamp: 1702345678999,
             boundary_type: BoundaryType::Upper,
@@ -170,6 +198,7 @@ mod tests {
 
         // Verify camelCase field names and uppercase enum
         assert!(json.contains(r#""topic":"my_topic""#));
+        assert!(json.contains(r#""liteTopic":"my_lite_topic""#));
         assert!(json.contains(r#""queueId":2"#));
         assert!(json.contains(r#""timestamp":1702345678999"#));
         assert!(json.contains(r#""boundaryType":"UPPER""#));
@@ -239,6 +268,7 @@ mod tests {
     fn search_offset_request_header_roundtrip_serialization() {
         let original = SearchOffsetRequestHeader {
             topic: CheetahString::from("roundtrip_topic"),
+            lite_topic: Some(CheetahString::from("roundtrip_lite_topic")),
             queue_id: 10,
             timestamp: 1702400000000,
             boundary_type: BoundaryType::Upper,
@@ -249,6 +279,7 @@ mod tests {
         let deserialized: SearchOffsetRequestHeader = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.topic, original.topic);
+        assert_eq!(deserialized.lite_topic, original.lite_topic);
         assert_eq!(deserialized.queue_id, original.queue_id);
         assert_eq!(deserialized.timestamp, original.timestamp);
         assert_eq!(deserialized.boundary_type, original.boundary_type);
@@ -258,6 +289,7 @@ mod tests {
     fn search_offset_request_header_with_negative_queue_id() {
         let header = SearchOffsetRequestHeader {
             topic: CheetahString::from("test"),
+            lite_topic: None,
             queue_id: -1,
             timestamp: 1000,
             boundary_type: BoundaryType::Lower,
@@ -271,6 +303,7 @@ mod tests {
     fn search_offset_request_header_with_empty_topic() {
         let header = SearchOffsetRequestHeader {
             topic: CheetahString::new(),
+            lite_topic: None,
             queue_id: 0,
             timestamp: 0,
             boundary_type: BoundaryType::Lower,
@@ -284,6 +317,7 @@ mod tests {
     fn search_offset_request_header_with_large_timestamp() {
         let header = SearchOffsetRequestHeader {
             topic: CheetahString::from("test"),
+            lite_topic: None,
             queue_id: 0,
             timestamp: i64::MAX,
             boundary_type: BoundaryType::Upper,
@@ -331,6 +365,7 @@ mod tests {
     fn topic_request_header_trait_lo_with_some_topic_request_header() {
         let mut header = SearchOffsetRequestHeader {
             topic: CheetahString::from("test"),
+            lite_topic: None,
             queue_id: 0,
             timestamp: 0,
             boundary_type: BoundaryType::Lower,

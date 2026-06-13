@@ -26,6 +26,7 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
+use crate::authorization::strategy::block_on_base_authorization;
 use crate::config::AuthConfig;
 
 /// Stateless authorization strategy.
@@ -134,8 +135,7 @@ impl AuthorizationStrategy for StatelessAuthorizationStrategy {
             context.subject().map(|s| s.subject_key())
         );
 
-        // Use async runtime to execute the async do_evaluate method
-        tokio::runtime::Handle::current().block_on(self.base.do_evaluate(context))
+        block_on_base_authorization(&self.base, context)
     }
 }
 
@@ -211,5 +211,20 @@ mod tests {
 
         let result = strategy.evaluate(&context);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn evaluate_inside_current_thread_runtime_without_nested_block_on_panic() {
+        let config = create_test_config();
+        let strategy = StatelessAuthorizationStrategy::new(config, None).unwrap();
+        let context = DefaultAuthorizationContext::default();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            assert!(strategy.evaluate(&context).is_ok());
+        });
     }
 }

@@ -22,6 +22,7 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -99,7 +100,9 @@ impl ServiceThreadTokio {
             if interrupt {
                 thread.abort();
             } else {
-                thread.await.expect("Failed to join service thread");
+                if let Err(err) = thread.await {
+                    error!("Failed to join service thread {}: {}", self.name, err);
+                }
             }
         } else {
             warn!("Service thread not started: {}", self.name);

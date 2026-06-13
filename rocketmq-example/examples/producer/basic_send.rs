@@ -22,7 +22,6 @@
 //! - `send_oneway`: One-way send (fire and forget, no response)
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQResult;

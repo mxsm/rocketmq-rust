@@ -193,8 +193,8 @@ where
                         msg_inner.message_ext_inner.sys_flag,
                         request_header.commit_or_rollback,
                     );
-                    msg_inner.message_ext_inner.queue_offset = request_header.tran_state_table_offset as i64;
-                    msg_inner.message_ext_inner.prepared_transaction_offset = request_header.commit_log_offset as i64;
+                    msg_inner.message_ext_inner.queue_offset = request_header.tran_state_table_offset;
+                    msg_inner.message_ext_inner.prepared_transaction_offset = request_header.commit_log_offset;
                     msg_inner.message_ext_inner.store_timestamp =
                         result.prepare_message.as_ref().unwrap().store_timestamp;
                     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_TRANSACTION_PREPARED);
@@ -334,12 +334,12 @@ where
                     return command;
                 }
             }
-            if message_ext.queue_offset != request_header.tran_state_table_offset as i64 {
+            if message_ext.queue_offset != request_header.tran_state_table_offset {
                 command.set_code_mut(ResponseCode::SystemError);
                 command.set_remark_mut("The transaction state table offset wrong");
                 return command;
             }
-            if message_ext.commit_log_offset != request_header.commit_log_offset as i64 {
+            if message_ext.commit_log_offset != request_header.commit_log_offset {
                 command.set_code_mut(ResponseCode::SystemError);
                 command.set_remark_mut("The commit log offset wrong");
                 return command;

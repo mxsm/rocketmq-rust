@@ -26,10 +26,30 @@ use crate::implementation::communication_mode::CommunicationMode;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::send_result::SendResult;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SendMessageTraceSnapshot {
+    pub topic: CheetahString,
+    pub tags: CheetahString,
+    pub keys: CheetahString,
+    pub body_length: i32,
+}
+
+impl SendMessageTraceSnapshot {
+    pub fn from_message(message: &(dyn MessageTrait + Send + Sync)) -> Self {
+        Self {
+            topic: message.topic().clone(),
+            tags: message.tags().unwrap_or_default(),
+            keys: message.get_keys().unwrap_or_default(),
+            body_length: message.get_body().map_or(0, |body| body.len() as i32),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SendMessageContext<'a> {
     pub producer_group: Option<CheetahString>,
     pub message: Option<&'a (dyn MessageTrait + Send + Sync)>,
+    pub message_trace_snapshot: Option<SendMessageTraceSnapshot>,
     pub mq: Option<&'a MessageQueue>,
     pub broker_addr: Option<CheetahString>,
     pub born_host: Option<CheetahString>,
@@ -37,6 +57,7 @@ pub struct SendMessageContext<'a> {
     pub send_result: Option<&'a SendResult>,
     pub exception: Option<Arc<Box<dyn Error + Send + Sync>>>,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
+    pub trace_start_time: Option<u64>,
     pub props: HashMap<CheetahString, CheetahString>,
     pub producer: Option<ArcMut<DefaultMQProducerImpl>>,
     pub msg_type: Option<MessageType>,

@@ -167,7 +167,7 @@ impl TopicConfig {
         sb.push_str(&format!("{}", self.topic_filter_type));
         sb.push_str(Self::SEPARATOR);
         if !self.attributes.is_empty() {
-            sb.push_str(&serde_json::to_string(&self.attributes).unwrap());
+            append_json_string_map(&mut sb, &self.attributes);
         }
         sb.trim().to_string()
     }
@@ -194,6 +194,43 @@ impl TopicConfig {
     pub fn get_read_queue_nums(&self) -> u32 {
         self.read_queue_nums
     }
+}
+
+fn append_json_string_map(output: &mut String, values: &HashMap<CheetahString, CheetahString>) {
+    output.push('{');
+    for (index, (key, value)) in values.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        append_json_string(output, key.as_str());
+        output.push(':');
+        append_json_string(output, value.as_str());
+    }
+    output.push('}');
+}
+
+fn append_json_string(output: &mut String, value: &str) {
+    output.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\u{08}' => output.push_str("\\b"),
+            '\u{0C}' => output.push_str("\\f"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if ch <= '\u{1F}' => {
+                output.push_str("\\u00");
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let byte = ch as u8;
+                output.push(HEX[(byte >> 4) as usize] as char);
+                output.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+            ch => output.push(ch),
+        }
+    }
+    output.push('"');
 }
 
 #[cfg(test)]
@@ -271,6 +308,26 @@ mod tests {
         };
         let encoded = config.encode();
         assert!(encoded.contains("test_topic 8 8 4 SINGLE_TAG {\"key\":\"value\"}"));
+    }
+
+    #[test]
+    fn encode_topic_config_escapes_attribute_json_without_panicking() {
+        let mut attributes = HashMap::new();
+        attributes.insert(CheetahString::from("k\"ey"), CheetahString::from("v\\alue"));
+        let config = TopicConfig {
+            topic_name: Some(CheetahString::from("test_topic")),
+            read_queue_nums: 8,
+            write_queue_nums: 8,
+            perm: PermName::PERM_READ,
+            topic_filter_type: TopicFilterType::SingleTag,
+            topic_sys_flag: 1,
+            order: false,
+            attributes,
+        };
+
+        let encoded = config.encode();
+
+        assert!(encoded.ends_with(r#"{"k\"ey":"v\\alue"}"#));
     }
 
     #[test]

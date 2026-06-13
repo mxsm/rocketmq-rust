@@ -26,6 +26,7 @@ pub use consume_concurrently_context::ConsumeConcurrentlyContext;
 pub use consume_concurrently_status::ConsumeConcurrentlyStatus;
 pub use consume_orderly_context::ConsumeOrderlyContext;
 pub use consume_orderly_status::ConsumeOrderlyStatus;
+pub use message_listener::MessageListener;
 pub use message_listener_concurrently::ArcMessageListenerConcurrently;
 pub use message_listener_concurrently::MessageListenerConcurrently;
 pub use message_listener_orderly::ArcMessageListenerOrderly;

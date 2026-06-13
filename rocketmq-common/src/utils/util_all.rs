@@ -27,6 +27,7 @@ use cheetah_string::CheetahString;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
+use chrono::LocalResult;
 use chrono::NaiveDateTime;
 use chrono::ParseError;
 use chrono::ParseResult;
@@ -39,13 +40,21 @@ use tracing::info;
 
 use crate::common::mix_all::MULTI_PATH_SPLITTER;
 
-pub const YYYY_MM_DD_HH_MM_SS: &str = "%Y-%m-%d %H:%M:%S%";
-pub const YYYY_MM_DD_HH_MM_SS_SSS: &str = "%Y-%m-%d %H:%M:%S%.f";
-pub const YYYYMMDDHHMMSS: &str = "%Y%m%d%H%M%S%";
+pub const YYYY_MM_DD_HH_MM_SS: &str = "%Y-%m-%d %H:%M:%S";
+pub const YYYY_MM_DD_HH_MM_SS_SSS: &str = "%Y-%m-%d#%H:%M:%S:%3f";
+pub const YYYYMMDDHHMMSS: &str = "%Y%m%d%H%M%S";
 
 const HEX_ARRAY: [char; 16] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
 ];
+
+fn local_timestamp_millis_or_epoch(t: i64) -> DateTime<Local> {
+    Local
+        .timestamp_millis_opt(t)
+        .single()
+        .or_else(|| Local.timestamp_millis_opt(0).single())
+        .unwrap_or_else(Local::now)
+}
 
 pub fn compute_elapsed_time_milliseconds(begin_time: Instant) -> u64 {
     let elapsed = begin_time.elapsed();
@@ -78,7 +87,7 @@ pub fn is_it_time_to_do(when: &str) -> bool {
 ///
 /// Formatted date-time string
 pub fn time_millis_to_human_string2(t: i64) -> String {
-    let dt: DateTime<Local> = Local.timestamp_millis_opt(t).unwrap();
+    let dt = local_timestamp_millis_or_epoch(t);
 
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02},{:03}",
@@ -104,7 +113,7 @@ pub fn time_millis_to_human_string2(t: i64) -> String {
 ///
 /// Formatted date-time string
 pub fn time_millis_to_human_string3(t: i64) -> String {
-    let dt: DateTime<Local> = Local.timestamp_millis_opt(t).unwrap();
+    let dt = local_timestamp_millis_or_epoch(t);
 
     format!(
         "{:04}{:02}{:02}{:02}{:02}{:02}",
@@ -129,7 +138,7 @@ pub fn time_millis_to_human_string3(t: i64) -> String {
 ///
 /// Formatted date-time string
 pub fn time_millis_to_human_string(t: i64) -> String {
-    let dt: DateTime<Local> = Local.timestamp_millis_opt(t).unwrap();
+    let dt = local_timestamp_millis_or_epoch(t);
 
     format!(
         "{:04}{:02}{:02}{:02}{:02}{:02}{:03}",
@@ -303,8 +312,9 @@ fn create_dir_if_not_exist(dir_name: &str) {
 
 pub fn compute_next_minutes_time_millis() -> u64 {
     let now = SystemTime::now();
-    let duration_since_epoch = now.duration_since(UNIX_EPOCH).unwrap();
-    let millis_since_epoch = duration_since_epoch.as_millis() as u64;
+    let millis_since_epoch = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64);
 
     let millis_in_minute = 60 * 1000;
     ((millis_since_epoch / millis_in_minute) + 1) * millis_in_minute
@@ -312,11 +322,13 @@ pub fn compute_next_minutes_time_millis() -> u64 {
 
 pub fn compute_next_morning_time_millis() -> u64 {
     let now = Local::now();
-    let tomorrow = now.date_naive().succ_opt().unwrap();
-    let next_morning = Local
-        .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0)
-        .unwrap();
-    next_morning.timestamp_millis() as u64
+    let tomorrow = now.date_naive().succ_opt().unwrap_or_else(|| now.date_naive());
+    let next_morning = match Local.with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0) {
+        LocalResult::Single(value) => value,
+        LocalResult::Ambiguous(earliest, _) => earliest,
+        LocalResult::None => now,
+    };
+    next_morning.timestamp_millis().max(0) as u64
 }
 
 pub fn delete_empty_directory<P: AsRef<Path>>(path: P) {
@@ -379,6 +391,16 @@ pub fn parse_date(date: &str, pattern: &str) -> Option<NaiveDateTime> {
     NaiveDateTime::parse_from_str(date, pattern).ok()
 }
 
+pub fn parse_date_to_millis(date: &str, pattern: &str) -> Option<i64> {
+    let parsed = parse_date(date, pattern)?;
+    let timestamp = match Local.from_local_datetime(&parsed) {
+        LocalResult::Single(timestamp) => timestamp,
+        LocalResult::Ambiguous(earliest, _) => earliest,
+        LocalResult::None => return None,
+    };
+    Some(timestamp.timestamp_millis())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -414,6 +436,13 @@ mod tests {
             .format("%Y%m%d%H%M%S%3f")
             .to_string();
         assert_eq!(time_millis_to_human_string(timestamp), expected);
+    }
+
+    #[test]
+    fn time_millis_to_human_string_falls_back_to_epoch_for_invalid_timestamp() {
+        assert_eq!(time_millis_to_human_string(i64::MAX), time_millis_to_human_string(0));
+        assert_eq!(time_millis_to_human_string2(i64::MAX), time_millis_to_human_string2(0));
+        assert_eq!(time_millis_to_human_string3(i64::MAX), time_millis_to_human_string3(0));
     }
 
     #[test]
@@ -454,6 +483,11 @@ mod tests {
         assert_eq!(next_minute % (60 * 1000), 0);
     }
 
+    #[test]
+    fn compute_next_morning_time_millis_returns_non_zero_timestamp() {
+        assert!(compute_next_morning_time_millis() > 0);
+    }
+
     /*    #[test]
     fn compute_next_morning_time_millis_returns_correct_time() {
         let now = Local::now();
@@ -486,5 +520,29 @@ mod tests {
             .format("%Y%m%d%H%M%S")
             .to_string();
         assert_eq!(time_millis_to_human_string3(timestamp), expect);
+    }
+
+    #[test]
+    fn java_date_format_constants_parse_java_shapes() {
+        assert!(parse_date("2025-01-02 03:04:05", YYYY_MM_DD_HH_MM_SS).is_some());
+        assert!(parse_date("20250102030405", YYYYMMDDHHMMSS).is_some());
+
+        let parsed = parse_date("2025-01-02#03:04:05:006", YYYY_MM_DD_HH_MM_SS_SSS)
+            .expect("Java millisecond format should parse");
+        assert_eq!(parsed.and_utc().timestamp_subsec_millis(), 6);
+    }
+
+    #[test]
+    fn parse_date_to_millis_uses_local_timezone_like_java_simple_date_format() {
+        let expected = match Local.with_ymd_and_hms(2025, 1, 2, 3, 4, 5) {
+            LocalResult::Single(timestamp) => timestamp,
+            LocalResult::Ambiguous(earliest, _) => earliest,
+            LocalResult::None => panic!("test timestamp should be valid in the local timezone"),
+        };
+
+        assert_eq!(
+            parse_date_to_millis("20250102030405", YYYYMMDDHHMMSS),
+            Some(expected.timestamp_millis())
+        );
     }
 }

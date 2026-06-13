@@ -85,11 +85,11 @@ impl RemoteBrokerOffsetStore {
                     }),
                 }),
             };
-            self.client_instance
-                .mut_from_ref()
-                .mq_client_api_impl
-                .as_mut()
-                .unwrap()
+            let client_instance = self.client_instance.mut_from_ref();
+            let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.as_mut() else {
+                return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
+            };
+            mq_client_api_impl
                 .query_consumer_offset(find_broker_result.broker_addr.as_str(), request_header, 5_000)
                 .await
         } else {
@@ -125,16 +125,22 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
 
     async fn read_offset(&self, mq: &MessageQueue, type_: ReadOffsetType) -> i64 {
         match type_ {
-            ReadOffsetType::ReadFromMemory | ReadOffsetType::MemoryFirstThenStore => {
+            ReadOffsetType::ReadFromMemory => {
                 let offset_table = self.offset_table.lock().await;
                 if let Some(offset) = offset_table.get(mq) {
                     return offset.get_offset();
-                } else if type_ == ReadOffsetType::ReadFromMemory {
-                    return -1;
                 }
+                -1
             }
-            ReadOffsetType::ReadFromStore => {
-                return match self.fetch_consume_offset_from_broker(mq).await {
+            ReadOffsetType::MemoryFirstThenStore => {
+                let memory_offset = {
+                    let offset_table = self.offset_table.lock().await;
+                    offset_table.get(mq).map(ControllableOffset::get_offset)
+                };
+                if let Some(offset) = memory_offset {
+                    return offset;
+                }
+                match self.fetch_consume_offset_from_broker(mq).await {
                     Ok(value) => {
                         self.update_offset(mq, value, false).await;
                         value
@@ -150,10 +156,26 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                             -2
                         }
                     },
-                };
+                }
             }
-        };
-        -3
+            ReadOffsetType::ReadFromStore => match self.fetch_consume_offset_from_broker(mq).await {
+                Ok(value) => {
+                    self.update_offset(mq, value, false).await;
+                    value
+                }
+                Err(e) => match e {
+                    rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
+                        if code == rocketmq_remoting::code::response_code::ResponseCode::QueryNotFound as i32 =>
+                    {
+                        -1
+                    }
+                    _ => {
+                        warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
+                        -2
+                    }
+                },
+            },
+        }
     }
 
     async fn persist_all(&mut self, mqs: &HashSet<MessageQueue>) {
@@ -194,11 +216,9 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
 
     async fn persist(&mut self, mq: &MessageQueue) {
         let offset_table = self.offset_table.lock().await;
-        let offset = offset_table.get(mq);
-        if offset.is_none() {
+        let Some(offset) = offset_table.get(mq).map(ControllableOffset::get_offset) else {
             return;
-        }
-        let offset = offset.unwrap().get_offset();
+        };
         drop(offset_table);
         match self.update_consume_offset_to_broker(mq, offset, true).await {
             Ok(_) => {
@@ -272,18 +292,15 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     }),
                 }),
             };
+            let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.as_mut() else {
+                return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
+            };
             if is_oneway {
-                self.client_instance
-                    .mq_client_api_impl
-                    .as_mut()
-                    .unwrap()
+                mq_client_api_impl
                     .update_consumer_offset_oneway(find_broker_result.broker_addr.as_str(), request_header, 5_000)
                     .await?;
             } else {
-                self.client_instance
-                    .mq_client_api_impl
-                    .as_mut()
-                    .unwrap()
+                mq_client_api_impl
                     .update_consumer_offset(&find_broker_result.broker_addr, request_header, 5_000)
                     .await?;
             };
