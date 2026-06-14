@@ -38,7 +38,6 @@ CURRENT_DIR="$(pwd)"
 # - rocketmq-dashboard/rocketmq-dashboard-gpui
 # - rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
 # Temporarily excluded from default release:
-# - rocketmq-controller
 # - rocketmq-broker
 # - rocketmq-proxy
 PROJECT_SPECS=(
@@ -46,17 +45,19 @@ PROJECT_SPECS=(
     "rocketmq-macros|rocketmq-macros|rocketmq-macros"
     "rocketmq-runtime|rocketmq-runtime|rocketmq-runtime"
     "rocketmq-dashboard-common|rocketmq-dashboard/rocketmq-dashboard-common|rocketmq-dashboard-common"
-    "rocketmq-admin-cli|rocketmq-tools/rocketmq-admin/rocketmq-admin-cli|rocketmq-admin-cli"
     "rocketmq-rust|rocketmq|rocketmq,rocketmq-rust"
-    "rocketmq-admin-tui|rocketmq-tools/rocketmq-admin/rocketmq-admin-tui|rocketmq-admin-tui"
     "rocketmq-common|rocketmq-common|rocketmq-common"
     "rocketmq-filter|rocketmq-filter|rocketmq-filter"
     "rocketmq-remoting|rocketmq-remoting|rocketmq-remoting"
     "rocketmq-auth|rocketmq-auth|rocketmq-auth"
     "rocketmq-client-rust|rocketmq-client|rocketmq-client,rocketmq-client-rust"
-    "rocketmq-namesrv|rocketmq-namesrv|rocketmq-namesrv"
+    "rocketmq-controller|rocketmq-controller|rocketmq-controller"
+    "rocketmq-tieredstore|rocketmq-tieredstore|rocketmq-tieredstore"
     "rocketmq-store|rocketmq-store|rocketmq-store"
+    "rocketmq-namesrv|rocketmq-namesrv|rocketmq-namesrv"
     "rocketmq-admin-core|rocketmq-tools/rocketmq-admin/rocketmq-admin-core|rocketmq-admin-core"
+    "rocketmq-admin-cli|rocketmq-tools/rocketmq-admin/rocketmq-admin-cli|rocketmq-admin-cli"
+    "rocketmq-admin-tui|rocketmq-tools/rocketmq-admin/rocketmq-admin-tui|rocketmq-admin-tui"
     "rocketmq-store-inspect|rocketmq-tools/rocketmq-store-inspect|rocketmq-store-inspect"
 )
 
@@ -162,11 +163,11 @@ EXAMPLES:
 
 PUBLISH ORDER:
     rocketmq-error -> rocketmq-macros -> rocketmq-runtime ->
-    rocketmq-dashboard-common -> rocketmq-admin-cli -> rocketmq-rust ->
-    rocketmq-admin-tui -> rocketmq-common -> rocketmq-filter ->
+    rocketmq-dashboard-common -> rocketmq-rust -> rocketmq-common -> rocketmq-filter ->
     rocketmq-remoting -> rocketmq-auth -> rocketmq-client-rust ->
-    rocketmq-namesrv -> rocketmq-store -> rocketmq-admin-core ->
-    rocketmq-store-inspect
+    rocketmq-controller -> rocketmq-tieredstore -> rocketmq-store ->
+    rocketmq-namesrv -> rocketmq-admin-core -> rocketmq-admin-cli ->
+    rocketmq-admin-tui -> rocketmq-store-inspect
 
 NOTES:
     - Requires cargo login credentials configured
@@ -177,7 +178,6 @@ NOTES:
       rocketmq-dashboard/rocketmq-dashboard-gpui,
       rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
     - Default release temporarily excludes:
-      rocketmq-controller,
       rocketmq-broker,
       rocketmq-proxy
 
@@ -200,6 +200,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --project)
+            if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+                print_error "--project requires a value"
+                exit 1
+            fi
             SPECIFIC_PROJECT="$2"
             shift 2
             ;;
@@ -216,6 +220,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --features)
+            if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+                print_error "--features requires a value"
+                exit 1
+            fi
             FEATURES="$2"
             shift 2
             ;;
@@ -238,6 +246,11 @@ if [ ! -f "$WORKSPACE_ROOT/Cargo.toml" ]; then
 fi
 
 cd "$WORKSPACE_ROOT"
+
+if { [ "$SKIP_PACKAGE" = false ] || [ "$DRY_RUN" = false ]; } && ! command -v cargo >/dev/null 2>&1; then
+    print_error "cargo not found in PATH"
+    exit 1
+fi
 
 print_header "RocketMQ Rust Workspace Publisher"
 print_info "Workspace Root: $WORKSPACE_ROOT"

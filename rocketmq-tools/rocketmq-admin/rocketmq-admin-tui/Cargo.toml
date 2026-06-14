@@ -28,7 +28,7 @@ description            = "A RocketMQ Rust terminal command management tool imple
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-admin-core = { path = "../rocketmq-admin-core" }
+rocketmq-admin-core = { version = "0.9.0", path = "../rocketmq-admin-core" }
 rocketmq-common     = { workspace = true }
 rocketmq-remoting   = { workspace = true }
 rocketmq-rust = { workspace = true }
