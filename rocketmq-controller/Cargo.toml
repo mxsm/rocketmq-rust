@@ -56,7 +56,7 @@ serde_json = { workspace = true }
 bytes        = { workspace = true }
 prost        = "0.14"
 futures      = "0.3"
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
 
 cheetah-string = { workspace = true }
 
