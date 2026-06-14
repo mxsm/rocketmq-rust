@@ -66,6 +66,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::runtime::RPCHook;
 
 static GROUP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const REQUIRE_BROKER_BACKED_SMOKE: &str = "ROCKETMQ_REQUIRE_BROKER_BACKED_SMOKE";
@@ -115,6 +116,12 @@ fn env_flag_enabled(name: &str) -> bool {
     std::env::var(name)
         .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+fn trace_smoke_step(step: &str) {
+    if env_flag_enabled("ROCKETMQ_TRACE_SMOKE_STEPS") {
+        eprintln!("[broker_backed_smoke] {step}");
+    }
 }
 
 fn env_optional_bool(name: &str) -> RocketMQResult<Option<bool>> {
@@ -227,8 +234,59 @@ where
         })?
 }
 
+fn optional_acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<dyn RPCHook>>> {
+    let (access_key, secret_key) = match (
+        env_non_empty("ROCKETMQ_ACL_ACCESS_KEY"),
+        env_non_empty("ROCKETMQ_ACL_SECRET_KEY"),
+    ) {
+        (Some(access_key), Some(secret_key)) => (access_key, secret_key),
+        (None, None) => return Ok(None),
+        _ => {
+            return Err(RocketMQError::illegal_argument(
+                "ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY must be set together",
+            ))
+        }
+    };
+
+    let credentials = match env_non_empty("ROCKETMQ_ACL_SECURITY_TOKEN") {
+        Some(security_token) => SessionCredentials::with_token(access_key, secret_key, security_token),
+        None => SessionCredentials::with_keys(access_key, secret_key),
+    };
+    Ok(Some(Arc::new(AclClientRPCHook::new(credentials))))
+}
+
+fn acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<dyn RPCHook>>> {
+    let hook = optional_acl_rpc_hook_from_env()?;
+    if hook.is_none() {
+        skip_or_fail("skipping ACL smoke test: ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY are not set")?;
+    }
+    Ok(hook)
+}
+
+macro_rules! maybe_with_acl_rpc_hook {
+    ($builder:expr) => {{
+        let builder = $builder;
+        if let Some(acl_hook) = optional_acl_rpc_hook_from_env()? {
+            builder.rpc_hook(acl_hook)
+        } else {
+            builder
+        }
+    }};
+}
+
+macro_rules! maybe_with_acl_push_rpc_hook {
+    ($builder:expr) => {{
+        let builder = $builder;
+        if let Some(acl_hook) = optional_acl_rpc_hook_from_env()? {
+            builder.rpc_hook(Some(acl_hook))
+        } else {
+            builder
+        }
+    }};
+}
+
 async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> RocketMQResult<()> {
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("route-bootstrap-producer"))
         .name_server_addr(namesrv_addr)
         .send_msg_timeout(5_000)
@@ -259,23 +317,6 @@ async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> RocketMQResult<(
             "topic route for {topic} was not available before smoke timeout"
         ))
     }))
-}
-
-fn acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<AclClientRPCHook>>> {
-    let Some(access_key) = env_non_empty("ROCKETMQ_ACL_ACCESS_KEY") else {
-        skip_or_fail("skipping ACL smoke test: ROCKETMQ_ACL_ACCESS_KEY is not set")?;
-        return Ok(None);
-    };
-    let Some(secret_key) = env_non_empty("ROCKETMQ_ACL_SECRET_KEY") else {
-        skip_or_fail("skipping ACL smoke test: ROCKETMQ_ACL_SECRET_KEY is not set")?;
-        return Ok(None);
-    };
-
-    let credentials = match env_non_empty("ROCKETMQ_ACL_SECURITY_TOKEN") {
-        Some(security_token) => SessionCredentials::with_token(access_key, secret_key, security_token),
-        None => SessionCredentials::with_keys(access_key, secret_key),
-    };
-    Ok(Some(Arc::new(AclClientRPCHook::new(credentials))))
 }
 
 #[test]
@@ -315,7 +356,7 @@ async fn broker_backed_producer_sync_oneway_batch_smoke() -> RocketMQResult<()> 
         return Ok(());
     };
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(env.producer_group)
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -356,17 +397,25 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
     };
 
     let topic = env.topic.clone();
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("admin-producer"))
         .name_server_addr(env.namesrv_addr.clone())
         .send_msg_timeout(5_000)
         .build();
 
-    producer.start().await?;
+    trace_smoke_step("mqadmin_offsets: producer.start begin");
+    smoke_timeout("mqadmin_producer.start", Duration::from_secs(30), producer.start()).await?;
+    trace_smoke_step("mqadmin_offsets: producer.start done");
 
     let queue_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let queues = loop {
-        match producer.fetch_publish_message_queues(&topic).await {
+        match smoke_timeout(
+            "mqadmin.fetch_publish_message_queues",
+            Duration::from_secs(10),
+            producer.fetch_publish_message_queues(&topic),
+        )
+        .await
+        {
             Ok(queues) if !queues.is_empty() => break queues,
             Ok(_) => {
                 if tokio::time::Instant::now() >= queue_deadline {
@@ -383,12 +432,15 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    trace_smoke_step("mqadmin_offsets: publish queues ready");
     let queue = queues[0].clone();
     let message_key = format!("rocketmq-rust-mqadmin-key-{}", unique_group("key"));
     let message_body = format!("rocketmq-rust-mqadmin-offset-smoke-{message_key}");
 
-    let send_result = producer
-        .send_to_queue_with_timeout(
+    let send_result = smoke_timeout(
+        "mqadmin_producer.send_to_queue",
+        Duration::from_secs(10),
+        producer.send_to_queue_with_timeout(
             Message::builder()
                 .topic(topic.as_str())
                 .tags("MQAdmin")
@@ -397,8 +449,10 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
                 .build_unchecked(),
             queue.clone(),
             5_000,
-        )
-        .await?;
+        ),
+    )
+    .await?;
+    trace_smoke_step("mqadmin_offsets: seed send done");
     assert!(
         send_result
             .as_ref()
@@ -407,10 +461,31 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         "admin offset smoke should seed one message in the selected queue"
     );
 
-    let min_offset = producer.min_offset(&queue).await?;
-    let max_offset = producer.max_offset(&queue).await?;
-    let search_offset = producer.search_offset(&queue, 0).await?;
-    let earliest_store_time = producer.earliest_msg_store_time(&queue).await?;
+    let min_offset = smoke_timeout(
+        "mqadmin_producer.min_offset",
+        Duration::from_secs(10),
+        producer.min_offset(&queue),
+    )
+    .await?;
+    let max_offset = smoke_timeout(
+        "mqadmin_producer.max_offset",
+        Duration::from_secs(10),
+        producer.max_offset(&queue),
+    )
+    .await?;
+    let search_offset = smoke_timeout(
+        "mqadmin_producer.search_offset",
+        Duration::from_secs(10),
+        producer.search_offset(&queue, 0),
+    )
+    .await?;
+    let earliest_store_time = smoke_timeout(
+        "mqadmin_producer.earliest_msg_store_time",
+        Duration::from_secs(10),
+        producer.earliest_msg_store_time(&queue),
+    )
+    .await?;
+    trace_smoke_step("mqadmin_offsets: producer offsets done");
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
@@ -420,9 +495,12 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         .unwrap_or(u64::MAX);
     let query_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let query_result = loop {
-        match producer
-            .query_message(&topic, &message_key, 32, 0, now_millis.saturating_add(60_000))
-            .await
+        match smoke_timeout(
+            "mqadmin_producer.query_message",
+            Duration::from_secs(10),
+            producer.query_message(&topic, &message_key, 32, 0, now_millis.saturating_add(60_000)),
+        )
+        .await
         {
             Ok(query_result) => {
                 if query_result.message_list().iter().any(|msg| {
@@ -442,6 +520,7 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    trace_smoke_step("mqadmin_offsets: producer query done");
     assert!(
         query_result.message_list().iter().any(|msg| {
             msg.body()
@@ -455,12 +534,24 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         .as_ref()
         .and_then(|result| result.offset_msg_id.as_deref().or(result.msg_id.as_deref()))
         .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("send result did not contain a message id"))?;
-    let viewed_message = producer.view_message(&topic, view_msg_id).await?;
+    let viewed_message = smoke_timeout(
+        "mqadmin_producer.view_message",
+        Duration::from_secs(10),
+        producer.view_message(&topic, view_msg_id),
+    )
+    .await?;
+    trace_smoke_step("mqadmin_offsets: producer view by offset id done");
     let viewed_by_unique_msg_id =
         if let Some(unique_msg_id) = send_result.as_ref().and_then(|result| result.msg_id.as_deref()) {
             let view_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
             Some(loop {
-                match producer.view_message(&topic, unique_msg_id).await {
+                match smoke_timeout(
+                    "mqadmin_producer.view_message_by_unique_id",
+                    Duration::from_secs(10),
+                    producer.view_message(&topic, unique_msg_id),
+                )
+                .await
+                {
                     Ok(message) => {
                         if message
                             .body()
@@ -482,8 +573,9 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         } else {
             None
         };
+    trace_smoke_step("mqadmin_offsets: producer view by unique id done");
 
-    let mut push_admin = DefaultMQPushConsumer::builder()
+    let mut push_admin = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
         .consumer_group(unique_group("admin-push"))
         .name_server_addr(env.namesrv_addr)
         .build();
@@ -491,19 +583,36 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
     push_admin.register_message_listener_concurrently(
         |_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| Ok(ConsumeConcurrentlyStatus::ConsumeSuccess),
     );
-    push_admin.start().await?;
+    trace_smoke_step("mqadmin_offsets: push_admin.start begin");
+    smoke_timeout("mqadmin_push.start", Duration::from_secs(30), push_admin.start()).await?;
+    trace_smoke_step("mqadmin_offsets: push_admin.start done");
 
-    let push_min_offset = MQConsumer::min_offset(&mut push_admin, &queue).await?;
-    let push_max_offset = MQConsumer::max_offset(&mut push_admin, &queue).await?;
+    let push_min_offset = smoke_timeout(
+        "mqadmin_push.min_offset",
+        Duration::from_secs(10),
+        MQConsumer::min_offset(&mut push_admin, &queue),
+    )
+    .await?;
+    let push_max_offset = smoke_timeout(
+        "mqadmin_push.max_offset",
+        Duration::from_secs(10),
+        MQConsumer::max_offset(&mut push_admin, &queue),
+    )
+    .await?;
+    trace_smoke_step("mqadmin_offsets: push offsets done");
     let push_query_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let push_query_result = loop {
-        match MQConsumer::query_message(
-            &mut push_admin,
-            &topic,
-            &message_key,
-            32,
-            0,
-            now_millis.saturating_add(60_000),
+        match smoke_timeout(
+            "mqadmin_push.query_message",
+            Duration::from_secs(10),
+            MQConsumer::query_message(
+                &mut push_admin,
+                &topic,
+                &message_key,
+                32,
+                0,
+                now_millis.saturating_add(60_000),
+            ),
         )
         .await
         {
@@ -525,9 +634,16 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    trace_smoke_step("mqadmin_offsets: push query done");
     let push_view_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let push_viewed_message = loop {
-        match MQConsumer::view_message(&mut push_admin, &topic, view_msg_id).await {
+        match smoke_timeout(
+            "mqadmin_push.view_message",
+            Duration::from_secs(10),
+            MQConsumer::view_message(&mut push_admin, &topic, view_msg_id),
+        )
+        .await
+        {
             Ok(message) => {
                 if message
                     .body()
@@ -546,10 +662,23 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    trace_smoke_step("mqadmin_offsets: push view done");
 
-    push_admin.shutdown().await;
+    trace_smoke_step("mqadmin_offsets: push_admin.shutdown begin");
+    smoke_timeout("mqadmin_push.shutdown", Duration::from_secs(30), async {
+        push_admin.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("mqadmin_offsets: push_admin.shutdown done");
 
-    producer.shutdown().await;
+    trace_smoke_step("mqadmin_offsets: producer.shutdown begin");
+    smoke_timeout("mqadmin_producer.shutdown", Duration::from_secs(15), async {
+        producer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("mqadmin_offsets: producer.shutdown done");
 
     assert!(min_offset >= 0, "minOffset should be non-negative");
     assert!(max_offset >= min_offset, "maxOffset should not be below minOffset");
@@ -605,7 +734,7 @@ async fn broker_backed_producer_create_topic_smoke() -> RocketMQResult<()> {
     }
 
     let new_topic = format!("rocketmq-rust-smoke-topic-{}", unique_group("topic"));
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("create-topic-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -639,7 +768,7 @@ async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
         return Ok(());
     };
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("async-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -697,7 +826,7 @@ async fn broker_backed_acl_producer_send_smoke() -> RocketMQResult<()> {
         return Ok(());
     };
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("acl-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -731,7 +860,7 @@ async fn broker_backed_tls_producer_send_smoke() -> RocketMQResult<()> {
     }
 
     let client_config = tls_smoke_client_config(&env)?;
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .client_config(client_config)
         .producer_group(unique_group("tls-producer"))
         .send_msg_timeout(5_000)
@@ -769,7 +898,7 @@ async fn broker_backed_trace_producer_send_smoke() -> RocketMQResult<()> {
     let trace_message_key = format!("rocketmq-rust-trace-key-{}", unique_group("key"));
     let trace_message_body = format!("rocketmq-rust-trace-smoke-{trace_message_key}");
 
-    let trace_consumer = DefaultLitePullConsumer::builder()
+    let trace_consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder())
         .consumer_group(unique_group("trace-lite-pull"))
         .name_server_addr(env.namesrv_addr.clone())
         .pull_batch_size(8)
@@ -785,7 +914,7 @@ async fn broker_backed_trace_producer_send_smoke() -> RocketMQResult<()> {
         .trace_msg_batch_num(1);
     client_config_builder = client_config_builder.trace_topic(trace_topic.clone());
     let client_config = client_config_builder.build()?;
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .client_config(client_config)
         .producer_group(unique_group("trace-producer"))
         .send_msg_timeout(5_000)
@@ -860,7 +989,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
 
     let reply_namesrv_addr = env.namesrv_addr.clone();
     let reply_task = tokio::spawn(async move {
-        let mut reply_producer = DefaultMQProducer::builder()
+        let mut reply_producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
             .producer_group(unique_group("reply-producer"))
             .name_server_addr(reply_namesrv_addr)
             .send_msg_timeout(5_000)
@@ -891,7 +1020,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
     let expected_request_body = request_body.clone();
     let reply_body_for_listener = reply_body.clone();
     let reply_tx_for_listener = reply_tx.clone();
-    let mut responder = DefaultMQPushConsumer::builder()
+    let mut responder = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
         .consumer_group(unique_group("request-responder"))
         .name_server_addr(env.namesrv_addr.clone())
         .consume_thread_min(1)
@@ -925,7 +1054,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut requester = DefaultMQProducer::builder()
+    let mut requester = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("request-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -962,7 +1091,7 @@ async fn broker_backed_producer_recall_smoke() -> RocketMQResult<()> {
         return Ok(());
     }
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("recall-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -1006,7 +1135,7 @@ async fn broker_backed_transaction_producer_smoke() -> RocketMQResult<()> {
         return Ok(());
     };
 
-    let mut producer = TransactionMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(TransactionMQProducer::builder())
         .producer_group(unique_group("transaction-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
@@ -1048,7 +1177,7 @@ async fn broker_backed_lite_pull_assign_offset_smoke() -> RocketMQResult<()> {
     };
     ensure_topic_route(&env.namesrv_addr, &env.topic).await?;
 
-    let consumer = DefaultLitePullConsumer::builder()
+    let consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder())
         .consumer_group(unique_group("lite-pull"))
         .name_server_addr(env.namesrv_addr)
         .pull_batch_size(4)
@@ -1057,7 +1186,7 @@ async fn broker_backed_lite_pull_assign_offset_smoke() -> RocketMQResult<()> {
         .build()?;
 
     consumer.set_sub_expression_for_assign(&env.topic, "*").await?;
-    consumer.start().await?;
+    smoke_timeout("lite_pull_assign.start", Duration::from_secs(30), consumer.start()).await?;
     assert!(consumer.is_running().await, "consumer should be running");
     assert!(!consumer.is_auto_commit().await, "smoke test uses manual offset commit");
 
@@ -1133,7 +1262,7 @@ async fn broker_backed_push_consumer_concurrent_smoke() -> RocketMQResult<()> {
     let received_notify_inner = Arc::clone(&received_notify);
     let expected_body = body.clone();
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
         .consumer_group(unique_group("push"))
         .name_server_addr(env.namesrv_addr.clone())
         .consume_thread_min(1)
@@ -1160,26 +1289,49 @@ async fn broker_backed_push_consumer_concurrent_smoke() -> RocketMQResult<()> {
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         },
     );
-    consumer.start().await?;
+    trace_smoke_step("push_concurrent: consumer.start begin");
+    smoke_timeout("push_consumer.start", Duration::from_secs(30), consumer.start()).await?;
+    trace_smoke_step("push_concurrent: consumer.start done");
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("push-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
         .build();
 
-    producer.start().await?;
-    let send_result = producer
-        .send_with_timeout(message(&env.topic, tag, &body), 5_000)
-        .await?;
+    trace_smoke_step("push_concurrent: producer.start begin");
+    smoke_timeout("push_producer.start", Duration::from_secs(30), producer.start()).await?;
+    trace_smoke_step("push_concurrent: producer.start done");
+    trace_smoke_step("push_concurrent: producer.send begin");
+    let send_result = smoke_timeout(
+        "push_producer.send",
+        Duration::from_secs(10),
+        producer.send_with_timeout(message(&env.topic, tag, &body), 5_000),
+    )
+    .await?;
+    trace_smoke_step("push_concurrent: producer.send done");
     assert!(send_result.is_some(), "push smoke producer send should succeed");
 
+    trace_smoke_step("push_concurrent: receive wait begin");
     let receive_result = tokio::time::timeout(std::time::Duration::from_secs(30), received_notify.notified()).await;
+    trace_smoke_step("push_concurrent: receive wait done");
 
-    producer.shutdown().await;
-    consumer.shutdown().await;
+    trace_smoke_step("push_concurrent: producer.shutdown begin");
+    smoke_timeout("push_producer.shutdown", Duration::from_secs(15), async {
+        producer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("push_concurrent: producer.shutdown done");
+    trace_smoke_step("push_concurrent: consumer.shutdown begin");
+    smoke_timeout("push_consumer.shutdown", Duration::from_secs(30), async {
+        consumer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("push_concurrent: consumer.shutdown done");
 
     receive_result.expect("push consumer should receive the smoke message");
     assert_eq!(
@@ -1210,7 +1362,7 @@ async fn broker_backed_push_consumer_retry_smoke() -> RocketMQResult<()> {
     let retry_notify_inner = Arc::clone(&retry_notify);
     let expected_body = body.clone();
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
         .consumer_group(unique_group("push-retry"))
         .name_server_addr(env.namesrv_addr.clone())
         .consume_thread_min(1)
@@ -1239,24 +1391,49 @@ async fn broker_backed_push_consumer_retry_smoke() -> RocketMQResult<()> {
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         },
     );
-    consumer.start().await?;
+    trace_smoke_step("push_retry: consumer.start begin");
+    smoke_timeout("push_retry_consumer.start", Duration::from_secs(30), consumer.start()).await?;
+    trace_smoke_step("push_retry: consumer.start done");
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("push-retry-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
         .build();
 
-    producer.start().await?;
-    let send_result = producer.send_with_timeout(message(&topic, tag, &body), 5_000).await?;
+    trace_smoke_step("push_retry: producer.start begin");
+    smoke_timeout("push_retry_producer.start", Duration::from_secs(30), producer.start()).await?;
+    trace_smoke_step("push_retry: producer.start done");
+    trace_smoke_step("push_retry: producer.send begin");
+    let send_result = smoke_timeout(
+        "push_retry_producer.send",
+        Duration::from_secs(10),
+        producer.send_with_timeout(message(&topic, tag, &body), 5_000),
+    )
+    .await?;
+    trace_smoke_step("push_retry: producer.send done");
     assert!(send_result.is_some(), "retry smoke producer send should succeed");
 
+    trace_smoke_step("push_retry: retry wait begin");
     let retry_result = tokio::time::timeout(std::time::Duration::from_secs(90), retry_notify.notified()).await;
+    trace_smoke_step("push_retry: retry wait done");
 
-    producer.shutdown().await;
-    consumer.shutdown().await;
+    trace_smoke_step("push_retry: producer.shutdown begin");
+    smoke_timeout("push_retry_producer.shutdown", Duration::from_secs(15), async {
+        producer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("push_retry: producer.shutdown done");
+    trace_smoke_step("push_retry: consumer.shutdown begin");
+    smoke_timeout("push_retry_consumer.shutdown", Duration::from_secs(30), async {
+        consumer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("push_retry: consumer.shutdown done");
 
     retry_result.expect("push consumer should receive the retried message");
     assert!(
@@ -1284,7 +1461,7 @@ async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
     let received_notify_inner = Arc::clone(&received_notify);
     let prefix_for_listener = body_prefix.clone();
 
-    let mut consumer = DefaultMQPushConsumer::builder()
+    let mut consumer = maybe_with_acl_push_rpc_hook!(DefaultMQPushConsumer::builder())
         .consumer_group(unique_group("push-orderly"))
         .name_server_addr(env.namesrv_addr.clone())
         .consume_thread_min(1)
@@ -1314,7 +1491,9 @@ async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
         }
         Ok(ConsumeOrderlyStatus::Success)
     });
-    consumer.start().await?;
+    trace_smoke_step("push_orderly: consumer.start begin");
+    smoke_timeout("push_orderly_consumer.start", Duration::from_secs(30), consumer.start()).await?;
+    trace_smoke_step("push_orderly: consumer.start done");
     assert!(
         consumer.is_consume_orderly(),
         "orderly listener should switch the consumer mode"
@@ -1322,28 +1501,54 @@ async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("push-orderly-producer"))
         .name_server_addr(env.namesrv_addr)
         .send_msg_timeout(5_000)
         .build();
 
-    producer.start().await?;
+    trace_smoke_step("push_orderly: producer.start begin");
+    smoke_timeout("push_orderly_producer.start", Duration::from_secs(30), producer.start()).await?;
+    trace_smoke_step("push_orderly: producer.start done");
     let selector = |queues: &[MessageQueue], _msg: &Message, _order_id: &i32| queues.first().cloned();
-    let first_send = producer
-        .send_with_selector_timeout(message(&env.topic, tag, &first_body), selector, 0, 5_000)
-        .await?;
+    trace_smoke_step("push_orderly: first send begin");
+    let first_send = smoke_timeout(
+        "push_orderly_producer.first_send",
+        Duration::from_secs(10),
+        producer.send_with_selector_timeout(message(&env.topic, tag, &first_body), selector, 0, 5_000),
+    )
+    .await?;
+    trace_smoke_step("push_orderly: first send done");
     assert!(first_send.is_some(), "first orderly send should succeed");
     let selector = |queues: &[MessageQueue], _msg: &Message, _order_id: &i32| queues.first().cloned();
-    let second_send = producer
-        .send_with_selector_timeout(message(&env.topic, tag, &second_body), selector, 0, 5_000)
-        .await?;
+    trace_smoke_step("push_orderly: second send begin");
+    let second_send = smoke_timeout(
+        "push_orderly_producer.second_send",
+        Duration::from_secs(10),
+        producer.send_with_selector_timeout(message(&env.topic, tag, &second_body), selector, 0, 5_000),
+    )
+    .await?;
+    trace_smoke_step("push_orderly: second send done");
     assert!(second_send.is_some(), "second orderly send should succeed");
 
+    trace_smoke_step("push_orderly: receive wait begin");
     let receive_result = tokio::time::timeout(std::time::Duration::from_secs(30), received_notify.notified()).await;
+    trace_smoke_step("push_orderly: receive wait done");
 
-    producer.shutdown().await;
-    consumer.shutdown().await;
+    trace_smoke_step("push_orderly: producer.shutdown begin");
+    smoke_timeout("push_orderly_producer.shutdown", Duration::from_secs(15), async {
+        producer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("push_orderly: producer.shutdown done");
+    trace_smoke_step("push_orderly: consumer.shutdown begin");
+    smoke_timeout("push_orderly_consumer.shutdown", Duration::from_secs(30), async {
+        consumer.shutdown().await;
+        Ok(())
+    })
+    .await?;
+    trace_smoke_step("push_orderly: consumer.shutdown done");
 
     receive_result.expect("orderly push consumer should receive both smoke messages");
     assert_eq!(
@@ -1367,7 +1572,7 @@ async fn broker_backed_lite_pull_subscribe_poll_smoke() -> RocketMQResult<()> {
     let topic = unique_group("lite-pull-subscribe-topic");
     ensure_topic_route(&env.namesrv_addr, &topic).await?;
     let body = format!("rocketmq-rust-lite-pull-subscribe-smoke-{}", unique_group("body"));
-    let mut producer = DefaultMQProducer::builder()
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder())
         .producer_group(unique_group("lite-pull-subscribe-producer"))
         .name_server_addr(env.namesrv_addr.clone())
         .send_msg_timeout(5_000)
@@ -1381,7 +1586,7 @@ async fn broker_backed_lite_pull_subscribe_poll_smoke() -> RocketMQResult<()> {
         )
         .await?;
 
-    let consumer = DefaultLitePullConsumer::builder()
+    let consumer = maybe_with_acl_rpc_hook!(DefaultLitePullConsumer::builder())
         .consumer_group(unique_group("lite-pull-subscribe"))
         .name_server_addr(env.namesrv_addr.clone())
         .pull_batch_size(4)

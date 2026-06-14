@@ -207,13 +207,20 @@ impl AutoSwitchHAService {
     }
 
     pub fn maybe_expand_in_sync_state_set(&self, slave_broker_id: i64, slave_max_offset: i64) -> Option<HashSet<i64>> {
-        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
-        if tracker.local_sync_state_set.contains(&slave_broker_id) {
-            return None;
+        {
+            let tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
+            if tracker.local_sync_state_set.contains(&slave_broker_id) {
+                return None;
+            }
         }
 
         let confirm_offset = self.message_store.get_commit_log().get_confirm_offset_directly();
         if slave_max_offset < confirm_offset {
+            return None;
+        }
+
+        let mut tracker = self.sync_state_tracker.lock().expect("lock sync state tracker");
+        if tracker.local_sync_state_set.contains(&slave_broker_id) {
             return None;
         }
 
@@ -557,6 +564,7 @@ mod tests {
     use std::collections::HashSet;
     use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
@@ -710,6 +718,42 @@ mod tests {
         assert_eq!(expanded, HashSet::from([7_i64, 9_i64]));
         assert_eq!(service.get_sync_state_set(), HashSet::from([7_i64, 9_i64]));
         assert!(service.is_synchronizing_sync_state_set());
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn maybe_expand_in_sync_state_set_does_not_reenter_sync_state_lock() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-auto-switch-expand-no-deadlock-{}",
+            current_millis()
+        ));
+        let mut store = new_test_message_store(&temp_root);
+        store.init().await.expect("init message store");
+        store
+            .get_commit_log_mut()
+            .append_data(0, &[1, 2, 3, 4], 0, 4)
+            .await
+            .expect("append data");
+
+        let mut service = ArcMut::new(AutoSwitchHAService::new(store.clone()));
+        let general_service = GeneralHAService::new_with_auto_switch_ha_service(service.clone());
+        AutoSwitchHAService::init(&mut service, general_service).expect("init auto switch ha service");
+        service.sync_controller_sync_state_set(7, &HashSet::from([7_i64]));
+
+        let service_for_thread = service.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let expanded = service_for_thread.maybe_expand_in_sync_state_set(9, 4);
+            let _ = tx.send(expanded);
+        });
+
+        let expanded = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("maybe_expand_in_sync_state_set should not deadlock");
+        handle.join().expect("maybe_expand thread should finish");
+
+        assert_eq!(expanded, Some(HashSet::from([7_i64, 9_i64])));
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

@@ -101,6 +101,10 @@ pub fn get_retry_topic(consumer_group: &str) -> String {
     format!("{RETRY_GROUP_TOPIC_PREFIX}{consumer_group}")
 }
 
+pub fn get_reply_topic(cluster_name: &str) -> String {
+    format!("{cluster_name}_{REPLY_TOPIC_POSTFIX}")
+}
+
 pub fn get_dlq_topic(consumer_group: &str) -> String {
     format!("{DLQ_GROUP_TOPIC_PREFIX}{consumer_group}")
 }
@@ -230,6 +234,20 @@ mod tests {
         let consumer_group = "";
         let expected = RETRY_GROUP_TOPIC_PREFIX.to_string();
         assert_eq!(get_retry_topic(consumer_group), expected);
+    }
+
+    #[test]
+    fn generates_reply_topic_for_cluster_name() {
+        let cluster_name = "test_cluster";
+        let expected = format!("{}_{}", cluster_name, REPLY_TOPIC_POSTFIX);
+        assert_eq!(get_reply_topic(cluster_name), expected);
+    }
+
+    #[test]
+    fn generates_reply_topic_for_empty_cluster_name() {
+        let cluster_name = "";
+        let expected = format!("_{}", REPLY_TOPIC_POSTFIX);
+        assert_eq!(get_reply_topic(cluster_name), expected);
     }
 
     #[test]

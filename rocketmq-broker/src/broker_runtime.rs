@@ -553,11 +553,14 @@ impl BrokerRuntime {
     }
 
     pub async fn shutdown(&mut self) {
+        self.inner.shutdown.store(true, Ordering::SeqCst);
+        self.scheduled_task_manager.abort_all();
+
         self.shutdown_basic_service().await;
 
         self.inner.broker_outer_api.shutdown();
 
-        self.scheduled_task_manager.cancel_all();
+        self.scheduled_task_manager.abort_all();
 
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
@@ -1170,7 +1173,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_millis(initial_delay),
             period,
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || broker_stats_.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 if let Some(broker_stats) = broker_stats_.broker_stats() {
                     broker_stats.record();
                 } else {
@@ -1187,7 +1193,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_secs(10),
             Duration::from_millis(flush_consumer_offset_interval),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || consumer_offset_manager_inner.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 consumer_offset_manager_inner.consumer_offset_manager.persist();
                 Ok(())
             },
@@ -1198,7 +1207,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_secs(10),
             Duration::from_secs(10),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || _inner.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 if let Some(consumer_filter_manager_) = &mut _inner.consumer_filter_manager {
                     consumer_filter_manager_.persist();
                 } else {
@@ -1218,7 +1230,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_mins(3),
             Duration::from_mins(3),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || runtime.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 runtime.protect_broker();
                 Ok(())
             },
@@ -1228,7 +1243,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_secs(10),
             Duration::from_secs(60),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || message_store_inner.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 if let Some(message_store) = message_store_inner.message_store.as_ref() {
                     let behind = message_store.dispatch_behind_bytes();
                     info!("Dispatch task fall behind commit log {behind}bytes");
@@ -1265,7 +1283,10 @@ impl BrokerRuntime {
                 self.scheduled_task_manager.add_fixed_rate_task_async(
                     Duration::from_secs(10),
                     Duration::from_secs(3),
-                    async move |_ctx| {
+                    async move |ctx| {
+                        if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
                         if current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
                                 slave_synchronize.sync_all().await;
@@ -1285,7 +1306,10 @@ impl BrokerRuntime {
                 self.scheduled_task_manager.add_fixed_rate_task_async(
                     Duration::from_secs(10),
                     Duration::from_secs(60),
-                    async move |_ctx| {
+                    async move |ctx| {
+                        if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
                         inner_clone.print_master_and_slave_diff();
                         Ok(())
                     },
@@ -1304,6 +1328,9 @@ impl BrokerRuntime {
             self.broker_runtime.as_ref().unwrap().get_handle().spawn(async move {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 loop {
+                    if broker_runtime.shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
                     let current_execution_time = tokio::time::Instant::now();
                     broker_runtime.update_namesrv_addr_inner().await;
                     let next_execution_time = current_execution_time + Duration::from_secs(60);
@@ -1511,6 +1538,9 @@ impl BrokerRuntime {
         let initial_delay = Duration::from_secs(10);
         self.scheduled_task_manager
             .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
+                if broker_runtime_inner.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
                 if current_millis() < start_time {
                     info!("Register to namesrv after {}", start_time);
@@ -1534,7 +1564,10 @@ impl BrokerRuntime {
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_millis(1000),
                 Duration::from_millis(sync_broker_member_group_period),
-                async move |_ctx| {
+                async move |ctx| {
+                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
                     BrokerRuntimeInner::sync_broker_member_group(&inner_).await;
                     Ok(())
                 },
@@ -1556,6 +1589,9 @@ impl BrokerRuntime {
         let initial_delay = Duration::from_secs(10);
         self.scheduled_task_manager
             .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
+                if inner.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 inner.broker_outer_api.refresh_metadata();
                 Ok(())
             });
@@ -1571,7 +1607,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_millis(1000),
             Duration::from_millis(broker_heartbeat_interval),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 if inner_.is_isolated.load(Ordering::Acquire) {
                     if inner_.broker_config.enable_controller_mode {
                         BrokerRuntimeInner::bootstrap_controller_mode(inner_.clone()).await;
@@ -1594,7 +1633,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_millis(1000),
             Duration::from_millis(period),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
                 Ok(())
             },
@@ -1607,7 +1649,10 @@ impl BrokerRuntime {
         self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_millis(3000),
             Duration::from_millis(period),
-            async move |_ctx| {
+            async move |ctx| {
+                if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 BrokerRuntimeInner::sync_controller_replica_info(inner_.clone()).await;
                 Ok(())
             },
@@ -2602,8 +2647,17 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         oneway: bool,
         force_register: bool,
     ) {
+        if self.shutdown.load(Ordering::Acquire) {
+            info!("BrokerRuntimeInner#register_broker_all_inner: broker has shutdown, skip broker registration.");
+            return;
+        }
+
         let mut topic_config_table = HashMap::new();
-        let table = self.topic_config_manager().topic_config_table();
+        let Some(topic_config_manager) = self.topic_config_manager.as_ref() else {
+            warn!("Skip broker registration because topic config manager is not initialized");
+            return;
+        };
+        let table = topic_config_manager.topic_config_table();
         for topic_config in table.iter() {
             let new_topic_config = if !PermName::is_writeable(self.broker_config.broker_permission)
                 || !PermName::is_readable(self.broker_config.broker_permission)
@@ -3561,6 +3615,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     async fn send_heartbeat(&self) {
+        if self.shutdown.load(Ordering::Acquire) {
+            return;
+        }
+
         let Some(replicas_manager) = self.replicas_manager() else {
             return;
         };
@@ -3571,6 +3629,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 "Skip controller heartbeat because no controller address is configured, broker={}",
                 self.broker_config.broker_identity.get_canonical_name()
             );
+            return;
+        }
+
+        if self.shutdown.load(Ordering::Acquire) {
             return;
         }
 
@@ -3589,6 +3651,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .map(|message_store| message_store.get_confirm_offset());
 
         for controller_address in controller_targets {
+            if self.shutdown.load(Ordering::Acquire) {
+                return;
+            }
             self.broker_outer_api
                 .send_heartbeat_to_controller(
                     controller_address,
@@ -3682,9 +3747,11 @@ mod tests {
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::message::MessageTrait;
+    use rocketmq_common::common::mix_all;
     use rocketmq_common::common::mix_all::MASTER_ID;
     use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
     use rocketmq_common::common::server::config::ServerConfig;
+    use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_common::TopicAttributes;
     use rocketmq_controller::config::RaftPeer;
@@ -3718,6 +3785,7 @@ mod tests {
     use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
     use rocketmq_remoting::protocol::body::user_info::UserInfo;
     use rocketmq_remoting::protocol::header::add_broker_request_header::AddBrokerRequestHeader;
+    use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
     use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
     use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
     use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
@@ -4272,7 +4340,6 @@ accounts:
         let message_store_config = Arc::new(MessageStoreConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
             flush_disk_type: FlushDiskType::AsyncFlush,
-            read_uncommitted: true,
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -5336,6 +5403,107 @@ accounts:
             1
         );
 
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn phase3_consumer_send_msg_back_writes_retry_delay_message() {
+        let mut runtime = new_phase3_test_runtime("phase3-send-back").await;
+        let topic = CheetahString::from_static_str("phase3-send-back-topic");
+        let group = CheetahString::from_static_str("phase3-send-back-group");
+        runtime
+            .inner_for_test()
+            .topic_config_manager_mut()
+            .update_topic_config(ArcMut::new(TopicConfig::with_queues(topic.clone(), 1, 1)));
+        runtime
+            .inner_for_test()
+            .subscription_group_manager_mut()
+            .update_subscription_group_config(&mut SubscriptionGroupConfig::new(group.clone()));
+        runtime
+            .inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .start()
+            .await
+            .expect("message store should start");
+
+        let mut original = MessageExtBrokerInner::default();
+        original.set_topic(topic.clone());
+        original.message_ext_inner.set_queue_id(0);
+        original.set_body(Bytes::from_static(b"phase3-send-back-body"));
+        original.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
+            CheetahString::from_static_str("RetryTag"),
+        );
+
+        let put_result = runtime
+            .inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .put_message(original)
+            .await;
+        assert!(put_result.is_ok(), "seed message should be stored");
+        let commit_log_offset = put_result
+            .append_message_result()
+            .expect("seed put should expose append result")
+            .wrote_offset;
+
+        let (mut processor, _) = runtime.init_processor();
+        let send_back_header = ConsumerSendMsgBackRequestHeader {
+            offset: commit_log_offset,
+            group: group.clone(),
+            delay_level: 3,
+            origin_msg_id: Some(CheetahString::from_static_str("origin-msg-id")),
+            origin_topic: Some(topic),
+            unit_mode: false,
+            max_reconsume_times: Some(16),
+            rpc_request_header: None,
+        };
+        let mut send_back_request =
+            RemotingCommand::create_request_command(RequestCode::ConsumerSendMsgBack, send_back_header);
+        send_back_request.make_custom_header_to_net();
+
+        let send_back_response = process_broker_request(&mut processor, &mut send_back_request).await;
+        assert_eq!(ResponseCode::from(send_back_response.code()), ResponseCode::Success);
+
+        let schedule_queue_id = crate::schedule::schedule_message_service::delay_level_to_queue_id(3);
+        let schedule_topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        let mut scheduled_offset = 0;
+        for _ in 0..100 {
+            scheduled_offset = runtime
+                .inner
+                .message_store()
+                .expect("message store should be initialized")
+                .get_max_offset_in_queue(&schedule_topic, schedule_queue_id);
+            if scheduled_offset == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            scheduled_offset, 1,
+            "send-back should write one delayed retry message into SCHEDULE_TOPIC_XXXX"
+        );
+
+        let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(group.as_str()));
+        assert!(
+            runtime
+                .inner_for_test()
+                .topic_config_manager()
+                .select_topic_config(&retry_topic)
+                .is_some(),
+            "send-back should create the retry topic for the consumer group"
+        );
+
+        runtime
+            .inner
+            .message_store_mut()
+            .as_mut()
+            .expect("message store should be initialized")
+            .shutdown()
+            .await;
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

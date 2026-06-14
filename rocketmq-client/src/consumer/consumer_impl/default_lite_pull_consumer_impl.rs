@@ -42,6 +42,7 @@ use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::mpsc;
@@ -442,6 +443,7 @@ pub struct DefaultLitePullConsumerImpl {
     rebalance_impl: ArcMut<RebalanceLitePullImpl>,
     pull_api_wrapper: Option<ArcMut<PullAPIWrapper>>,
     offset_store: Option<ArcMut<OffsetStore>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
 
     // Queue management
     assigned_message_queue: Arc<AssignedMessageQueue>,
@@ -499,6 +501,7 @@ impl DefaultLitePullConsumerImpl {
             rebalance_impl: ArcMut::new(RebalanceLitePullImpl::new(consumer_config.to_consumer_config())),
             pull_api_wrapper: None,
             offset_store: None,
+            rpc_hook: None,
             assigned_message_queue: Arc::new(AssignedMessageQueue::new()),
             message_queue_locks: Arc::new(RwLock::new(HashMap::new())),
             task_handles: Arc::new(RwLock::new(HashMap::new())),
@@ -534,6 +537,10 @@ impl DefaultLitePullConsumerImpl {
             user_listener: self.user_message_queue_listener.clone(),
         }));
         self.default_lite_pull_consumer_impl = Some(default_lite_pull_consumer_impl);
+    }
+
+    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<dyn RPCHook>>) {
+        self.rpc_hook = rpc_hook;
     }
 
     /// Validates service state is Running.
@@ -605,6 +612,11 @@ impl DefaultLitePullConsumerImpl {
     #[cfg(test)]
     pub(crate) fn rebalance_has_offset_store(&self) -> bool {
         self.rebalance_impl.offset_store.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_rpc_hook(&self) -> bool {
+        self.rpc_hook.is_some()
     }
 
     /// Validates configuration before starting.
@@ -891,7 +903,7 @@ impl DefaultLitePullConsumerImpl {
                 }
 
                 let client_instance = MQClientManager::get_instance()
-                    .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), None);
+                    .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), self.rpc_hook.clone());
                 self.client_instance = Some(client_instance.clone());
 
                 self.rebalance_impl

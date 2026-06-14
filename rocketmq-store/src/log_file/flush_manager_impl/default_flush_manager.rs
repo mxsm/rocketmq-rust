@@ -51,6 +51,7 @@ impl DefaultFlushManager {
             FlushDiskType::SyncFlush => (
                 Some(GroupCommitService {
                     store_checkpoint: store_checkpoint.clone(),
+                    notified: Arc::new(Notify::new()),
                     tx_in: None,
                     shutdown_token: CancellationToken::new(),
                     worker_handle: None,
@@ -233,6 +234,7 @@ impl FlushManager for DefaultFlushManager {
 
 struct GroupCommitService {
     store_checkpoint: Arc<StoreCheckpoint>,
+    notified: Arc<Notify>,
     tx_in: Option<tokio::sync::mpsc::Sender<GroupCommitRequest>>,
     shutdown_token: CancellationToken,
     worker_handle: Option<JoinHandle<()>>,
@@ -263,6 +265,7 @@ impl GroupCommitService {
         self.tx_in = Some(tx_in);
         let shutdown_token = self.shutdown_token.clone();
         let store_checkpoint = self.store_checkpoint.clone();
+        let notified = Arc::clone(&self.notified);
         self.worker_handle = Some(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -278,6 +281,14 @@ impl GroupCommitService {
                             complete_group_commit_batch(remaining, flushed_where);
                         }
                         break;
+                    }
+                    _ = notified.notified() => {
+                        let Some(flush_result) = flush_mapped_file_queue(mapped_file_queue.clone(), 0).await else {
+                            continue;
+                        };
+                        if flush_result.store_timestamp > 0 {
+                            store_checkpoint.set_physic_msg_timestamp(flush_result.store_timestamp);
+                        }
                     }
                     maybe_request = rx_in.recv() => match maybe_request {
                     None => break,
@@ -316,7 +327,9 @@ impl GroupCommitService {
         }));
     }
 
-    pub fn wakeup(&self) {}
+    pub fn wakeup(&self) {
+        self.notified.notify_one();
+    }
 
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
@@ -704,6 +717,7 @@ mod tests {
         let mapped_file_queue = ArcMut::new(MappedFileQueue::default());
         let mut service = GroupCommitService {
             store_checkpoint,
+            notified: Arc::new(Notify::new()),
             tx_in: None,
             shutdown_token: CancellationToken::new(),
             worker_handle: None,

@@ -55,7 +55,7 @@ impl MessageUtil {
         let mut reply_message = Message::default();
         reply_message.set_body(Some(Bytes::copy_from_slice(body)));
 
-        let reply_topic = mix_all::get_retry_topic(cluster);
+        let reply_topic = mix_all::get_reply_topic(cluster);
         reply_message.set_topic(CheetahString::from_string(reply_topic));
 
         // Set message type using cached static string
@@ -97,5 +97,61 @@ impl MessageUtil {
         reply_message
             .property(&PROPERTY_MESSAGE_REPLY_TO_CLIENT)
             .map(CheetahString::from_slice)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_reply_message_uses_java_reply_topic_and_copies_request_properties() {
+        let mut request = Message::default();
+        MessageAccessor::put_property(
+            &mut request,
+            PROPERTY_CLUSTER.clone(),
+            CheetahString::from_static_str("ClusterA"),
+        );
+        MessageAccessor::put_property(
+            &mut request,
+            PROPERTY_MESSAGE_REPLY_TO_CLIENT.clone(),
+            CheetahString::from_static_str("client-1"),
+        );
+        MessageAccessor::put_property(
+            &mut request,
+            PROPERTY_CORRELATION_ID.clone(),
+            CheetahString::from_static_str("corr-1"),
+        );
+        MessageAccessor::put_property(
+            &mut request,
+            PROPERTY_MESSAGE_TTL.clone(),
+            CheetahString::from_static_str("3000"),
+        );
+
+        let reply =
+            MessageUtil::create_reply_message(&request, b"reply-body").expect("reply message should be created");
+
+        assert_eq!(reply.topic().as_str(), "ClusterA_REPLY_TOPIC");
+        assert_eq!(
+            reply.body().as_ref().map(|body| body.as_ref()),
+            Some(b"reply-body".as_slice())
+        );
+        assert_eq!(
+            reply.property(&PROPERTY_MESSAGE_TYPE),
+            Some(mix_all::REPLY_MESSAGE_FLAG)
+        );
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_REPLY_TO_CLIENT), Some("client-1"));
+        assert_eq!(reply.property(&PROPERTY_CORRELATION_ID), Some("corr-1"));
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_TTL), Some("3000"));
+    }
+
+    #[test]
+    fn create_reply_message_requires_cluster_property_like_java() {
+        let request = Message::default();
+
+        let error =
+            MessageUtil::create_reply_message(&request, b"reply-body").expect_err("missing cluster should fail");
+
+        assert!(error.to_string().contains(MessageConst::PROPERTY_CLUSTER));
     }
 }

@@ -40,6 +40,8 @@ use crate::runtime::processor::RequestProcessor;
 use crate::tls::connect_tls_stream;
 #[cfg(not(feature = "tls"))]
 use crate::tls::tls_disabled_error;
+#[cfg(not(feature = "tls"))]
+use crate::tls::TLS_DISABLED_ERROR_REASON;
 
 #[derive(Clone)]
 pub struct Client<PR> {
@@ -92,6 +94,10 @@ where
             #[cfg(not(feature = "tls"))]
             {
                 let _ = stream;
+                debug_assert_eq!(
+                    TLS_DISABLED_ERROR_REASON,
+                    "rocketmq-remoting was compiled without the tls feature"
+                );
                 return Err(tls_disabled_error());
             }
         } else {
