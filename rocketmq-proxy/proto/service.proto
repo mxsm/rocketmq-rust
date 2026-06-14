@@ -15,7 +15,7 @@
 //
 // Source: https://github.com/apache/rocketmq-apis/tree/main/apache/rocketmq/v2
 // Copyright: The Apache Software Foundation (ASF)
-// Adapted for rocketmq-rust namespace and local build layout.
+// Adapted for rocketmq-rust local build layout.
 
 syntax = "proto3";
 
@@ -24,14 +24,14 @@ import "google/protobuf/timestamp.proto";
 
 import "definition.proto";
 
-package rocketmq_rust_proxy.v2;
+package apache.rocketmq.v2;
 
-option csharp_namespace = "Rocketmq.Rust.Proxy.V2";
+option csharp_namespace = "Apache.Rocketmq.V2";
 option java_multiple_files = true;
-option java_package = "rocketmq.rust.proxy.v2";
+option java_package = "apache.rocketmq.v2";
 option java_generate_equals_and_hash = true;
 option java_string_check_utf8 = true;
-option java_outer_classname = "RocketmqRustProxyService";
+option java_outer_classname = "RocketmqService";
 
 // Topics are destination of messages to publish to or subscribe from. Similar
 // to domain names, they will be addressable after resolution through the

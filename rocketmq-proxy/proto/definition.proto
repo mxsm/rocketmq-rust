@@ -15,21 +15,21 @@
 //
 // Source: https://github.com/apache/rocketmq-apis/tree/main/apache/rocketmq/v2
 // Copyright: The Apache Software Foundation (ASF)
-// Adapted for rocketmq-rust namespace and local build layout.
+// Adapted for rocketmq-rust local build layout.
 
 syntax = "proto3";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
 
-package rocketmq_rust_proxy.v2;
+package apache.rocketmq.v2;
 
-option csharp_namespace = "Rocketmq.Rust.Proxy.V2";
+option csharp_namespace = "Apache.Rocketmq.V2";
 option java_multiple_files = true;
-option java_package = "rocketmq.rust.proxy.v2";
+option java_package = "apache.rocketmq.v2";
 option java_generate_equals_and_hash = true;
 option java_string_check_utf8 = true;
-option java_outer_classname = "RocketmqRustProxyDomain";
+option java_outer_classname = "RocketmqDomain";
 
 enum TransactionResolution {
   TRANSACTION_RESOLUTION_UNSPECIFIED = 0;
