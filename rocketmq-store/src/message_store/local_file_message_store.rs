@@ -3938,6 +3938,8 @@ struct CleanCommitLogService {
     commit_log: ArcMut<CommitLog>,
     running_flags: Arc<RunningFlags>,
     manual_delete_requests: AtomicI32,
+    #[cfg(test)]
+    disk_clean_decision_override: StdMutex<Option<DiskCleanDecision>>,
 }
 
 impl CleanCommitLogService {
@@ -3953,6 +3955,8 @@ impl CleanCommitLogService {
             commit_log,
             running_flags,
             manual_delete_requests: AtomicI32::new(0),
+            #[cfg(test)]
+            disk_clean_decision_override: StdMutex::new(None),
         }
     }
 
@@ -4006,7 +4010,24 @@ impl CleanCommitLogService {
             .is_ok()
     }
 
+    #[cfg(test)]
+    fn set_disk_clean_decision_override(&self, decision: Option<DiskCleanDecision>) {
+        *self
+            .disk_clean_decision_override
+            .lock()
+            .expect("lock disk clean decision override") = decision;
+    }
+
     fn is_space_to_delete(&self) -> DiskCleanDecision {
+        #[cfg(test)]
+        if let Some(decision) = *self
+            .disk_clean_decision_override
+            .lock()
+            .expect("lock disk clean decision override")
+        {
+            return decision;
+        }
+
         let warning_ratio = self.disk_space_warning_level_ratio();
         let clean_forcibly_ratio = self.disk_space_clean_forcibly_ratio();
         let (min_physic_ratio, min_store_path) = self.min_physic_disk_ratio();
@@ -4374,6 +4395,7 @@ mod tests {
 
     use super::run_blocking_scheduled_task;
     use super::CleanCommitLogService;
+    use super::DiskCleanDecision;
     use super::LocalFileMessageStore;
     use super::ReputMessageServiceInner;
     use super::StoreLifecycleState;
@@ -6594,6 +6616,9 @@ mod tests {
                 .expect("append commitlog file"));
         }
 
+        store
+            .clean_commit_log_service
+            .set_disk_clean_decision_override(Some(DiskCleanDecision::default()));
         store.clean_commit_log_service.run();
 
         assert_eq!(store.get_min_phy_offset(), 0);

@@ -73,12 +73,17 @@ rocketmq-admin-cli topic updateTopic -t MyTopic -c DefaultCluster -r 8 -w 8 -n 1
 rocketmq-admin-cli topic deleteTopic -t MyTopic -c DefaultCluster -n 127.0.0.1:9876
 
 # NameServer commands
-rocketmq-admin-cli nameserver getKVConfig -s namespace -k key -n 127.0.0.1:9876
-rocketmq-admin-cli nameserver updateKVConfig -s namespace -k key -v value -n 127.0.0.1:9876
+rocketmq-admin-cli nameserver updateKvConfig -s namespace -k key -v value -n 127.0.0.1:9876
+rocketmq-admin-cli nameserver deleteKvConfig -s namespace -k key -n 127.0.0.1:9876
 
 # Broker config commands
 rocketmq-admin-cli broker getBrokerConfig -c DefaultCluster -n 127.0.0.1:9876
 rocketmq-admin-cli broker updateBrokerConfig -c DefaultCluster -k flushDiskType -v ASYNC_FLUSH -n 127.0.0.1:9876
+
+# Container and export commands
+rocketmq-admin-cli container addBroker -c 127.0.0.1:10911 -b ./conf/broker.conf
+rocketmq-admin-cli export exportMetrics -c DefaultCluster -f /tmp/rocketmq/export -n 127.0.0.1:9876
+rocketmq-admin-cli export rocksDBConfigToJson -p /tmp/rocketmq/config -t topics -j true
 ```
 
 ## Command Domains
@@ -89,17 +94,18 @@ rocketmq-admin-cli broker updateBrokerConfig -c DefaultCluster -k flushDiskType 
 | `nameserver` | NameServer config, KV config, and write permission operations. |
 | `broker` | Broker config, status, cleanup, cold-data, timer, and commit-log operations. |
 | `cluster` | Cluster listing and cluster send-RT diagnostics. |
+| `container` | Broker container add/remove operations. |
 | `consumer` | Subscription group, consumer progress, running info, and consume mode operations. |
 | `connection` | Consumer and producer connection inspection. |
 | `offset` | Clone, reset, skip, and query consumer offsets. |
 | `queue` | ConsumeQueue query and RocksDB CQ write-progress checks. |
 | `message` | Message query, decode, print, consume, and send diagnostics. |
 | `producer` | Producer info and send diagnostic operations. |
-| `controller` | Controller config and metadata operations. |
+| `controller` | Controller config, metadata, and master election operations. |
 | `auth` | User and ACL management. |
 | `ha` | HA status and sync-state-set inspection. |
 | `stats` | Cluster-wide topic and consumer statistics. |
-| `export` | Config, metadata, pop-record, and optional RocksDB metadata export. |
+| `export` | Config, metadata, metrics, pop-record, and RocksDB metadata export. |
 | `lite` | Lite topic/group/client inspection and dispatch operations. |
 
 ## Environment

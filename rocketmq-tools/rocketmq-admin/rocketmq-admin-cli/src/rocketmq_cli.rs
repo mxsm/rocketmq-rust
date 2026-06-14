@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ffi::OsString;
+
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::generate;
@@ -38,6 +40,10 @@ pub struct RocketMQCli {
 }
 
 impl RocketMQCli {
+    pub fn parse_from_java_compatible_args() -> Self {
+        Self::parse_from(normalize_java_compatible_args(std::env::args_os()))
+    }
+
     pub async fn handle(&self) {
         if let Some(shell) = &self.completion {
             let mut cmd = RocketMQCli::command();
@@ -69,5 +75,39 @@ impl RocketMQCli {
         } else {
             eprintln!("No command specified. Use --help for usage information.");
         }
+    }
+}
+
+fn normalize_java_compatible_args<I>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    args.into_iter()
+        .map(|arg| {
+            if arg == "-bn" {
+                OsString::from("--brokerName")
+            } else {
+                arg
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_java_compatible_args;
+    use std::ffi::OsString;
+
+    #[test]
+    fn normalizes_java_multi_character_short_broker_name_option() {
+        let args = normalize_java_compatible_args([
+            OsString::from("rocketmq-admin-cli"),
+            OsString::from("controller"),
+            OsString::from("electMaster"),
+            OsString::from("-bn"),
+            OsString::from("broker-a"),
+        ]);
+
+        assert_eq!(args[3], OsString::from("--brokerName"));
     }
 }

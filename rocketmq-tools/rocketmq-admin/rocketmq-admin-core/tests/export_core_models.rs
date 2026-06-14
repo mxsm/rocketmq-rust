@@ -196,6 +196,10 @@ fn export_metrics_report_parses_runtime_quota_like_java() {
         CheetahString::from_static_str("putMessageAverageSize"),
         CheetahString::from_static_str("512"),
     );
+    runtime_stats.table.insert(
+        CheetahString::from_static_str("brokerVersionDesc"),
+        CheetahString::from_static_str("V5_5_0"),
+    );
 
     let broker_config = HashMap::from([(
         CheetahString::from_static_str("clientCallbackExecutorThreads"),
@@ -236,6 +240,7 @@ fn export_metrics_report_parses_runtime_quota_like_java() {
     assert_eq!(report.runtime_quota.one_day_num.schedule_one_day_in_num, 20);
     assert_eq!(report.runtime_quota.topic_size, 12);
     assert_eq!(report.runtime_quota.group_size, 4);
+    assert_eq!(report.runtime_version.rocketmq_version, "V5_5_0");
     assert_eq!(report.runtime_version.client_info, vec!["JAVA%V5_1_0"]);
     assert_eq!(totals.total_tps.total_normal_in_tps, 123.5);
     assert_eq!(totals.total_one_day_num.normal_one_day_out_num, 50);

@@ -69,8 +69,10 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::CommandCustomHeader;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_rust::ArcMut;
+use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::info;
 
@@ -419,13 +421,18 @@ impl Controller for OpenRaftController {
 
         let addr = raft_addr;
         let node_id = self.config.node_id;
+        let listener = TcpListener::bind(addr).await.map_err(|error| {
+            rocketmq_error::RocketMQError::Internal(format!(
+                "Failed to bind OpenRaft gRPC server for node {node_id} on {addr}: {error}"
+            ))
+        })?;
 
         let handle = tokio::spawn(async move {
             info!("gRPC server starting for node {} on {}", node_id, addr);
 
             let result = Server::builder()
                 .add_service(OpenRaftServiceServer::new(service))
-                .serve_with_shutdown(addr, async {
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                     shutdown_rx.await.ok();
                     info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
                 })
@@ -802,5 +809,36 @@ impl Controller for OpenRaftController {
 
     fn register_broker_lifecycle_listener(&self, listener: Arc<dyn BrokerLifecycleListener>) {
         self.lifecycle_listeners.write().push(listener);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener as StdTcpListener;
+
+    use rocketmq_common::common::controller::controller_config::RaftPeer;
+    use rocketmq_common::common::controller::ControllerConfig;
+    use rocketmq_rust::ArcMut;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn startup_binds_grpc_listener_before_returning() {
+        let probe = StdTcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+        let addr = probe.local_addr().expect("read probe address");
+        drop(probe);
+
+        let config = ControllerConfig::default()
+            .with_node_info(1, addr)
+            .with_raft_peers(vec![RaftPeer { id: 1, addr }]);
+        let mut controller = OpenRaftController::new(ArcMut::new(config));
+
+        controller.startup().await.expect("start OpenRaft controller");
+        assert!(
+            StdTcpListener::bind(addr).is_err(),
+            "OpenRaft controller startup should return only after binding the gRPC listener"
+        );
+
+        controller.shutdown().await.expect("shutdown OpenRaft controller");
     }
 }

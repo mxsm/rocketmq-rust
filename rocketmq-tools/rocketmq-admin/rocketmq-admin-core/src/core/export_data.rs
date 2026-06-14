@@ -979,7 +979,8 @@ impl ExportService {
                 group_size,
             },
             runtime_version: ExportMetricsRuntimeVersion {
-                rocketmq_version: CURRENT_VERSION.name().to_string(),
+                rocketmq_version: kv_value(runtime_stats, "brokerVersionDesc")
+                    .unwrap_or_else(|| CURRENT_VERSION.name().to_string()),
                 client_info: normalize_client_info(client_info),
             },
         }

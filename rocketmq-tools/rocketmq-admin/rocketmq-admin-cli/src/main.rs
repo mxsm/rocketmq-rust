@@ -12,19 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use clap::Parser;
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_remoting::protocol::remoting_command;
 
-#[rocketmq_rust::main]
-async fn main() {
+const CLI_RUNTIME_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+fn main() {
+    let handle = std::thread::Builder::new()
+        .name("rocketmq-admin-cli-main".to_string())
+        .stack_size(CLI_RUNTIME_STACK_SIZE)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(CLI_RUNTIME_STACK_SIZE)
+                .build()
+                .expect("failed to build rocketmq-admin-cli runtime");
+            runtime.block_on(async_main());
+        })
+        .expect("failed to spawn rocketmq-admin-cli main thread");
+
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+async fn async_main() {
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
     );
 
-    let cli = RocketMQCli::parse();
+    let cli = RocketMQCli::parse_from_java_compatible_args();
     cli.handle().await;
 }

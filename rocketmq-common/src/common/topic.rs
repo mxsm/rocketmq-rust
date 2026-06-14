@@ -70,6 +70,12 @@ static SYSTEM_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC,
     ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC,
+    ));
     set
 });
 
@@ -87,6 +93,12 @@ static NOT_ALLOWED_SEND_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
     ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC,
+    ));
     set
 });
 
@@ -97,8 +109,10 @@ impl TopicValidator {
     pub const RMQ_SYS_SCHEDULE_TOPIC: &'static str = "SCHEDULE_TOPIC_XXXX";
     pub const RMQ_SYS_BENCHMARK_TOPIC: &'static str = "BenchmarkTest";
     pub const RMQ_SYS_TRANS_HALF_TOPIC: &'static str = "RMQ_SYS_TRANS_HALF_TOPIC";
+    pub const RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC: &'static str = "RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC";
     pub const RMQ_SYS_TRACE_TOPIC: &'static str = "RMQ_SYS_TRACE_TOPIC";
     pub const RMQ_SYS_TRANS_OP_HALF_TOPIC: &'static str = "RMQ_SYS_TRANS_OP_HALF_TOPIC";
+    pub const RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC: &'static str = "RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC";
     pub const RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC: &'static str = "TRANS_CHECK_MAX_TIME_TOPIC";
     pub const RMQ_SYS_SELF_TEST_TOPIC: &'static str = "SELF_TEST_TOPIC";
     pub const RMQ_SYS_OFFSET_MOVED_EVENT: &'static str = "OFFSET_MOVED_EVENT";
@@ -263,6 +277,12 @@ mod tests {
     #[test]
     fn is_system_topic_with_system_topic() {
         assert!(TopicValidator::is_system_topic(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
+        assert!(TopicValidator::is_system_topic(
+            TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC
+        ));
+        assert!(TopicValidator::is_system_topic(
+            TopicValidator::RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC
+        ));
     }
 
     #[test]
@@ -274,6 +294,12 @@ mod tests {
     fn is_not_allowed_send_topic_with_not_allowed_topic() {
         assert!(TopicValidator::is_not_allowed_send_topic(
             TopicValidator::RMQ_SYS_SCHEDULE_TOPIC
+        ));
+        assert!(TopicValidator::is_not_allowed_send_topic(
+            TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC
+        ));
+        assert!(TopicValidator::is_not_allowed_send_topic(
+            TopicValidator::RMQ_SYS_ROCKSDB_TRANS_OP_HALF_TOPIC
         ));
     }
 

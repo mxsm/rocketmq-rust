@@ -119,15 +119,15 @@ impl TopicService {
             let mut topic_stats_table = rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable::new();
             if let Some(route_data) = &topic_route_data {
                 let mut total_offset_table = HashMap::new();
+                let mut topic_put_tps = 0.0;
                 for broker_data in &route_data.broker_datas {
                     let addr = broker_data.select_broker_addr();
-                    let offset_table = admin
-                        .examine_topic_stats(topic.clone(), addr)
-                        .await?
-                        .into_offset_table();
-                    total_offset_table.extend(offset_table);
+                    let stats = admin.examine_topic_stats(topic.clone(), addr).await?;
+                    topic_put_tps += stats.get_topic_put_tps();
+                    total_offset_table.extend(stats.into_offset_table());
                 }
                 topic_stats_table.set_offset_table(total_offset_table);
+                topic_stats_table.set_topic_put_tps(topic_put_tps);
             }
             Ok(topic_stats_table)
         } else {

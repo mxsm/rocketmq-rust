@@ -76,7 +76,8 @@ pub enum MessageCommands {
     DumpCompactionLog(DumpCompactionLogSubCommand),
 
     #[command(
-        name = "printMessage",
+        name = "printMsg",
+        visible_alias = "printMessage",
         about = "Print Message Detail.",
         long_about = None,
     )]
@@ -118,6 +119,7 @@ pub enum MessageCommands {
 
     #[command(
         name = "queryMsgTraceById",
+        visible_alias = "QueryMsgTraceById",
         about = "Query message trace by message ID.",
         long_about = None,
     )]

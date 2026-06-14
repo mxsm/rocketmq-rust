@@ -130,10 +130,10 @@ impl CommandExecute for ConsumeMessageSubCommand {
                 MessagePullEvent::ConsumeOk => println!("Consume ok"),
                 MessagePullEvent::Messages { messages } => Self::print_messages(&messages),
                 MessagePullEvent::NoMatched { mq, status, offset } => {
-                    println!("{} no matched msg. status={:?}, offset={}", mq, status, offset)
+                    println!("{} no matched msg. status={}, offset={}", mq, status, offset)
                 }
                 MessagePullEvent::Finished { mq, status, offset } => {
-                    println!("{} print msg finished. status={:?}, offset={}", mq, status, offset)
+                    println!("{} print msg finished. status={}, offset={}", mq, status, offset)
                 }
                 MessagePullEvent::PullError { error } => eprintln!("{}", error),
                 MessagePullEvent::OffsetNotMatched { mq, offset } => {

@@ -4738,11 +4738,6 @@ accounts:
         root: &Path,
     ) -> ArcMut<TestControllerManager> {
         let node_id = controller_peer.id;
-        let raft_addr = raft_peers
-            .iter()
-            .find(|peer| peer.id == node_id)
-            .map(|peer| peer.addr)
-            .unwrap_or(controller_peer.addr);
         let config = TestControllerConfig::default()
             .with_node_info(node_id, controller_peer.addr)
             .with_controller_peers(controller_peers)
@@ -4774,7 +4769,6 @@ accounts:
         );
         manager.clone().start().await.expect("start controller manager");
         wait_for_tcp_listener(controller_peer.addr, "controller remoting server to listen").await;
-        wait_for_tcp_listener(raft_addr, "controller raft server to listen").await;
         manager
     }
 

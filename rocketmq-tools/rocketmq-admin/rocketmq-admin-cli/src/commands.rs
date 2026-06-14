@@ -17,6 +17,7 @@ mod broker;
 mod cluster;
 mod connection;
 mod consumer;
+mod container;
 mod controller;
 mod export;
 mod ha;
@@ -105,6 +106,11 @@ pub enum Commands {
     Consumer(consumer::ConsumerCommands),
 
     #[command(subcommand)]
+    #[command(about = "Broker container commands")]
+    #[command(name = "container")]
+    Container(container::ContainerCommands),
+
+    #[command(subcommand)]
     #[command(about = "Controller commands")]
     #[command(name = "controller")]
     Controller(controller::ControllerCommands),
@@ -170,6 +176,7 @@ impl CommandExecute for Commands {
             Commands::Cluster(value) => value.execute(rpc_hook).await,
             Commands::Connection(value) => value.execute(rpc_hook).await,
             Commands::Consumer(value) => value.execute(rpc_hook).await,
+            Commands::Container(value) => value.execute(rpc_hook).await,
             Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Export(value) => value.execute(rpc_hook).await,
             Commands::HA(value) => value.execute(rpc_hook).await,
@@ -237,13 +244,33 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Auth",
+                command: "getAcl",
+                remark: "Get acl from cluster.",
+            },
+            Command {
+                category: "Auth",
+                command: "getUser",
+                remark: "Get user from cluster.",
+            },
+            Command {
+                category: "Auth",
                 command: "listAcl",
                 remark: "List acl from cluster.",
             },
             Command {
                 category: "Auth",
+                command: "listUser",
+                remark: "List users from cluster.",
+            },
+            Command {
+                category: "Auth",
                 command: "updateAcl",
                 remark: "Update ACL.",
+            },
+            Command {
+                category: "Auth",
+                command: "updateUser",
+                remark: "Update user to cluster.",
             },
             Command {
                 category: "Broker",
@@ -312,6 +339,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "updateColdDataFlowCtrGroupConfig",
+                remark: "Update cold data flow ctr group config.",
+            },
+            Command {
+                category: "Broker",
                 command: "setCommitLogReadAheadMode",
                 remark: "Set read ahead mode for all commitlog files.",
             },
@@ -336,9 +368,24 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Query producer's socket connection and client version.",
             },
             Command {
+                category: "Container",
+                command: "addBroker",
+                remark: "Add a broker to specified container.",
+            },
+            Command {
+                category: "Container",
+                command: "removeBroker",
+                remark: "Remove a broker from specified container.",
+            },
+            Command {
                 category: "Consumer",
                 command: "consumerStatus",
                 remark: "Query and display consumer's internal data structures.",
+            },
+            Command {
+                category: "Consumer",
+                command: "consumerProgress",
+                remark: "Query consumer progress.",
             },
             Command {
                 category: "Consumer",
@@ -371,6 +418,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Start Monitoring.",
             },
             Command {
+                category: "Consumer",
+                command: "setConsumeMode",
+                remark: "Set consume mode for consumer group.",
+            },
+            Command {
                 category: "Controller",
                 command: "cleanBrokerMetadata",
                 remark: "Clean metadata of broker on controller.",
@@ -386,6 +438,16 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Get meta data of controller.",
             },
             Command {
+                category: "Controller",
+                command: "electMaster",
+                remark: "Re-elect the specified broker as master.",
+            },
+            Command {
+                category: "Controller",
+                command: "updateControllerConfig",
+                remark: "Update configuration of controller(s).",
+            },
+            Command {
                 category: "Export",
                 command: "exportConfigs",
                 remark: "Export configs",
@@ -397,6 +459,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Export",
+                command: "exportMetrics",
+                remark: "Export metrics.",
+            },
+            Command {
+                category: "Export",
                 command: "exportMetadataInRocksDB",
                 remark: "Export RocksDB kv config (topics/subscriptionGroups). Recommend to use [mqadmin \
                          rocksDBConfigToJson]",
@@ -405,6 +472,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Export",
                 command: "exportPopRecord",
                 remark: "Export pop consumer records.",
+            },
+            Command {
+                category: "Export",
+                command: "rocksDBConfigToJson",
+                remark: "Convert RocksDB kv config to json.",
             },
             Command {
                 category: "HA",
@@ -468,7 +540,7 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
-                command: "printMessage",
+                command: "printMsg",
                 remark: "Print Message Detail.",
             },
             Command {
@@ -630,6 +702,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Topic",
                 command: "updateTopicPerm",
                 remark: "Update topic perm.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateTopicList",
+                remark: "Create or update topic configs in batch.",
             },
             Command {
                 category: "Topic",

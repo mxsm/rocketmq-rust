@@ -119,6 +119,8 @@ pub struct UpdateSubGroupSubCommand {
 impl UpdateSubGroupSubCommand {
     fn request(&self) -> RocketMQResult<UpdateSubscriptionGroupRequest> {
         let mut subscription_group_config = SubscriptionGroupConfig::new(self.group_name.as_str().into());
+        subscription_group_config.set_consume_broadcast_enable(false);
+        subscription_group_config.set_consume_from_min_enable(false);
 
         if let Some(consume_enable) = self.consume_enable {
             subscription_group_config.set_consume_enable(consume_enable);
@@ -321,5 +323,22 @@ mod tests {
         assert_eq!(Some(3), cmd.which_broker_when_consume_slowly);
         assert_eq!(Some(true), cmd.notify_consumer_ids_changed);
         assert_eq!(Some("+a=b,+c=d,-e"), cmd.attributes.as_deref());
+    }
+
+    #[test]
+    fn test_java_default_subscription_flags_are_preserved() {
+        let cmd = UpdateSubGroupSubCommand::try_parse_from([
+            "updateSubGroup",
+            "--brokerAddr",
+            "127.0.0.1:10911",
+            "--groupName",
+            "group-a",
+        ])
+        .unwrap();
+
+        let request = cmd.request().unwrap();
+
+        assert!(!request.config().consume_from_min_enable());
+        assert!(!request.config().consume_broadcast_enable());
     }
 }

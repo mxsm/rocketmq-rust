@@ -637,6 +637,7 @@ mod tests {
 
         let message_store_config = MessageStoreConfig {
             enable_controller_mode,
+            ha_max_time_slave_not_catchup: 1000,
             store_path_root_dir: root.to_string_lossy().into_owned().into(),
             ..MessageStoreConfig::default()
         };
@@ -843,6 +844,7 @@ mod tests {
         connection.set_slave_broker_id(Some(9));
 
         service.handle_connection_caught_up(connection.as_ref());
+        sleep(Duration::from_millis(2)).await;
 
         let shrunk = auto_switch_service.maybe_shrink_sync_state_set();
         assert_eq!(shrunk, HashSet::from([7_i64, 9_i64]));

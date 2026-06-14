@@ -23,9 +23,13 @@ use rocketmq_remoting::runtime::RPCHook;
 use tracing::warn;
 
 use crate::commands::CommandExecute;
+use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct StatsAllSubCommand {
+    #[command(flatten)]
+    common_args: CommonArgs,
+
     #[arg(
         short = 'a',
         long = "activeTopic",
@@ -41,6 +45,7 @@ pub struct StatsAllSubCommand {
 impl StatsAllSubCommand {
     fn request(&self) -> StatsAllQueryRequest {
         StatsAllQueryRequest::new(self.active_topic, self.topic.clone())
+            .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone())
     }
 
     fn print_row(row: &StatsAllRow) {
@@ -98,11 +103,13 @@ mod tests {
 
     #[test]
     fn stats_all_sub_command_builds_core_request() {
-        let cmd = StatsAllSubCommand::try_parse_from(["statsAll", "-a", "-t", " TopicA "]).unwrap();
+        let cmd =
+            StatsAllSubCommand::try_parse_from(["statsAll", "-a", "-t", " TopicA ", "-n", " 127.0.0.1:9876 "]).unwrap();
 
         let request = cmd.request();
 
         assert!(request.active_topic());
         assert_eq!(request.topic().map(|topic| topic.as_str()), Some("TopicA"));
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
     }
 }
