@@ -40,6 +40,7 @@ use crate::connection::Connection;
 
 const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
 const TLS_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
+pub const TLS_DISABLED_ERROR_REASON: &str = "rocketmq-remoting was compiled without the tls feature";
 
 #[cfg(feature = "tls")]
 type TlsAcceptorSlot = arc_swap::ArcSwapOption<tokio_rustls::TlsAcceptor>;
@@ -617,7 +618,7 @@ pub fn tls_disabled_error() -> RocketMQError {
     RocketMQError::ConfigInvalidValue {
         key: "use_tls",
         value: "true".to_string(),
-        reason: "rocketmq-remoting was compiled without the tls feature".to_string(),
+        reason: TLS_DISABLED_ERROR_REASON.to_string(),
     }
 }
 

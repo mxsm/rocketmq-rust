@@ -1015,6 +1015,7 @@ impl DefaultLitePullConsumer {
                 ));
                 let wrapper = impl_.clone();
                 impl_.set_default_lite_pull_consumer_impl(wrapper);
+                impl_.set_rpc_hook(self.rpc_hook.clone());
                 impl_.set_message_queue_listener(self.current_message_queue_listener());
 
                 self.init_trace_dispatcher_internal(&impl_).await?;
@@ -1738,6 +1739,8 @@ mod tests {
 
     use super::*;
     use crate::base::access_channel::AccessChannel;
+    use crate::common::acl_client_rpc_hook::AclClientRPCHook;
+    use crate::common::session_credentials::SessionCredentials;
     use crate::consumer::mq_consumer_inner::MQConsumerInner;
     use crate::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
     use crate::consumer::store::read_offset_type::ReadOffsetType;
@@ -1867,6 +1870,26 @@ mod tests {
             .expect("pre-start subscribe should be stored in rebalance subscriptions");
 
         assert_eq!(subscription.sub_string.as_str(), "TagA");
+    }
+
+    #[tokio::test]
+    async fn initialization_propagates_rpc_hook_to_impl() {
+        let rpc_hook = Arc::new(AclClientRPCHook::new(SessionCredentials::with_keys(
+            "access_key",
+            "secret_key",
+        )));
+        let consumer = DefaultLitePullConsumer::builder()
+            .consumer_group("lite_pull_rpc_hook_group")
+            .rpc_hook(rpc_hook)
+            .build()
+            .expect("builder should create consumer with RPC hook");
+
+        let impl_ = consumer
+            .get_or_init_impl()
+            .await
+            .expect("impl initialization should keep RPC hook");
+
+        assert!(impl_.has_rpc_hook(), "LitePull impl should retain builder RPC hook");
     }
 
     #[tokio::test]

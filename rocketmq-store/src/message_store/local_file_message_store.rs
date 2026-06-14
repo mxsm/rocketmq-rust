@@ -4323,6 +4323,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::net::TcpListener;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicI64;
     use std::sync::atomic::Ordering;
@@ -4398,6 +4399,14 @@ mod tests {
 
     fn new_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
         new_configured_test_store(temp_dir, MessageStoreConfig::default())
+    }
+
+    fn allocate_local_test_port() -> u16 {
+        TcpListener::bind(("127.0.0.1", 0))
+            .expect("allocate local test port")
+            .local_addr()
+            .expect("read local test port")
+            .port()
     }
 
     #[tokio::test]
@@ -5080,6 +5089,107 @@ mod tests {
 
         second.start().await.expect("lock should be reusable after shutdown");
         second.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn started_store_reput_dispatches_schedule_topic_messages_after_normal_message() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let normal_topic = CheetahString::from_static_str("started-store-normal-before-schedule-topic");
+        let schedule_topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        let schedule_queue_id = 2;
+        let normal_message = build_test_message(&normal_topic, Bytes::from_static(b"normal-before-schedule-body"));
+        let mut schedule_message = build_test_message(&schedule_topic, Bytes::from_static(b"scheduled-retry-body"));
+        schedule_message.message_ext_inner.set_queue_id(schedule_queue_id);
+        schedule_message.set_delay_time_level(3);
+
+        store.init().await.expect("init store");
+        assert!(store.load().await, "load store");
+        store.start().await.expect("start store");
+
+        let normal_put_result = store.put_message(normal_message).await;
+        assert_eq!(normal_put_result.put_message_status(), PutMessageStatus::PutOk);
+        let schedule_put_result = store.put_message(schedule_message).await;
+        assert_eq!(schedule_put_result.put_message_status(), PutMessageStatus::PutOk);
+
+        let mut normal_max_offset = 0;
+        let mut max_offset = 0;
+        for _ in 0..100 {
+            normal_max_offset = store.get_max_offset_in_queue(&normal_topic, 0);
+            max_offset = store.get_max_offset_in_queue(&schedule_topic, schedule_queue_id);
+            if normal_max_offset == 1 && max_offset == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        store.shutdown().await;
+
+        assert_eq!(
+            normal_max_offset, 1,
+            "started store should dispatch the normal message before the scheduled message"
+        );
+        assert_eq!(
+            max_offset, 1,
+            "started store should dispatch scheduled messages into SCHEDULE_TOPIC_XXXX consume queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_flush_store_dispatches_wait_false_schedule_topic_messages() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                ha_listen_port: allocate_local_test_port() as usize,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let normal_topic = CheetahString::from_static_str("sync-flush-normal-before-schedule-topic");
+        let schedule_topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        let schedule_queue_id = 2;
+        let normal_message = build_test_message(&normal_topic, Bytes::from_static(b"sync-flush-normal-body"));
+        let mut schedule_message = build_test_message(&schedule_topic, Bytes::from_static(b"sync-flush-schedule-body"));
+        schedule_message.message_ext_inner.set_queue_id(schedule_queue_id);
+        schedule_message.set_delay_time_level(3);
+        schedule_message.set_wait_store_msg_ok(false);
+
+        store.init().await.expect("init store");
+        assert!(store.load().await, "load store");
+        store.start().await.expect("start store");
+
+        let normal_put_result = store.put_message(normal_message).await;
+        assert_eq!(normal_put_result.put_message_status(), PutMessageStatus::PutOk);
+        let schedule_put_result = store.put_message(schedule_message).await;
+        assert_eq!(schedule_put_result.put_message_status(), PutMessageStatus::PutOk);
+
+        let mut normal_max_offset = 0;
+        let mut schedule_max_offset = 0;
+        for _ in 0..100 {
+            normal_max_offset = store.get_max_offset_in_queue(&normal_topic, 0);
+            schedule_max_offset = store.get_max_offset_in_queue(&schedule_topic, schedule_queue_id);
+            if normal_max_offset == 1 && schedule_max_offset == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        store.shutdown().await;
+
+        assert_eq!(
+            normal_max_offset, 1,
+            "sync flush store should dispatch the preceding normal message"
+        );
+        assert_eq!(
+            schedule_max_offset, 1,
+            "sync flush store should dispatch wait=false scheduled messages after wakeup flush"
+        );
     }
 
     #[tokio::test]

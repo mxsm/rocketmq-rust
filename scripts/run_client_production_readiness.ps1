@@ -389,13 +389,14 @@ if (-not $SkipUnitTests) {
 Push-Location $workspaceRoot
 try {
     $hasNamesrv = Test-EnvNonEmpty "ROCKETMQ_NAMESRV_ADDR"
+    $selfManagedBrokerSmoke = ($BrokerSmoke -eq "Require") -and (-not $hasNamesrv)
     $buildLikeGatesNeedDisk =
         (-not $SkipFormat) -or
         (-not $SkipClippy) -or
         (-not $SkipUnitTests) -or
         (-not $SkipBenchCompile) -or
         $RunBenchmarks -or
-        (($BrokerSmoke -ne "Skip") -and $hasNamesrv) -or
+        (($BrokerSmoke -ne "Skip") -and ($hasNamesrv -or $selfManagedBrokerSmoke)) -or
         ((-not $RustOnly) -and (-not [string]::IsNullOrWhiteSpace($JavaCompatibilityCommand))) -or
         ((-not $RustOnly) -and (-not [string]::IsNullOrWhiteSpace($JavaBenchCommand)))
     $skipBuildLikeGatesForDisk =
@@ -508,10 +509,36 @@ try {
     if ($BrokerSmoke -eq "Skip") {
         Add-ExternalGate -Gates $externalGates -Gate "broker-backed smoke not run; set ROCKETMQ_NAMESRV_ADDR and use -BrokerSmoke Require"
     } elseif (-not $hasNamesrv) {
-        $gate = "broker-backed smoke missing ROCKETMQ_NAMESRV_ADDR"
-        Add-ExternalGate -Gates $externalGates -Gate $gate
         if ($BrokerSmoke -eq "Require") {
-            throw $gate
+            $functionalScript = Join-Path $PSScriptRoot "run_client_broker_functional_tests.ps1"
+            if (-not (Test-Path $functionalScript)) {
+                $gate = "self-managed broker smoke missing script: $functionalScript"
+                Add-ExternalGate -Gates $externalGates -Gate $gate
+                throw $gate
+            }
+
+            $selfManagedOutputDir = Join-Path $OutputDir "self-managed-broker-smoke"
+            $functionalCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File $(Format-CommandArgument $functionalScript) " +
+                "-OutputDir $(Format-CommandArgument $selfManagedOutputDir) " +
+                "-JavaRocketMQRoot $(Format-CommandArgument $JavaRocketMQRoot) " +
+                "-SkipBaseGates -SkipMixedMatrix " +
+                "-BrokerSmokeTimeoutSeconds $BrokerSmokeTimeoutSeconds " +
+                "-CommandTimeoutSeconds $CommandTimeoutSeconds"
+            if ($UseExistingJavaClassesForJavaGate) {
+                $functionalCommand = "$functionalCommand -UseExistingJavaClasses"
+            }
+
+            $outputFile = Join-Path $resolvedOutputDir "broker-backed-smoke-self-managed-$runId.txt"
+            Invoke-LoggedCommand `
+                -Name "broker-backed-smoke-self-managed" `
+                -Command $functionalCommand `
+                -WorkingDirectory $workspaceRoot `
+                -OutputFile $outputFile `
+                -TimeoutSeconds $CommandTimeoutSeconds
+            "broker-backed-smoke-self-managed=$outputFile" | Add-Content -Path $summaryFile
+        } else {
+            $gate = "broker-backed smoke missing ROCKETMQ_NAMESRV_ADDR"
+            Add-ExternalGate -Gates $externalGates -Gate $gate
         }
     } elseif ($skipBuildLikeGatesForDisk) {
         Add-ExternalGate -Gates $externalGates -Gate "broker-backed smoke skipped because workspace drive free disk is below minimum"
