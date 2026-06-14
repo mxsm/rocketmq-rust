@@ -1,139 +1,102 @@
-# RocketMQ-Rust 示例
+# RocketMQ Rust 示例
 
-展示如何使用 RocketMQ-Rust 客户端 API 和功能的全面示例集合。
+这是 RocketMQ Rust client API 的独立示例项目。
 
-## 📋 概述
+该目录不是根 Cargo workspace 的一部分。所有命令都应在 `rocketmq-example/`
+目录下执行。
 
-这是一个**独立项目**，包含 RocketMQ-Rust 的实用示例。展示了各种使用模式，包括：
+## 前置条件
 
-- **消费者示例**：Push 消费者、Pop 消费者、消息监听器
-- **生产者示例**：*（即将推出）*
-- **管理操作**：*（即将推出）*
+- Rust 1.85.0 或更高版本。
+- 已启动 RocketMQ Namesrv 和 Broker。
+- 示例默认 Namesrv 地址为 `127.0.0.1:9876`。
+- 运行示例前先创建 topic 和 consumer group。示例本身不自动创建 broker 资源。
 
-## 🚀 快速开始
+使用 RocketMQ `mqadmin` 创建 topic 示例：
 
-### 前置要求
-
-- Rust 1.85.0 或更高版本
-- 运行中的 RocketMQ nameserver 和 broker（默认：`127.0.0.1:9876`）
-
-### 运行示例
-
-```bash
-# 进入示例目录
-cd rocketmq-example
-
-# 运行 pop 消费者示例
-cargo run --example pop-consumer
-
-# 列出所有可用示例
-cargo run --example <TAB>
+```powershell
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t BasicSendTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t DelaySendTestTopic -r 4 -w 4 -a +message.type=DELAY
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t OrderSendTestTopic -r 4 -w 4 -o true
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t TransactionSendTestTopic -r 4 -w 4 -a +message.type=TRANSACTION
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t RequestSendTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t BroadcastConsumerTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t TagFilterConsumerTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t SqlFilterConsumerTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t LitePullConsumerTestTopic -r 4 -w 4
 ```
 
-## 📚 可用示例
+按需创建消费组：
 
-### 消费者示例
-
-#### 集群消费者
-演示如何使用集群模式消费消息，在多个消费者实例之间实现负载均衡。
-
-**文件**：[examples/consumer/consumer_cluster.rs](examples/consumer/consumer_cluster.rs)
-
-**运行**：
-```bash
-cargo run --example consumer-cluster
+```powershell
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_broadcast_group -d true
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_orderly_group -o true
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_tag_filter_group
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_sql_filter_group
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_lite_pull_group
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_request_reply_group
 ```
 
-**功能特性**：
-- 集群模式消费（默认模式）
-- 消费者实例间负载均衡
-- 并发消息处理
-- 每条消息仅被一个实例消费
+## Producer 示例
 
-#### Pop 消费者
-演示如何使用 pop 消费模式并禁用客户端侧负载均衡。
+| 模式 | 示例 | 命令 | Topic | 说明 |
+| --- | --- | --- | --- | --- |
+| 简单发送 | `producer-simple` | `cargo run --example producer-simple` | `TopicTest` | 基础 producer 启动和发送。 |
+| 超时发送 | `producer-with-timeout` | `cargo run --example producer-with-timeout` | `TopicTest` | 已有超时和延迟消息示例。 |
+| 基础发送 API | `producer-basic-send` | `cargo run --example producer-basic-send` | `BasicSendTestTopic` | 同步、超时、callback、callback 超时、one-way。 |
+| 批量发送 | `producer-batch-send` | `cargo run --example producer-batch-send` | `BatchSendTestTopic` | 批量发送各种模式。 |
+| 指定队列发送 | `producer-send-to-queue` | `cargo run --example producer-send-to-queue` | `QueueSendTestTopic` | 发送到指定 message queue。 |
+| 队列选择器 | `producer-send-with-selector` | `cargo run --example producer-send-with-selector` | `SelectorSendTestTopic` | 自定义 queue selector。 |
+| 高级选择器 | `producer-send-with-selector-advanced` | `cargo run --example producer-send-with-selector-advanced` | `AdvancedSelectorTestTopic` | hash、round-robin、random、weighted 示例。 |
+| 延迟发送 | `producer-delay-send` | `cargo run --example producer-delay-send` | `DelaySendTestTopic` | `delay_level`、`delay_secs`、`delay_millis`、`deliver_time_ms`。 |
+| 顺序发送 | `producer-order-send` | `cargo run --example producer-order-send` | `OrderSendTestTopic` | 同一个 order id 路由到同一个队列。 |
+| 事务发送 | `producer-transaction-send` | `cargo run --example producer-transaction-send` | `TransactionSendTestTopic` | commit、rollback、unknown 本地事务状态。 |
+| Request/reply | `producer-request-send` | `cargo run --example producer-request-send` | `RequestSendTestTopic` | 先启动 `consumer-request-reply`。 |
+| Request/reply callback | `producer-request-callback-send` | `cargo run --example producer-request-callback-send` | `RequestSendTestTopic` | 先启动 `consumer-request-reply`。 |
 
-**文件**：[examples/consumer/pop_consumer.rs](examples/consumer/pop_consumer.rs)
+## Consumer 示例
 
-**运行**：
-```bash
-cargo run --example pop-consumer
+| 模式 | 示例 | 命令 | Topic | 说明 |
+| --- | --- | --- | --- | --- |
+| 集群 Push | `consumer-cluster` | `cargo run --example consumer-cluster` | `TopicTest` | 负载均衡消费。 |
+| Pop 消费 | `pop-consumer` | `cargo run --example pop-consumer` | `TopicTest` | Pop request mode 示例。 |
+| 广播 Push | `consumer-broadcast` | `cargo run --example consumer-broadcast` | `BroadcastConsumerTestTopic` | 每个 consumer 实例都会收到消息；消费组必须开启广播消费。 |
+| 顺序 Push | `consumer-orderly` | `cargo run --example consumer-orderly` | `OrderSendTestTopic` | 使用 `MessageListenerOrderly`。 |
+| Tag 过滤 Push | `consumer-tag-filter` | `cargo run --example consumer-tag-filter` | `TagFilterConsumerTestTopic` | 使用 `MessageSelector::by_tag("TagA || TagB")`。 |
+| SQL92 过滤 Push | `consumer-sql-filter` | `cargo run --example consumer-sql-filter` | `SqlFilterConsumerTestTopic` | 使用 `MessageSelector::by_sql`，Broker 需要支持 SQL 过滤。 |
+| Lite Pull | `consumer-lite-pull` | `cargo run --example consumer-lite-pull` | `LitePullConsumerTestTopic` | 主动 poll 消息并手动提交 offset。 |
+| Request/reply responder | `consumer-request-reply` | `cargo run --example consumer-request-reply` | `RequestSendTestTopic` | 为 request producer 示例发送 reply 消息。 |
+
+## 验证
+
+构建单个示例：
+
+```powershell
+cargo build --example producer-delay-send
 ```
 
-**功能特性**：
-- 基于 Pop 的消息消费
-- 并发消息处理
-- 自动创建主题/消费者组
-- 消息请求模式配置
+修改该项目后必须执行：
 
-## 🔧 配置
-
-大多数示例使用默认配置：
-
-```rust
-const NAMESRV_ADDR: &str = "127.0.0.1:9876";
-const TOPIC: &str = "TopicTest";
-const CONSUMER_GROUP: &str = "please_rename_unique_group_name_4";
+```powershell
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
 ```
 
-修改示例源文件中的这些常量以匹配您的 RocketMQ 集群设置。
+## 项目结构
 
-## 📖 开发指南
-
-### 添加新示例
-
-1. 在适当的类别文件夹中创建新文件（例如：`examples/consumer/my_example.rs`）
-2. 将示例配置添加到 `Cargo.toml`：
-
-```toml
-[[example]]
-name = "my-example"
-path = "examples/consumer/my_example.rs"
-```
-
-3. 运行示例：
-```bash
-cargo run --example my-example
-```
-
-### 依赖项
-
-该项目引用本地 RocketMQ-Rust crate：
-
-- `rocketmq-client-rust` - 客户端 API
-- `rocketmq-common` - 通用工具
-- `rocketmq-rust` - 核心运行时
-- `rocketmq-tools` - 管理工具
-
-## 🏗️ 项目结构
-
-```
+```text
 rocketmq-example/
-├── examples/
-│   └── consumer/
-│       ├── consumer_cluster.rs
-│       └── pop_consumer.rs
-├── Cargo.toml
-└── README.md
+|-- examples/
+|   |-- consumer/
+|   |-- interop/
+|   `-- producer/
+|-- Cargo.toml
+|-- README.md
+`-- README-zh_cn.md
 ```
 
-## 📝 注意事项
+## 注意事项
 
-- 这是一个**独立项目**，不属于主 RocketMQ-Rust workspace
-- 示例使用相对路径依赖来引用父 crate
-- 每个示例都是独立的，可以单独运行
-
-## 🤝 贡献
-
-欢迎贡献新示例！请确保：
-
-1. 示例有良好的内联注释文档
-2. 配置明确指定
-3. 示例遵循 Rust 最佳实践
-4. 每个示例演示单一、清晰的用例
-
-## 📄 许可证
-
-该项目继承 RocketMQ-Rust 的双重许可证：
-- Apache License 2.0
-- MIT License
+- 示例通过本地 path dependency 引用父目录中的 RocketMQ Rust crates。
+- topic、group、Namesrv 地址等常量在每个示例源码中定义。
+- Producer 示例发送完成后退出；Consumer 示例持续运行，按 Ctrl+C 退出。

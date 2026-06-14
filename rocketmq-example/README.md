@@ -1,139 +1,105 @@
-# RocketMQ-Rust Examples
+# RocketMQ Rust Examples
 
-Comprehensive examples demonstrating how to use RocketMQ-Rust client APIs and features.
+Standalone examples for RocketMQ Rust client APIs.
 
-## 📋 Overview
+This project is not part of the root Cargo workspace. Run all commands from
+`rocketmq-example/`.
 
-This is a **standalone project** containing practical examples for RocketMQ-Rust. It showcases various usage patterns including:
+## Prerequisites
 
-- **Consumer Examples**: Push consumer, pop consumer, message listeners
-- **Producer Examples**: *(Coming soon)*
-- **Admin Operations**: *(Coming soon)*
+- Rust 1.85.0 or later.
+- A running RocketMQ name server and broker.
+- Default name server address used by examples: `127.0.0.1:9876`.
+- Create topics and subscription groups before running examples. The examples do
+  not create broker resources automatically.
 
-## 🚀 Quick Start
+Example topic setup with RocketMQ `mqadmin`:
 
-### Prerequisites
-
-- Rust 1.85.0 or later
-- Running RocketMQ nameserver and broker (default: `127.0.0.1:9876`)
-
-### Running Examples
-
-```bash
-# Navigate to the examples directory
-cd rocketmq-example
-
-# Run the pop consumer example
-cargo run --example pop-consumer
-
-# List all available examples
-cargo run --example <TAB>
+```powershell
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t BasicSendTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t DelaySendTestTopic -r 4 -w 4 -a +message.type=DELAY
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t OrderSendTestTopic -r 4 -w 4 -o true
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t TransactionSendTestTopic -r 4 -w 4 -a +message.type=TRANSACTION
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t RequestSendTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t BroadcastConsumerTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t TagFilterConsumerTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t SqlFilterConsumerTestTopic -r 4 -w 4
+bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t LitePullConsumerTestTopic -r 4 -w 4
 ```
 
-## 📚 Available Examples
+Create subscription groups as needed:
 
-### Consumer Examples
-
-#### Cluster Consumer
-Demonstrates how to consume messages in cluster mode with load balancing across multiple consumer instances.
-
-**File**: [examples/consumer/consumer_cluster.rs](examples/consumer/consumer_cluster.rs)
-
-**Run**:
-```bash
-cargo run --example consumer-cluster
+```powershell
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_broadcast_group -d true
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_orderly_group -o true
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_tag_filter_group
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_sql_filter_group
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_lite_pull_group
+bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_request_reply_group
 ```
 
-**Features**:
-- Cluster mode consumption (default mode)
-- Load balancing across consumer instances
-- Concurrent message processing
-- Each message consumed by only one instance
+## Producer Examples
 
-#### Pop Consumer
-Demonstrates how to use the pop consumption model with client-side load balancing disabled.
+| Mode | Example | Command | Topic | Notes |
+| --- | --- | --- | --- | --- |
+| Simple send | `producer-simple` | `cargo run --example producer-simple` | `TopicTest` | Basic producer startup and send. |
+| Timeout send | `producer-with-timeout` | `cargo run --example producer-with-timeout` | `TopicTest` | Existing timeout and delayed-message sample. |
+| Basic send APIs | `producer-basic-send` | `cargo run --example producer-basic-send` | `BasicSendTestTopic` | Sync, timeout, callback, callback timeout, one-way. |
+| Batch send | `producer-batch-send` | `cargo run --example producer-batch-send` | `BatchSendTestTopic` | Batch send variants. |
+| Send to queue | `producer-send-to-queue` | `cargo run --example producer-send-to-queue` | `QueueSendTestTopic` | Targets a selected message queue. |
+| Queue selector | `producer-send-with-selector` | `cargo run --example producer-send-with-selector` | `SelectorSendTestTopic` | Uses custom queue selector. |
+| Advanced selector | `producer-send-with-selector-advanced` | `cargo run --example producer-send-with-selector-advanced` | `AdvancedSelectorTestTopic` | Hash, round-robin, random, weighted examples. |
+| Delay send | `producer-delay-send` | `cargo run --example producer-delay-send` | `DelaySendTestTopic` | `delay_level`, `delay_secs`, `delay_millis`, `deliver_time_ms`. |
+| Ordered send | `producer-order-send` | `cargo run --example producer-order-send` | `OrderSendTestTopic` | Same order id is routed to the same queue. |
+| Transaction send | `producer-transaction-send` | `cargo run --example producer-transaction-send` | `TransactionSendTestTopic` | Commit, rollback, and unknown local states. |
+| Request/reply | `producer-request-send` | `cargo run --example producer-request-send` | `RequestSendTestTopic` | Start `consumer-request-reply` first. |
+| Request/reply callback | `producer-request-callback-send` | `cargo run --example producer-request-callback-send` | `RequestSendTestTopic` | Start `consumer-request-reply` first. |
 
-**File**: [examples/consumer/pop_consumer.rs](examples/consumer/pop_consumer.rs)
+## Consumer Examples
 
-**Run**:
-```bash
-cargo run --example pop-consumer
+| Mode | Example | Command | Topic | Notes |
+| --- | --- | --- | --- | --- |
+| Cluster push | `consumer-cluster` | `cargo run --example consumer-cluster` | `TopicTest` | Load-balanced push consumption. |
+| Pop consumer | `pop-consumer` | `cargo run --example pop-consumer` | `TopicTest` | Pop request mode example. |
+| Broadcast push | `consumer-broadcast` | `cargo run --example consumer-broadcast` | `BroadcastConsumerTestTopic` | Every consumer instance receives every message; group must enable broadcast consumption. |
+| Orderly push | `consumer-orderly` | `cargo run --example consumer-orderly` | `OrderSendTestTopic` | Uses `MessageListenerOrderly`. |
+| Tag filter push | `consumer-tag-filter` | `cargo run --example consumer-tag-filter` | `TagFilterConsumerTestTopic` | Uses `MessageSelector::by_tag("TagA || TagB")`. |
+| SQL92 filter push | `consumer-sql-filter` | `cargo run --example consumer-sql-filter` | `SqlFilterConsumerTestTopic` | Uses `MessageSelector::by_sql`; broker must support SQL filtering. |
+| Lite pull | `consumer-lite-pull` | `cargo run --example consumer-lite-pull` | `LitePullConsumerTestTopic` | Polls messages and commits offsets manually. |
+| Request/reply responder | `consumer-request-reply` | `cargo run --example consumer-request-reply` | `RequestSendTestTopic` | Sends reply messages for request producer examples. |
+
+## Validation
+
+Build an individual example:
+
+```powershell
+cargo build --example producer-delay-send
 ```
 
-**Features**:
-- Pop-based message consumption
-- Concurrent message processing
-- Automatic topic/consumer group creation
-- Message request mode configuration
+Required validation after changing this project:
 
-## 🔧 Configuration
-
-Most examples use default configuration:
-
-```rust
-const NAMESRV_ADDR: &str = "127.0.0.1:9876";
-const TOPIC: &str = "TopicTest";
-const CONSUMER_GROUP: &str = "please_rename_unique_group_name_4";
+```powershell
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
 ```
 
-Modify these constants in the example source files to match your RocketMQ cluster setup.
+## Project Structure
 
-## 📖 Development Guide
-
-### Adding New Examples
-
-1. Create a new file in the appropriate category folder (e.g., `examples/consumer/my_example.rs`)
-2. Add the example configuration to `Cargo.toml`:
-
-```toml
-[[example]]
-name = "my-example"
-path = "examples/consumer/my_example.rs"
-```
-
-3. Run the example:
-```bash
-cargo run --example my-example
-```
-
-### Dependencies
-
-This project references local RocketMQ-Rust crates:
-
-- `rocketmq-client-rust` - Client APIs
-- `rocketmq-common` - Common utilities
-- `rocketmq-rust` - Core runtime
-- `rocketmq-tools` - Admin tools
-
-## 🏗️ Project Structure
-
-```
+```text
 rocketmq-example/
-├── examples/
-│   └── consumer/
-│       ├── consumer_cluster.rs
-│       └── pop_consumer.rs
-├── Cargo.toml
-└── README.md
+|-- examples/
+|   |-- consumer/
+|   |-- interop/
+|   `-- producer/
+|-- Cargo.toml
+|-- README.md
+`-- README-zh_cn.md
 ```
 
-## 📝 Notes
+## Notes
 
-- This is a **standalone project**, not part of the main RocketMQ-Rust workspace
-- Examples use relative path dependencies to reference parent crates
-- Each example is self-contained and runnable independently
-
-## 🤝 Contributing
-
-Contributions of new examples are welcome! Please ensure:
-
-1. Examples are well-documented with inline comments
-2. Configuration is clearly specified
-3. Examples follow Rust best practices
-4. Each example demonstrates a single, clear use case
-
-## 📄 License
-
-This project inherits the dual-license from RocketMQ-Rust:
-- Apache License 2.0
-- MIT License
+- Examples use local path dependencies to the parent RocketMQ Rust crates.
+- Constants such as topic, group, and name server address are defined in each
+  example source file.
+- Producer examples exit after sending messages. Consumer examples run until
+  interrupted with Ctrl+C.

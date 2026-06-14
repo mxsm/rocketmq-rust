@@ -59,6 +59,30 @@ name = "consumer-cluster"
 path = "examples/consumer/consumer_cluster.rs"
 
 [[example]]
+name = "consumer-broadcast"
+path = "examples/consumer/broadcast_consumer.rs"
+
+[[example]]
+name = "consumer-orderly"
+path = "examples/consumer/orderly_consumer.rs"
+
+[[example]]
+name = "consumer-tag-filter"
+path = "examples/consumer/tag_filter_consumer.rs"
+
+[[example]]
+name = "consumer-sql-filter"
+path = "examples/consumer/sql_filter_consumer.rs"
+
+[[example]]
+name = "consumer-lite-pull"
+path = "examples/consumer/lite_pull_consumer.rs"
+
+[[example]]
+name = "consumer-request-reply"
+path = "examples/consumer/request_reply_responder.rs"
+
+[[example]]
 name = "producer-simple"
 path = "examples/producer/producer_simple.rs"
 
@@ -85,6 +109,26 @@ path = "examples/producer/send_with_selector.rs"
 [[example]]
 name = "producer-send-with-selector-advanced"
 path = "examples/producer/send_with_selector_advanced.rs"
+
+[[example]]
+name = "producer-delay-send"
+path = "examples/producer/delay_send.rs"
+
+[[example]]
+name = "producer-order-send"
+path = "examples/producer/order_send.rs"
+
+[[example]]
+name = "producer-transaction-send"
+path = "examples/producer/transaction_send.rs"
+
+[[example]]
+name = "producer-request-send"
+path = "examples/producer/request_send.rs"
+
+[[example]]
+name = "producer-request-callback-send"
+path = "examples/producer/request_callback_send.rs"
 
 [[example]]
 name = "request-code-smoke"
