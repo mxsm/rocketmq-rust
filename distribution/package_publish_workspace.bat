@@ -18,7 +18,7 @@ set "CURRENT_DIR=%cd%"
 for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
 for %%I in ("%SCRIPT_DIR%\..") do set "WORKSPACE_ROOT=%%~fI"
 
-set "PROJECT_COUNT=16"
+set "PROJECT_COUNT=18"
 set "PROJECT_1_NAME=rocketmq-error"
 set "PROJECT_1_PATH=rocketmq-error"
 set "PROJECT_1_ALIASES=rocketmq-error"
@@ -31,62 +31,91 @@ set "PROJECT_3_ALIASES=rocketmq-runtime"
 set "PROJECT_4_NAME=rocketmq-dashboard-common"
 set "PROJECT_4_PATH=rocketmq-dashboard\rocketmq-dashboard-common"
 set "PROJECT_4_ALIASES=rocketmq-dashboard-common"
-set "PROJECT_5_NAME=rocketmq-admin-cli"
-set "PROJECT_5_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-cli"
-set "PROJECT_5_ALIASES=rocketmq-admin-cli"
-set "PROJECT_6_NAME=rocketmq-rust"
-set "PROJECT_6_PATH=rocketmq"
-set "PROJECT_6_ALIASES=rocketmq,rocketmq-rust"
-set "PROJECT_7_NAME=rocketmq-admin-tui"
-set "PROJECT_7_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-tui"
-set "PROJECT_7_ALIASES=rocketmq-admin-tui"
-set "PROJECT_8_NAME=rocketmq-common"
-set "PROJECT_8_PATH=rocketmq-common"
-set "PROJECT_8_ALIASES=rocketmq-common"
-set "PROJECT_9_NAME=rocketmq-filter"
-set "PROJECT_9_PATH=rocketmq-filter"
-set "PROJECT_9_ALIASES=rocketmq-filter"
-set "PROJECT_10_NAME=rocketmq-remoting"
-set "PROJECT_10_PATH=rocketmq-remoting"
-set "PROJECT_10_ALIASES=rocketmq-remoting"
-set "PROJECT_11_NAME=rocketmq-auth"
-set "PROJECT_11_PATH=rocketmq-auth"
-set "PROJECT_11_ALIASES=rocketmq-auth"
-set "PROJECT_12_NAME=rocketmq-client-rust"
-set "PROJECT_12_PATH=rocketmq-client"
-set "PROJECT_12_ALIASES=rocketmq-client,rocketmq-client-rust"
-set "PROJECT_13_NAME=rocketmq-namesrv"
-set "PROJECT_13_PATH=rocketmq-namesrv"
-set "PROJECT_13_ALIASES=rocketmq-namesrv"
-set "PROJECT_14_NAME=rocketmq-store"
-set "PROJECT_14_PATH=rocketmq-store"
-set "PROJECT_14_ALIASES=rocketmq-store"
+set "PROJECT_5_NAME=rocketmq-rust"
+set "PROJECT_5_PATH=rocketmq"
+set "PROJECT_5_ALIASES=rocketmq,rocketmq-rust"
+set "PROJECT_6_NAME=rocketmq-common"
+set "PROJECT_6_PATH=rocketmq-common"
+set "PROJECT_6_ALIASES=rocketmq-common"
+set "PROJECT_7_NAME=rocketmq-filter"
+set "PROJECT_7_PATH=rocketmq-filter"
+set "PROJECT_7_ALIASES=rocketmq-filter"
+set "PROJECT_8_NAME=rocketmq-remoting"
+set "PROJECT_8_PATH=rocketmq-remoting"
+set "PROJECT_8_ALIASES=rocketmq-remoting"
+set "PROJECT_9_NAME=rocketmq-auth"
+set "PROJECT_9_PATH=rocketmq-auth"
+set "PROJECT_9_ALIASES=rocketmq-auth"
+set "PROJECT_10_NAME=rocketmq-client-rust"
+set "PROJECT_10_PATH=rocketmq-client"
+set "PROJECT_10_ALIASES=rocketmq-client,rocketmq-client-rust"
+set "PROJECT_11_NAME=rocketmq-controller"
+set "PROJECT_11_PATH=rocketmq-controller"
+set "PROJECT_11_ALIASES=rocketmq-controller"
+set "PROJECT_12_NAME=rocketmq-tieredstore"
+set "PROJECT_12_PATH=rocketmq-tieredstore"
+set "PROJECT_12_ALIASES=rocketmq-tieredstore"
+set "PROJECT_13_NAME=rocketmq-store"
+set "PROJECT_13_PATH=rocketmq-store"
+set "PROJECT_13_ALIASES=rocketmq-store"
+set "PROJECT_14_NAME=rocketmq-namesrv"
+set "PROJECT_14_PATH=rocketmq-namesrv"
+set "PROJECT_14_ALIASES=rocketmq-namesrv"
 set "PROJECT_15_NAME=rocketmq-admin-core"
 set "PROJECT_15_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-core"
 set "PROJECT_15_ALIASES=rocketmq-admin-core"
-set "PROJECT_16_NAME=rocketmq-store-inspect"
-set "PROJECT_16_PATH=rocketmq-tools\rocketmq-store-inspect"
-set "PROJECT_16_ALIASES=rocketmq-store-inspect"
+set "PROJECT_16_NAME=rocketmq-admin-cli"
+set "PROJECT_16_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-cli"
+set "PROJECT_16_ALIASES=rocketmq-admin-cli"
+set "PROJECT_17_NAME=rocketmq-admin-tui"
+set "PROJECT_17_PATH=rocketmq-tools\rocketmq-admin\rocketmq-admin-tui"
+set "PROJECT_17_ALIASES=rocketmq-admin-tui"
+set "PROJECT_18_NAME=rocketmq-store-inspect"
+set "PROJECT_18_PATH=rocketmq-tools\rocketmq-store-inspect"
+set "PROJECT_18_ALIASES=rocketmq-store-inspect"
 
 :parse_args
 if "%~1"=="" goto args_done
 
-if /i "%~1"=="--dry-run"              set "DRY_RUN=1"
-if /i "%~1"=="--skip-package"         set "SKIP_PACKAGE=1"
-if /i "%~1"=="--allow-dirty"          set "ALLOW_DIRTY=1"
-if /i "%~1"=="--verbose"              set "VERBOSE=1"
-if /i "%~1"=="--all-features"         set "ALL_FEATURES=1"
-if /i "%~1"=="--no-default-features"  set "NO_DEFAULT_FEATURES=1"
-
-if /i "%~1"=="--features" (
-    set "FEATURES=%~2"
+if /i "%~1"=="--dry-run" (
+    set "DRY_RUN=1"
     shift
+    goto parse_args
 )
 
-if /i "%~1"=="--project" (
-    set "SPECIFIC_PROJECT=%~2"
+if /i "%~1"=="--skip-package" (
+    set "SKIP_PACKAGE=1"
     shift
+    goto parse_args
 )
+
+if /i "%~1"=="--allow-dirty" (
+    set "ALLOW_DIRTY=1"
+    shift
+    goto parse_args
+)
+
+if /i "%~1"=="--verbose" (
+    set "VERBOSE=1"
+    shift
+    goto parse_args
+)
+
+if /i "%~1"=="--all-features" (
+    set "ALL_FEATURES=1"
+    shift
+    goto parse_args
+)
+
+if /i "%~1"=="--no-default-features" (
+    set "NO_DEFAULT_FEATURES=1"
+    shift
+    goto parse_args
+)
+
+if /i "%~1"=="--features" goto :farg
+
+if /i "%~1"=="--project" goto parse_project_arg
 
 if /i "%~1"=="--help" (
     echo Usage: package_publish_workspace.bat [OPTIONS]
@@ -114,14 +143,46 @@ if /i "%~1"=="--help" (
     echo   rocketmq-dashboard\rocketmq-dashboard-gpui
     echo   rocketmq-dashboard\rocketmq-dashboard-tauri\src-tauri
     echo Default release temporarily excludes:
-    echo   rocketmq-controller
     echo   rocketmq-broker
     echo   rocketmq-proxy
     exit /b 0
 )
 
+if /i "%~1"=="-h" goto show_help_short
+
+echo [ERROR] Unknown option: %~1
+echo Run package_publish_workspace.bat --help for usage.
+exit /b 1
+
+:show_help_short
+call "%~f0" --help
+exit /b %errorlevel%
+
+:farg
+if "%~2"=="" goto :fmissing
+set "NEXT_ARG=%~2"
+if "!NEXT_ARG:~0,2!"=="--" goto :fmissing
+set "FEATURES=%~2"
+shift
 shift
 goto parse_args
+
+:fmissing
+echo [ERROR] --features requires a value
+exit /b 1
+
+:parse_project_arg
+if "%~2"=="" goto missing_project_arg
+set "NEXT_ARG=%~2"
+if "!NEXT_ARG:~0,2!"=="--" goto missing_project_arg
+set "SPECIFIC_PROJECT=%~2"
+shift
+shift
+goto parse_args
+
+:missing_project_arg
+echo [ERROR] --project requires a value
+exit /b 1
 
 :args_done
 if not exist "%WORKSPACE_ROOT%\Cargo.toml" (
