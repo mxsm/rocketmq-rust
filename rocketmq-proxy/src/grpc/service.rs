@@ -62,6 +62,19 @@ use crate::status::ProxyStatusMapper;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
+const DEFAULT_MAX_BODY_SIZE_BYTES: i32 = 4 * 1024 * 1024;
+const DEFAULT_PRODUCER_MAX_ATTEMPTS: i32 = 3;
+const DEFAULT_PRODUCER_BACKOFF_INITIAL_MS: u64 = 10;
+const DEFAULT_PRODUCER_BACKOFF_MAX_MS: u64 = 1_000;
+const DEFAULT_PRODUCER_BACKOFF_MULTIPLIER: f32 = 2.0;
+const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = 17;
+const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = 32;
+const DEFAULT_CONSUMER_LONG_POLLING_TIMEOUT_MS: u64 = 20_000;
+const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = [
+    1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000, 540_000,
+    600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
+];
+
 #[derive(Clone)]
 struct ExecutionGuards {
     route: Arc<Semaphore>,
@@ -679,26 +692,34 @@ where
 
     fn merged_telemetry_settings(&self, settings: &v2::Settings) -> v2::Settings {
         let mut merged = settings.clone();
-        if let Some(v2::settings::PubSub::Subscription(subscription)) = merged.pub_sub.as_mut() {
-            if subscription.receive_batch_size.is_some_and(|value| value <= 0) {
-                subscription.receive_batch_size = Some(1);
+        let mut backoff_policy = None;
+        match merged.pub_sub.as_mut() {
+            Some(v2::settings::PubSub::Publishing(publishing)) => {
+                if publishing.max_body_size <= 0 {
+                    publishing.max_body_size = DEFAULT_MAX_BODY_SIZE_BYTES;
+                }
+                publishing.validate_message_type = true;
+                backoff_policy = Some(default_producer_retry_policy());
             }
+            Some(v2::settings::PubSub::Subscription(subscription)) => {
+                subscription.receive_batch_size = Some(DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE);
+                let timeout = Duration::from_millis(DEFAULT_CONSUMER_LONG_POLLING_TIMEOUT_MS);
+                subscription.long_polling_timeout = Some(duration_to_proto_duration(clamp_duration(
+                    timeout,
+                    self.config.session.min_long_polling_timeout(),
+                    self.config.session.max_long_polling_timeout(),
+                )));
+                backoff_policy = Some(default_consumer_retry_policy());
 
-            let timeout = subscription
-                .long_polling_timeout
-                .as_ref()
-                .and_then(proto_duration)
-                .unwrap_or_else(|| self.config.session.min_long_polling_timeout());
-            subscription.long_polling_timeout = Some(duration_to_proto_duration(clamp_duration(
-                timeout,
-                self.config.session.min_long_polling_timeout(),
-                self.config.session.max_long_polling_timeout(),
-            )));
-
-            if is_lite_client(merged.client_type) {
-                subscription.lite_subscription_quota.get_or_insert(1200);
-                subscription.max_lite_topic_size.get_or_insert(64);
+                if is_lite_client(merged.client_type) {
+                    subscription.lite_subscription_quota.get_or_insert(1200);
+                    subscription.max_lite_topic_size.get_or_insert(64);
+                }
             }
+            None => {}
+        }
+        if let Some(backoff_policy) = backoff_policy {
+            merged.backoff_policy = Some(backoff_policy);
         }
         merged
     }
@@ -713,6 +734,12 @@ where
                 self.apply_receive_settings(&mut request, &settings);
             }
         }
+
+        request.long_polling_timeout = clamp_duration(
+            request.long_polling_timeout,
+            self.config.session.min_long_polling_timeout(),
+            self.config.session.max_long_polling_timeout(),
+        );
 
         if let Some(deadline) = context.deadline() {
             request.long_polling_timeout = request.long_polling_timeout.min(deadline);
@@ -732,14 +759,6 @@ where
 
         if let Some(receive_batch_size) = subscription.receive_batch_size {
             request.batch_size = request.batch_size.min(receive_batch_size.max(1));
-        }
-
-        if let Some(long_polling_timeout) = subscription.long_polling_timeout {
-            request.long_polling_timeout = clamp_duration(
-                long_polling_timeout,
-                self.config.session.min_long_polling_timeout(),
-                self.config.session.max_long_polling_timeout(),
-            );
         }
 
         request.target.fifo |= subscription.fifo;
@@ -1099,6 +1118,33 @@ fn duration_to_proto_duration(duration: Duration) -> prost_types::Duration {
     prost_types::Duration {
         seconds: duration.as_secs() as i64,
         nanos: duration.subsec_nanos() as i32,
+    }
+}
+
+fn default_producer_retry_policy() -> v2::RetryPolicy {
+    v2::RetryPolicy {
+        max_attempts: DEFAULT_PRODUCER_MAX_ATTEMPTS,
+        strategy: Some(v2::retry_policy::Strategy::ExponentialBackoff(v2::ExponentialBackoff {
+            initial: Some(duration_to_proto_duration(Duration::from_millis(
+                DEFAULT_PRODUCER_BACKOFF_INITIAL_MS,
+            ))),
+            max: Some(duration_to_proto_duration(Duration::from_millis(
+                DEFAULT_PRODUCER_BACKOFF_MAX_MS,
+            ))),
+            multiplier: DEFAULT_PRODUCER_BACKOFF_MULTIPLIER,
+        })),
+    }
+}
+
+fn default_consumer_retry_policy() -> v2::RetryPolicy {
+    v2::RetryPolicy {
+        max_attempts: DEFAULT_CONSUMER_MAX_ATTEMPTS,
+        strategy: Some(v2::retry_policy::Strategy::CustomizedBackoff(v2::CustomizedBackoff {
+            next: DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS
+                .iter()
+                .map(|millis| duration_to_proto_duration(Duration::from_millis(*millis)))
+                .collect(),
+        })),
     }
 }
 
@@ -1994,6 +2040,11 @@ mod tests {
     use tonic::Request;
 
     use super::ProxyGrpcService;
+    use super::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
+    use super::DEFAULT_CONSUMER_MAX_ATTEMPTS;
+    use super::DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE;
+    use super::DEFAULT_MAX_BODY_SIZE_BYTES;
+    use super::DEFAULT_PRODUCER_MAX_ATTEMPTS;
     use crate::auth::ProxyAuthRuntime;
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
@@ -3456,15 +3507,78 @@ mod tests {
             metric: None,
         });
 
+        let backoff_policy = merged.backoff_policy.clone().expect("consumer retry policy");
         let subscription = match merged.pub_sub.unwrap() {
             v2::settings::PubSub::Subscription(subscription) => subscription,
             _ => panic!("expected subscription settings"),
         };
-        assert_eq!(subscription.receive_batch_size, Some(64));
+        assert_eq!(
+            subscription.receive_batch_size,
+            Some(DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE)
+        );
         assert_eq!(
             subscription.long_polling_timeout,
-            Some(prost_types::Duration { seconds: 5, nanos: 0 })
+            Some(prost_types::Duration { seconds: 20, nanos: 0 })
         );
+        assert_eq!(backoff_policy.max_attempts, DEFAULT_CONSUMER_MAX_ATTEMPTS);
+        match backoff_policy.strategy.expect("consumer retry strategy") {
+            v2::retry_policy::Strategy::CustomizedBackoff(backoff) => {
+                assert_eq!(backoff.next.len(), DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS.len());
+                assert_eq!(backoff.next[0], prost_types::Duration { seconds: 1, nanos: 0 });
+                assert_eq!(
+                    backoff.next[17],
+                    prost_types::Duration {
+                        seconds: 7200,
+                        nanos: 0
+                    }
+                );
+            }
+            other => panic!("unexpected consumer retry strategy: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn telemetry_settings_fill_producer_defaults() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let merged = service.merged_telemetry_settings(&v2::Settings {
+            client_type: Some(v2::ClientType::Producer as i32),
+            access_point: None,
+            backoff_policy: None,
+            request_timeout: None,
+            pub_sub: Some(v2::settings::PubSub::Publishing(v2::Publishing {
+                topics: vec![v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }],
+                max_body_size: 0,
+                validate_message_type: false,
+            })),
+            user_agent: None,
+            metric: None,
+        });
+
+        let backoff_policy = merged.backoff_policy.clone().expect("producer retry policy");
+        let publishing = match merged.pub_sub.unwrap() {
+            v2::settings::PubSub::Publishing(publishing) => publishing,
+            _ => panic!("expected publishing settings"),
+        };
+        assert_eq!(publishing.max_body_size, DEFAULT_MAX_BODY_SIZE_BYTES);
+        assert!(publishing.validate_message_type);
+        assert_eq!(backoff_policy.max_attempts, DEFAULT_PRODUCER_MAX_ATTEMPTS);
+        match backoff_policy.strategy.expect("producer retry strategy") {
+            v2::retry_policy::Strategy::ExponentialBackoff(backoff) => {
+                assert_eq!(
+                    backoff.initial,
+                    Some(prost_types::Duration {
+                        seconds: 0,
+                        nanos: 10_000_000
+                    })
+                );
+                assert_eq!(backoff.max, Some(prost_types::Duration { seconds: 1, nanos: 0 }));
+                assert_eq!(backoff.multiplier, 2.0);
+            }
+            other => panic!("unexpected producer retry strategy: {other:?}"),
+        }
     }
 
     #[test]
@@ -3830,7 +3944,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(request.batch_size, 32);
-        assert_eq!(request.long_polling_timeout, std::time::Duration::from_secs(5));
+        assert_eq!(request.long_polling_timeout, std::time::Duration::from_secs(20));
         assert!(request.target.fifo);
     }
 

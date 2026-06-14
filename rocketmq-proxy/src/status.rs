@@ -188,6 +188,9 @@ impl ProxyStatusMapper {
                 v2::Code::Forbidden
             }
             RocketMQError::MessageTooLarge { .. } => v2::Code::MessageBodyTooLarge,
+            RocketMQError::IllegalArgument(message) if is_topic_route_not_found_message(message) => {
+                v2::Code::TopicNotFound
+            }
             RocketMQError::IllegalArgument(_)
             | RocketMQError::InvalidProperty(_)
             | RocketMQError::ConfigParseFailed { .. }
@@ -218,6 +221,12 @@ impl ProxyStatusMapper {
     }
 }
 
+fn is_topic_route_not_found_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    (lower.contains("code: 17") || lower.contains("code:17"))
+        && (lower.contains("no topic route info") || lower.contains("no route info"))
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
@@ -236,6 +245,15 @@ mod tests {
     #[test]
     fn route_not_found_maps_to_topic_not_found() {
         let status = ProxyStatusMapper::from_error(&ProxyError::RocketMQ(RocketMQError::route_not_found("TestTopic")));
+        assert_eq!(status.code, v2::Code::TopicNotFound as i32);
+    }
+
+    #[test]
+    fn namesrv_topic_route_illegal_argument_maps_to_topic_not_found() {
+        let status = ProxyStatusMapper::from_error(&ProxyError::RocketMQ(RocketMQError::illegal_argument(
+            "CODE: 17  DESC: No topic route info in name server for the topic: TestTopic",
+        )));
+
         assert_eq!(status.code, v2::Code::TopicNotFound as i32);
     }
 

@@ -348,7 +348,7 @@ pub fn build_end_transaction_request(request: &v2::EndTransactionRequest) -> Pro
 }
 
 pub fn build_query_route_response(request: &v2::QueryRouteRequest, plan: &QueryRoutePlan) -> v2::QueryRouteResponse {
-    let broker_map = build_broker_map(&plan.route);
+    let broker_map = build_broker_map(&plan.route, client_visible_endpoints(request.endpoints.as_ref()));
     let topic = request.topic.clone().unwrap_or_default();
     let message_queues = plan
         .route
@@ -385,7 +385,7 @@ pub fn build_query_assignment_response(
         };
     }
 
-    let broker_map = build_broker_map(&plan.route);
+    let broker_map = build_broker_map(&plan.route, client_visible_endpoints(request.endpoints.as_ref()));
     let topic = request.topic.clone().unwrap_or_default();
     let is_fifo = plan
         .subscription_group
@@ -566,7 +566,7 @@ fn build_query_assignment_response_from_server(
     plan: &QueryAssignmentPlan,
 ) -> Option<Vec<v2::Assignment>> {
     let assignments = plan.assignments.as_ref()?;
-    let broker_map = build_broker_map(&plan.route);
+    let broker_map = build_broker_map(&plan.route, client_visible_endpoints(request.endpoints.as_ref()));
     let topic = request.topic.clone().unwrap_or_default();
 
     Some(
@@ -725,14 +725,7 @@ fn message_queue_broker(message_queue: &v2::MessageQueue) -> ProxyResult<(Option
     };
 
     let broker_name = (!broker.name.trim().is_empty()).then(|| broker.name.clone());
-    let broker_addr = broker
-        .endpoints
-        .as_ref()
-        .and_then(|endpoints| endpoints.addresses.first())
-        .map(endpoint_address)
-        .transpose()?;
-
-    Ok((broker_name, broker_addr))
+    Ok((broker_name, None))
 }
 
 fn message_queue_target(
@@ -752,25 +745,6 @@ fn message_queue_target(
         broker_name,
         broker_addr,
     })
-}
-
-fn endpoint_address(address: &v2::Address) -> ProxyResult<String> {
-    if address.host.trim().is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument("broker endpoint host must not be empty").into());
-    }
-    if !(0..=u16::MAX as i32).contains(&address.port) {
-        return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-            "broker endpoint port out of range: {}",
-            address.port
-        ))
-        .into());
-    }
-
-    if address.host.contains(':') && !address.host.starts_with('[') {
-        Ok(format!("[{}]:{}", address.host, address.port))
-    } else {
-        Ok(format!("{}:{}", address.host, address.port))
-    }
 }
 
 fn build_filter_expression(filter_expression: Option<&v2::FilterExpression>) -> ProxyResult<ConsumerFilterExpression> {
@@ -870,21 +844,27 @@ where
     Ok(Duration::new(seconds, nanos))
 }
 
-fn build_broker_map(route: &TopicRouteData) -> HashMap<String, HashMap<u64, v2::Broker>> {
+fn build_broker_map(
+    route: &TopicRouteData,
+    client_visible_endpoints: Option<v2::Endpoints>,
+) -> HashMap<String, HashMap<u64, v2::Broker>> {
     let mut broker_map = HashMap::new();
 
     for broker_data in &route.broker_datas {
         let mut broker_id_map = HashMap::new();
         let broker_name = broker_data.broker_name().to_string();
         for (broker_id, broker_addr) in broker_data.broker_addrs() {
-            let (scheme, address) = parse_broker_address(broker_addr.as_str());
+            let endpoints = client_visible_endpoints.clone().unwrap_or_else(|| {
+                let (scheme, address) = parse_broker_address(broker_addr.as_str());
+                v2::Endpoints {
+                    scheme: scheme as i32,
+                    addresses: vec![address],
+                }
+            });
             let broker = v2::Broker {
                 name: broker_name.clone(),
                 id: *broker_id as i32,
-                endpoints: Some(v2::Endpoints {
-                    scheme: scheme as i32,
-                    addresses: vec![address],
-                }),
+                endpoints: Some(endpoints),
             };
             broker_id_map.insert(*broker_id, broker);
         }
@@ -892,6 +872,10 @@ fn build_broker_map(route: &TopicRouteData) -> HashMap<String, HashMap<u64, v2::
     }
 
     broker_map
+}
+
+fn client_visible_endpoints(endpoints: Option<&v2::Endpoints>) -> Option<v2::Endpoints> {
+    endpoints.filter(|endpoints| !endpoints.addresses.is_empty()).cloned()
 }
 
 fn build_send_message_entry(message: &v2::Message) -> ProxyResult<SendMessageEntry> {
@@ -1587,6 +1571,7 @@ mod tests {
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
+    use super::build_pull_message_request;
     use super::build_query_assignment_response;
     use super::build_query_route_response;
     use super::build_send_message_request;
@@ -1602,6 +1587,16 @@ mod tests {
     use crate::service::ResourceIdentity;
     use crate::service::SubscriptionGroupMetadata;
     use crate::status::ProxyStatusMapper;
+
+    fn proxy_endpoints() -> v2::Endpoints {
+        v2::Endpoints {
+            scheme: v2::AddressScheme::IPv4 as i32,
+            addresses: vec![v2::Address {
+                host: "127.0.0.1".to_owned(),
+                port: 18081,
+            }],
+        }
+    }
 
     #[test]
     fn route_response_preserves_permission_split() {
@@ -1647,7 +1642,7 @@ mod tests {
                     resource_namespace: String::new(),
                     name: "TopicA".to_owned(),
                 }),
-                endpoints: Some(v2::Endpoints::default()),
+                endpoints: Some(proxy_endpoints()),
             },
             &QueryRoutePlan {
                 route,
@@ -1655,8 +1650,15 @@ mod tests {
             },
         );
 
-        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.status.as_ref().unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.message_queues.len(), 1);
+        let endpoints = response.message_queues[0]
+            .broker
+            .as_ref()
+            .and_then(|broker| broker.endpoints.as_ref())
+            .expect("broker endpoints should be present");
+        assert_eq!(endpoints.addresses[0].host, "127.0.0.1");
+        assert_eq!(endpoints.addresses[0].port, 18081);
     }
 
     #[test]
@@ -1684,7 +1686,7 @@ mod tests {
                     resource_namespace: String::new(),
                     name: "GroupA".to_owned(),
                 }),
-                endpoints: Some(v2::Endpoints::default()),
+                endpoints: Some(proxy_endpoints()),
             },
             &QueryAssignmentPlan {
                 route,
@@ -1700,6 +1702,46 @@ mod tests {
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.assignments.len(), 1);
         assert_eq!(response.assignments[0].message_queue.as_ref().unwrap().id, 1);
+        let endpoints = response.assignments[0]
+            .message_queue
+            .as_ref()
+            .and_then(|queue| queue.broker.as_ref())
+            .and_then(|broker| broker.endpoints.as_ref())
+            .expect("assignment broker endpoints should be present");
+        assert_eq!(endpoints.addresses[0].port, 18081);
+    }
+
+    #[test]
+    fn inbound_message_queue_target_ignores_client_visible_proxy_endpoint() {
+        let request = v2::PullMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 1,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: Some(v2::Broker {
+                    name: "broker-a".to_owned(),
+                    id: 0,
+                    endpoints: Some(proxy_endpoints()),
+                }),
+                accept_message_types: vec![v2::MessageType::Normal as i32],
+            }),
+            offset: 7,
+            batch_size: 1,
+            filter_expression: None,
+            long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+        };
+
+        let parsed = build_pull_message_request(&request).expect("pull request should parse");
+
+        assert_eq!(parsed.target.broker_name.as_deref(), Some("broker-a"));
+        assert_eq!(parsed.target.broker_addr, None);
     }
 
     #[test]

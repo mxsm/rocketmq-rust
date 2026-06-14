@@ -15,7 +15,7 @@
 #[allow(clippy::large_enum_variant)]
 #[allow(clippy::doc_lazy_continuation)]
 pub mod v2 {
-    tonic::include_proto!("rocketmq_rust_proxy.v2");
+    tonic::include_proto!("apache.rocketmq.v2");
 }
 
 pub use v2::*;
