@@ -88,7 +88,7 @@ RocketMQ-Rust 实现了分布式架构，包含以下核心组件：
 
 ```toml
 [dependencies]
-rocketmq-client-rust = "0.8.0"
+rocketmq-client-rust = "0.9.0"
 ```
 
 或者针对特定组件：
@@ -96,13 +96,13 @@ rocketmq-client-rust = "0.8.0"
 ```toml
 [dependencies]
 # 客户端 SDK（Producer 和 Consumer）
-rocketmq-client-rust = "0.8.0"
+rocketmq-client-rust = "0.9.0"
 
 # 核心工具和数据结构
-rocketmq-common = "0.8.0"
+rocketmq-common = "0.9.0"
 
 # 低级运行时抽象
-rocketmq-rust = "0.8.0"
+rocketmq-rust = "0.9.0"
 ```
 
 ### 启动 Name Server

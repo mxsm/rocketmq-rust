@@ -3867,7 +3867,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-admin-core"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -3886,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-auth"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "cheetah-string",
@@ -3911,7 +3911,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-client-rust"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "cheetah-string",
@@ -3937,7 +3937,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-common"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3981,7 +3981,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-dashboard-common"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4019,7 +4019,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-error"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "config",
@@ -4029,7 +4029,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-macros"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4038,7 +4038,7 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-remoting"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4074,14 +4074,14 @@ dependencies = [
 
 [[package]]
 name = "rocketmq-runtime"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "rocketmq-rust"
-version = "0.9.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",

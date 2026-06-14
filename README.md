@@ -95,7 +95,7 @@ Add the client SDK to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rocketmq-client-rust = "0.8.0"
+rocketmq-client-rust = "0.9.0"
 ```
 
 Or for specific components:
@@ -103,13 +103,13 @@ Or for specific components:
 ```toml
 [dependencies]
 # Client SDK (Producer & Consumer)
-rocketmq-client-rust = "0.8.0"
+rocketmq-client-rust = "0.9.0"
 
 # Core utilities and data structures
-rocketmq-common = "0.8.0"
+rocketmq-common = "0.9.0"
 
 # Low-level runtime abstractions
-rocketmq-rust = "0.8.0"
+rocketmq-rust = "0.9.0"
 ```
 
 ### Start Name Server
