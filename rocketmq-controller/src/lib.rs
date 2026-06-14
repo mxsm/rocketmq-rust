@@ -32,8 +32,8 @@
 //!        ┌───────┴────────┐
 //!        │                │
 //! ┌──────▼──────┐  ┌─────▼──────┐
-//! │ Raft Module │  │  Processor │
-//! │  (raft-rs)  │  │   Layer    │
+//! │ OpenRaft    │  │  Processor │
+//! │  Module     │  │   Layer    │
 //! └──────┬──────┘  └─────┬──────┘
 //!        │                │
 //!        └────────┬───────┘
@@ -82,7 +82,6 @@ pub mod metadata;
 pub mod metrics;
 pub mod openraft;
 pub mod processor;
-pub mod raft;
 pub mod rpc;
 pub mod storage;
 pub mod task;
@@ -101,7 +100,6 @@ pub use cli::ControllerCli;
 pub use config::ControllerConfig;
 pub use controller::open_raft_controller::OpenRaftController;
 pub use controller::raft_controller::RaftController;
-pub use controller::raft_rs_controller::RaftRsController;
 pub use controller::Controller;
 pub use controller::MockController;
 pub use elect::policy::DefaultElectPolicy;

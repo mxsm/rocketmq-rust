@@ -35,18 +35,14 @@
 //!                        │
 //!          ┌─────────────▼──────────────┐
 //!          │     RaftController         │
-//!          │  (Wrapper/Dispatcher)      │
+//!          │   (OpenRaft wrapper)       │
 //!          └──────────────┬─────────────┘
 //!                         │
-//!          ┌──────────────┴──────────────┐
-//!          │                             │
-//!          │ delegates                   │ delegates
-//!          │                             │
-//! ┌────────▼──────────┐       ┌─────────▼──────────┐
-//! │ OpenRaftController│       │  RaftRsController  │
-//! │ (OpenRaft backend)│       │  (raft-rs backend) │
-//! └───────────────────┘       └────────────────────┘
-//!          │                             │
+//!                         │ delegates
+//!                         │
+//!          ┌──────────────▼──────────────┐
+//!          │     OpenRaftController      │
+//!          │     (OpenRaft backend)      │
 //!          └──────────────┬──────────────┘
 //!                         │
 //!          ┌──────────────▼──────────────┐
@@ -110,7 +106,6 @@ pub mod broker_housekeeping_service;
 pub mod controller_manager;
 pub mod open_raft_controller;
 pub mod raft_controller;
-pub mod raft_rs_controller;
 
 use std::sync::Arc;
 

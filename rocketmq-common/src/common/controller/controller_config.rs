@@ -85,7 +85,7 @@ pub struct ControllerConfig {
     /// Controller type: "Raft"
     ///
     /// Default: Raft
-    /// Note: In Rust implementation, "Raft" uses tikv/raft or openraft
+    /// Note: In Rust implementation, "Raft" uses OpenRaft.
     pub controller_type: String,
 
     /// Interval of periodic scanning for non-active broker (milliseconds)

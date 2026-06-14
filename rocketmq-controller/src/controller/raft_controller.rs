@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! RaftController wrapper for different Raft implementations
+//! OpenRaft-backed controller wrapper.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -31,34 +31,30 @@ use rocketmq_remoting::protocol::header::controller::get_replica_info_request_he
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 
 use crate::controller::open_raft_controller::OpenRaftController;
-use crate::controller::raft_rs_controller::RaftRsController;
 use crate::controller::Controller;
-use crate::error::ControllerError;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::typ::Node;
 use crate::typ::NodeId;
 
-/// Unified controller wrapper supporting multiple Raft implementations
+/// Controller wrapper used by the rest of the controller stack.
 ///
-/// This enum allows runtime selection between OpenRaft and raft-rs implementations.
+/// The controller mode is backed exclusively by OpenRaft.
 #[derive(Clone)]
-pub enum RaftController {
-    /// OpenRaft-based implementation
-    OpenRaft(ArcMut<OpenRaftController>),
-    /// raft-rs (TiKV) based implementation
-    RaftRs(ArcMut<RaftRsController>),
+pub struct RaftController {
+    inner: ArcMut<OpenRaftController>,
 }
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
     pub fn new_open_raft(config: ArcMut<ControllerConfig>) -> Self {
-        Self::OpenRaft(ArcMut::new(OpenRaftController::new(config)))
+        Self {
+            inner: ArcMut::new(OpenRaftController::new(config)),
+        }
     }
 
     /// Create a new OpenRaft-based controller that shares a heartbeat manager.
@@ -66,107 +62,52 @@ impl RaftController {
         config: ArcMut<ControllerConfig>,
         heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
     ) -> Self {
-        Self::OpenRaft(ArcMut::new(OpenRaftController::new_with_heartbeat(
-            config,
-            heartbeat_manager,
-        )))
-    }
-
-    /// Create a new raft-rs based controller
-    pub fn new_raft_rs(runtime: Arc<RocketMQRuntime>) -> Self {
-        Self::RaftRs(ArcMut::new(RaftRsController::new(runtime)))
+        Self {
+            inner: ArcMut::new(OpenRaftController::new_with_heartbeat(config, heartbeat_manager)),
+        }
     }
 
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.initialize_cluster(nodes).await,
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Cluster bootstrap is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.initialize_cluster(nodes).await
     }
 
     pub async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.add_learner(node_id, node, blocking).await,
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Learner bootstrap is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.add_learner(node_id, node, blocking).await
     }
 
     pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.change_membership(members, retain).await,
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Membership changes are only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.change_membership(members, retain).await
     }
 
     pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.allow_next_revert(node_id, allow).await,
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Replication reset is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.allow_next_revert(node_id, allow).await
     }
 
     pub fn set_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.set_runtime_tick_enabled(enabled),
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Runtime tick control is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.set_runtime_tick_enabled(enabled)
     }
 
     pub fn set_runtime_heartbeat_enabled(&self, enabled: bool) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.set_runtime_heartbeat_enabled(enabled),
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Runtime heartbeat control is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.set_runtime_heartbeat_enabled(enabled)
     }
 
     pub fn set_runtime_elect_enabled(&self, enabled: bool) -> Result<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.set_runtime_elect_enabled(enabled),
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Runtime election control is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.set_runtime_elect_enabled(enabled)
     }
 
     pub fn has_committed_log(&self) -> Result<bool> {
-        match self {
-            Self::OpenRaft(controller) => controller.has_committed_log(),
-            Self::RaftRs(_) => Err(ControllerError::InvalidRequest(
-                "Committed-log inspection is only supported by the OpenRaft controller".to_string(),
-            )),
-        }
+        self.inner.has_committed_log()
     }
 
     pub fn scheduling_enabled(&self) -> bool {
-        match self {
-            Self::OpenRaft(controller) => controller.scheduling_enabled(),
-            Self::RaftRs(_) => false,
-        }
+        self.inner.scheduling_enabled()
     }
 
     pub async fn record_broker_heartbeat(
         &self,
         request: &BrokerHeartbeatRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.record_broker_heartbeat(request).await,
-            Self::RaftRs(_) => Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                rocketmq_remoting::code::response_code::ResponseCode::Success,
-                "Heart beat success",
-            ))),
-        }
+        self.inner.record_broker_heartbeat(request).await
     }
 
     pub async fn remove_broker_live_info(
@@ -175,95 +116,60 @@ impl RaftController {
         broker_name: &str,
         broker_id: Option<i64>,
     ) -> RocketMQResult<()> {
-        match self {
-            Self::OpenRaft(controller) => {
-                controller
-                    .remove_broker_live_info(cluster_name, broker_name, broker_id)
-                    .await
-            }
-            Self::RaftRs(_) => Ok(()),
-        }
+        self.inner
+            .remove_broker_live_info(cluster_name, broker_name, broker_id)
+            .await
     }
 }
 
 impl Controller for RaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.startup().await,
-            Self::RaftRs(controller) => controller.startup().await,
-        }
+        self.inner.startup().await
     }
 
     async fn shutdown(&mut self) -> RocketMQResult<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.shutdown().await,
-            Self::RaftRs(controller) => controller.shutdown().await,
-        }
+        self.inner.shutdown().await
     }
 
     async fn start_scheduling(&self) -> RocketMQResult<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.start_scheduling().await,
-            Self::RaftRs(controller) => controller.start_scheduling().await,
-        }
+        self.inner.start_scheduling().await
     }
 
     async fn stop_scheduling(&self) -> RocketMQResult<()> {
-        match self {
-            Self::OpenRaft(controller) => controller.stop_scheduling().await,
-            Self::RaftRs(controller) => controller.stop_scheduling().await,
-        }
+        self.inner.stop_scheduling().await
     }
 
     fn is_leader(&self) -> bool {
-        match self {
-            Self::OpenRaft(controller) => controller.is_leader(),
-            Self::RaftRs(controller) => controller.is_leader(),
-        }
+        self.inner.is_leader()
     }
 
     async fn register_broker(
         &self,
         request: &RegisterBrokerToControllerRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.register_broker(request).await,
-            Self::RaftRs(controller) => controller.register_broker(request).await,
-        }
+        self.inner.register_broker(request).await
     }
 
     async fn get_next_broker_id(
         &self,
         request: &GetNextBrokerIdRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.get_next_broker_id(request).await,
-            Self::RaftRs(controller) => controller.get_next_broker_id(request).await,
-        }
+        self.inner.get_next_broker_id(request).await
     }
 
     async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.apply_broker_id(request).await,
-            Self::RaftRs(controller) => controller.apply_broker_id(request).await,
-        }
+        self.inner.apply_broker_id(request).await
     }
 
     async fn clean_broker_data(
         &self,
         request: &CleanBrokerDataRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.clean_broker_data(request).await,
-            Self::RaftRs(controller) => controller.clean_broker_data(request).await,
-        }
+        self.inner.clean_broker_data(request).await
     }
 
     async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.elect_master(request).await,
-            Self::RaftRs(controller) => controller.elect_master(request).await,
-        }
+        self.inner.elect_master(request).await
     }
 
     async fn alter_sync_state_set(
@@ -271,37 +177,22 @@ impl Controller for RaftController {
         request: &AlterSyncStateSetRequestHeader,
         sync_state_set: SyncStateSet,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.alter_sync_state_set(request, sync_state_set).await,
-            Self::RaftRs(controller) => controller.alter_sync_state_set(request, sync_state_set).await,
-        }
+        self.inner.alter_sync_state_set(request, sync_state_set).await
     }
 
     async fn get_replica_info(&self, request: &GetReplicaInfoRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.get_replica_info(request).await,
-            Self::RaftRs(controller) => controller.get_replica_info(request).await,
-        }
+        self.inner.get_replica_info(request).await
     }
 
     async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.get_controller_metadata().await,
-            Self::RaftRs(controller) => controller.get_controller_metadata().await,
-        }
+        self.inner.get_controller_metadata().await
     }
 
     async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
-        match self {
-            Self::OpenRaft(controller) => controller.get_sync_state_data(broker_names).await,
-            Self::RaftRs(controller) => controller.get_sync_state_data(broker_names).await,
-        }
+        self.inner.get_sync_state_data(broker_names).await
     }
 
     fn register_broker_lifecycle_listener(&self, listener: Arc<dyn BrokerLifecycleListener>) {
-        match self {
-            Self::OpenRaft(controller) => controller.register_broker_lifecycle_listener(listener),
-            Self::RaftRs(controller) => controller.register_broker_lifecycle_listener(listener),
-        }
+        self.inner.register_broker_lifecycle_listener(listener);
     }
 }

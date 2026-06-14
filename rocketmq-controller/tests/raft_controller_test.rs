@@ -12,17 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_controller::typ::Node;
 use rocketmq_controller::Controller;
 use rocketmq_controller::RaftController;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+
+fn test_config(port: u16) -> ArcMut<ControllerConfig> {
+    ArcMut::new(
+        ControllerConfig::default()
+            .with_node_info(1, format!("127.0.0.1:{port}").parse().expect("valid test address"))
+            .with_election_timeout_ms(300)
+            .with_heartbeat_interval_ms(100),
+    )
+}
 
 #[tokio::test]
 async fn test_open_raft_controller_lifecycle() {
-    let config = ArcMut::new(ControllerConfig::test_config());
+    let config = test_config(60201);
     let mut controller = RaftController::new_open_raft(config);
 
     assert!(controller.startup().await.is_ok());
@@ -31,49 +41,33 @@ async fn test_open_raft_controller_lifecycle() {
 }
 
 #[tokio::test]
-async fn test_raft_rs_controller_lifecycle() {
-    let runtime = tokio::task::spawn_blocking(|| Arc::new(RocketMQRuntime::new_multi(4, "test-runtime")))
+async fn test_raft_controller_wrapper_initializes_openraft_cluster() {
+    let port = 60202;
+    let config = test_config(port);
+
+    let mut controller = RaftController::new_open_raft(config);
+    controller.startup().await.expect("start openraft controller");
+
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        1,
+        Node {
+            node_id: 1,
+            rpc_addr: format!("127.0.0.1:{port}"),
+        },
+    );
+    controller
+        .initialize_cluster(nodes)
         .await
-        .unwrap();
+        .expect("initialize single-node openraft cluster");
 
-    let mut controller = RaftController::new_raft_rs(runtime.clone());
+    for _ in 0..30 {
+        if controller.is_leader() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
-    assert!(controller.startup().await.is_ok());
-    assert!(!controller.is_leader()); // Default is false
+    assert!(controller.is_leader(), "OpenRaft controller should become leader");
     assert!(controller.shutdown().await.is_ok());
-
-    drop(controller);
-    tokio::task::spawn_blocking(move || {
-        drop(runtime);
-    })
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
-async fn test_raft_controller_wrapper() {
-    let runtime = tokio::task::spawn_blocking(|| Arc::new(RocketMQRuntime::new_multi(4, "test-runtime")))
-        .await
-        .unwrap();
-    let config = ArcMut::new(ControllerConfig::test_config());
-
-    // Test OpenRaft variant
-    let mut open_raft_controller = RaftController::new_open_raft(config.clone());
-    assert!(open_raft_controller.startup().await.is_ok());
-    assert!(!open_raft_controller.is_leader());
-    assert!(open_raft_controller.shutdown().await.is_ok());
-    drop(open_raft_controller);
-
-    // Test RaftRs variant
-    let mut raft_rs_controller = RaftController::new_raft_rs(runtime.clone());
-    assert!(raft_rs_controller.startup().await.is_ok());
-    assert!(!raft_rs_controller.is_leader());
-    assert!(raft_rs_controller.shutdown().await.is_ok());
-    drop(raft_rs_controller);
-
-    tokio::task::spawn_blocking(move || {
-        drop(runtime);
-    })
-    .await
-    .unwrap();
 }
