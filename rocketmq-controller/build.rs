@@ -15,10 +15,7 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/");
 
-    tonic_prost_build::configure().compile_protos(
-        &["proto/raft.proto", "proto/controller.proto", "proto/openraft.proto"],
-        &["proto/"],
-    )?;
+    tonic_prost_build::configure().compile_protos(&["proto/controller.proto", "proto/openraft.proto"], &["proto/"])?;
 
     Ok(())
 }
