@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn get_controller_metadata_sub_command_parse_request() {
-        let cmd = GetControllerMetadataSubCommand::try_parse_from(["getControllerMetadata", "-a", " 127.0.0.1:9878 "])
+        let cmd = GetControllerMetadataSubCommand::try_parse_from(["getControllerMetaData", "-a", " 127.0.0.1:9878 "])
             .unwrap();
 
         assert_eq!(cmd.request().unwrap().controller_addr().as_str(), "127.0.0.1:9878");

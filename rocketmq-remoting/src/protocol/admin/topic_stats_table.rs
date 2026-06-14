@@ -19,11 +19,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json_any_key::*;
 
+use crate::protocol::admin::consume_stats::normalize_nonstandard_offset_table_keys;
 use crate::protocol::admin::topic_offset::TopicOffset;
+use crate::protocol::RemotingDeserializable;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicStatsTable {
+    topic_put_tps: f64,
     #[serde(with = "any_key_map")]
     offset_table: HashMap<MessageQueue, TopicOffset>,
 }
@@ -31,8 +34,17 @@ pub struct TopicStatsTable {
 impl TopicStatsTable {
     pub fn new() -> Self {
         Self {
+            topic_put_tps: 0.0,
             offset_table: HashMap::new(),
         }
+    }
+
+    pub fn get_topic_put_tps(&self) -> f64 {
+        self.topic_put_tps
+    }
+
+    pub fn set_topic_put_tps(&mut self, topic_put_tps: f64) {
+        self.topic_put_tps = topic_put_tps;
     }
 
     pub fn get_offset_table(&self) -> &HashMap<MessageQueue, TopicOffset> {
@@ -49,6 +61,22 @@ impl TopicStatsTable {
 
     pub fn set_offset_table(&mut self, offset_table: HashMap<MessageQueue, TopicOffset>) {
         self.offset_table = offset_table;
+    }
+
+    pub fn decode(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+        match <Self as RemotingDeserializable>::decode(body) {
+            Ok(stats) => Ok(stats),
+            Err(error) => {
+                let Ok(raw_body) = std::str::from_utf8(body) else {
+                    return Err(error);
+                };
+                let normalized_body = normalize_nonstandard_offset_table_keys(raw_body);
+                if normalized_body == raw_body {
+                    return Err(error);
+                }
+                <Self as RemotingDeserializable>::decode_str(&normalized_body)
+            }
+        }
     }
 }
 
@@ -119,6 +147,22 @@ mod tests {
 
         let offset_val = deserialized.get_offset_table().values().next().unwrap().clone();
         assert_eq!(offset_val.get_last_update_timestamp(), 11111111);
+    }
+
+    #[test]
+    fn test_decode_java_fastjson_message_queue_keys() {
+        let body = br#"{"offsetTable":{{"topic":"TBW102","brokerName":"broker-a","queueId":0}:{"minOffset":0,"maxOffset":0,"lastUpdateTimestamp":0}},"topicPutTps":1.5}"#;
+
+        let table = TopicStatsTable::decode(body).expect("decode Java fastjson topic stats");
+
+        let queue = MessageQueue::from_parts("TBW102", "broker-a", 0);
+        let offset = table
+            .get_offset_table()
+            .get(&queue)
+            .expect("queue offset should decode");
+        assert_eq!(offset.get_min_offset(), 0);
+        assert_eq!(offset.get_max_offset(), 0);
+        assert_eq!(table.get_topic_put_tps(), 1.5);
     }
 
     #[test]

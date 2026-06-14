@@ -110,7 +110,8 @@ pub enum AuthCommands {
     ListAcl(ListAclSubCommand),
 
     #[command(
-        name = "listUsers",
+        name = "listUser",
+        visible_alias = "listUsers",
         about = "List users from cluster.",
         long_about = None,
     )]

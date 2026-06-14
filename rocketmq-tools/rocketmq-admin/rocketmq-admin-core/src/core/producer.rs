@@ -342,7 +342,7 @@ impl ProducerService {
                     .as_ref()
                     .map(|mq| mq.queue_id().to_string())
                     .unwrap_or_else(|| "Unknown".to_string()),
-                send_status: format!("{:?}", result.send_status),
+                send_status: result.send_status.to_string(),
                 msg_id: result
                     .msg_id
                     .as_ref()

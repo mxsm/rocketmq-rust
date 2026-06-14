@@ -50,24 +50,31 @@ impl CommandExecute for TopicStatusSubCommand {
         let mut mq_list: Vec<_> = offset_table.keys().cloned().collect();
         mq_list.sort();
 
-        println!("#Broker Name #QID #Min Offset #Max Offset #Last Updated");
+        println!(
+            "{:<32}  {:<4}  {:<20}  {:<20}    #Last Updated",
+            "#Broker Name", "#QID", "#Min Offset", "#Max Offset"
+        );
 
         for queue in &mq_list {
-            let topic_offset = offset_table.get(queue);
-            if let Some(offset) = topic_offset {
-                if offset.get_last_update_timestamp() > 0 {
-                    let human_timestamp = time_millis_to_human_string2(offset.get_last_update_timestamp());
-                    println!(
-                        "{}  {}  {}  {}  {}",
-                        queue.broker_name(),
-                        queue.queue_id(),
-                        offset.get_min_offset(),
-                        offset.get_max_offset(),
-                        human_timestamp
-                    );
-                }
+            if let Some(offset) = offset_table.get(queue) {
+                let human_timestamp = if offset.get_last_update_timestamp() > 0 {
+                    time_millis_to_human_string2(offset.get_last_update_timestamp())
+                } else {
+                    String::new()
+                };
+                println!(
+                    "{:<32}  {:<4}  {:<20}  {:<20}    {}",
+                    queue.broker_name(),
+                    queue.queue_id(),
+                    offset.get_min_offset(),
+                    offset.get_max_offset(),
+                    human_timestamp
+                );
             }
         }
+
+        println!();
+        println!("Topic Put TPS: {:?}", topic_status.get_topic_put_tps());
 
         Ok(())
     }

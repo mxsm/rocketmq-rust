@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod clean_broker_metadata_sub_command;
+mod elect_master_sub_command;
 mod get_controller_config_sub_command;
 mod get_controller_metadata_sub_command;
 mod update_controller_config_sub_command;
@@ -25,6 +26,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
 use crate::commands::controller::clean_broker_metadata_sub_command::CleanBrokerMetadataSubCommand;
+use crate::commands::controller::elect_master_sub_command::ElectMasterSubCommand;
 use crate::commands::controller::get_controller_config_sub_command::GetControllerConfigSubCommand;
 use crate::commands::controller::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
 use crate::commands::controller::update_controller_config_sub_command::UpdateControllerConfigSubCommand;
@@ -39,6 +41,13 @@ pub enum ControllerCommands {
     CleanBrokerMetadata(CleanBrokerMetadataSubCommand),
 
     #[command(
+        name = "electMaster",
+        about = "Re-elect the specified broker as master.",
+        long_about = None,
+    )]
+    ElectMaster(ElectMasterSubCommand),
+
+    #[command(
         name = "getControllerConfig",
         about = "Get configuration of controller(s)",
         long_about = None,
@@ -46,7 +55,8 @@ pub enum ControllerCommands {
     GetControllerConfig(GetControllerConfigSubCommand),
 
     #[command(
-        name = "getControllerMetadata",
+        name = "getControllerMetaData",
+        visible_alias = "getControllerMetadata",
         about = "Get meta data of controller",
         long_about = None,
     )]
@@ -64,6 +74,7 @@ impl CommandExecute for ControllerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(rpc_hook).await,
+            ControllerCommands::ElectMaster(value) => value.execute(rpc_hook).await,
             ControllerCommands::GetControllerConfig(value) => value.execute(rpc_hook).await,
             ControllerCommands::GetControllerMetadata(value) => value.execute(rpc_hook).await,
             ControllerCommands::UpdateControllerConfig(value) => value.execute(rpc_hook).await,

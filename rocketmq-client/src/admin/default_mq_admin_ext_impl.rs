@@ -1985,24 +1985,11 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         special_topic: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        let mut topic_config_wrapper = self.get_all_topic_config(broker_addr, timeout_millis).await?;
+        let mut topic_config_wrapper = self.get_all_topic_config(broker_addr.clone(), timeout_millis).await?;
+        let system_topic_list = self.get_system_topic_list_from_broker(broker_addr).await?;
 
         if let Some(ref mut topic_table) = topic_config_wrapper.topic_config_table_mut() {
-            topic_table.retain(|topic_name, topic_config| {
-                if TopicValidator::is_system_topic(topic_name.as_str()) {
-                    return false;
-                }
-                if !special_topic
-                    && (topic_name.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-                        || topic_name.starts_with(DLQ_GROUP_TOPIC_PREFIX))
-                {
-                    return false;
-                }
-                if !PermName::is_valid(topic_config.perm) {
-                    return false;
-                }
-                true
-            });
+            retain_java_user_topic_config(topic_table, &system_topic_list.topic_list, special_topic);
         }
 
         Ok(topic_config_wrapper)
@@ -3896,6 +3883,32 @@ fn filter_consume_stats(stats: &mut ConsumeStats, topic: Option<&CheetahString>,
     });
 }
 
+fn retain_java_user_topic_config(
+    topic_table: &mut HashMap<CheetahString, TopicConfig>,
+    broker_system_topics: &[CheetahString],
+    special_topic: bool,
+) {
+    topic_table.retain(|topic_name, topic_config| {
+        let topic = topic_config
+            .topic_name
+            .as_ref()
+            .map(CheetahString::as_str)
+            .unwrap_or_else(|| topic_name.as_str());
+        if broker_system_topics
+            .iter()
+            .any(|system_topic| system_topic.as_str() == topic)
+            || TopicValidator::is_system_topic(topic)
+        {
+            return false;
+        }
+        if !special_topic && (topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX))
+        {
+            return false;
+        }
+        PermName::is_valid(topic_config.perm)
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -3909,14 +3922,18 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
     use rocketmq_common::common::config::TopicConfig;
+    use rocketmq_common::common::constant::PermName;
     use rocketmq_common::common::message::message_builder::MessageBuilder;
     use rocketmq_common::common::message::message_enum::MessageRequestMode;
     use rocketmq_common::common::message::message_ext::MessageExt;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_common::common::message::MessageConst;
     use rocketmq_common::common::mix_all;
+    use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
+    use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
     #[allow(deprecated)]
     use rocketmq_common::common::tools::track_type::TrackType;
+    use rocketmq_common::common::topic::TopicValidator;
     use rocketmq_remoting::code::response_code::ResponseCode;
     use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
     use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
@@ -3955,6 +3972,7 @@ mod tests {
     use super::query_consume_queue_index_to_java_long;
     use super::reset_offset_by_queue_id_request_headers;
     use super::resolve_consumed_track_type;
+    use super::retain_java_user_topic_config;
     use super::search_offset_timestamp_to_java_long;
     use super::select_consumer_direct_connection;
     use super::timeout_millis_to_u64;
@@ -3973,6 +3991,68 @@ mod tests {
             ArcMut::new(ClientConfig::default()),
             CheetahString::from("admin-group"),
         )
+    }
+
+    #[test]
+    fn retain_java_user_topic_config_filters_java_internal_topics() {
+        let mut topic_table = HashMap::from([
+            (
+                CheetahString::from_static_str("UserTopic"),
+                TopicConfig::new("UserTopic"),
+            ),
+            (
+                CheetahString::from_static_str("BrokerInternalTopic"),
+                TopicConfig::new("BrokerInternalTopic"),
+            ),
+            (
+                CheetahString::from_static_str(TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC),
+                TopicConfig::new(TopicValidator::RMQ_SYS_ROCKSDB_TRANS_HALF_TOPIC),
+            ),
+            (
+                CheetahString::from_string(format!("{RETRY_GROUP_TOPIC_PREFIX}group-a")),
+                TopicConfig::new(format!("{RETRY_GROUP_TOPIC_PREFIX}group-a")),
+            ),
+            (
+                CheetahString::from_string(format!("{DLQ_GROUP_TOPIC_PREFIX}group-a")),
+                TopicConfig::new(format!("{DLQ_GROUP_TOPIC_PREFIX}group-a")),
+            ),
+            (
+                CheetahString::from_static_str("InvalidPermTopic"),
+                TopicConfig {
+                    perm: PermName::PERM_PRIORITY,
+                    ..TopicConfig::new("InvalidPermTopic")
+                },
+            ),
+        ]);
+        let broker_system_topics = vec![CheetahString::from_static_str("BrokerInternalTopic")];
+
+        retain_java_user_topic_config(&mut topic_table, &broker_system_topics, false);
+
+        assert_eq!(topic_table.len(), 1);
+        assert!(topic_table.contains_key("UserTopic"));
+    }
+
+    #[test]
+    fn retain_java_user_topic_config_keeps_retry_and_dlq_when_special_topic_enabled() {
+        let retry_topic = CheetahString::from_string(format!("{RETRY_GROUP_TOPIC_PREFIX}group-a"));
+        let dlq_topic = CheetahString::from_string(format!("{DLQ_GROUP_TOPIC_PREFIX}group-a"));
+        let mut topic_table = HashMap::from([
+            (retry_topic.clone(), TopicConfig::new(retry_topic.clone())),
+            (dlq_topic.clone(), TopicConfig::new(dlq_topic.clone())),
+            (
+                CheetahString::from_static_str("InvalidPermTopic"),
+                TopicConfig {
+                    perm: PermName::PERM_PRIORITY,
+                    ..TopicConfig::new("InvalidPermTopic")
+                },
+            ),
+        ]);
+
+        retain_java_user_topic_config(&mut topic_table, &[], true);
+
+        assert_eq!(topic_table.len(), 2);
+        assert!(topic_table.contains_key(&retry_topic));
+        assert!(topic_table.contains_key(&dlq_topic));
     }
 
     #[test]

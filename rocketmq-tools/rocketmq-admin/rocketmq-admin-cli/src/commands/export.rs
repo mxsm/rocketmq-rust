@@ -15,7 +15,9 @@
 mod export_configs_sub_command;
 mod export_metadata_in_rocks_db_sub_command;
 mod export_metadata_sub_command;
+mod export_metrics_sub_command;
 mod export_pop_record_sub_command;
+mod rocksdb_config_to_json_sub_command;
 
 use std::sync::Arc;
 
@@ -27,7 +29,9 @@ use crate::commands::CommandExecute;
 use crate::commands::export::export_configs_sub_command::ExportConfigsSubCommand;
 use crate::commands::export::export_metadata_in_rocks_db_sub_command::ExportMetadataInRocksDBSubCommand;
 use crate::commands::export::export_metadata_sub_command::ExportMetadataSubCommand;
+use crate::commands::export::export_metrics_sub_command::ExportMetricsSubCommand;
 use crate::commands::export::export_pop_record_sub_command::ExportPopRecordSubCommand;
+use crate::commands::export::rocksdb_config_to_json_sub_command::RocksDBConfigToJsonSubCommand;
 
 #[derive(Subcommand)]
 pub enum ExportCommands {
@@ -37,6 +41,13 @@ pub enum ExportCommands {
         long_about = None,
     )]
     ExportConfigs(ExportConfigsSubCommand),
+
+    #[command(
+        name = "exportMetrics",
+        about = "Export metrics.",
+        long_about = None,
+    )]
+    ExportMetrics(ExportMetricsSubCommand),
 
     #[command(
         name = "exportMetadataInRocksDB",
@@ -58,15 +69,24 @@ pub enum ExportCommands {
         long_about = None,
     )]
     ExportPopRecord(ExportPopRecordSubCommand),
+
+    #[command(
+        name = "rocksDBConfigToJson",
+        about = "Convert RocksDB kv config to json.",
+        long_about = None,
+    )]
+    RocksDBConfigToJson(RocksDBConfigToJsonSubCommand),
 }
 
 impl CommandExecute for ExportCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             ExportCommands::ExportConfigs(cmd) => cmd.execute(rpc_hook).await,
+            ExportCommands::ExportMetrics(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportMetadata(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportPopRecord(cmd) => cmd.execute(rpc_hook).await,
+            ExportCommands::RocksDBConfigToJson(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
