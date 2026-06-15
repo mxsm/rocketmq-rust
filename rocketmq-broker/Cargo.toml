@@ -34,6 +34,14 @@ local_file_store = ["rocketmq-store/local_file_store"]
 rocksdb_store    = ["rocketmq-store/rocksdb_store"]
 rocksdb-store    = ["rocksdb_store"]
 tieredstore      = ["local_file_store", "rocketmq-store/tieredstore"]
+observability    = ["dep:rocketmq-observability", "rocketmq-observability/observability"]
+otel-metrics     = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+otel-traces      = ["dep:rocketmq-observability", "rocketmq-observability/otel-traces"]
+otel-logs        = ["dep:rocketmq-observability", "rocketmq-observability/otel-logs"]
+otlp-metrics     = ["dep:rocketmq-observability", "rocketmq-observability/otlp-metrics"]
+otlp-traces      = ["dep:rocketmq-observability", "rocketmq-observability/otlp-traces"]
+otlp-logs        = ["dep:rocketmq-observability", "rocketmq-observability/otlp-logs"]
+prometheus       = ["dep:rocketmq-observability", "rocketmq-observability/prometheus"]
 
 [dependencies]
 rocketmq-rust        = { workspace = true }
@@ -45,6 +53,7 @@ rocketmq-runtime     = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 rocketmq-error       = { workspace = true }
 rocketmq-auth        = { workspace = true }
+rocketmq-observability = { workspace = true, optional = true }
 
 anyhow.workspace = true
 

@@ -27,6 +27,11 @@ readme                 = "README.md"
 description            = "Rust implementation of Apache rocketmq client"
 rust-version.workspace = true
 
+[features]
+default = []
+observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-traces"]
+otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
+
 [dependencies]
 rocketmq-rust            = { workspace = true }
 rocketmq-common          = { workspace = true }
@@ -34,6 +39,7 @@ rocketmq-remoting        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-error.workspace = true
 rocketmq-auth.workspace  = true
+rocketmq-observability   = { workspace = true, optional = true }
 
 #json spupport
 serde.workspace      = true
