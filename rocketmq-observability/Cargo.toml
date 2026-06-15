@@ -1,0 +1,98 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "rocketmq-observability"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+readme = "README.md"
+description = "Observability support for rocketmq-rust"
+rust-version.workspace = true
+
+[features]
+default = []
+observability = ["otel-metrics", "otel-traces"]
+otel-metrics = [
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "opentelemetry/metrics",
+  "opentelemetry_sdk/metrics",
+  "opentelemetry_sdk/rt-tokio",
+]
+otel-traces = [
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-semantic-conventions",
+  "dep:tracing-opentelemetry",
+  "opentelemetry/trace",
+  "opentelemetry_sdk/trace",
+]
+otel-logs = [
+  "dep:opentelemetry",
+  "dep:opentelemetry_sdk",
+  "dep:opentelemetry-appender-tracing",
+  "opentelemetry/logs",
+  "opentelemetry_sdk/logs",
+]
+otlp-grpc = [
+  "dep:opentelemetry-otlp",
+  "opentelemetry-otlp/grpc-tonic",
+]
+otlp-metrics = [
+  "otel-metrics",
+  "otlp-grpc",
+  "opentelemetry-otlp/metrics",
+]
+otlp-traces = [
+  "otel-traces",
+  "otlp-grpc",
+  "opentelemetry-otlp/trace",
+]
+otlp-logs = [
+  "otel-logs",
+  "otlp-grpc",
+  "opentelemetry-otlp/logs",
+]
+prometheus = [
+  "otel-metrics",
+  "dep:opentelemetry-prometheus",
+]
+stdout = []
+
+[dependencies]
+rocketmq-common = { workspace = true }
+rocketmq-error = { workspace = true }
+rocketmq-runtime = { workspace = true }
+
+anyhow.workspace = true
+cheetah-string.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-prometheus = { workspace = true, optional = true }
+opentelemetry-appender-tracing = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
