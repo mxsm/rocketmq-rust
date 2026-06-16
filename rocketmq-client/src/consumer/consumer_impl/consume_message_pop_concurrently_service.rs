@@ -203,11 +203,50 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
+        let group_for_span = self.consumer_group.clone();
         let status_result = tokio::task::spawn_blocking(move || {
             let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
-            listener.consume_message(&msgs_refs, &context)
+            let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                msgs_refs.first().copied(),
+                msgs_refs.len(),
+                group_for_span.as_str(),
+                &context.message_queue,
+                "pop_concurrent_direct",
+            );
+            let _entered = process_span.enter();
+            let result = listener.consume_message(&msgs_refs, &context);
+            match &result {
+                Ok(ConsumeConcurrentlyStatus::ConsumeSuccess) => {
+                    crate::consumer::consumer_impl::observability::record_process_event(
+                        &process_span,
+                        "RocketMQ CONSUMER ACK",
+                        "success",
+                        msgs_refs.len(),
+                    );
+                }
+                Ok(ConsumeConcurrentlyStatus::ReconsumeLater) => {
+                    crate::consumer::consumer_impl::observability::record_process_event(
+                        &process_span,
+                        "RocketMQ CONSUMER RETRY",
+                        "reconsume_later",
+                        msgs_refs.len(),
+                    );
+                }
+                Err(_) => {
+                    crate::consumer::consumer_impl::observability::record_process_event(
+                        &process_span,
+                        "RocketMQ CONSUMER RETRY",
+                        "exception",
+                        msgs_refs.len(),
+                    );
+                }
+            }
+            result
         })
         .await;
+        let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+        crate::observability_metrics::record_consume(1, consume_rt);
+
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
         result.set_auto_commit(true);
@@ -231,7 +270,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                 )))
             }
         }
-        result.set_spent_time_mills(begin_timestamp.elapsed().as_millis() as u64);
+        result.set_spent_time_mills(consume_rt);
         info!("consumeMessageDirectly Result: {}", result);
         result
     }
@@ -650,12 +689,21 @@ impl ConsumeRequest {
 
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = self.msgs.iter().map(|m| m.as_ref().clone()).collect();
+        let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+            msgs_cloned.first(),
+            msgs_cloned.len(),
+            self.consumer_group.as_str(),
+            &self.message_queue,
+            "pop_concurrent",
+        );
         let context = ConsumeConcurrentlyContext {
             message_queue: self.message_queue.clone(),
             delay_level_when_next_consume: 0,
             ack_index: i32::MAX,
         };
+        let process_span_for_blocking = process_span.clone();
         let blocking_result = tokio::task::spawn_blocking(move || {
+            let _entered = process_span_for_blocking.enter();
             let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let result = listener.consume_message(&msgs_refs, &context);
             (result, context)
@@ -694,6 +742,7 @@ impl ConsumeRequest {
             }
         };
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+        crate::observability_metrics::record_consume(self.msgs.len(), consume_rt);
         let return_type = classify_pop_consume_return_type(status, has_exception, consume_rt, self.invisible_time);
 
         if default_mqpush_consumer_impl.has_hook() {
@@ -711,6 +760,24 @@ impl ConsumeRequest {
         }
 
         let final_status = status.unwrap_or(ConsumeConcurrentlyStatus::ReconsumeLater);
+        match final_status {
+            ConsumeConcurrentlyStatus::ConsumeSuccess => {
+                crate::consumer::consumer_impl::observability::record_process_event(
+                    &process_span,
+                    "RocketMQ CONSUMER ACK",
+                    "success",
+                    self.msgs.len(),
+                );
+            }
+            ConsumeConcurrentlyStatus::ReconsumeLater => {
+                crate::consumer::consumer_impl::observability::record_process_event(
+                    &process_span,
+                    "RocketMQ CONSUMER RETRY",
+                    if has_exception { "exception" } else { "reconsume_later" },
+                    self.msgs.len(),
+                );
+            }
+        }
 
         if default_mqpush_consumer_impl.has_hook() {
             if let Some(cmc) = consume_message_context.as_mut() {

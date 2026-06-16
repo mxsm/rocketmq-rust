@@ -786,6 +786,7 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    #[cfg(feature = "rocksdb_store")]
     use rocketmq_common::common::config_manager::ConfigManager;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;

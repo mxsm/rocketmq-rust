@@ -711,7 +711,9 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    #[cfg(feature = "rocksdb_store")]
     use rocketmq_common::common::config::TopicConfig;
+    #[cfg(feature = "rocksdb_store")]
     use rocketmq_common::common::config_manager::ConfigManager;
     use rocketmq_common::common::constant::file_readahead_mode::READ_AHEAD_MODE;
     use rocketmq_common::common::message::MessageConst;
@@ -724,10 +726,12 @@ mod tests {
     use rocketmq_remoting::net::channel::ChannelInner;
     use rocketmq_remoting::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+    #[cfg(feature = "rocksdb_store")]
     use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
     use rocketmq_rust::ArcMut;
     use rocketmq_store::base::message_store::MessageStore;
+    #[cfg(feature = "rocksdb_store")]
     use rocketmq_store::base::store_enum::StoreType;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
     use rocketmq_store::timer::timer_checkpoint::TimerCheckpointSnapshot;

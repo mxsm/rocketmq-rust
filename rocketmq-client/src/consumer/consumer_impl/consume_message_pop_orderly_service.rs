@@ -124,6 +124,40 @@ impl crate::consumer::ack_callback::AckCallback for DefaultAckCallback {
     }
 }
 
+#[allow(deprecated)]
+fn record_orderly_process_event<E>(
+    span: &tracing::Span,
+    status: &Result<ConsumeOrderlyStatus, E>,
+    message_count: usize,
+) {
+    match status {
+        Ok(ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Commit) => {
+            crate::consumer::consumer_impl::observability::record_process_event(
+                span,
+                "RocketMQ CONSUMER ACK",
+                "success",
+                message_count,
+            );
+        }
+        Ok(ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::SuspendCurrentQueueAMoment) => {
+            crate::consumer::consumer_impl::observability::record_process_event(
+                span,
+                "RocketMQ CONSUMER RETRY",
+                "reconsume_later",
+                message_count,
+            );
+        }
+        Err(_) => {
+            crate::consumer::consumer_impl::observability::record_process_event(
+                span,
+                "RocketMQ CONSUMER RETRY",
+                "exception",
+                message_count,
+            );
+        }
+    }
+}
+
 impl ConsumeMessagePopOrderlyService {
     pub fn new(
         client_config: ArcMut<ClientConfig>,
@@ -558,13 +592,26 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
+        let group_for_span = self.consumer_group.clone();
         let blocking_result = tokio::task::spawn_blocking(move || {
             let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let mut ctx = ConsumeOrderlyContext::new(mq);
+            let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                msg_refs.first().copied(),
+                msg_refs.len(),
+                group_for_span.as_str(),
+                ctx.get_message_queue(),
+                "pop_orderly_direct",
+            );
+            let _entered = process_span.enter();
             let result = listener.consume_message(&msg_refs, &mut ctx);
+            record_orderly_process_event(&process_span, &result, msg_refs.len());
             (result, ctx)
         })
         .await;
+
+        let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+        crate::observability_metrics::record_consume(msgs.len(), consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(true);
@@ -600,7 +647,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
                 )));
             }
         }
-        result.set_spent_time_mills(begin_timestamp.elapsed().as_millis() as u64);
+        result.set_spent_time_mills(consume_rt);
         info!("consumeMessageDirectly Result: {}", result);
         result
     }
@@ -699,11 +746,21 @@ impl ConsumeRequest {
             return;
         }
 
+        let begin_timestamp = Instant::now();
         let listener = consume_message_pop_orderly_service.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
+        let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+            msgs.first().map(|msg| msg.as_ref()),
+            msgs.len(),
+            consume_message_pop_orderly_service.consumer_group.as_str(),
+            &self.message_queue,
+            "pop_orderly",
+        );
         let mq = self.message_queue.clone();
         let mq_for_fallback = self.message_queue.clone();
+        let process_span_for_blocking = process_span.clone();
         let blocking_result = tokio::task::spawn_blocking(move || {
+            let _entered = process_span_for_blocking.enter();
             let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let mut ctx = ConsumeOrderlyContext::new(mq);
             let result = listener.consume_message(&msg_refs, &mut ctx);
@@ -723,6 +780,9 @@ impl ConsumeRequest {
                 )
             }
         };
+        record_orderly_process_event(&process_span, &status, msgs.len());
+        let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+        crate::observability_metrics::record_consume(msgs.len(), consume_rt);
 
         let continue_consume = consume_message_pop_orderly_service
             .process_consume_result(msgs, status, &context)

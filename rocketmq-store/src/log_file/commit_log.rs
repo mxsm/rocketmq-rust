@@ -495,7 +495,19 @@ impl CommitLog {
         Ok(need_ack_nums)
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        name = "RocketMQ STORE APPEND",
+        skip_all,
+        fields(
+            messaging.message.id = tracing::field::Empty,
+            messaging.message.body.size = tracing::field::Empty,
+            messaging.rocketmq.message.keys = tracing::field::Empty,
+        )
+    )]
     pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
+        #[cfg(any(feature = "observability", feature = "observability-traces"))]
+        rocketmq_observability::trace::record_current_message_attributes(&msg_batch.message_ext_broker_inner);
         msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = current_millis() as i64;
         let tran_type = MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
@@ -624,6 +636,8 @@ impl CommitLog {
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_append_latency(elapsed_time_in_lock);
         drop(_put_message_lock);
         self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -669,7 +683,19 @@ impl CommitLog {
         }
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        name = "RocketMQ STORE APPEND",
+        skip_all,
+        fields(
+            messaging.message.id = tracing::field::Empty,
+            messaging.message.body.size = tracing::field::Empty,
+            messaging.rocketmq.message.keys = tracing::field::Empty,
+        )
+    )]
     pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        #[cfg(any(feature = "observability", feature = "observability-traces"))]
+        rocketmq_observability::trace::record_current_message_attributes(&msg);
         // Set the message body CRC (consider the most appropriate setting on the client)
         msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.get_body());
         if self.enabled_append_prop_crc {
@@ -809,6 +835,8 @@ impl CommitLog {
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_append_latency(elapsed_time_in_lock);
         drop(_put_message_lock);
         self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -995,12 +1023,21 @@ impl CommitLog {
         put_message_result: &AppendMessageResult,
         msg: &MessageExtBrokerInner,
     ) -> PutMessageStatus {
+        #[cfg(feature = "observability")]
+        let start_time = Instant::now();
+
         // Acquire lock and immediately call handle_disk_flush which internally
         // only triggers async operations without holding the lock
-        self.flush_manager
+        let status = self
+            .flush_manager
             .mut_from_ref()
             .handle_disk_flush(put_message_result, msg)
-            .await
+            .await;
+
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_flush_latency(start_time.elapsed().as_millis() as u64);
+
+        status
     }
 
     fn need_handle_ha(&self, msg_inner: &MessageExtBrokerInner) -> bool {
@@ -1030,7 +1067,11 @@ impl CommitLog {
         is_file_end: bool,
     ) {
         if do_dispatch && !is_file_end {
+            #[cfg(feature = "observability")]
+            let start_time = Instant::now();
             self.dispatcher.dispatch(request);
+            #[cfg(feature = "observability")]
+            crate::observability_metrics::record_dispatch_latency(start_time.elapsed().as_millis() as u64);
         }
     }
 

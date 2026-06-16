@@ -51,6 +51,10 @@ use rocketmq_common::common::metrics::nop_long_counter::NopLongCounter;
 use rocketmq_common::common::metrics::nop_long_histogram::NopLongHistogram;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
+#[cfg(feature = "otel-metrics")]
+use rocketmq_observability::metrics::broker::BrokerMetrics;
+#[cfg(feature = "otel-metrics")]
+use rocketmq_observability::metrics::labels::LabelGuard;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use tracing::warn;
 
@@ -172,6 +176,50 @@ static LABEL_MAP: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
 /// Global attributes builder supplier
 static ATTRIBUTES_BUILDER_SUPPLIER: OnceLock<Arc<dyn AttributesBuilderSupplier>> = OnceLock::new();
 
+#[cfg(feature = "otel-metrics")]
+struct GuardedLabel {
+    key_value: KeyValue,
+    dropped: bool,
+}
+
+#[cfg(feature = "otel-metrics")]
+fn guarded_bounded_label(label_guard: &RwLock<LabelGuard>, key: &'static str, value: &str) -> GuardedLabel {
+    let (value, dropped) = label_guard
+        .write()
+        .map(|mut guard| {
+            let (value, dropped) = guard.normalize_metric_label_with_outcome(key, value);
+            (value.into_owned(), dropped)
+        })
+        .unwrap_or_else(|_| ("other".to_string(), true));
+    GuardedLabel {
+        key_value: KeyValue::new(key, value),
+        dropped,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrokerMetricsLabelConfig {
+    pub cardinality_limit: usize,
+    pub topic_label_enabled: bool,
+    pub consumer_group_label_enabled: bool,
+}
+
+impl BrokerMetricsLabelConfig {
+    pub fn new(cardinality_limit: usize, topic_label_enabled: bool, consumer_group_label_enabled: bool) -> Self {
+        Self {
+            cardinality_limit,
+            topic_label_enabled,
+            consumer_group_label_enabled,
+        }
+    }
+}
+
+impl Default for BrokerMetricsLabelConfig {
+    fn default() -> Self {
+        Self::new(10_000, true, true)
+    }
+}
+
 /// Broker metrics manager for comprehensive broker-level metrics
 ///
 /// This struct manages all broker-related metrics including:
@@ -182,16 +230,23 @@ static ATTRIBUTES_BUILDER_SUPPLIER: OnceLock<Arc<dyn AttributesBuilderSupplier>>
 /// - Transaction metrics (commit/rollback, half messages)
 pub struct BrokerMetricsManager {
     // Request metrics - Counters
+    #[cfg(not(feature = "otel-metrics"))]
     messages_in_total: Counter<u64>,
+    #[cfg(not(feature = "otel-metrics"))]
     messages_out_total: Counter<u64>,
+    #[cfg(not(feature = "otel-metrics"))]
     throughput_in_total: Counter<u64>,
+    #[cfg(not(feature = "otel-metrics"))]
     throughput_out_total: Counter<u64>,
     send_to_dlq_messages: Counter<u64>,
     commit_messages_total: Counter<u64>,
     rollback_messages_total: Counter<u64>,
 
     // Request metrics - Histograms
+    #[cfg(not(feature = "otel-metrics"))]
     message_size: Histogram<u64>,
+    #[cfg(feature = "otel-metrics")]
+    broker_metrics: BrokerMetrics,
     topic_create_execute_time: Histogram<u64>,
     consumer_group_create_execute_time: Histogram<u64>,
     transaction_finish_latency: Histogram<u64>,
@@ -201,31 +256,52 @@ pub struct BrokerMetricsManager {
 
     // Attributes supplier
     attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+
+    #[cfg(feature = "otel-metrics")]
+    label_guard: RwLock<LabelGuard>,
 }
 
 impl BrokerMetricsManager {
     /// Create a new BrokerMetricsManager with OpenTelemetry Meter
     pub fn new(meter: Meter, attributes_supplier: Arc<dyn AttributesBuilderSupplier>) -> Self {
+        Self::new_with_label_config(meter, attributes_supplier, BrokerMetricsLabelConfig::default())
+    }
+
+    pub fn new_with_label_config(
+        meter: Meter,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+    ) -> Self {
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = label_config;
+
         // Request metrics - Counters
+        #[cfg(not(feature = "otel-metrics"))]
         let messages_in_total = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_MESSAGES_IN_TOTAL)
             .with_description("Total number of incoming messages")
             .build();
 
+        #[cfg(not(feature = "otel-metrics"))]
         let messages_out_total = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_MESSAGES_OUT_TOTAL)
             .with_description("Total number of outgoing messages")
             .build();
 
+        #[cfg(not(feature = "otel-metrics"))]
         let throughput_in_total = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_THROUGHPUT_IN_TOTAL)
             .with_description("Total traffic of incoming messages")
             .build();
 
+        #[cfg(not(feature = "otel-metrics"))]
         let throughput_out_total = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_THROUGHPUT_OUT_TOTAL)
             .with_description("Total traffic of outgoing messages")
             .build();
+
+        #[cfg(feature = "otel-metrics")]
+        let broker_metrics = BrokerMetrics::new(&meter);
 
         let send_to_dlq_messages = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL)
@@ -243,6 +319,7 @@ impl BrokerMetricsManager {
             .build();
 
         // Request metrics - Histograms
+        #[cfg(not(feature = "otel-metrics"))]
         let message_size = meter
             .u64_histogram(BrokerMetricsConstant::HISTOGRAM_MESSAGE_SIZE)
             .with_description("Incoming messages size")
@@ -267,19 +344,32 @@ impl BrokerMetricsManager {
             .build();
 
         Self {
+            #[cfg(not(feature = "otel-metrics"))]
             messages_in_total,
+            #[cfg(not(feature = "otel-metrics"))]
             messages_out_total,
+            #[cfg(not(feature = "otel-metrics"))]
             throughput_in_total,
+            #[cfg(not(feature = "otel-metrics"))]
             throughput_out_total,
             send_to_dlq_messages,
             commit_messages_total,
             rollback_messages_total,
+            #[cfg(not(feature = "otel-metrics"))]
             message_size,
+            #[cfg(feature = "otel-metrics")]
+            broker_metrics,
             topic_create_execute_time,
             consumer_group_create_execute_time,
             transaction_finish_latency,
             meter,
             attributes_supplier,
+            #[cfg(feature = "otel-metrics")]
+            label_guard: RwLock::new(LabelGuard::new(
+                label_config.cardinality_limit,
+                label_config.topic_label_enabled,
+                label_config.consumer_group_label_enabled,
+            )),
         }
     }
 
@@ -372,6 +462,8 @@ impl BrokerMetricsManager {
             })
             .build();
 
+        #[cfg(feature = "otel-metrics")]
+        let consumer_connection_label_guard = Arc::new(RwLock::new(LabelGuard::default()));
         let attrs6 = attributes_supplier;
         let _consumer_connection = meter
             .i64_observable_gauge(BrokerMetricsConstant::GAUGE_CONSUMER_CONNECTIONS)
@@ -379,8 +471,18 @@ impl BrokerMetricsManager {
             .with_callback(move |observer| {
                 for (attr, count) in consumer_connections_fn() {
                     let mut attrs = attrs6.get();
+                    #[cfg(feature = "otel-metrics")]
+                    let consumer_group_label = guarded_bounded_label(
+                        &consumer_connection_label_guard,
+                        BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
+                        &attr.group,
+                    )
+                    .key_value;
+                    #[cfg(not(feature = "otel-metrics"))]
+                    let consumer_group_label =
+                        KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, attr.group.clone());
                     attrs.extend([
-                        KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, attr.group.clone()),
+                        consumer_group_label,
                         KeyValue::new(
                             BrokerMetricsConstant::LABEL_LANGUAGE,
                             attr.language.to_string().to_lowercase(),
@@ -405,9 +507,17 @@ impl BrokerMetricsManager {
 
     /// Initialize the global BrokerMetricsManager
     pub fn init_global(meter: Meter, attributes_supplier: Arc<dyn AttributesBuilderSupplier>) {
+        Self::init_global_with_label_config(meter, attributes_supplier, BrokerMetricsLabelConfig::default());
+    }
+
+    pub fn init_global_with_label_config(
+        meter: Meter,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+    ) {
         let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
         let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
-        let _ = BROKER_METRICS_MANAGER.set(Self::new(meter, attributes_supplier));
+        let _ = BROKER_METRICS_MANAGER.set(Self::new_with_label_config(meter, attributes_supplier, label_config));
     }
 
     /// Get the global BrokerMetricsManager instance
@@ -430,9 +540,50 @@ impl BrokerMetricsManager {
         attrs
     }
 
+    #[inline]
+    fn topic_label(&self, topic: &str) -> KeyValue {
+        self.bounded_label(BrokerMetricsConstant::LABEL_TOPIC, topic)
+    }
+
+    #[inline]
+    fn consumer_group_label(&self, consumer_group: &str) -> KeyValue {
+        self.bounded_label(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group)
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    #[inline]
+    fn bounded_label(&self, key: &'static str, value: &str) -> KeyValue {
+        let label = guarded_bounded_label(&self.label_guard, key, value);
+        if label.dropped {
+            self.record_metric_label_dropped(key);
+        }
+        label.key_value
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    #[inline]
+    fn bounded_label(&self, key: &'static str, value: &str) -> KeyValue {
+        KeyValue::new(key, value.to_owned())
+    }
+
     /// Get the meter reference
     pub fn meter(&self) -> &Meter {
         &self.meter
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    fn record_metric_label_dropped(&self, label_key: &'static str) {
+        let mut attrs = self.base_attributes();
+        attrs.push(KeyValue::new("label_key", label_key));
+        self.broker_metrics.record_metrics_label_dropped_total(1, &attrs);
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    pub fn dropped_metric_labels(&self) -> u64 {
+        self.label_guard
+            .read()
+            .map(|guard| guard.dropped_labels())
+            .unwrap_or_default()
     }
 
     pub fn register_auth_observable_gauge<F>(&self, auth_snapshot_fn: F)
@@ -466,13 +617,16 @@ impl BrokerMetricsManager {
     pub fn inc_messages_in_total(&self, topic: &str, message_type: TopicMessageType, num: u64, is_system: bool) {
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
+            self.topic_label(topic),
             KeyValue::new(
                 BrokerMetricsConstant::LABEL_MESSAGE_TYPE,
                 message_type.to_string().to_lowercase(),
             ),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_messages_in_total(num, &attrs);
+        #[cfg(not(feature = "otel-metrics"))]
         self.messages_in_total.add(num, &attrs);
     }
 
@@ -481,11 +635,14 @@ impl BrokerMetricsManager {
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group.to_owned()),
+            self.topic_label(topic),
+            self.consumer_group_label(consumer_group),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_RETRY, is_retry.to_string()),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_messages_out_total(num, &attrs);
+        #[cfg(not(feature = "otel-metrics"))]
         self.messages_out_total.add(num, &attrs);
     }
 
@@ -496,7 +653,10 @@ impl BrokerMetricsManager {
     /// Record incoming throughput (bytes)
     pub fn inc_throughput_in_total(&self, topic: &str, bytes: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
+        attrs.push(self.topic_label(topic));
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_throughput_in_total(bytes, &attrs);
+        #[cfg(not(feature = "otel-metrics"))]
         self.throughput_in_total.add(bytes, &attrs);
     }
 
@@ -505,11 +665,14 @@ impl BrokerMetricsManager {
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group.to_owned()),
+            self.topic_label(topic),
+            self.consumer_group_label(consumer_group),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_RETRY, is_retry.to_string()),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_throughput_out_total(bytes, &attrs);
+        #[cfg(not(feature = "otel-metrics"))]
         self.throughput_out_total.add(bytes, &attrs);
     }
 
@@ -521,13 +684,31 @@ impl BrokerMetricsManager {
     pub fn record_message_size(&self, topic: &str, message_type: TopicMessageType, size: u64) {
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
+            self.topic_label(topic),
             KeyValue::new(
                 BrokerMetricsConstant::LABEL_MESSAGE_TYPE,
                 message_type.to_string().to_lowercase(),
             ),
         ]);
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_message_size(size, &attrs);
+        #[cfg(not(feature = "otel-metrics"))]
         self.message_size.record(size, &attrs);
+    }
+
+    /// Record broker send message processing latency.
+    pub fn record_send_message_latency(&self, topic: &str, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        {
+            let mut attrs = self.base_attributes();
+            attrs.push(self.topic_label(topic));
+            self.broker_metrics.record_send_message_latency(latency_ms, &attrs);
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = (topic, latency_ms);
+        }
     }
 
     // ========================================================================
@@ -555,8 +736,8 @@ impl BrokerMetricsManager {
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group.to_owned()),
+            self.topic_label(topic),
+            self.consumer_group_label(consumer_group),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
         self.send_to_dlq_messages.add(num, &attrs);
@@ -569,21 +750,21 @@ impl BrokerMetricsManager {
     /// Record commit message count
     pub fn inc_commit_messages(&self, topic: &str, num: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
+        attrs.push(self.topic_label(topic));
         self.commit_messages_total.add(num, &attrs);
     }
 
     /// Record rollback message count
     pub fn inc_rollback_messages(&self, topic: &str, num: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
+        attrs.push(self.topic_label(topic));
         self.rollback_messages_total.add(num, &attrs);
     }
 
     /// Record transaction finish latency
     pub fn record_transaction_finish_latency(&self, topic: &str, latency_ms: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
+        attrs.push(self.topic_label(topic));
         self.transaction_finish_latency.record(latency_ms, &attrs);
     }
 }
@@ -831,6 +1012,45 @@ mod tests {
     fn test_noop_attributes_supplier() {
         let supplier = NoopAttributesSupplier;
         assert!(supplier.get().is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn broker_metrics_manager_bounds_topic_and_consumer_group_labels() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let meter = meter_provider.meter("broker-label-guard-test");
+        let manager = BrokerMetricsManager::new_with_label_config(
+            meter,
+            Arc::new(NoopAttributesSupplier),
+            BrokerMetricsLabelConfig::new(1, true, true),
+        );
+
+        let topic_a = manager.topic_label("topic-a");
+        let topic_b = manager.topic_label("topic-b");
+        let group_a = manager.consumer_group_label("group-a");
+        let group_b = manager.consumer_group_label("group-b");
+
+        assert_eq!(topic_a.value.to_string(), "topic-a");
+        assert_eq!(topic_b.value.to_string(), "other");
+        assert_eq!(group_a.value.to_string(), "group-a");
+        assert_eq!(group_b.value.to_string(), "other");
+        assert_eq!(manager.dropped_metric_labels(), 2);
+    }
+
+    #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn broker_metrics_manager_can_disable_topic_labels() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let meter = meter_provider.meter("broker-label-disable-test");
+        let manager = BrokerMetricsManager::new_with_label_config(
+            meter,
+            Arc::new(NoopAttributesSupplier),
+            BrokerMetricsLabelConfig::new(10, false, true),
+        );
+
+        assert_eq!(manager.topic_label("topic-a").value.to_string(), "other");
+        assert_eq!(manager.consumer_group_label("group-a").value.to_string(), "group-a");
+        assert_eq!(manager.dropped_metric_labels(), 1);
     }
 
     #[test]

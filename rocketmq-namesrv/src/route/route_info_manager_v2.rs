@@ -1488,6 +1488,11 @@ impl RouteInfoManagerV2 {
         self.topic_queue_table.get_all_topics()
     }
 
+    /// Get the number of brokers currently tracked as live.
+    pub fn active_broker_count(&self) -> usize {
+        self.broker_live_table.len()
+    }
+
     /// Get topics for a specific cluster
     pub fn get_topics_by_cluster(&self, cluster_name: &str) -> RouteResult<Vec<TopicName>> {
         let broker_names = self.cluster_addr_table.get_brokers(cluster_name);

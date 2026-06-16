@@ -59,12 +59,20 @@ impl ResourceAttribute {
     }
 }
 
-#[cfg(feature = "otel-metrics")]
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
 pub fn build_key_values(config: &ObservabilityConfig) -> Vec<opentelemetry::KeyValue> {
     build_resource_attributes(config)
         .into_iter()
         .map(|attribute| opentelemetry::KeyValue::new(attribute.key, attribute.value))
         .collect()
+}
+
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+pub fn build_resource(config: &ObservabilityConfig) -> opentelemetry_sdk::Resource {
+    opentelemetry_sdk::Resource::builder()
+        .with_service_name(config.service_name.clone())
+        .with_attributes(build_key_values(config))
+        .build()
 }
 
 #[cfg(test)]

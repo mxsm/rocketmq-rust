@@ -19,9 +19,10 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricsExporterType {
+    #[default]
     Disable = 0,
     OtlpGrpc = 1,
     Prom = 2,

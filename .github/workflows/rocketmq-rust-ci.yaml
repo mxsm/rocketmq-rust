@@ -118,6 +118,91 @@ jobs:
         run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
   # =========================
+  # Observability feature matrix
+  # =========================
+  observability-feature-matrix:
+    name: Observability Features (${{ matrix.features || 'default' }})
+    needs: check
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "observability"
+          - "otlp-metrics"
+          - "otel-metrics,prometheus"
+          - "otlp-traces"
+          - "otlp-logs"
+          - "otlp-metrics,otlp-traces,otlp-logs,prometheus"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang llvm libclang-dev \
+            cmake make ninja-build pkg-config \
+            protobuf-compiler \
+            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CXX=clang++" >> $GITHUB_ENV
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> $GITHUB_ENV
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+
+      - name: Cache Rust + RocksDB
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: observability-features-${{ matrix.features || 'default' }}
+          workspaces: |
+            .
+          env-vars: |
+            CC
+            CXX
+            LIBCLANG_PATH
+            ROCKSDB_DISABLE_JEMALLOC
+
+      - name: Check observability feature set
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          if [ -n "$FEATURES" ]; then
+            cargo check --workspace --all-targets --features "$FEATURES"
+          else
+            cargo check --workspace --all-targets
+          fi
+
+      - name: Clippy observability feature set
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          if [ -n "$FEATURES" ]; then
+            cargo clippy --workspace --no-deps --all-targets --features "$FEATURES" -- -D warnings
+          else
+            cargo clippy --workspace --no-deps --all-targets -- -D warnings
+          fi
+
+      - name: Test rocketmq-observability feature set
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          if [ -n "$FEATURES" ]; then
+            cargo test -p rocketmq-observability --features "$FEATURES"
+          else
+            cargo test -p rocketmq-observability
+          fi
+
+  # =========================
   # RocksDB feature validation
   # =========================
   rocksdb-store:

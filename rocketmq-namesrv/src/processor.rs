@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -108,7 +109,8 @@ impl RequestProcessor for NameServerRequestProcessor {
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        match self.processor_table.get_mut(request.code_ref()) {
+        let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
+        let response = match self.processor_table.get_mut(request.code_ref()) {
             None => match self.default_request_processor.as_mut() {
                 None => {
                     let response_command = RemotingCommand::create_response_command_with_code_remark(
@@ -120,6 +122,10 @@ impl RequestProcessor for NameServerRequestProcessor {
                 Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
             },
             Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
+        };
+        if let Some(started) = route_request_started {
+            crate::observability_metrics::record_route_request(started.elapsed());
         }
+        response
     }
 }

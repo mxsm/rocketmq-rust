@@ -81,6 +81,7 @@ pub mod implementation;
 pub mod latency;
 pub mod legacy;
 pub mod lock;
+mod observability_metrics;
 pub mod producer;
 pub mod stat;
 mod trace;

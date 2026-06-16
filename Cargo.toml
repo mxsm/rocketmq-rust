@@ -129,4 +129,5 @@ opentelemetry-prometheus           = { version = "0.32", default-features = fals
 opentelemetry-appender-tracing     = { version = "0.32", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.32" }
 tracing-opentelemetry              = { version = "0.33", default-features = false }
+prometheus                         = { version = "0.14", default-features = false }
 rocksdb                            = { version = "0.24", default-features = false, features = ["multi-threaded-cf", "lz4", "zstd"] }

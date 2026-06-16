@@ -156,13 +156,15 @@ impl RouteInfoManagerWrapper {
     ///
     /// Returns the number of brokers that were cleaned up
     pub fn scan_not_active_broker(&mut self) -> usize {
-        match self {
+        let cleaned = match self {
             RouteInfoManagerWrapper::V1(manager) => {
                 manager.scan_not_active_broker();
                 0 // V1 doesn't return count
             }
             RouteInfoManagerWrapper::V2(manager) => manager.scan_not_active_broker().unwrap_or(0),
-        }
+        };
+        crate::observability_metrics::record_active_brokers(self.active_broker_count());
+        cleaned
     }
 
     /// Register a broker with the nameserver
@@ -180,7 +182,7 @@ impl RouteInfoManagerWrapper {
         filter_server_list: Vec<CheetahString>,
         channel: Channel,
     ) -> Option<RegisterBrokerResult> {
-        match self {
+        let result = match self {
             RouteInfoManagerWrapper::V1(manager) => manager.register_broker(
                 cluster_name,
                 broker_addr,
@@ -209,7 +211,11 @@ impl RouteInfoManagerWrapper {
                     channel,
                 )
                 .ok(),
+        };
+        if result.is_some() {
+            crate::observability_metrics::record_broker_registration(self.active_broker_count());
         }
+        result
     }
 
     /// Submit unregister broker request
@@ -230,7 +236,7 @@ impl RouteInfoManagerWrapper {
     ) -> RouteResult<()> {
         use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 
-        match self {
+        let result = match self {
             RouteInfoManagerWrapper::V1(manager) => {
                 // V1 uses batch unregister
                 let header = UnRegisterBrokerRequestHeader {
@@ -245,6 +251,18 @@ impl RouteInfoManagerWrapper {
             RouteInfoManagerWrapper::V2(manager) => {
                 manager.unregister_broker(cluster_name, broker_addr, broker_name, broker_id)
             }
+        };
+        if result.is_ok() {
+            crate::observability_metrics::record_active_brokers(self.active_broker_count());
+        }
+        result
+    }
+
+    /// Get the number of brokers currently tracked as live.
+    pub fn active_broker_count(&self) -> usize {
+        match self {
+            RouteInfoManagerWrapper::V1(manager) => manager.broker_live_table.len(),
+            RouteInfoManagerWrapper::V2(manager) => manager.active_broker_count(),
         }
     }
 
@@ -463,5 +481,6 @@ impl RouteInfoManagerWrapper {
                 manager.un_register_broker(requests);
             }
         }
+        crate::observability_metrics::record_active_brokers(self.active_broker_count());
     }
 }

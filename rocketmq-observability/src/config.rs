@@ -14,7 +14,9 @@
 
 use std::collections::HashMap;
 
+use rocketmq_common::common::metrics::LogExporterType;
 use rocketmq_common::common::metrics::MetricsExporterType;
+use rocketmq_common::common::metrics::TraceExporterType;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -210,6 +212,26 @@ impl From<MetricsExporterType> for MetricsExporter {
     }
 }
 
+impl From<TraceExporterType> for TraceExporter {
+    fn from(value: TraceExporterType) -> Self {
+        match value {
+            TraceExporterType::Disable => Self::Disable,
+            TraceExporterType::OtlpGrpc => Self::OtlpGrpc,
+            TraceExporterType::Log => Self::Log,
+        }
+    }
+}
+
+impl From<LogExporterType> for LogsExporter {
+    fn from(value: LogExporterType) -> Self {
+        match value {
+            LogExporterType::Disable => Self::Disable,
+            LogExporterType::OtlpGrpc => Self::OtlpGrpc,
+            LogExporterType::Log => Self::Log,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +263,22 @@ mod tests {
             MetricsExporter::Prometheus
         );
         assert_eq!(MetricsExporter::from(MetricsExporterType::Log), MetricsExporter::Log);
+    }
+
+    #[test]
+    fn maps_existing_trace_exporter_type() {
+        assert_eq!(TraceExporter::from(TraceExporterType::Disable), TraceExporter::Disable);
+        assert_eq!(
+            TraceExporter::from(TraceExporterType::OtlpGrpc),
+            TraceExporter::OtlpGrpc
+        );
+        assert_eq!(TraceExporter::from(TraceExporterType::Log), TraceExporter::Log);
+    }
+
+    #[test]
+    fn maps_existing_log_exporter_type() {
+        assert_eq!(LogsExporter::from(LogExporterType::Disable), LogsExporter::Disable);
+        assert_eq!(LogsExporter::from(LogExporterType::OtlpGrpc), LogsExporter::OtlpGrpc);
+        assert_eq!(LogsExporter::from(LogExporterType::Log), LogsExporter::Log);
     }
 }

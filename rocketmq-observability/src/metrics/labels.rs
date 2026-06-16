@@ -38,15 +38,19 @@ impl LabelGuard {
     }
 
     pub fn normalize_metric_label<'a>(&mut self, key: &str, value: &'a str) -> Cow<'a, str> {
+        self.normalize_metric_label_with_outcome(key, value).0
+    }
+
+    pub fn normalize_metric_label_with_outcome<'a>(&mut self, key: &str, value: &'a str) -> (Cow<'a, str>, bool) {
         match key {
-            "cluster" | "node_type" | "node_id" | "processor" | "invocation_status" => Cow::Borrowed(value),
+            "cluster" | "node_type" | "node_id" | "processor" | "invocation_status" => (Cow::Borrowed(value), false),
             "topic" if self.topic_enabled => self.normalize_bounded_value(value, LabelKind::Topic),
             "consumer_group" if self.consumer_group_enabled => {
                 self.normalize_bounded_value(value, LabelKind::ConsumerGroup)
             }
             _ => {
                 self.dropped_labels += 1;
-                Cow::Borrowed("other")
+                (Cow::Borrowed("other"), true)
             }
         }
     }
@@ -59,23 +63,23 @@ impl LabelGuard {
         self.dropped_labels
     }
 
-    fn normalize_bounded_value<'a>(&mut self, value: &'a str, kind: LabelKind) -> Cow<'a, str> {
+    fn normalize_bounded_value<'a>(&mut self, value: &'a str, kind: LabelKind) -> (Cow<'a, str>, bool) {
         let values = match kind {
             LabelKind::Topic => &mut self.seen_topics,
             LabelKind::ConsumerGroup => &mut self.seen_consumer_groups,
         };
 
         if values.contains(value) {
-            return Cow::Borrowed(value);
+            return (Cow::Borrowed(value), false);
         }
 
         if values.len() < self.cardinality_limit {
             values.insert(value.to_string());
-            return Cow::Borrowed(value);
+            return (Cow::Borrowed(value), false);
         }
 
         self.dropped_labels += 1;
-        Cow::Borrowed("other")
+        (Cow::Borrowed("other"), true)
     }
 }
 
@@ -102,6 +106,24 @@ mod tests {
         assert_eq!(guard.normalize_metric_label("message_id", "abc"), "other");
         assert_eq!(guard.normalize_metric_label("trace_id", "trace"), "other");
         assert_eq!(guard.dropped_labels(), 2);
+    }
+
+    #[test]
+    fn reports_when_label_is_dropped() {
+        let mut guard = LabelGuard::new(1, true, true);
+
+        assert_eq!(
+            guard.normalize_metric_label_with_outcome("topic", "topic-a"),
+            (Cow::Borrowed("topic-a"), false)
+        );
+        assert_eq!(
+            guard.normalize_metric_label_with_outcome("topic", "topic-b"),
+            (Cow::Borrowed("other"), true)
+        );
+        assert_eq!(
+            guard.normalize_metric_label_with_outcome("message_id", "msg-1"),
+            (Cow::Borrowed("other"), true)
+        );
     }
 
     #[test]

@@ -34,14 +34,23 @@ local_file_store = ["rocketmq-store/local_file_store"]
 rocksdb_store    = ["rocketmq-store/rocksdb_store"]
 rocksdb-store    = ["rocksdb_store"]
 tieredstore      = ["local_file_store", "rocketmq-store/tieredstore"]
-observability    = ["dep:rocketmq-observability", "rocketmq-observability/observability"]
-otel-metrics     = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
-otel-traces      = ["dep:rocketmq-observability", "rocketmq-observability/otel-traces"]
+observability    = ["otel-metrics", "otel-traces"]
+otel-metrics     = [
+  "dep:rocketmq-observability",
+  "rocketmq-observability/otel-metrics",
+  "rocketmq-store/observability",
+  "rocketmq-remoting/observability",
+]
+otel-traces      = [
+  "dep:rocketmq-observability",
+  "rocketmq-observability/otel-traces",
+  "rocketmq-store/observability-traces",
+]
 otel-logs        = ["dep:rocketmq-observability", "rocketmq-observability/otel-logs"]
-otlp-metrics     = ["dep:rocketmq-observability", "rocketmq-observability/otlp-metrics"]
-otlp-traces      = ["dep:rocketmq-observability", "rocketmq-observability/otlp-traces"]
-otlp-logs        = ["dep:rocketmq-observability", "rocketmq-observability/otlp-logs"]
-prometheus       = ["dep:rocketmq-observability", "rocketmq-observability/prometheus"]
+otlp-metrics     = ["otel-metrics", "rocketmq-observability/otlp-metrics"]
+otlp-traces      = ["otel-traces", "rocketmq-observability/otlp-traces"]
+otlp-logs        = ["otel-logs", "rocketmq-observability/otlp-logs"]
+prometheus       = ["otel-metrics", "rocketmq-observability/prometheus"]
 
 [dependencies]
 rocketmq-rust        = { workspace = true }

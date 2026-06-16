@@ -25,6 +25,9 @@ use serde::Serialize;
 use crate::common::broker::broker_role::BrokerRole;
 use crate::common::constant::PermName;
 use crate::common::message::message_enum::MessageRequestMode;
+use crate::common::metrics::LogExporterType;
+use crate::common::metrics::MetricsExporterType;
+use crate::common::metrics::TraceExporterType;
 use crate::common::mix_all;
 use crate::common::mix_all::NAMESRV_ADDR_PROPERTY;
 use crate::common::server::config::ServerConfig;
@@ -100,7 +103,55 @@ mod defaults {
         CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID)
     }
 
+    pub fn observability_environment() -> CheetahString {
+        "dev".into()
+    }
+
     pub fn trace_on() -> bool {
+        true
+    }
+
+    pub fn metrics_export_interval_millis() -> u64 {
+        30_000
+    }
+
+    pub fn metrics_cardinality_limit() -> usize {
+        10_000
+    }
+
+    pub fn metrics_label_enabled() -> bool {
+        true
+    }
+
+    pub fn otlp_exporter_endpoint() -> CheetahString {
+        "http://127.0.0.1:4317".into()
+    }
+
+    pub fn otlp_exporter_timeout_millis() -> u64 {
+        3_000
+    }
+
+    pub fn metrics_prom_exporter_host() -> CheetahString {
+        "127.0.0.1".into()
+    }
+
+    pub fn metrics_prom_exporter_port() -> u16 {
+        5557
+    }
+
+    pub fn metrics_prom_exporter_path() -> CheetahString {
+        "/metrics".into()
+    }
+
+    pub fn trace_sample_ratio() -> f64 {
+        0.01
+    }
+
+    pub fn trace_propagate_context() -> bool {
+        true
+    }
+
+    pub fn trace_record_body_size() -> bool {
         true
     }
 
@@ -756,8 +807,71 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::region_id")]
     pub region_id: CheetahString,
 
+    #[serde(default = "defaults::observability_environment")]
+    pub observability_environment: CheetahString,
+
+    #[serde(default)]
+    pub observability_service_instance_id: CheetahString,
+
+    #[serde(default)]
+    pub observability_resource_attributes: CheetahString,
+
     #[serde(default = "defaults::trace_on")]
     pub trace_on: bool,
+
+    #[serde(default)]
+    pub metrics_exporter_type: MetricsExporterType,
+
+    #[serde(default = "defaults::metrics_export_interval_millis")]
+    pub metrics_export_interval_millis: u64,
+
+    #[serde(default = "defaults::metrics_cardinality_limit")]
+    pub metrics_cardinality_limit: usize,
+
+    #[serde(default = "defaults::metrics_label_enabled")]
+    pub metrics_topic_label_enabled: bool,
+
+    #[serde(default = "defaults::metrics_label_enabled")]
+    pub metrics_consumer_group_label_enabled: bool,
+
+    #[serde(default = "defaults::otlp_exporter_endpoint")]
+    pub otlp_exporter_endpoint: CheetahString,
+
+    #[serde(default)]
+    pub otlp_exporter_headers: CheetahString,
+
+    #[serde(default = "defaults::otlp_exporter_timeout_millis")]
+    pub otlp_exporter_timeout_millis: u64,
+
+    #[serde(default = "defaults::metrics_prom_exporter_host")]
+    pub metrics_prom_exporter_host: CheetahString,
+
+    #[serde(default = "defaults::metrics_prom_exporter_port")]
+    pub metrics_prom_exporter_port: u16,
+
+    #[serde(default = "defaults::metrics_prom_exporter_path")]
+    pub metrics_prom_exporter_path: CheetahString,
+
+    #[serde(default)]
+    pub trace_exporter_type: TraceExporterType,
+
+    #[serde(default = "defaults::trace_sample_ratio")]
+    pub trace_sample_ratio: f64,
+
+    #[serde(default = "defaults::trace_propagate_context")]
+    pub trace_propagate_context: bool,
+
+    #[serde(default)]
+    pub trace_record_message_id: bool,
+
+    #[serde(default)]
+    pub trace_record_message_keys: bool,
+
+    #[serde(default = "defaults::trace_record_body_size")]
+    pub trace_record_body_size: bool,
+
+    #[serde(default)]
+    pub log_exporter_type: LogExporterType,
 
     #[serde(default = "defaults::broker_permission")]
     pub broker_permission: u32,
@@ -1246,7 +1360,28 @@ impl Default for BrokerConfig {
             sync_broker_metadata_period: 5_000,
             sync_controller_metadata_period: 10_000,
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
+            observability_environment: defaults::observability_environment(),
+            observability_service_instance_id: CheetahString::new(),
+            observability_resource_attributes: CheetahString::new(),
             trace_on: true,
+            metrics_exporter_type: MetricsExporterType::Disable,
+            metrics_export_interval_millis: defaults::metrics_export_interval_millis(),
+            metrics_cardinality_limit: defaults::metrics_cardinality_limit(),
+            metrics_topic_label_enabled: true,
+            metrics_consumer_group_label_enabled: true,
+            otlp_exporter_endpoint: defaults::otlp_exporter_endpoint(),
+            otlp_exporter_headers: CheetahString::new(),
+            otlp_exporter_timeout_millis: defaults::otlp_exporter_timeout_millis(),
+            metrics_prom_exporter_host: defaults::metrics_prom_exporter_host(),
+            metrics_prom_exporter_port: defaults::metrics_prom_exporter_port(),
+            metrics_prom_exporter_path: defaults::metrics_prom_exporter_path(),
+            trace_exporter_type: TraceExporterType::Disable,
+            trace_sample_ratio: defaults::trace_sample_ratio(),
+            trace_propagate_context: defaults::trace_propagate_context(),
+            trace_record_message_id: false,
+            trace_record_message_keys: false,
+            trace_record_body_size: defaults::trace_record_body_size(),
+            log_exporter_type: LogExporterType::Disable,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
             async_send_enable: false,
             store_path_root_dir: defaults::store_path_root_dir(),
@@ -1475,6 +1610,63 @@ impl BrokerConfig {
         properties.insert("traceTopicEnable".into(), self.trace_topic_enable.to_string().into());
         properties.insert("msgTraceTopicName".into(), self.msg_trace_topic_name.clone());
         properties.insert(
+            "metricsExporterType".into(),
+            self.metrics_exporter_type.to_string().into(),
+        );
+        properties.insert(
+            "metricsExportIntervalMillis".into(),
+            self.metrics_export_interval_millis.to_string().into(),
+        );
+        properties.insert(
+            "metricsCardinalityLimit".into(),
+            self.metrics_cardinality_limit.to_string().into(),
+        );
+        properties.insert(
+            "metricsTopicLabelEnabled".into(),
+            self.metrics_topic_label_enabled.to_string().into(),
+        );
+        properties.insert(
+            "metricsConsumerGroupLabelEnabled".into(),
+            self.metrics_consumer_group_label_enabled.to_string().into(),
+        );
+        properties.insert("otlpExporterEndpoint".into(), self.otlp_exporter_endpoint.clone());
+        properties.insert("otlpExporterHeaders".into(), self.otlp_exporter_headers.clone());
+        properties.insert(
+            "otlpExporterTimeoutMillis".into(),
+            self.otlp_exporter_timeout_millis.to_string().into(),
+        );
+        properties.insert(
+            "metricsPromExporterHost".into(),
+            self.metrics_prom_exporter_host.clone(),
+        );
+        properties.insert(
+            "metricsPromExporterPort".into(),
+            self.metrics_prom_exporter_port.to_string().into(),
+        );
+        properties.insert(
+            "metricsPromExporterPath".into(),
+            self.metrics_prom_exporter_path.clone(),
+        );
+        properties.insert("traceExporterType".into(), self.trace_exporter_type.to_string().into());
+        properties.insert("traceSampleRatio".into(), self.trace_sample_ratio.to_string().into());
+        properties.insert(
+            "tracePropagateContext".into(),
+            self.trace_propagate_context.to_string().into(),
+        );
+        properties.insert(
+            "traceRecordMessageId".into(),
+            self.trace_record_message_id.to_string().into(),
+        );
+        properties.insert(
+            "traceRecordMessageKeys".into(),
+            self.trace_record_message_keys.to_string().into(),
+        );
+        properties.insert(
+            "traceRecordBodySize".into(),
+            self.trace_record_body_size.to_string().into(),
+        );
+        properties.insert("logExporterType".into(), self.log_exporter_type.to_string().into());
+        properties.insert(
             "enableControllerMode".into(),
             self.enable_controller_mode.to_string().into(),
         );
@@ -1488,6 +1680,18 @@ impl BrokerConfig {
             self.sync_controller_metadata_period.to_string().into(),
         );
         properties.insert("regionId".into(), self.region_id.clone());
+        properties.insert(
+            "observabilityEnvironment".into(),
+            self.observability_environment.clone(),
+        );
+        properties.insert(
+            "observabilityServiceInstanceId".into(),
+            self.observability_service_instance_id.clone(),
+        );
+        properties.insert(
+            "observabilityResourceAttributes".into(),
+            self.observability_resource_attributes.clone(),
+        );
         properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());
         properties.insert("traceOn".into(), self.trace_on.to_string().into());
         properties.insert("brokerPermission".into(), self.broker_permission.to_string().into());
@@ -1872,7 +2076,12 @@ pub struct TimerWheelConfig {
 
 #[cfg(test)]
 mod tests {
+    use cheetah_string::CheetahString;
+
     use super::BrokerConfig;
+    use crate::common::metrics::LogExporterType;
+    use crate::common::metrics::MetricsExporterType;
+    use crate::common::metrics::TraceExporterType;
 
     #[test]
     fn default_broker_config_uses_java_lite_defaults() {
@@ -1892,6 +2101,125 @@ mod tests {
         assert!(!config.lite_lag_latency_metrics_enable);
         assert!(!config.lite_lag_count_metrics_enable);
         assert_eq!(config.lite_lag_latency_top_k, 50);
+    }
+
+    #[test]
+    fn default_broker_config_disables_metrics_exporter() {
+        let config = BrokerConfig::default();
+
+        assert_eq!(config.metrics_exporter_type, MetricsExporterType::Disable);
+        assert_eq!(config.metrics_export_interval_millis, 30_000);
+        assert_eq!(config.metrics_cardinality_limit, 10_000);
+        assert!(config.metrics_topic_label_enabled);
+        assert!(config.metrics_consumer_group_label_enabled);
+        assert_eq!(config.otlp_exporter_endpoint, "http://127.0.0.1:4317");
+        assert_eq!(config.otlp_exporter_headers, "");
+        assert_eq!(config.otlp_exporter_timeout_millis, 3_000);
+        assert_eq!(config.metrics_prom_exporter_host, "127.0.0.1");
+        assert_eq!(config.metrics_prom_exporter_port, 5557);
+        assert_eq!(config.metrics_prom_exporter_path, "/metrics");
+        assert_eq!(config.trace_exporter_type, TraceExporterType::Disable);
+        assert!((config.trace_sample_ratio - 0.01).abs() < f64::EPSILON);
+        assert!(config.trace_propagate_context);
+        assert_eq!(config.observability_environment, "dev");
+        assert_eq!(config.observability_service_instance_id, "");
+        assert_eq!(config.observability_resource_attributes, "");
+        assert!(!config.trace_record_message_id);
+        assert!(!config.trace_record_message_keys);
+        assert!(config.trace_record_body_size);
+        assert_eq!(config.log_exporter_type, LogExporterType::Disable);
+
+        let properties = config.get_properties();
+        assert_eq!(
+            properties.get("metricsExporterType").map(CheetahString::as_str),
+            Some("disable")
+        );
+        assert_eq!(
+            properties.get("metricsExportIntervalMillis").map(CheetahString::as_str),
+            Some("30000")
+        );
+        assert_eq!(
+            properties.get("metricsCardinalityLimit").map(CheetahString::as_str),
+            Some("10000")
+        );
+        assert_eq!(
+            properties.get("metricsTopicLabelEnabled").map(CheetahString::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            properties
+                .get("metricsConsumerGroupLabelEnabled")
+                .map(CheetahString::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("otlpExporterEndpoint").map(CheetahString::as_str),
+            Some("http://127.0.0.1:4317")
+        );
+        assert_eq!(
+            properties.get("otlpExporterHeaders").map(CheetahString::as_str),
+            Some("")
+        );
+        assert_eq!(
+            properties.get("otlpExporterTimeoutMillis").map(CheetahString::as_str),
+            Some("3000")
+        );
+        assert_eq!(
+            properties.get("metricsPromExporterHost").map(CheetahString::as_str),
+            Some("127.0.0.1")
+        );
+        assert_eq!(
+            properties.get("metricsPromExporterPort").map(CheetahString::as_str),
+            Some("5557")
+        );
+        assert_eq!(
+            properties.get("metricsPromExporterPath").map(CheetahString::as_str),
+            Some("/metrics")
+        );
+        assert_eq!(
+            properties.get("traceExporterType").map(CheetahString::as_str),
+            Some("disable")
+        );
+        assert_eq!(
+            properties.get("traceSampleRatio").map(CheetahString::as_str),
+            Some("0.01")
+        );
+        assert_eq!(
+            properties.get("tracePropagateContext").map(CheetahString::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("observabilityEnvironment").map(CheetahString::as_str),
+            Some("dev")
+        );
+        assert_eq!(
+            properties
+                .get("observabilityServiceInstanceId")
+                .map(CheetahString::as_str),
+            Some("")
+        );
+        assert_eq!(
+            properties
+                .get("observabilityResourceAttributes")
+                .map(CheetahString::as_str),
+            Some("")
+        );
+        assert_eq!(
+            properties.get("traceRecordMessageId").map(CheetahString::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("traceRecordMessageKeys").map(CheetahString::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            properties.get("traceRecordBodySize").map(CheetahString::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            properties.get("logExporterType").map(CheetahString::as_str),
+            Some("disable")
+        );
     }
 
     #[test]

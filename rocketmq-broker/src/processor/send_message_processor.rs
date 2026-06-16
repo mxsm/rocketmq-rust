@@ -100,6 +100,18 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
+    #[tracing::instrument(
+        level = "debug",
+        name = "RocketMQ BROKER RECEIVE_SEND",
+        skip_all,
+        fields(
+            rocketmq.request.code = request.code(),
+            rocketmq.request.opaque = request.opaque(),
+            messaging.message.id = tracing::field::Empty,
+            messaging.message.body.size = tracing::field::Empty,
+            messaging.rocketmq.message.keys = tracing::field::Empty,
+        )
+    )]
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -184,6 +196,15 @@ where
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&channel, &ctx, request).await,
             _ => {
                 let mut request_header = parse_request_header(request, request_code)?;
+                #[cfg(feature = "otel-traces")]
+                {
+                    let properties = string_to_message_properties(request_header.properties.as_ref());
+                    rocketmq_observability::propagation::set_current_span_parent_from_properties(&properties);
+                    rocketmq_observability::trace::record_current_message_properties(
+                        &properties,
+                        request.body().map(|body| body.len()),
+                    );
+                }
                 let mapping_context = self
                     .inner
                     .broker_runtime_inner
@@ -723,10 +744,16 @@ where
             .broker_runtime_inner
             .broker_stats_manager()
             .inc_broker_put_nums(topic, result.msg_num);
+        let latency_millis = begin_time_millis.elapsed().as_millis();
+        let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_topic_put_latency(topic, queue_id, begin_time_millis.elapsed().as_millis() as i32);
+            .inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
+
+        if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+            metrics.record_send_message_latency(topic, latency_millis.min(u64::MAX as u128) as u64);
+        }
     }
 
     /// Set response header for successful message send
@@ -1226,6 +1253,12 @@ where
                 format!("look message by offset failed, the offset is {}", request_header.offset),
             )));
         };
+        #[cfg(feature = "otel-traces")]
+        {
+            rocketmq_observability::propagation::set_current_span_parent_from_message(&msg_ext);
+            rocketmq_observability::trace::record_current_message_attributes(&msg_ext);
+        }
+
         let retry_topic = msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
         if retry_topic.is_none() {
             let topic = msg_ext.topic().clone();
@@ -1336,6 +1369,17 @@ where
                 false,
             ),
         };
+        #[cfg(feature = "otel-traces")]
+        {
+            let event = if is_dlq {
+                "RocketMQ CONSUMER DLQ"
+            } else {
+                "RocketMQ CONSUMER RETRY"
+            };
+            let status = if succeeded { "success" } else { "failure" };
+            rocketmq_observability::propagation::add_current_span_event_with_status(event, status);
+        }
+
         if self.has_consume_message_hook() && request_header.origin_msg_id.is_some_and(|ref id| !id.is_empty()) {
             let namespace = CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(
                 request_header.group.as_str(),

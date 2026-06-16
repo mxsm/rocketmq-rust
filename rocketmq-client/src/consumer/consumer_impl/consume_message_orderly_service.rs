@@ -598,10 +598,47 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
         let begin_timestamp = Instant::now();
 
+        let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+            msgs.first().map(|msg| msg.as_ref()),
+            msgs.len(),
+            self.consumer_group.as_str(),
+            context.get_message_queue(),
+            "orderly_direct",
+        );
+        let _entered = process_span.enter();
         let status = self.message_listener.consume_message(
             &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>()[..],
             &mut context,
         );
+        match &status {
+            Ok(ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Commit) => {
+                crate::consumer::consumer_impl::observability::record_process_event(
+                    &process_span,
+                    "RocketMQ CONSUMER ACK",
+                    "success",
+                    msgs.len(),
+                );
+            }
+            Ok(ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::SuspendCurrentQueueAMoment) => {
+                crate::consumer::consumer_impl::observability::record_process_event(
+                    &process_span,
+                    "RocketMQ CONSUMER RETRY",
+                    "reconsume_later",
+                    msgs.len(),
+                );
+            }
+            Err(_) => {
+                crate::consumer::consumer_impl::observability::record_process_event(
+                    &process_span,
+                    "RocketMQ CONSUMER RETRY",
+                    "exception",
+                    msgs.len(),
+                );
+            }
+        }
+        let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+        crate::observability_metrics::record_consume(msgs.len(), consume_rt);
+
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(true);
         result.set_auto_commit(context.is_auto_commit());
@@ -625,7 +662,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
                 result.set_remark(CheetahString::from_string(e.to_string()))
             }
         }
-        result.set_spent_time_mills(begin_timestamp.elapsed().as_millis() as u64);
+        result.set_spent_time_mills(consume_rt);
         info!("consumeMessageDirectly Result: {}", result);
         result
     }
@@ -836,12 +873,22 @@ impl ConsumeRequest {
                 let msgs_owned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
                 let listener = consume_message_orderly_service_inner.message_listener.clone();
                 let mq_for_spawn = self.message_queue.clone();
-                let (consume_result, context) = tokio::task::spawn_blocking(move || {
+                let consumer_group_for_span = self.consumer_group.clone();
+                let (consume_result, context, process_span) = tokio::task::spawn_blocking(move || {
+                    let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                        msgs_owned.first(),
+                        msgs_owned.len(),
+                        consumer_group_for_span.as_str(),
+                        &mq_for_spawn,
+                        "orderly",
+                    );
                     let mut ctx = ConsumeOrderlyContext::new(mq_for_spawn);
                     let vec: Vec<&MessageExt> = msgs_owned.iter().collect();
-                    let result = listener.consume_message(&vec, &mut ctx);
-                    drop(consume_lock);
-                    (result, ctx)
+                    let result = {
+                        let _entered = process_span.enter();
+                        listener.consume_message(&vec, &mut ctx)
+                    };
+                    (result, ctx, process_span)
                 })
                 .await
                 .unwrap_or_else(|e| {
@@ -850,8 +897,16 @@ impl ConsumeRequest {
                             "orderly consume task panicked: {e}"
                         ))),
                         ConsumeOrderlyContext::new(self.message_queue.clone()),
+                        crate::consumer::consumer_impl::observability::consumer_process_span(
+                            msgs.first().map(|msg| msg.as_ref()),
+                            msgs.len(),
+                            self.consumer_group.as_str(),
+                            &self.message_queue,
+                            "orderly",
+                        ),
                     )
                 });
+                drop(consume_lock);
                 match consume_result {
                     Ok(value) => {
                         status = Some(value);
@@ -880,6 +935,7 @@ impl ConsumeRequest {
                     );
                 }
                 let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
+                crate::observability_metrics::record_consume(msgs.len(), consume_rt);
                 let return_type = match status {
                     None => {
                         if has_exception {
@@ -912,6 +968,24 @@ impl ConsumeRequest {
                     }
                 }
                 let final_status = status.unwrap_or(ConsumeOrderlyStatus::SuspendCurrentQueueAMoment);
+                match final_status {
+                    ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Commit => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER ACK",
+                            "success",
+                            msgs.len(),
+                        );
+                    }
+                    ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
+                        crate::consumer::consumer_impl::observability::record_process_event(
+                            &process_span,
+                            "RocketMQ CONSUMER RETRY",
+                            if has_exception { "exception" } else { "reconsume_later" },
+                            msgs.len(),
+                        );
+                    }
+                }
                 if default_mqpush_consumer_impl.has_hook() {
                     if let Some(cmc) = consume_message_context.as_mut() {
                         cmc.success = final_status == ConsumeOrderlyStatus::Success

@@ -52,6 +52,7 @@ otel-logs = [
 ]
 otlp-grpc = [
   "dep:opentelemetry-otlp",
+  "dep:tonic",
   "opentelemetry-otlp/grpc-tonic",
 ]
 otlp-metrics = [
@@ -72,6 +73,8 @@ otlp-logs = [
 prometheus = [
   "otel-metrics",
   "dep:opentelemetry-prometheus",
+  "dep:prometheus",
+  "dep:tokio",
 ]
 stdout = []
 
@@ -96,3 +99,13 @@ opentelemetry-prometheus = { workspace = true, optional = true }
 opentelemetry-appender-tracing = { workspace = true, optional = true }
 opentelemetry-semantic-conventions = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tonic = { version = "0.14.1", default-features = false, optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "observability_hot_path"
+harness = false

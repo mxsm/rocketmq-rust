@@ -46,6 +46,8 @@ fast-load = []
 # Safe sequential loading fallback (disables fast-load)
 safe-load = []
 tieredstore = ["dep:rocketmq-tieredstore"]
+observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+observability-traces = ["dep:rocketmq-observability"]
 
 
 [dependencies]
@@ -53,6 +55,7 @@ rocketmq-common   = { workspace = true }
 rocketmq-rust     = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
+rocketmq-observability = { workspace = true, optional = true }
 rocketmq-tieredstore = { version = "1.0.0", path = "../rocketmq-tieredstore", optional = true }
 rocksdb             = { workspace = true, optional = true }
 

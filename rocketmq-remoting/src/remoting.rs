@@ -113,12 +113,25 @@ pub(crate) mod inner {
             }
         }
 
+        #[tracing::instrument(
+            level = "debug",
+            name = "RocketMQ REMOTING REQUEST",
+            skip_all,
+            fields(
+                rocketmq.request.code = cmd.code(),
+                rocketmq.request.opaque = cmd.opaque(),
+            )
+        )]
         async fn process_request_command(
             &mut self,
             ctx: &mut ConnectionHandlerContext,
             mut cmd: RemotingCommand,
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
+            #[cfg(feature = "observability")]
+            let _metrics_guard = crate::observability_metrics::RequestMetricsGuard::start(
+                cmd.body().map_or(0, |body| body.len() as u64),
+            );
             let reject_request = self.request_processor.reject_request(cmd.code());
             const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
             if reject_request.0 {

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "otel-logs")]
+use crate::config::LogsExporter;
+use crate::config::MetricsExporter;
 use crate::config::ObservabilityConfig;
 use crate::error::ObservabilityError;
 
@@ -19,6 +22,8 @@ use crate::error::ObservabilityError;
 pub struct TelemetryGuard {
     #[cfg(feature = "otel-metrics")]
     meter_provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
+    #[cfg(feature = "prometheus")]
+    prometheus_http: Option<crate::exporter::prometheus::PrometheusHttpHandle>,
     #[cfg(feature = "otel-traces")]
     tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
     #[cfg(feature = "otel-logs")]
@@ -36,19 +41,24 @@ impl TelemetryGuard {
 
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
     fn shutdown_inner(mut self) -> Result<(), ObservabilityError> {
+        #[cfg(feature = "prometheus")]
+        if let Some(prometheus_http) = self.prometheus_http.take() {
+            prometheus_http.shutdown();
+        }
+
         #[cfg(feature = "otel-metrics")]
         if let Some(provider) = self.meter_provider.take() {
-            drop(provider);
+            provider.shutdown().map_err(ObservabilityError::metrics_shutdown)?;
         }
 
         #[cfg(feature = "otel-traces")]
         if let Some(provider) = self.tracer_provider.take() {
-            drop(provider);
+            provider.shutdown().map_err(ObservabilityError::traces_shutdown)?;
         }
 
         #[cfg(feature = "otel-logs")]
         if let Some(provider) = self.logger_provider.take() {
-            drop(provider);
+            provider.shutdown().map_err(ObservabilityError::logs_shutdown)?;
         }
 
         Ok(())
@@ -77,6 +87,7 @@ impl TelemetryGuard {
 
 pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard, ObservabilityError> {
     validate_config(config)?;
+    crate::trace::configure_message_span_recording(&config.traces);
 
     if !config.enabled {
         return Ok(TelemetryGuard::noop());
@@ -90,7 +101,21 @@ pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard
     if config.metrics.enabled {
         #[cfg(feature = "otel-metrics")]
         {
-            guard.meter_provider = Some(init_metrics(config)?);
+            #[cfg(feature = "prometheus")]
+            let mut metrics_runtime = init_metrics(config)?;
+            #[cfg(not(feature = "prometheus"))]
+            let metrics_runtime = init_metrics(config)?;
+
+            #[cfg(feature = "prometheus")]
+            {
+                if let Some(registry) = metrics_runtime.prometheus_registry.take() {
+                    guard.prometheus_http = Some(crate::exporter::prometheus::spawn_prometheus_http_endpoint(
+                        config, registry,
+                    )?);
+                }
+            }
+            opentelemetry::global::set_meter_provider(metrics_runtime.provider.clone());
+            guard.meter_provider = Some(metrics_runtime.provider);
         }
 
         #[cfg(not(feature = "otel-metrics"))]
@@ -117,6 +142,16 @@ pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard
         return Err(ObservabilityError::FeatureDisabled("otel-logs"));
     }
 
+    #[cfg(all(feature = "otel-traces", feature = "otel-logs"))]
+    let _installed =
+        try_init_observability_subscriber(config, guard.tracer_provider.as_ref(), guard.logger_provider.as_ref());
+
+    #[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
+    let _installed = try_init_observability_subscriber(config, guard.tracer_provider.as_ref());
+
+    #[cfg(all(not(feature = "otel-traces"), feature = "otel-logs"))]
+    let _installed = try_init_observability_subscriber(guard.logger_provider.as_ref());
+
     Ok(guard)
 }
 
@@ -134,26 +169,260 @@ fn validate_config(config: &ObservabilityConfig) -> Result<(), ObservabilityErro
         ));
     }
 
+    if config.metrics.enabled
+        && matches!(config.metrics.exporter, MetricsExporter::Prometheus)
+        && config.prometheus.path.trim().is_empty()
+    {
+        return Err(ObservabilityError::invalid_config(
+            "prometheus.path must not be empty when Prometheus metrics are enabled",
+        ));
+    }
+
     Ok(())
 }
 
 #[cfg(feature = "otel-metrics")]
-fn init_metrics(
-    _config: &ObservabilityConfig,
-) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, ObservabilityError> {
-    Ok(opentelemetry_sdk::metrics::SdkMeterProvider::builder().build())
+struct MetricsRuntime {
+    provider: opentelemetry_sdk::metrics::SdkMeterProvider,
+    #[cfg(feature = "prometheus")]
+    prometheus_registry: Option<prometheus::Registry>,
+}
+
+#[cfg(feature = "otel-metrics")]
+impl MetricsRuntime {
+    fn new(provider: opentelemetry_sdk::metrics::SdkMeterProvider) -> Self {
+        Self {
+            provider,
+            #[cfg(feature = "prometheus")]
+            prometheus_registry: None,
+        }
+    }
+
+    #[cfg(feature = "prometheus")]
+    fn prometheus(provider: opentelemetry_sdk::metrics::SdkMeterProvider, registry: prometheus::Registry) -> Self {
+        Self {
+            provider,
+            prometheus_registry: Some(registry),
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+fn init_metrics(config: &ObservabilityConfig) -> Result<MetricsRuntime, ObservabilityError> {
+    use std::time::Duration;
+
+    use opentelemetry_sdk::metrics::PeriodicReader;
+    use opentelemetry_sdk::metrics::SdkMeterProvider;
+
+    let builder = SdkMeterProvider::builder().with_resource(crate::resource::build_resource(config));
+
+    let runtime = match config.metrics.exporter {
+        MetricsExporter::Disable => MetricsRuntime::new(builder.build()),
+        MetricsExporter::Log => {
+            let reader = PeriodicReader::builder(crate::exporter::stdout::StdoutExporter::default())
+                .with_interval(Duration::from_millis(config.metrics.export_interval_millis))
+                .build();
+            MetricsRuntime::new(builder.with_reader(reader).build())
+        }
+        MetricsExporter::OtlpGrpc => {
+            #[cfg(feature = "otlp-metrics")]
+            {
+                MetricsRuntime::new(crate::exporter::otlp::init_otlp_meter_provider(config)?)
+            }
+
+            #[cfg(not(feature = "otlp-metrics"))]
+            {
+                return Err(ObservabilityError::FeatureDisabled("otlp-metrics"));
+            }
+        }
+        MetricsExporter::Prometheus => {
+            #[cfg(feature = "prometheus")]
+            {
+                let prometheus = crate::exporter::prometheus::init_prometheus_metrics(config)?;
+                let (provider, registry) = prometheus.into_parts();
+                MetricsRuntime::prometheus(provider, registry)
+            }
+
+            #[cfg(not(feature = "prometheus"))]
+            {
+                return Err(ObservabilityError::FeatureDisabled("prometheus"));
+            }
+        }
+    };
+
+    Ok(runtime)
 }
 
 #[cfg(feature = "otel-traces")]
 fn init_traces(
-    _config: &ObservabilityConfig,
+    config: &ObservabilityConfig,
 ) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, ObservabilityError> {
-    Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder().build())
+    use opentelemetry_sdk::trace::Sampler;
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+
+    let builder = SdkTracerProvider::builder()
+        .with_resource(crate::resource::build_resource(config))
+        .with_sampler(Sampler::TraceIdRatioBased(config.traces.sample_ratio.clamp(0.0, 1.0)));
+
+    let provider = match config.traces.exporter {
+        crate::config::TraceExporter::Disable => builder.build(),
+        crate::config::TraceExporter::Log => builder
+            .with_simple_exporter(crate::exporter::stdout::StdoutExporter::default())
+            .build(),
+        crate::config::TraceExporter::OtlpGrpc => {
+            #[cfg(feature = "otlp-traces")]
+            {
+                crate::exporter::otlp::init_otlp_tracer_provider(config)?
+            }
+
+            #[cfg(not(feature = "otlp-traces"))]
+            {
+                return Err(ObservabilityError::FeatureDisabled("otlp-traces"));
+            }
+        }
+    };
+
+    crate::propagation::set_context_propagation_enabled(config.traces.propagate_context);
+    if config.traces.propagate_context {
+        crate::propagation::install_trace_context_propagators();
+    }
+
+    opentelemetry::global::set_tracer_provider(provider.clone());
+
+    Ok(provider)
 }
 
 #[cfg(feature = "otel-logs")]
-fn init_logs(_config: &ObservabilityConfig) -> Result<opentelemetry_sdk::logs::SdkLoggerProvider, ObservabilityError> {
-    Ok(opentelemetry_sdk::logs::SdkLoggerProvider::builder().build())
+fn init_logs(config: &ObservabilityConfig) -> Result<opentelemetry_sdk::logs::SdkLoggerProvider, ObservabilityError> {
+    use opentelemetry_sdk::logs::SdkLoggerProvider;
+
+    let builder = SdkLoggerProvider::builder().with_resource(crate::resource::build_resource(config));
+
+    let provider = match config.logs.exporter {
+        LogsExporter::Disable => builder.build(),
+        LogsExporter::Log => builder
+            .with_simple_exporter(crate::exporter::stdout::StdoutExporter::default())
+            .build(),
+        LogsExporter::OtlpGrpc => {
+            #[cfg(feature = "otlp-logs")]
+            {
+                crate::exporter::otlp::init_otlp_logger_provider(config)?
+            }
+
+            #[cfg(not(feature = "otlp-logs"))]
+            {
+                return Err(ObservabilityError::FeatureDisabled("otlp-logs"));
+            }
+        }
+    };
+
+    Ok(provider)
+}
+
+#[cfg(all(feature = "otel-traces", feature = "otel-logs"))]
+fn try_init_observability_subscriber(
+    config: &ObservabilityConfig,
+    tracer_provider: Option<&opentelemetry_sdk::trace::SdkTracerProvider>,
+    logger_provider: Option<&opentelemetry_sdk::logs::SdkLoggerProvider>,
+) -> bool {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let result = match (tracer_provider, logger_provider) {
+        (Some(tracer_provider), Some(logger_provider)) => tracing_subscriber::registry()
+            .with(crate::trace::build_tracing_layer(config, tracer_provider))
+            .with(crate::logs::bridge::build_logs_layer(logger_provider))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_thread_names(true),
+            )
+            .try_init(),
+        (Some(tracer_provider), None) => tracing_subscriber::registry()
+            .with(crate::trace::build_tracing_layer(config, tracer_provider))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_thread_names(true),
+            )
+            .try_init(),
+        (None, Some(logger_provider)) => tracing_subscriber::registry()
+            .with(crate::logs::bridge::build_logs_layer(logger_provider))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_thread_names(true),
+            )
+            .try_init(),
+        (None, None) => return false,
+    };
+
+    log_subscriber_init_result(result)
+}
+
+#[cfg(all(feature = "otel-traces", not(feature = "otel-logs")))]
+fn try_init_observability_subscriber(
+    config: &ObservabilityConfig,
+    tracer_provider: Option<&opentelemetry_sdk::trace::SdkTracerProvider>,
+) -> bool {
+    let Some(tracer_provider) = tracer_provider else {
+        return false;
+    };
+
+    let installed = crate::trace::try_init_tracing_subscriber(config, tracer_provider);
+    if !installed {
+        tracing::debug!(
+            target: "rocketmq_observability",
+            "tracing subscriber already initialized; OpenTelemetry tracing layer was not installed"
+        );
+    }
+    installed
+}
+
+#[cfg(all(not(feature = "otel-traces"), feature = "otel-logs"))]
+fn try_init_observability_subscriber(logger_provider: Option<&opentelemetry_sdk::logs::SdkLoggerProvider>) -> bool {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let Some(logger_provider) = logger_provider else {
+        return false;
+    };
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_thread_names(true);
+
+    log_subscriber_init_result(
+        tracing_subscriber::registry()
+            .with(crate::logs::bridge::build_logs_layer(logger_provider))
+            .with(fmt_layer)
+            .try_init(),
+    )
+}
+
+#[cfg(any(
+    all(feature = "otel-traces", feature = "otel-logs"),
+    all(not(feature = "otel-traces"), feature = "otel-logs")
+))]
+fn log_subscriber_init_result<E>(result: Result<(), E>) -> bool
+where
+    E: std::fmt::Display,
+{
+    match result {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::debug!(
+                target: "rocketmq_observability",
+                %error,
+                "tracing subscriber already initialized; OpenTelemetry logs layer was not installed"
+            );
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +454,124 @@ mod tests {
         let error = init_observability(&config).expect_err("zero cardinality limit should fail");
 
         assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    #[test]
+    fn disabled_metrics_exporter_initializes_meter_provider() {
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.metrics.enabled = true;
+        config.metrics.exporter = MetricsExporter::Disable;
+
+        let guard = init_observability(&config).expect("disable metrics exporter should initialize");
+
+        assert!(guard.meter_provider().is_some());
+        guard.shutdown().expect("metrics shutdown should succeed");
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    #[test]
+    fn log_metrics_exporter_initializes_meter_provider() {
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.metrics.enabled = true;
+        config.metrics.exporter = MetricsExporter::Log;
+        config.metrics.export_interval_millis = 60_000;
+
+        let guard = init_observability(&config).expect("log metrics exporter should initialize");
+
+        assert!(guard.meter_provider().is_some());
+        guard.shutdown().expect("metrics shutdown should succeed");
+    }
+
+    #[cfg(feature = "otel-traces")]
+    #[test]
+    fn disabled_trace_exporter_initializes_tracer_provider() {
+        let _guard = crate::propagation::context_propagation_test_lock();
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.traces.enabled = true;
+        config.traces.exporter = crate::config::TraceExporter::Disable;
+
+        let guard = init_observability(&config).expect("disable trace exporter should initialize");
+
+        assert!(guard.tracer_provider().is_some());
+        guard.shutdown().expect("trace shutdown should succeed");
+    }
+
+    #[cfg(feature = "otel-traces")]
+    #[test]
+    fn log_trace_exporter_initializes_tracer_provider() {
+        let _guard = crate::propagation::context_propagation_test_lock();
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.traces.enabled = true;
+        config.traces.exporter = crate::config::TraceExporter::Log;
+
+        let guard = init_observability(&config).expect("log trace exporter should initialize");
+
+        assert!(guard.tracer_provider().is_some());
+        guard.shutdown().expect("trace shutdown should succeed");
+    }
+
+    #[cfg(feature = "otel-traces")]
+    #[test]
+    fn trace_propagation_config_updates_global_switch() {
+        let _guard = crate::propagation::context_propagation_test_lock();
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.traces.enabled = true;
+        config.traces.exporter = crate::config::TraceExporter::Disable;
+        config.traces.propagate_context = false;
+
+        let guard = init_observability(&config).expect("trace init should honor propagation config");
+
+        assert!(!crate::propagation::is_context_propagation_enabled());
+
+        guard.shutdown().expect("trace shutdown should succeed");
+        crate::propagation::set_context_propagation_enabled(true);
+    }
+
+    #[cfg(feature = "otel-logs")]
+    #[test]
+    fn disabled_log_exporter_initializes_logger_provider() {
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.logs.enabled = true;
+        config.logs.exporter = crate::config::LogsExporter::Disable;
+
+        let guard = init_observability(&config).expect("disable log exporter should initialize");
+
+        assert!(guard.logger_provider().is_some());
+        guard.shutdown().expect("logs shutdown should succeed");
+    }
+
+    #[cfg(feature = "otel-logs")]
+    #[test]
+    fn log_exporter_initializes_logger_provider() {
+        let mut config = ObservabilityConfig {
+            enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        config.logs.enabled = true;
+        config.logs.exporter = crate::config::LogsExporter::Log;
+
+        let guard = init_observability(&config).expect("log exporter should initialize");
+
+        assert!(guard.logger_provider().is_some());
+        guard.shutdown().expect("logs shutdown should succeed");
     }
 }
