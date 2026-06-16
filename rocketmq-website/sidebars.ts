@@ -57,6 +57,7 @@ const sidebars: SidebarsConfig = {
         'configuration/broker-config',
         'configuration/client-config',
         'configuration/performance-tuning',
+        'configuration/observability',
       ],
     },
     {

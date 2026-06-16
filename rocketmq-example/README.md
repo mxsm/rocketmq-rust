@@ -76,6 +76,18 @@ Build an individual example:
 cargo build --example producer-delay-send
 ```
 
+## Observability Configuration
+
+The broker observability configuration fragment lives in the existing examples
+directory:
+
+```text
+rocketmq-example/examples/broker_observability.yaml
+```
+
+Merge those fields into a complete broker configuration when testing OTLP,
+Prometheus, tracing, or logs locally.
+
 Required validation after changing this project:
 
 ```powershell
@@ -90,7 +102,8 @@ rocketmq-example/
 |-- examples/
 |   |-- consumer/
 |   |-- interop/
-|   `-- producer/
+|   |-- producer/
+|   `-- broker_observability.yaml
 |-- Cargo.toml
 |-- README.md
 `-- README-zh_cn.md
