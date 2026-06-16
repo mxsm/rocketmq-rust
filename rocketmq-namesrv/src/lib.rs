@@ -25,6 +25,7 @@ pub use self::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
 pub mod bootstrap;
 mod kvconfig;
 mod namesrv_config_parse;
+mod observability_metrics;
 pub mod processor;
 pub mod route;
 mod route_info;

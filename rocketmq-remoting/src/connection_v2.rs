@@ -251,6 +251,8 @@ impl RefactoredConnection {
 
         // Freeze to Bytes (zero-copy)
         let bytes = self.encode_buffer.split().freeze();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(bytes.len() as u64);
 
         // FramedWrite automatically processes Bytes through CompositeCodec
         self.framed_writer.send(bytes).await
@@ -275,6 +277,9 @@ impl RefactoredConnection {
     ///
     /// To send RemotingCommand, use `send_command` method instead
     pub async fn send_bytes(&mut self, bytes: Bytes) -> RocketMQResult<()> {
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(bytes.len() as u64);
+
         // Flush FramedWrite buffer first
         self.framed_writer.flush().await?;
 
@@ -305,6 +310,8 @@ impl RefactoredConnection {
 
             // Use split() to get current content while keeping buffer reusable
             let bytes = self.encode_buffer.split().freeze();
+            #[cfg(feature = "observability")]
+            crate::observability_metrics::record_network_bytes(bytes.len() as u64);
 
             self.framed_writer.feed(bytes).await?;
         }
@@ -329,6 +336,8 @@ impl RefactoredConnection {
         // Write all chunks directly (zero-copy)
         let inner = self.framed_writer.get_mut();
         for chunk in chunks {
+            #[cfg(feature = "observability")]
+            crate::observability_metrics::record_network_bytes(chunk.len() as u64);
             inner.write_all(&chunk).await?;
         }
 
@@ -361,6 +370,8 @@ impl RefactoredConnection {
 
         // Convert to IoSlice for writev (zero-copy scatter-gather I/O)
         let mut slices: Vec<IoSlice> = chunks.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(chunks.iter().map(|chunk| chunk.len() as u64).sum());
 
         // Direct write (zero-copy) - ensure all data is written
         write_all_vectored(inner, &mut slices).await?;
@@ -373,6 +384,9 @@ impl RefactoredConnection {
     ///
     /// Suitable for sending single large block of data
     pub async fn send_bytes_zero_copy_single(&mut self, data: Bytes) -> RocketMQResult<()> {
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(data.len() as u64);
+
         // Flush existing buffer
         self.framed_writer.flush().await?;
 
@@ -412,6 +426,8 @@ impl RefactoredConnection {
             self.encode_buffer.extend_from_slice(&body);
         }
         let header_bytes = self.encode_buffer.split().freeze();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(header_bytes.len() as u64);
 
         self.framed_writer.send(header_bytes).await?;
 
@@ -421,6 +437,8 @@ impl RefactoredConnection {
         // 3. Zero-copy send message bodies
         let inner = self.framed_writer.get_mut();
         for body in message_bodies {
+            #[cfg(feature = "observability")]
+            crate::observability_metrics::record_network_bytes(body.len() as u64);
             inner.write_all(&body).await?;
         }
 
@@ -454,10 +472,15 @@ impl RefactoredConnection {
 
         // Construct all IoSlice
         let mut slices = Vec::with_capacity(1 + message_bodies.len());
+        #[cfg(feature = "observability")]
+        let total_bytes =
+            response_header_bytes.len() as u64 + message_bodies.iter().map(|body| body.len() as u64).sum::<u64>();
         slices.push(IoSlice::new(response_header_bytes.as_ref()));
         for body in &message_bodies {
             slices.push(IoSlice::new(body.as_ref()));
         }
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(total_bytes);
 
         // Send all data at once (true scatter-gather I/O) - ensure all data is written
         let inner = self.framed_writer.get_mut();
@@ -629,6 +652,8 @@ impl ConcurrentConnection {
             encode_buffer.extend_from_slice(&body);
         }
         let bytes = encode_buffer.split().freeze();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(bytes.len() as u64);
         framed_writer.send(bytes).await?;
         framed_writer.flush().await?;
         Ok(())
@@ -639,6 +664,8 @@ impl ConcurrentConnection {
         framed_writer: &mut FramedWrite<OwnedWriteHalf, CompositeCodec>,
         bytes: Bytes,
     ) -> RocketMQResult<()> {
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(bytes.len() as u64);
         framed_writer.send(bytes).await?;
         framed_writer.flush().await?;
         Ok(())
@@ -656,6 +683,8 @@ impl ConcurrentConnection {
                 encode_buffer.extend_from_slice(&body);
             }
             let bytes = encode_buffer.split().freeze();
+            #[cfg(feature = "observability")]
+            crate::observability_metrics::record_network_bytes(bytes.len() as u64);
             framed_writer.feed(bytes).await?;
         }
         framed_writer.flush().await?;
@@ -668,6 +697,8 @@ impl ConcurrentConnection {
         bytes_vec: Vec<Bytes>,
     ) -> RocketMQResult<()> {
         for bytes in bytes_vec {
+            #[cfg(feature = "observability")]
+            crate::observability_metrics::record_network_bytes(bytes.len() as u64);
             framed_writer.feed(bytes).await?;
         }
         framed_writer.flush().await?;
@@ -680,6 +711,8 @@ impl ConcurrentConnection {
         bytes_vec: Vec<Bytes>,
     ) -> RocketMQResult<()> {
         let mut io_slices: Vec<IoSlice> = bytes_vec.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(bytes_vec.iter().map(|bytes| bytes.len() as u64).sum());
         write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
@@ -698,10 +731,14 @@ impl ConcurrentConnection {
             encode_buffer.extend_from_slice(&body);
         }
         let header_bytes = encode_buffer.split().freeze();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(header_bytes.len() as u64);
         framed_writer.send(header_bytes).await?;
 
         // Zero-copy send bodies - ensure all data is written
         let mut io_slices: Vec<IoSlice> = bodies.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(bodies.iter().map(|body| body.len() as u64).sum());
         write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
@@ -717,6 +754,8 @@ impl ConcurrentConnection {
         all_bytes.extend(bodies);
 
         let mut io_slices: Vec<IoSlice> = all_bytes.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        #[cfg(feature = "observability")]
+        crate::observability_metrics::record_network_bytes(all_bytes.iter().map(|bytes| bytes.len() as u64).sum());
         write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())

@@ -2869,19 +2869,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentelemetry-http"
-version = "0.32.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5683015d09e2df236ef005b17f6f196f0d5f6313c4fa43a7b6a53b52776e4331"
-dependencies = [
- "async-trait",
- "bytes",
- "http",
- "opentelemetry",
- "reqwest",
-]
-
-[[package]]
 name = "opentelemetry-otlp"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2889,11 +2876,9 @@ checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
 dependencies = [
  "http",
  "opentelemetry",
- "opentelemetry-http",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "reqwest",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
@@ -3845,9 +3830,7 @@ dependencies = [
  "base64",
  "bytes",
  "encoding_rs",
- "futures-channel",
  "futures-core",
- "futures-util",
  "h2",
  "http",
  "http-body",
@@ -4149,12 +4132,12 @@ dependencies = [
  "futures",
  "openraft",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
  "prost",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -4233,6 +4216,7 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-controller",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-rust",
  "serde",
@@ -4246,12 +4230,14 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "cheetah-string",
+ "criterion",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry-prometheus",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "prometheus",
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-runtime",
@@ -4259,6 +4245,8 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.18",
+ "tokio",
+ "tonic",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4283,6 +4271,7 @@ dependencies = [
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-rust",
  "rocketmq-store",
@@ -4322,6 +4311,7 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-macros",
+ "rocketmq-observability",
  "rocketmq-rust",
  "rustls-native-certs",
  "rustls-pemfile",
@@ -4384,6 +4374,7 @@ dependencies = [
  "rayon",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-rust",
  "rocketmq-tieredstore",

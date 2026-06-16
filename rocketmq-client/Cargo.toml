@@ -30,6 +30,7 @@ rust-version.workspace = true
 [features]
 default = []
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-traces"]
+observability-metrics = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
 otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
 
 [dependencies]

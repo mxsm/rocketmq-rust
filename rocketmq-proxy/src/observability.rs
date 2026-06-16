@@ -153,6 +153,7 @@ impl ProxyMetrics {
         let bucket = self.bucket(rpc_name);
         bucket.started.fetch_add(1, Ordering::Relaxed);
         bucket.in_flight.fetch_add(1, Ordering::Relaxed);
+        record_observability_grpc_request();
     }
 
     pub fn record_request_completed(&self, rpc_name: &'static str, outcome: &ProxyRequestOutcome, elapsed: Duration) {
@@ -175,6 +176,8 @@ impl ProxyMetrics {
                 bucket.transport_failures.fetch_add(1, Ordering::Relaxed);
             }
         }
+
+        record_observability_grpc_latency(elapsed);
     }
 
     pub fn snapshot(
@@ -182,6 +185,8 @@ impl ProxyMetrics {
         sessions: &ClientSessionRegistry,
         auth: Option<AuthMetricsSnapshot>,
     ) -> ProxyMetricsSnapshot {
+        record_observability_active_connections(sessions.len());
+
         let mut rpcs = self
             .rpcs
             .iter()
@@ -229,6 +234,36 @@ fn decrement_saturating(counter: &AtomicU64) {
     let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_sub(1))
     });
+}
+
+#[inline]
+fn record_observability_grpc_request() {
+    #[cfg(feature = "observability")]
+    rocketmq_observability::metrics::proxy::record_grpc_requests_total(1);
+}
+
+#[inline]
+fn record_observability_grpc_latency(elapsed: Duration) {
+    #[cfg(feature = "observability")]
+    rocketmq_observability::metrics::proxy::record_grpc_request_latency(duration_millis_u64(elapsed));
+
+    #[cfg(not(feature = "observability"))]
+    let _ = elapsed;
+}
+
+#[inline]
+fn record_observability_active_connections(count: usize) {
+    #[cfg(feature = "observability")]
+    rocketmq_observability::metrics::proxy::record_active_connections(count as u64);
+
+    #[cfg(not(feature = "observability"))]
+    let _ = count;
+}
+
+#[cfg(feature = "observability")]
+#[inline]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]

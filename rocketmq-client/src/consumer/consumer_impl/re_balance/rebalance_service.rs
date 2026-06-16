@@ -269,6 +269,7 @@ impl RebalanceService {
                     // Rebalance operation with exception handling and metrics
                     let start_time = tokio::time::Instant::now();
                     total_count.fetch_add(1, Ordering::Relaxed);
+                    crate::observability_metrics::record_rebalance();
 
                     let balanced = match instance.do_rebalance().await {
                         Ok(result) => {

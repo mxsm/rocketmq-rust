@@ -1,0 +1,35 @@
+# Broker observability config fragment.
+# Merge these fields into a complete BrokerConfig YAML file.
+
+brokerIdentity:
+  brokerName: broker-a
+  brokerClusterName: DefaultCluster
+  brokerId: 0
+
+metricsExporterType: otlp_grpc
+metricsExportIntervalMillis: 5000
+metricsCardinalityLimit: 10000
+metricsTopicLabelEnabled: true
+metricsConsumerGroupLabelEnabled: true
+
+otlpExporterEndpoint: http://127.0.0.1:4317
+otlpExporterHeaders: authorization:Bearer token,tenant:rocketmq
+otlpExporterTimeoutMillis: 3000
+
+traceExporterType: otlp_grpc
+traceSampleRatio: 0.01
+tracePropagateContext: true
+traceRecordMessageId: false
+traceRecordMessageKeys: false
+traceRecordBodySize: true
+
+logExporterType: otlp_grpc
+
+observabilityEnvironment: dev
+observabilityServiceInstanceId: broker-a-0
+observabilityResourceAttributes: zone:az-a,rack:rack-1
+
+# Direct Prometheus exporter settings. Used when metricsExporterType is prom.
+metricsPromExporterHost: 127.0.0.1
+metricsPromExporterPort: 5557
+metricsPromExporterPath: /metrics

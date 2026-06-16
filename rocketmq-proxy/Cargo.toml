@@ -28,18 +28,20 @@ description            = "RocketMQ Proxy Module - gRPC proxy runtime for the Rus
 rust-version.workspace = true
 
 [features]
-default     = []
-tieredstore = ["rocketmq-broker/tieredstore", "rocketmq-store/tieredstore"]
+default       = []
+observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+tieredstore   = ["rocketmq-broker/tieredstore", "rocketmq-store/tieredstore"]
 
 [dependencies]
-rocketmq-common   = { workspace = true }
-rocketmq-broker   = { workspace = true }
-rocketmq-store    = { workspace = true }
-rocketmq-error    = { workspace = true }
-rocketmq-remoting = { workspace = true }
+rocketmq-common      = { workspace = true }
+rocketmq-broker      = { workspace = true }
+rocketmq-store       = { workspace = true }
+rocketmq-error       = { workspace = true }
+rocketmq-remoting    = { workspace = true }
 rocketmq-client-rust = { workspace = true }
-rocketmq-auth = { workspace = true, features = ["grpc"] }
-rocketmq-rust = { workspace = true }
+rocketmq-auth        = { workspace = true, features = ["grpc"] }
+rocketmq-rust        = { workspace = true }
+rocketmq-observability = { workspace = true, optional = true }
 
 tokio        = { workspace = true }
 tokio-stream = { workspace = true }

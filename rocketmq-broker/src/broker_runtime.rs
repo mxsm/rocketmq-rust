@@ -27,6 +27,8 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+#[cfg(feature = "otel-metrics")]
+use opentelemetry::metrics::MeterProvider;
 use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthMetricsSnapshot;
@@ -194,6 +196,101 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         stateful_authorization_cache_max_num: broker_config.stateful_authorization_cache_max_num,
         stateful_authorization_cache_expired_second: broker_config.stateful_authorization_cache_expired_second,
     }
+}
+
+#[cfg(feature = "otel-metrics")]
+struct BrokerObservabilityAttributesSupplier {
+    cluster: String,
+    node_id: String,
+}
+
+#[cfg(feature = "otel-metrics")]
+impl BrokerObservabilityAttributesSupplier {
+    fn new(broker_config: &BrokerConfig) -> Self {
+        Self {
+            cluster: broker_config.broker_identity.broker_cluster_name.to_string(),
+            node_id: broker_config.broker_identity.get_canonical_name(),
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl crate::metrics::broker_metrics_manager::AttributesBuilderSupplier for BrokerObservabilityAttributesSupplier {
+    fn get(&self) -> Vec<opentelemetry::KeyValue> {
+        vec![
+            opentelemetry::KeyValue::new(
+                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::LABEL_CLUSTER_NAME,
+                self.cluster.clone(),
+            ),
+            opentelemetry::KeyValue::new(
+                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::LABEL_NODE_TYPE,
+                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::NODE_TYPE_BROKER,
+            ),
+            opentelemetry::KeyValue::new(
+                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::LABEL_NODE_ID,
+                self.node_id.clone(),
+            ),
+        ]
+    }
+}
+
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_observability::ObservabilityConfig {
+    let metrics_enabled = broker_config.metrics_exporter_type.is_enable();
+    let traces_enabled = broker_config.trace_exporter_type.is_enable();
+    let logs_enabled = broker_config.log_exporter_type.is_enable();
+    let mut config = rocketmq_observability::ObservabilityConfig {
+        enabled: metrics_enabled || traces_enabled || logs_enabled,
+        service_name: "rocketmq-broker".to_string(),
+        service_namespace: "rocketmq".to_string(),
+        cluster: broker_config.broker_identity.broker_cluster_name.to_string(),
+        node_type: "broker".to_string(),
+        node_id: broker_config.broker_identity.get_canonical_name(),
+        ..rocketmq_observability::ObservabilityConfig::default()
+    };
+
+    config.environment = broker_config.observability_environment.to_string();
+    config.service_instance_id = broker_config.observability_service_instance_id.to_string();
+    config.resource_attributes = parse_observability_key_values(&broker_config.observability_resource_attributes);
+    config.metrics.enabled = metrics_enabled;
+    config.metrics.exporter = broker_config.metrics_exporter_type.into();
+    config.metrics.export_interval_millis = broker_config.metrics_export_interval_millis;
+    config.metrics.export_timeout_millis = broker_config.otlp_exporter_timeout_millis;
+    config.metrics.cardinality_limit = broker_config.metrics_cardinality_limit;
+    config.metrics.topic_label_enabled = broker_config.metrics_topic_label_enabled;
+    config.metrics.consumer_group_label_enabled = broker_config.metrics_consumer_group_label_enabled;
+    config.otlp.endpoint = broker_config.otlp_exporter_endpoint.to_string();
+    config.otlp.headers = parse_observability_key_values(&broker_config.otlp_exporter_headers);
+    config.otlp.timeout_millis = broker_config.otlp_exporter_timeout_millis;
+    config.prometheus.host = broker_config.metrics_prom_exporter_host.to_string();
+    config.prometheus.port = broker_config.metrics_prom_exporter_port;
+    config.prometheus.path = broker_config.metrics_prom_exporter_path.to_string();
+    config.traces.enabled = traces_enabled;
+    config.traces.exporter = broker_config.trace_exporter_type.into();
+    config.traces.sample_ratio = broker_config.trace_sample_ratio;
+    config.traces.propagate_context = broker_config.trace_propagate_context;
+    config.traces.record_message_id = broker_config.trace_record_message_id;
+    config.traces.record_message_keys = broker_config.trace_record_message_keys;
+    config.traces.record_body_size = broker_config.trace_record_body_size;
+    config.logs.enabled = logs_enabled;
+    config.logs.exporter = broker_config.log_exporter_type.into();
+    config
+}
+
+#[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+fn parse_observability_key_values(values: &CheetahString) -> HashMap<String, String> {
+    values
+        .as_str()
+        .split(',')
+        .filter_map(|entry| {
+            let (key, value) = entry.split_once(':')?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
 }
 
 #[cfg(feature = "rocksdb_store")]
@@ -435,6 +532,8 @@ impl BrokerRuntime {
             pop_inflight_message_counter,
             replicas_manager: None,
             broker_fast_failure: BrokerFastFailure::new(broker_config.clone()),
+            #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+            observability_guard: None,
             cold_data_pull_request_hold_service: Some(ColdDataPullRequestHoldService::default()),
             cold_data_cg_ctr_service: Some(ColdDataCgCtrService::new(
                 message_store_config.cold_data_flow_control_enable,
@@ -595,6 +694,13 @@ impl BrokerRuntime {
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
                 warn!("Failed to shutdown auth runtime: {error}");
+            }
+        }
+
+        #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+        if let Some(guard) = self.inner.observability_guard.take() {
+            if let Err(error) = guard.shutdown() {
+                warn!("Failed to shutdown observability runtime: {error}");
             }
         }
 
@@ -911,8 +1017,59 @@ impl BrokerRuntime {
     }
 
     fn initialize_resources(&mut self) {
+        #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+        self.initialize_observability();
+
         if self.inner.topic_queue_mapping_clean_service.is_none() {
             self.inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(self.inner.clone()));
+        }
+    }
+
+    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+    fn initialize_observability(&mut self) {
+        if self.inner.observability_guard.is_some() {
+            return;
+        }
+
+        let config = build_broker_observability_config(&self.inner.broker_config);
+        if !config.enabled {
+            return;
+        }
+
+        match rocketmq_observability::init_observability(&config) {
+            Ok(guard) => {
+                #[cfg(feature = "otel-metrics")]
+                if let Some(provider) = guard.meter_provider() {
+                    let meter = provider.meter(
+                        crate::metrics::broker_metrics_constant::BrokerMetricsConstant::OPEN_TELEMETRY_METER_NAME,
+                    );
+                    let label_config = crate::metrics::broker_metrics_manager::BrokerMetricsLabelConfig::new(
+                        config.metrics.cardinality_limit,
+                        config.metrics.topic_label_enabled,
+                        config.metrics.consumer_group_label_enabled,
+                    );
+                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_label_config(
+                        meter,
+                        Arc::new(BrokerObservabilityAttributesSupplier::new(&self.inner.broker_config)),
+                        label_config,
+                    );
+
+                    let store_meter = provider.meter("rocketmq-store");
+                    let _ = rocketmq_observability::metrics::store::init_global(&store_meter);
+
+                    let remoting_meter = provider.meter("rocketmq-remoting");
+                    let _ = rocketmq_observability::metrics::remoting::init_global(&remoting_meter);
+                }
+
+                info!(
+                    exporter = ?config.metrics.exporter,
+                    trace_exporter = ?config.traces.exporter,
+                    log_exporter = ?config.logs.exporter,
+                    "initialized broker observability"
+                );
+                self.inner.observability_guard = Some(guard);
+            }
+            Err(error) => warn!("Failed to initialize broker observability: {error}"),
         }
     }
 
@@ -1936,6 +2093,8 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pop_inflight_message_counter: PopInflightMessageCounter,
     replicas_manager: Option<ReplicasManager>,
     broker_fast_failure: BrokerFastFailure,
+    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+    observability_guard: Option<rocketmq_observability::TelemetryGuard>,
     cold_data_pull_request_hold_service: Option<ColdDataPullRequestHoldService>,
     cold_data_cg_ctr_service: Option<ColdDataCgCtrService>,
     is_schedule_service_start: Arc<AtomicBool>,
@@ -3855,6 +4014,57 @@ mod tests {
 
     fn next_controller_test_temp_id() -> u64 {
         NEXT_CONTROLLER_TEST_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
+    #[test]
+    fn build_broker_observability_config_maps_otlp_settings() {
+        let broker_config = BrokerConfig {
+            metrics_exporter_type: rocketmq_common::common::metrics::MetricsExporterType::OtlpGrpc,
+            trace_exporter_type: rocketmq_common::common::metrics::TraceExporterType::OtlpGrpc,
+            log_exporter_type: rocketmq_common::common::metrics::LogExporterType::OtlpGrpc,
+            observability_environment: "prod".into(),
+            observability_service_instance_id: "broker-a-0".into(),
+            observability_resource_attributes: "zone:az-a,rack:rack-1".into(),
+            otlp_exporter_endpoint: "http://collector:4317".into(),
+            otlp_exporter_headers: "authorization:Bearer token,tenant:rocketmq".into(),
+            otlp_exporter_timeout_millis: 1_500,
+            metrics_cardinality_limit: 64,
+            metrics_topic_label_enabled: false,
+            metrics_consumer_group_label_enabled: true,
+            trace_record_message_id: true,
+            trace_record_message_keys: true,
+            trace_record_body_size: false,
+            ..Default::default()
+        };
+
+        let config = build_broker_observability_config(&broker_config);
+
+        assert!(config.enabled);
+        assert!(config.metrics.enabled);
+        assert!(config.traces.enabled);
+        assert!(config.logs.enabled);
+        assert_eq!(config.environment, "prod");
+        assert_eq!(config.service_instance_id, "broker-a-0");
+        assert_eq!(config.resource_attributes.get("zone").map(String::as_str), Some("az-a"));
+        assert_eq!(
+            config.resource_attributes.get("rack").map(String::as_str),
+            Some("rack-1")
+        );
+        assert_eq!(config.otlp.endpoint, "http://collector:4317");
+        assert_eq!(config.otlp.timeout_millis, 1_500);
+        assert_eq!(config.metrics.export_timeout_millis, 1_500);
+        assert_eq!(config.metrics.cardinality_limit, 64);
+        assert!(!config.metrics.topic_label_enabled);
+        assert!(config.metrics.consumer_group_label_enabled);
+        assert!(config.traces.record_message_id);
+        assert!(config.traces.record_message_keys);
+        assert!(!config.traces.record_body_size);
+        assert_eq!(
+            config.otlp.headers.get("authorization").map(String::as_str),
+            Some("Bearer token")
+        );
+        assert_eq!(config.otlp.headers.get("tenant").map(String::as_str), Some("rocketmq"));
     }
 
     #[test]

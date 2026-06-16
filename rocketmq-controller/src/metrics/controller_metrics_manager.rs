@@ -36,8 +36,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
-#[cfg(feature = "metrics")]
-use std::time::Duration;
 
 use opentelemetry::metrics::Counter;
 use opentelemetry::metrics::Histogram;
@@ -45,20 +43,17 @@ use opentelemetry::metrics::Meter;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry::metrics::UpDownCounter;
 use opentelemetry::KeyValue;
-#[cfg(feature = "metrics")]
-use opentelemetry_otlp::MetricExporter;
-#[cfg(feature = "metrics")]
-use opentelemetry_otlp::Protocol;
-#[cfg(feature = "metrics")]
-use opentelemetry_otlp::WithExportConfig;
-#[cfg(feature = "metrics")]
-use opentelemetry_sdk::metrics::PeriodicReader;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType;
 use rocketmq_common::common::metrics::nop_long_counter::NopLongCounter;
 use rocketmq_common::common::metrics::nop_long_histogram::NopLongHistogram;
+#[cfg(feature = "metrics")]
+use rocketmq_observability::config::ObservabilityConfig;
+#[cfg(feature = "metrics")]
+use rocketmq_observability::TelemetryGuard;
 use rocketmq_rust::ArcMut;
 use tracing::error;
+#[cfg(feature = "metrics")]
 use tracing::info;
 use tracing::warn;
 
@@ -69,11 +64,6 @@ use crate::config::ControllerConfig;
 // Constants
 // ============================================================================
 
-/// Microsecond to second conversion
-const US: f64 = 1.0;
-const MS: f64 = 1000.0 * US;
-const S: f64 = 1000.0 * MS;
-
 // ============================================================================
 // Global State
 // ============================================================================
@@ -83,6 +73,12 @@ static INSTANCE: OnceLock<Arc<ControllerMetricsManager>> = OnceLock::new();
 
 /// Global label map for common labels
 static LABEL_MAP: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+
+const CONTROLLER_ROLE_LEADER: i64 = 3;
+
+#[cfg(not(feature = "metrics"))]
+#[derive(Debug)]
+struct ControllerTelemetryGuard;
 
 // ============================================================================
 // Metric Wrappers for Static Access
@@ -192,7 +188,11 @@ pub struct ControllerMetricsManager {
 
     // OpenTelemetry SDK components
     _meter_provider: Option<SdkMeterProvider>,
+    _telemetry_guard: Option<ControllerTelemetryGuard>,
 }
+
+#[cfg(feature = "metrics")]
+type ControllerTelemetryGuard = TelemetryGuard;
 
 impl ControllerMetricsManager {
     /// Get or initialize the global singleton instance
@@ -229,40 +229,60 @@ impl ControllerMetricsManager {
         // Parse custom labels from config if available
         // TODO: When ControllerConfig is extended with metrics_label field
 
-        // Check if metrics are enabled
-        let metrics_type = MetricsExporterType::Disable; // TODO: Get from config
+        let metrics_type = config.metrics_exporter_type;
 
         if !Self::check_config(&config, metrics_type) {
             warn!("Metrics are disabled or configuration is invalid");
             return Self::create_noop_manager(config);
         }
 
-        // Build meter provider with appropriate exporter
-        let meter_provider = match Self::build_meter_provider(&config, metrics_type) {
-            Ok(provider) => provider,
-            Err(e) => {
-                error!("Failed to build meter provider: {:?}, falling back to no-op", e);
+        #[cfg(feature = "metrics")]
+        {
+            let telemetry_config = Self::build_observability_config(&config, metrics_type);
+            let telemetry_guard = match rocketmq_observability::init_observability(&telemetry_config) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    error!(
+                        "Failed to initialize controller observability: {:?}, falling back to no-op",
+                        error
+                    );
+                    return Self::create_noop_manager(config);
+                }
+            };
+
+            let Some(meter_provider) = telemetry_guard.meter_provider().cloned() else {
+                warn!("Controller metrics exporter did not initialize a meter provider");
                 return Self::create_noop_manager(config);
-            }
-        };
+            };
 
-        let meter = meter_provider.meter(OPEN_TELEMETRY_METER_NAME);
+            let meter = meter_provider.meter(OPEN_TELEMETRY_METER_NAME);
+            let _ = rocketmq_observability::metrics::controller::init_global(&meter);
 
-        // Initialize metrics
-        let manager = Self::init_metrics(meter.clone(), config.clone(), Some(meter_provider));
+            let manager = Self::init_metrics(
+                meter.clone(),
+                config.clone(),
+                Some(meter_provider),
+                Some(telemetry_guard),
+            );
 
-        // Initialize static metric references
-        Self::init_static_metrics(&manager);
+            Self::init_static_metrics(&manager);
 
-        info!("ControllerMetricsManager initialized successfully");
-        manager
+            info!("ControllerMetricsManager initialized successfully");
+            manager
+        }
+
+        #[cfg(not(feature = "metrics"))]
+        {
+            warn!("Controller metrics require the 'metrics' feature");
+            Self::create_noop_manager(config)
+        }
     }
 
     /// Create a no-op manager when metrics are disabled
     fn create_noop_manager(config: ArcMut<ControllerConfig>) -> Self {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("noop");
-        Self::init_metrics(meter, config, None)
+        Self::init_metrics(meter, config, Some(provider), None)
     }
 
     /// Check if metrics configuration is valid
@@ -272,105 +292,54 @@ impl ControllerMetricsManager {
         }
 
         match metrics_type {
-            MetricsExporterType::OtlpGrpc => {
-                // TODO: Check config.metrics_grpc_exporter_target
-                true
-            }
+            MetricsExporterType::OtlpGrpc => true,
             MetricsExporterType::Prom => true,
             MetricsExporterType::Log => true,
             MetricsExporterType::Disable => false,
         }
     }
 
-    /// Build OpenTelemetry meter provider with configured exporter
-    fn build_meter_provider(
-        _config: &ControllerConfig,
-        metrics_type: MetricsExporterType,
-    ) -> Result<SdkMeterProvider, Box<dyn std::error::Error>> {
-        let provider_builder = SdkMeterProvider::builder();
+    #[cfg(feature = "metrics")]
+    fn build_observability_config(config: &ControllerConfig, metrics_type: MetricsExporterType) -> ObservabilityConfig {
+        let mut observability_config = ObservabilityConfig {
+            enabled: true,
+            service_name: "rocketmq-controller".to_string(),
+            service_namespace: "rocketmq".to_string(),
+            node_type: "controller".to_string(),
+            node_id: config.node_id.to_string(),
+            ..ObservabilityConfig::default()
+        };
 
-        match metrics_type {
-            #[cfg(feature = "metrics")]
-            MetricsExporterType::OtlpGrpc => {
-                // TODO: Get endpoint from config
-                let endpoint = "http://localhost:4317";
+        observability_config.metrics.enabled = true;
+        observability_config.metrics.exporter = metrics_type.into();
+        observability_config.metrics.export_interval_millis = match metrics_type {
+            MetricsExporterType::Log => config.metric_logging_exporter_interval_in_mills,
+            _ => config.metric_grpc_exporter_interval_in_mills,
+        };
+        observability_config.metrics.export_timeout_millis = config.metric_grpc_exporter_time_out_in_mills;
 
-                let exporter = MetricExporter::builder()
-                    .with_tonic()
-                    .with_protocol(Protocol::Grpc)
-                    .with_endpoint(endpoint)
-                    .with_timeout(Duration::from_secs(10))
-                    .build()?;
-
-                let reader = PeriodicReader::builder(exporter).build();
-
-                let provider_builder = provider_builder.with_reader(reader);
-
-                // Register views for histogram buckets
-                let provider_builder = Self::register_metrics_views(provider_builder);
-
-                return Ok(provider_builder.build());
-            }
-            #[cfg(not(feature = "metrics"))]
-            MetricsExporterType::OtlpGrpc => {
-                warn!("OTLP gRPC exporter requires 'metrics' feature");
-            }
-            MetricsExporterType::Prom => {
-                // TODO: Implement Prometheus exporter
-                // This would require opentelemetry-prometheus crate
-                warn!("Prometheus exporter not yet implemented");
-            }
-            MetricsExporterType::Log => {
-                // TODO: Implement log exporter
-                warn!("Log exporter not yet implemented");
-            }
-            MetricsExporterType::Disable => {}
+        if !config.metrics_grpc_exporter_target.trim().is_empty() {
+            observability_config.otlp.endpoint = config.metrics_grpc_exporter_target.clone();
         }
+        observability_config.otlp.timeout_millis = config.metric_grpc_exporter_time_out_in_mills;
+        observability_config.otlp.headers = parse_key_value_list(&config.metrics_grpc_exporter_header);
 
-        // Register views for histogram buckets
-        let provider_builder = Self::register_metrics_views(provider_builder);
+        if !config.metrics_prom_exporter_host.trim().is_empty() {
+            observability_config.prometheus.host = config.metrics_prom_exporter_host.clone();
+        }
+        observability_config.prometheus.port = config.metrics_prom_exporter_port;
+        observability_config.resource_attributes = parse_key_value_list(&config.metrics_label);
 
-        Ok(provider_builder.build())
-    }
-
-    /// Register custom views for histogram bucket configuration
-    fn register_metrics_views(
-        builder: opentelemetry_sdk::metrics::MeterProviderBuilder,
-    ) -> opentelemetry_sdk::metrics::MeterProviderBuilder {
-        // Define latency buckets
-        let _latency_buckets = vec![
-            1.0 * US,
-            3.0 * US,
-            5.0 * US,
-            10.0 * US,
-            30.0 * US,
-            50.0 * US,
-            100.0 * US,
-            300.0 * US,
-            500.0 * US,
-            1.0 * MS,
-            3.0 * MS,
-            5.0 * MS,
-            10.0 * MS,
-            30.0 * MS,
-            50.0 * MS,
-            100.0 * MS,
-            300.0 * MS,
-            500.0 * MS,
-            1.0 * S,
-            3.0 * S,
-            5.0 * S,
-            10.0 * S,
-        ];
-
-        // TODO: Configure views when OpenTelemetry Rust SDK supports it
-        // Currently, view configuration is limited in Rust SDK compared to Java
-
-        builder
+        observability_config
     }
 
     /// Initialize all metrics with the given meter
-    fn init_metrics(meter: Meter, config: ArcMut<ControllerConfig>, meter_provider: Option<SdkMeterProvider>) -> Self {
+    fn init_metrics(
+        meter: Meter,
+        config: ArcMut<ControllerConfig>,
+        meter_provider: Option<SdkMeterProvider>,
+        telemetry_guard: Option<ControllerTelemetryGuard>,
+    ) -> Self {
         // Node status metrics
         let role = meter
             .i64_up_down_counter(GAUGE_ROLE)
@@ -455,6 +424,7 @@ impl ControllerMetricsManager {
             meter,
             config,
             _meter_provider: meter_provider,
+            _telemetry_guard: telemetry_guard,
         }
     }
 
@@ -489,6 +459,10 @@ impl ControllerMetricsManager {
         if let Some(role) = ROLE.get() {
             let attrs = Self::new_attributes_builder();
             role.add(new_role - old_role, &attrs);
+        }
+
+        if is_leader_role_transition(new_role, old_role) {
+            record_observability_leader_change();
         }
     }
 
@@ -554,6 +528,7 @@ impl ControllerMetricsManager {
         attrs.push(KeyValue::new(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
 
         self.election_total.add(1, &attrs);
+        record_observability_election();
     }
 
     // ========================================================================
@@ -608,12 +583,31 @@ impl ControllerMetricsManager {
             attrs.push(KeyValue::new(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
             counter.add(1, &attrs);
         }
+
+        record_observability_election();
     }
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+#[inline]
+fn is_leader_role_transition(new_role: i64, old_role: i64) -> bool {
+    new_role != old_role && (new_role == CONTROLLER_ROLE_LEADER || old_role == CONTROLLER_ROLE_LEADER)
+}
+
+#[inline]
+fn record_observability_election() {
+    #[cfg(feature = "metrics")]
+    rocketmq_observability::metrics::controller::record_election_total(1);
+}
+
+#[inline]
+fn record_observability_leader_change() {
+    #[cfg(feature = "metrics")]
+    rocketmq_observability::metrics::controller::record_leader_changes_total(1);
+}
 
 /// Calculate total size of a directory recursively
 fn calculate_directory_size(path: &Path) -> std::io::Result<u64> {
@@ -637,6 +631,26 @@ fn calculate_directory_size(path: &Path) -> std::io::Result<u64> {
     }
 
     Ok(total_size)
+}
+
+fn parse_key_value_list(value: &str) -> HashMap<String, String> {
+    value
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+
+            let (key, value) = entry.split_once(':').or_else(|| entry.split_once('='))?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -679,6 +693,55 @@ mod tests {
         assert_eq!(
             ElectionResult::NoMasterElected.get_lower_case_name(),
             "no_master_elected"
+        );
+    }
+
+    #[test]
+    fn detects_leader_role_transitions() {
+        assert!(is_leader_role_transition(3, 2));
+        assert!(is_leader_role_transition(2, 3));
+        assert!(!is_leader_role_transition(3, 3));
+        assert!(!is_leader_role_transition(2, 1));
+    }
+
+    #[test]
+    fn parses_metrics_key_value_list() {
+        let values = parse_key_value_list("instance_id:controller-a,region=local, invalid, :empty");
+
+        assert_eq!(values.get("instance_id").map(String::as_str), Some("controller-a"));
+        assert_eq!(values.get("region").map(String::as_str), Some("local"));
+        assert!(!values.contains_key("invalid"));
+        assert!(!values.contains_key(""));
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn maps_controller_config_to_observability_config() {
+        let config = ControllerConfig::default()
+            .with_node_info(7, "127.0.0.1:9878".parse().unwrap())
+            .with_metrics_exporter_type(MetricsExporterType::OtlpGrpc)
+            .with_metrics_grpc_exporter("http://127.0.0.1:4317", "tenant:rocketmq")
+            .with_metrics_label("instance_id:controller-a");
+
+        let observability_config =
+            ControllerMetricsManager::build_observability_config(&config, MetricsExporterType::OtlpGrpc);
+
+        assert!(observability_config.enabled);
+        assert!(observability_config.metrics.enabled);
+        assert_eq!(observability_config.service_name, "rocketmq-controller");
+        assert_eq!(observability_config.node_type, "controller");
+        assert_eq!(observability_config.node_id, "7");
+        assert_eq!(observability_config.otlp.endpoint, "http://127.0.0.1:4317");
+        assert_eq!(
+            observability_config.otlp.headers.get("tenant").map(String::as_str),
+            Some("rocketmq")
+        );
+        assert_eq!(
+            observability_config
+                .resource_attributes
+                .get("instance_id")
+                .map(String::as_str),
+            Some("controller-a")
         );
     }
 }

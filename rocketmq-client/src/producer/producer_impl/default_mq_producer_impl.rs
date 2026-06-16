@@ -739,9 +739,11 @@ impl DefaultMQProducerImpl {
             // Fire and forget (use unbounded method for maximum batch throughput)
             match client_instance.get_mq_client_api_impl() {
                 Ok(mut mq_client_api) => {
+                    let send_start = Instant::now();
                     if let Err(e) = mq_client_api.send_oneway_unbounded(&broker_addr, request).await {
                         tracing::debug!("Oneway batch send failed: {:?}", e);
                     }
+                    crate::observability_metrics::record_send(send_start.elapsed());
                 }
                 Err(e) => tracing::debug!("Oneway batch send skipped: {:?}", e),
             }
@@ -1380,6 +1382,19 @@ impl DefaultMQProducerImpl {
             .await;
     }
 
+    #[cfg_attr(
+        feature = "observability",
+        tracing::instrument(
+            name = "RocketMQ PRODUCER SEND",
+            skip_all,
+            fields(
+                messaging.system = "rocketmq",
+                messaging.message.id = tracing::field::Empty,
+                messaging.message.body.size = tracing::field::Empty,
+                messaging.rocketmq.message.keys = tracing::field::Empty,
+            )
+        )
+    )]
     async fn send_kernel_impl<T>(
         &mut self,
         msg: &mut T,
@@ -1415,6 +1430,8 @@ impl DefaultMQProducerImpl {
         if !batch {
             MessageClientIDSetter::set_uniq_id(msg);
         }
+        #[cfg(feature = "observability")]
+        rocketmq_observability::trace::record_current_message_attributes(msg);
 
         let namespace = self.client_config.get_namespace();
         let mut topic_with_namespace = false;
@@ -1455,6 +1472,9 @@ impl DefaultMQProducerImpl {
         }
 
         // Build send message request header
+        #[cfg(feature = "observability")]
+        rocketmq_observability::propagation::inject_current_context_into_message(msg);
+
         let producer_group = self.producer_config.producer_group();
         let topic = msg.topic();
         let create_topic_key = self.producer_config.create_topic_key();
@@ -1621,6 +1641,8 @@ impl DefaultMQProducerImpl {
                     .await
             }
         };
+
+        crate::observability_metrics::record_send(begin_start_time.elapsed());
 
         match send_result {
             Ok(result) => {

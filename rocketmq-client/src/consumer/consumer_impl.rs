@@ -24,6 +24,7 @@ pub(crate) mod default_lite_pull_consumer_impl;
 pub(crate) mod default_mq_push_consumer_impl;
 pub(crate) mod lite_pull_consume_request;
 pub(crate) mod message_request;
+pub(crate) mod observability;
 pub mod pop_process_queue;
 pub(crate) mod pop_request;
 pub mod process_queue;
