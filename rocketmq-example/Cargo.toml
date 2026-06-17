@@ -23,7 +23,7 @@ authors = ["mxsm <mxsm@apache.org>"]
 edition = "2024"
 homepage = "https://github.com/mxsm/rocketmq-rust"
 repository = "https://github.com/mxsm/rocketmq-rust"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 keywords = [
   "apache-rocketmq",
   "rocketmq-rust",

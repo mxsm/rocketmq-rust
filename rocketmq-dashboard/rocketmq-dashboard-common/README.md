@@ -43,4 +43,4 @@ cargo clippy -p rocketmq-dashboard-common --all-targets -- -D warnings
 
 ## License
 
-Licensed under Apache-2.0 or MIT.
+Licensed under Apache-2.0.
