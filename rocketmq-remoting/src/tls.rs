@@ -419,16 +419,16 @@ fn generate_self_signed_certificate() -> RocketMQResult<(
     use tokio_rustls::rustls::pki_types::PrivateKeyDer;
     use tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer;
 
-    let rcgen::CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
         .map_err(|error| {
-            config_error(
-                "tls.test.mode.enable",
-                "true",
-                format!("failed to generate self-signed test certificate: {error}"),
-            )
-        })?;
+        config_error(
+            "tls.test.mode.enable",
+            "true",
+            format!("failed to generate self-signed test certificate: {error}"),
+        )
+    })?;
     let certs = vec![cert.der().clone()];
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
     Ok((certs, key))
 }
 
@@ -879,6 +879,7 @@ mod tests {
             use rcgen::CertificateParams;
             use rcgen::ExtendedKeyUsagePurpose;
             use rcgen::IsCa;
+            use rcgen::Issuer;
             use rcgen::KeyPair;
             use rcgen::KeyUsagePurpose;
 
@@ -889,10 +890,10 @@ mod tests {
             ca_params.key_usages.push(KeyUsagePurpose::CrlSign);
             let ca_key = KeyPair::generate().expect("generate ca key");
             let ca_cert = ca_params.self_signed(&ca_key).expect("self sign ca");
+            let ca_issuer = Issuer::new(ca_params, ca_key);
 
             fn end_entity(
-                ca_cert: &Certificate,
-                ca_key: &KeyPair,
+                ca_issuer: &Issuer<'_, KeyPair>,
                 name: &str,
                 usage: ExtendedKeyUsagePurpose,
             ) -> (Certificate, KeyPair) {
@@ -901,14 +902,12 @@ mod tests {
                 params.key_usages.push(KeyUsagePurpose::DigitalSignature);
                 params.extended_key_usages.push(usage);
                 let key = KeyPair::generate().expect("generate leaf key");
-                let cert = params.signed_by(&key, ca_cert, ca_key).expect("sign leaf");
+                let cert = params.signed_by(&key, ca_issuer).expect("sign leaf");
                 (cert, key)
             }
 
-            let (server_cert, server_key) =
-                end_entity(&ca_cert, &ca_key, "localhost", ExtendedKeyUsagePurpose::ServerAuth);
-            let (client_cert, client_key) =
-                end_entity(&ca_cert, &ca_key, "client", ExtendedKeyUsagePurpose::ClientAuth);
+            let (server_cert, server_key) = end_entity(&ca_issuer, "localhost", ExtendedKeyUsagePurpose::ServerAuth);
+            let (client_cert, client_key) = end_entity(&ca_issuer, "client", ExtendedKeyUsagePurpose::ClientAuth);
 
             let ca_cert_path = write_pem(temp_dir.path(), "ca.pem", ca_cert.pem());
             let server_cert_path = write_pem(temp_dir.path(), "server.pem", server_cert.pem());
