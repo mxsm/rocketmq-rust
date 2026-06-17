@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/rocketmq-error.svg)](https://crates.io/crates/rocketmq-error)
 [![Documentation](https://docs.rs/rocketmq-error/badge.svg)](https://docs.rs/rocketmq-error)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE-APACHE)
 
 ## Overview
 
@@ -524,7 +524,7 @@ cargo doc --open -p rocketmq-error
 
 ## License
 
-Licensed under [Apache License, Version 2.0](../LICENSE-APACHE) or [MIT license](../LICENSE-MIT) at your option.
+Licensed under [Apache License, Version 2.0](../LICENSE-APACHE).
 
 ---
 

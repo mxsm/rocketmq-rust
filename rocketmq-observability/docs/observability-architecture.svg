@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="820" viewBox="0 0 1280 820" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-observability global design architecture</title>
+  <desc id="desc">Architecture diagram showing application components, observability configuration, telemetry signals, OpenTelemetry runtime providers, exporters, and shutdown lifecycle.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#314155" />
+    </marker>
+    <style>
+      .canvas { fill: #f7f9fc; }
+      .group { fill: #ffffff; stroke: #c8d2df; stroke-width: 1.4; rx: 18; }
+      .group-title { fill: #314155; font: 700 18px Arial, sans-serif; }
+      .box { fill: #eef5ff; stroke: #7398c6; stroke-width: 1.4; rx: 10; }
+      .box.alt { fill: #f0f9f3; stroke: #6da77e; }
+      .box.signal { fill: #fff6e8; stroke: #c79348; }
+      .box.exporter { fill: #f6efff; stroke: #9b7bc8; }
+      .box.lifecycle { fill: #fff0f0; stroke: #cf7777; }
+      .label { fill: #1f2937; font: 600 16px Arial, sans-serif; }
+      .small { fill: #4b5563; font: 13px Arial, sans-serif; }
+      .arrow { fill: none; stroke: #314155; stroke-width: 1.7; marker-end: url(#arrow); }
+      .muted-arrow { fill: none; stroke: #748296; stroke-width: 1.4; marker-end: url(#arrow); stroke-dasharray: 5 5; }
+    </style>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="1280" height="820" />
+  <text x="640" y="42" text-anchor="middle" class="group-title">rocketmq-observability Global Design</text>
+  <text x="640" y="66" text-anchor="middle" class="small">Shared configuration, lifecycle, signals, propagation, OpenTelemetry runtime, and exporters</text>
+
+  <rect class="group" x="40" y="105" width="250" height="590" />
+  <text x="165" y="135" text-anchor="middle" class="group-title">RocketMQ Components</text>
+  <rect class="box" x="75" y="165" width="180" height="58" />
+  <text x="165" y="189" text-anchor="middle" class="label">Application</text>
+  <text x="165" y="209" text-anchor="middle" class="small">or embedding process</text>
+  <rect class="box" x="75" y="260" width="180" height="58" />
+  <text x="165" y="284" text-anchor="middle" class="label">Broker</text>
+  <text x="165" y="304" text-anchor="middle" class="small">business metrics</text>
+  <rect class="box" x="75" y="345" width="180" height="58" />
+  <text x="165" y="369" text-anchor="middle" class="label">Client</text>
+  <text x="165" y="389" text-anchor="middle" class="small">send / consume / rebalance</text>
+  <rect class="box" x="75" y="430" width="180" height="58" />
+  <text x="165" y="454" text-anchor="middle" class="label">Store / Remoting</text>
+  <text x="165" y="474" text-anchor="middle" class="small">latency and requests</text>
+  <rect class="box" x="75" y="515" width="180" height="58" />
+  <text x="165" y="539" text-anchor="middle" class="label">Namesrv / Controller</text>
+  <text x="165" y="559" text-anchor="middle" class="small">route and cluster state</text>
+  <rect class="box" x="75" y="600" width="180" height="58" />
+  <text x="165" y="624" text-anchor="middle" class="label">Proxy</text>
+  <text x="165" y="644" text-anchor="middle" class="small">gRPC and forwarding</text>
+
+  <rect class="group" x="335" y="105" width="255" height="230" />
+  <text x="462" y="135" text-anchor="middle" class="group-title">Configuration</text>
+  <rect class="box alt" x="372" y="165" width="180" height="58" />
+  <text x="462" y="189" text-anchor="middle" class="label">ObservabilityConfig</text>
+  <text x="462" y="209" text-anchor="middle" class="small">signals and exporters</text>
+  <rect class="box alt" x="372" y="252" width="180" height="58" />
+  <text x="462" y="276" text-anchor="middle" class="label">init_observability</text>
+  <text x="462" y="296" text-anchor="middle" class="small">validate and initialize</text>
+
+  <rect class="group" x="335" y="380" width="255" height="315" />
+  <text x="462" y="410" text-anchor="middle" class="group-title">Telemetry APIs</text>
+  <rect class="box signal" x="372" y="440" width="180" height="50" />
+  <text x="462" y="471" text-anchor="middle" class="label">metrics::*</text>
+  <rect class="box signal" x="372" y="505" width="180" height="50" />
+  <text x="462" y="536" text-anchor="middle" class="label">trace::*</text>
+  <rect class="box signal" x="372" y="570" width="180" height="50" />
+  <text x="462" y="601" text-anchor="middle" class="label">propagation::*</text>
+  <rect class="box signal" x="372" y="635" width="180" height="50" />
+  <text x="462" y="666" text-anchor="middle" class="label">logs::bridge</text>
+
+  <rect class="group" x="640" y="105" width="270" height="590" />
+  <text x="775" y="135" text-anchor="middle" class="group-title">OpenTelemetry Runtime</text>
+  <rect class="box" x="680" y="165" width="190" height="58" />
+  <text x="775" y="189" text-anchor="middle" class="label">Resource</text>
+  <text x="775" y="209" text-anchor="middle" class="small">service and RocketMQ metadata</text>
+  <rect class="box" x="680" y="260" width="190" height="58" />
+  <text x="775" y="284" text-anchor="middle" class="label">SdkMeterProvider</text>
+  <text x="775" y="304" text-anchor="middle" class="small">metrics instruments</text>
+  <rect class="box" x="680" y="360" width="190" height="58" />
+  <text x="775" y="384" text-anchor="middle" class="label">SdkTracerProvider</text>
+  <text x="775" y="404" text-anchor="middle" class="small">spans and context</text>
+  <rect class="box" x="680" y="460" width="190" height="58" />
+  <text x="775" y="484" text-anchor="middle" class="label">SdkLoggerProvider</text>
+  <text x="775" y="504" text-anchor="middle" class="small">OpenTelemetry logs</text>
+  <rect class="box" x="680" y="560" width="190" height="58" />
+  <text x="775" y="584" text-anchor="middle" class="label">tracing subscriber</text>
+  <text x="775" y="604" text-anchor="middle" class="small">trace and log layers</text>
+
+  <rect class="group" x="960" y="105" width="260" height="390" />
+  <text x="1090" y="135" text-anchor="middle" class="group-title">Exporters</text>
+  <rect class="box exporter" x="995" y="170" width="190" height="58" />
+  <text x="1090" y="194" text-anchor="middle" class="label">stdout / log</text>
+  <text x="1090" y="214" text-anchor="middle" class="small">local inspection</text>
+  <rect class="box exporter" x="995" y="270" width="190" height="58" />
+  <text x="1090" y="294" text-anchor="middle" class="label">OTLP gRPC</text>
+  <text x="1090" y="314" text-anchor="middle" class="small">collector endpoint</text>
+  <rect class="box exporter" x="995" y="370" width="190" height="58" />
+  <text x="1090" y="394" text-anchor="middle" class="label">Prometheus</text>
+  <text x="1090" y="414" text-anchor="middle" class="small">HTTP scrape endpoint</text>
+
+  <rect class="group" x="960" y="550" width="260" height="145" />
+  <text x="1090" y="580" text-anchor="middle" class="group-title">Lifecycle</text>
+  <rect class="box lifecycle" x="995" y="610" width="190" height="58" />
+  <text x="1090" y="634" text-anchor="middle" class="label">TelemetryGuard</text>
+  <text x="1090" y="654" text-anchor="middle" class="small">shutdown providers and HTTP</text>
+
+  <path class="arrow" d="M255,194 C300,194 315,194 372,194" />
+  <path class="arrow" d="M462,223 L462,252" />
+  <path class="arrow" d="M552,281 C590,281 620,194 680,194" />
+  <path class="arrow" d="M552,281 C610,281 625,289 680,289" />
+  <path class="arrow" d="M552,281 C610,281 625,389 680,389" />
+  <path class="arrow" d="M552,281 C610,281 625,489 680,489" />
+  <path class="arrow" d="M552,281 C615,281 620,589 680,589" />
+
+  <path class="arrow" d="M255,289 C300,289 315,465 372,465" />
+  <path class="arrow" d="M255,374 C300,374 315,530 372,530" />
+  <path class="arrow" d="M255,459 C300,459 315,465 372,465" />
+  <path class="arrow" d="M255,544 C300,544 315,465 372,465" />
+  <path class="arrow" d="M255,629 C300,629 315,465 372,465" />
+
+  <path class="arrow" d="M552,465 C605,465 625,289 680,289" />
+  <path class="arrow" d="M552,530 C605,530 625,589 680,589" />
+  <path class="arrow" d="M552,595 C600,595 612,389 680,389" />
+  <path class="arrow" d="M552,660 C605,660 625,589 680,589" />
+
+  <path class="arrow" d="M870,289 C925,289 940,199 995,199" />
+  <path class="arrow" d="M870,289 C925,289 940,299 995,299" />
+  <path class="arrow" d="M870,289 C925,289 940,399 995,399" />
+  <path class="arrow" d="M870,389 C925,389 940,199 995,199" />
+  <path class="arrow" d="M870,389 C925,389 940,299 995,299" />
+  <path class="arrow" d="M870,489 C925,489 940,199 995,199" />
+  <path class="arrow" d="M870,489 C925,489 940,299 995,299" />
+
+  <path class="muted-arrow" d="M870,589 C930,589 940,639 995,639" />
+  <path class="muted-arrow" d="M1185,639 C1215,720 800,765 462,685" />
+  <text x="858" y="745" class="small">Disabled features compile to no-op paths where supported.</text>
+</svg>

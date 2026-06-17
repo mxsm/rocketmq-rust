@@ -89,6 +89,4 @@ rocketmq-doc/
 
 ## 📄 许可证
 
-本文档是 RocketMQ-Rust 项目的一部分，采用双许可证：
-- Apache License 2.0
-- MIT License
+本文档是 RocketMQ-Rust 项目的一部分，采用 Apache License 2.0 许可证。

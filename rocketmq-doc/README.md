@@ -91,6 +91,5 @@ We welcome contributions to improve our documentation! Please:
 
 ## 📄 License
 
-This documentation is part of the RocketMQ-Rust project and is dual-licensed under:
-- Apache License 2.0
-- MIT License
+This documentation is part of the RocketMQ-Rust project and is licensed under
+Apache License 2.0.

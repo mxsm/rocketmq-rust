@@ -158,7 +158,6 @@ Current Web capabilities include health/config APIs, optional auth/session APIs 
 
 ## License
 
-This project inherits the dual-license from the parent RocketMQ-Rust project:
+This project inherits the license from the parent RocketMQ-Rust project:
 
 - Apache License 2.0
-- MIT License

@@ -103,7 +103,6 @@ To reset the local administrator account:
 
 ## License
 
-Licensed under either of:
+Licensed under:
 
 - Apache License, Version 2.0
-- MIT license

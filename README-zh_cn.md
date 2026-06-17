@@ -384,12 +384,9 @@ RocketMQ-Rust 利用 Rust 的零成本抽象和高效的异步运行时，以较
 
 ## 📄 许可证
 
-RocketMQ-Rust 采用双重许可证：
+RocketMQ-Rust 采用 **Apache License 2.0** 许可证。
 
-- **Apache License 2.0** ([LICENSE-APACHE](LICENSE-APACHE) 或 http://www.apache.org/licenses/LICENSE-2.0)
-- **MIT License** ([LICENSE-MIT](LICENSE-MIT) 或 http://opensource.org/licenses/MIT)
-
-您可以选择任一许可证进行使用。
+请参阅 [LICENSE-APACHE](LICENSE-APACHE) 或 http://www.apache.org/licenses/LICENSE-2.0。
 
 ## 🙏 致谢
 

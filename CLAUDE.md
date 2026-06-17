@@ -7,7 +7,7 @@ This is an unofficial Rust implementation of Apache RocketMQ, a distributed mess
 - **Language**: Rust (nightly toolchain, MSRV 1.85.0)
 - **Architecture**: Multi-crate Cargo workspace with standalone projects
 - **Key Components**: Broker, NameServer, Client, Store, Remoting, Controller, Proxy
-- **License**: Apache-2.0 OR MIT
+- **License**: Apache-2.0
 
 ## Repository Structure
 

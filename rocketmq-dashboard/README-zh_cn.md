@@ -133,10 +133,9 @@ cargo test
 
 ## License
 
-继承父项目 RocketMQ-Rust 的双许可证：
+继承父项目 RocketMQ-Rust 的许可证：
 
 - Apache License 2.0
-- MIT License
 
 ## Web Dashboard
 

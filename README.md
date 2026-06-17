@@ -394,12 +394,9 @@ Thanks to all our contributors! 🙏
 
 ## 📄 License
 
-RocketMQ-Rust is dual-licensed under:
+RocketMQ-Rust is licensed under the **Apache License 2.0**.
 
-- **Apache License 2.0** ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- **MIT License** ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-You may choose either license for your use.
+See [LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0.
 
 ## 🙏 Acknowledgments
 
