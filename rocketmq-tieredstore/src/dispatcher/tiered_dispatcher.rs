@@ -24,6 +24,7 @@ use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
 use crate::file::ConsumeQueueUnit;
 use crate::file::TieredFlatFileStore;
+use crate::metrics::TieredStoreMetrics;
 use crate::provider::TieredStoreProvider;
 
 #[allow(async_fn_in_trait)]
@@ -46,6 +47,7 @@ where
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
     handle: tokio::sync::Mutex<Option<JoinHandle<Result<(), RocketMQError>>>>,
+    metrics: Arc<TieredStoreMetrics>,
 }
 
 impl<P> DefaultTieredDispatcher<P>
@@ -57,6 +59,20 @@ where
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         shutdown: CancellationToken,
     ) -> Self {
+        Self::new_with_metrics(
+            config,
+            flat_file_store,
+            shutdown,
+            Arc::new(TieredStoreMetrics::default()),
+        )
+    }
+
+    pub fn new_with_metrics(
+        config: Arc<TieredStoreConfig>,
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        shutdown: CancellationToken,
+        metrics: Arc<TieredStoreMetrics>,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(config.max_pending_tasks);
         let permits = Arc::new(Semaphore::new((config.max_pending_tasks / 4).max(1)));
         Self {
@@ -67,7 +83,12 @@ where
             permits,
             shutdown,
             handle: tokio::sync::Mutex::new(None),
+            metrics,
         }
+    }
+
+    pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
+        self.metrics.clone()
     }
 
     pub fn try_dispatch(&self, request: TieredDispatchRequest) -> Result<(), RocketMQError> {
@@ -76,7 +97,9 @@ where
         }
         self.sender
             .try_send(request)
-            .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))
+            .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
+        crate::metrics::record_dispatch_queued(&self.metrics);
+        Ok(())
     }
 
     async fn run(
@@ -84,12 +107,13 @@ where
         mut receiver: mpsc::Receiver<TieredDispatchRequest>,
         permits: Arc<Semaphore>,
         shutdown: CancellationToken,
+        metrics: Arc<TieredStoreMetrics>,
     ) -> Result<(), RocketMQError> {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
                     while let Ok(request) = receiver.try_recv() {
-                        Self::dispatch_one(flat_file_store.clone(), permits.clone(), request).await?;
+                        Self::dispatch_one(flat_file_store.clone(), permits.clone(), metrics.clone(), request).await?;
                     }
                     break;
                 }
@@ -97,7 +121,7 @@ where
                     let Some(request) = maybe_request else {
                         break;
                     };
-                    Self::dispatch_one(flat_file_store.clone(), permits.clone(), request).await?;
+                    Self::dispatch_one(flat_file_store.clone(), permits.clone(), metrics.clone(), request).await?;
                 }
             }
         }
@@ -107,12 +131,35 @@ where
     async fn dispatch_one(
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         permits: Arc<Semaphore>,
+        metrics: Arc<TieredStoreMetrics>,
         request: TieredDispatchRequest,
     ) -> Result<(), RocketMQError> {
+        let started = std::time::Instant::now();
+        metrics.record_dispatch_dequeued();
         let _permit = permits
             .acquire_owned()
             .await
             .map_err(|err| RocketMQError::Internal(err.to_string()))?;
+        let result = Self::dispatch_one_inner(flat_file_store, &request).await;
+        match &result {
+            Ok(()) => {
+                metrics.record_messages_dispatch(&request.topic, request.queue_id, "commitlog", 1);
+                metrics.record_dispatch_latency(
+                    &request.topic,
+                    request.queue_id,
+                    "commitlog",
+                    started.elapsed().as_millis() as u64,
+                );
+            }
+            Err(_) => metrics.record_commit_failure(),
+        }
+        result
+    }
+
+    async fn dispatch_one_inner(
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        request: &TieredDispatchRequest,
+    ) -> Result<(), RocketMQError> {
         let file = flat_file_store.get_or_create(request.topic.clone(), request.queue_id)?;
         let consume_queue_min_offset = file.consume_queue_min_offset();
         let consume_queue_commit_offset = file.consume_queue_commit_offset();
@@ -141,7 +188,7 @@ where
         )
         .await?;
         file.commit().await?;
-        flat_file_store.append_index(&request, tiered_offset).await
+        flat_file_store.append_index(request, tiered_offset).await
     }
 }
 
@@ -156,7 +203,9 @@ where
         self.sender
             .send(request)
             .await
-            .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))
+            .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
+        crate::metrics::record_dispatch_queued(&self.metrics);
+        Ok(())
     }
 
     async fn start(&self) -> Result<(), RocketMQError> {
@@ -169,6 +218,7 @@ where
             receiver,
             self.permits.clone(),
             self.shutdown.clone(),
+            self.metrics.clone(),
         ));
         *self.handle.lock().await = Some(handle);
         Ok(())

@@ -16,6 +16,7 @@ use std::collections::HashMap;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -63,6 +64,13 @@ impl<MS> SubscriptionGroupManager<MS>
 where
     MS: MessageStore,
 {
+    #[inline]
+    fn record_consumer_group_create_latency(start_time: Instant) {
+        if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+            metrics.record_consumer_group_create_time(start_time.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        }
+    }
+
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> SubscriptionGroupManager<MS> {
         let mut manager = Self {
             subscription_group_table: Arc::new(DashMap::new()),
@@ -241,6 +249,7 @@ where
     }
 
     fn update_subscription_group_config_without_persist(&mut self, config: &mut SubscriptionGroupConfig) {
+        let start_time = Instant::now();
         let new_attributes = self.request(config);
         let current_attributes = self.current(config.group_name());
         let final_attributes = match AttributeUtil::alter_current_attributes(
@@ -275,7 +284,8 @@ where
                 );
             }
             None => {
-                info!("create new subscription group, {:?}", config)
+                info!("create new subscription group, {:?}", config);
+                Self::record_consumer_group_create_latency(start_time);
             }
         }
 
@@ -637,6 +647,7 @@ where
             && (self.broker_runtime_inner.broker_config().auto_create_subscription_group
                 || is_sys_consumer_group(group))
         {
+            let start_time = Instant::now();
             if group.len() > CHARACTER_MAX_LENGTH || TopicValidator::is_topic_or_group_illegal(group) {
                 return None;
             }
@@ -648,6 +659,7 @@ where
                 .insert(group.clone(), Arc::clone(&arc_config));
             if pre_config.is_none() {
                 info!("auto create a subscription group, {:?}", subscription_group_config_new);
+                Self::record_consumer_group_create_latency(start_time);
             }
             self.update_data_version();
             self.persist();

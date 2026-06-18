@@ -292,6 +292,27 @@ impl PopMetricsManager {
         let _ = POP_METRICS_MANAGER.set(Self::new(meter, attributes_supplier));
     }
 
+    /// Initialize the global PopMetricsManager with observable gauges.
+    pub fn init_global_with_observables<F1, F2, F3>(
+        meter_provider: &SdkMeterProvider,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        offset_size_fn: F1,
+        ck_size_fn: F2,
+        revive_services_fn: F3,
+    ) where
+        F1: Fn() -> i64 + Send + Sync + 'static,
+        F2: Fn() -> i64 + Send + Sync + 'static,
+        F3: Fn() -> Vec<(i32, i64, i64)> + Send + Sync + 'static,
+    {
+        let _ = POP_METRICS_MANAGER.set(Self::init_with_observables(
+            meter_provider,
+            attributes_supplier,
+            offset_size_fn,
+            ck_size_fn,
+            revive_services_fn,
+        ));
+    }
+
     /// Get the global PopMetricsManager instance
     /// Returns None if not initialized
     pub fn try_global() -> Option<&'static PopMetricsManager> {

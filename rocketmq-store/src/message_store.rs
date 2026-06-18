@@ -113,6 +113,25 @@ impl GenericMessageStore {
             Self::RocksDBStore(store) => store.local_file_store_mut().consume_queue_store_mut(),
         }
     }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub fn rocksdb_ticker_metrics(&self) -> Option<crate::rocksdb::metrics::RocksDbTickerMetrics> {
+        match self {
+            #[cfg(feature = "local_file_store")]
+            Self::LocalFileStore(_) => None,
+            Self::RocksDBStore(store) => Some(store.rocksdb_store().ticker_metrics()),
+        }
+    }
+
+    #[cfg(feature = "tieredstore")]
+    pub fn tiered_store_metrics(&self) -> Option<Arc<rocketmq_tieredstore::metrics::TieredStoreMetrics>> {
+        match self {
+            #[cfg(feature = "local_file_store")]
+            Self::LocalFileStore(store) => store.tiered_store_metrics(),
+            #[cfg(feature = "rocksdb_store")]
+            Self::RocksDBStore(store) => store.local_file_store().tiered_store_metrics(),
+        }
+    }
 }
 
 macro_rules! delegate_store {

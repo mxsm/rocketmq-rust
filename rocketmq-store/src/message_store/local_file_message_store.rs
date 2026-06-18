@@ -727,6 +727,7 @@ impl LocalFileMessageStore {
     #[cfg(feature = "tieredstore")]
     async fn get_message_from_tiered_store(
         &self,
+        group: &CheetahString,
         topic: &CheetahString,
         queue_id: i32,
         offset: i64,
@@ -735,19 +736,23 @@ impl LocalFileMessageStore {
         message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
         let tiered_store = self.tiered_store.as_ref()?;
+        let metrics = tiered_store.metrics();
+        metrics.record_get_message_fallback(topic.as_str(), group.as_str());
         match tiered_store
             .fetcher()
             .get_message(topic.to_string(), queue_id, offset, max_msg_nums)
             .await
         {
-            Ok(fetched) => Some(Self::to_store_get_message_result(
-                fetched,
-                offset,
-                max_total_msg_size,
-                message_filter,
-            )),
+            Ok(fetched) => {
+                let result = Self::to_store_get_message_result(fetched, offset, max_total_msg_size, message_filter);
+                if result.status() == Some(GetMessageStatus::Found) {
+                    metrics.record_messages_out(topic.as_str(), group.as_str(), result.message_count().max(0) as u64);
+                }
+                Some(result)
+            }
             Err(error) => {
                 warn!(
+                    group = %group,
                     topic = %topic,
                     queue_id,
                     offset,
@@ -818,6 +823,11 @@ impl LocalFileMessageStore {
 
     pub fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
+    }
+
+    #[cfg(feature = "tieredstore")]
+    pub fn tiered_store_metrics(&self) -> Option<Arc<rocketmq_tieredstore::metrics::TieredStoreMetrics>> {
+        self.tiered_store.as_ref().map(|tiered_store| tiered_store.metrics())
     }
 
     pub fn message_store_config_ref(&self) -> &MessageStoreConfig {
@@ -2203,6 +2213,7 @@ impl MessageStore for LocalFileMessageStore {
         if Self::should_try_tiered_get_message(status) {
             if let Some(tiered_result) = self
                 .get_message_from_tiered_store(
+                    group,
                     topic,
                     queue_id,
                     offset,
@@ -4801,6 +4812,8 @@ mod tests {
         assert!(fetched.messages[0]
             .windows(body.len())
             .any(|window| window == body.as_ref()));
+        assert_eq!(tiered_store.metrics().dispatch_requests(), 1);
+        assert_eq!(tiered_store.metrics().messages_dispatch_total(), 1);
     }
 
     #[cfg(feature = "tieredstore")]
@@ -4886,6 +4899,8 @@ mod tests {
             .get_buffer()
             .windows(body.len())
             .any(|window| window == body.as_ref()));
+        assert!(tiered_store.metrics().get_message_fallback_total() >= 1);
+        assert!(tiered_store.metrics().messages_out_total() >= 1);
 
         let timestamp = store
             .get_message_store_timestamp_async(&topic, 0, queue_offset)

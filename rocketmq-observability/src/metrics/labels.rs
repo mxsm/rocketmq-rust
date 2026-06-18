@@ -43,7 +43,43 @@ impl LabelGuard {
 
     pub fn normalize_metric_label_with_outcome<'a>(&mut self, key: &str, value: &'a str) -> (Cow<'a, str>, bool) {
         match key {
-            "cluster" | "node_type" | "node_id" | "processor" | "invocation_status" => (Cow::Borrowed(value), false),
+            "address"
+            | "aggregation"
+            | "broker_set"
+            | "cluster"
+            | "consume_mode"
+            | "dLedger_operation_status"
+            | "dledger_operation"
+            | "election_result"
+            | "file_type"
+            | "invocation_status"
+            | "is_long_polling"
+            | "is_retry"
+            | "is_system"
+            | "language"
+            | "message_type"
+            | "node_id"
+            | "node_type"
+            | "operation"
+            | "path"
+            | "peer_id"
+            | "processor"
+            | "protocol_type"
+            | "proxy_mode"
+            | "put_status"
+            | "queue_id"
+            | "request_code"
+            | "request_handle_status"
+            | "request_type"
+            | "response_code"
+            | "result"
+            | "revive_message_type"
+            | "storage_medium"
+            | "storage_type"
+            | "success"
+            | "timer_bound_s"
+            | "version" => (Cow::Borrowed(value), false),
+            "group" if self.consumer_group_enabled => self.normalize_bounded_value(value, LabelKind::ConsumerGroup),
             "topic" if self.topic_enabled => self.normalize_bounded_value(value, LabelKind::Topic),
             "consumer_group" if self.consumer_group_enabled => {
                 self.normalize_bounded_value(value, LabelKind::ConsumerGroup)
@@ -140,5 +176,43 @@ mod tests {
         let mut guard = LabelGuard::new(10, false, true);
 
         assert_eq!(guard.normalize_metric_label("topic", "topic-a"), "other");
+    }
+
+    #[test]
+    fn allows_java_compatible_low_cardinality_labels() {
+        let mut guard = LabelGuard::default();
+
+        for key in [
+            "protocol_type",
+            "request_code",
+            "response_code",
+            "is_long_polling",
+            "result",
+            "storage_type",
+            "storage_medium",
+            "timer_bound_s",
+            "proxy_mode",
+            "operation",
+            "success",
+            "queue_id",
+            "file_type",
+            "request_type",
+            "dledger_operation",
+            "dLedger_operation_status",
+            "election_result",
+        ] {
+            assert_eq!(guard.normalize_metric_label(key, "value"), "value", "{key}");
+        }
+
+        assert_eq!(guard.dropped_labels(), 0);
+    }
+
+    #[test]
+    fn bounds_java_group_alias_like_consumer_group() {
+        let mut guard = LabelGuard::new(1, true, true);
+
+        assert_eq!(guard.normalize_metric_label("group", "group-a"), "group-a");
+        assert_eq!(guard.normalize_metric_label("group", "group-b"), "other");
+        assert_eq!(guard.dropped_labels(), 1);
     }
 }

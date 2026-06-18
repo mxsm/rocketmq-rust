@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -60,6 +61,13 @@ pub(crate) struct TopicConfigManager<MS: MessageStore> {
 }
 
 impl<MS: MessageStore> TopicConfigManager<MS> {
+    #[inline]
+    fn record_topic_create_latency(start_time: Instant) {
+        if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+            metrics.record_topic_create_time(start_time.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        }
+    }
+
     const SCHEDULE_TOPIC_QUEUE_NUM: u32 = 18;
 
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, init: bool) -> Self {
@@ -324,6 +332,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         client_default_topic_queue_nums: i32,
         topic_sys_flag: u32,
     ) -> Option<ArcMut<TopicConfig>> {
+        let start_time = Instant::now();
+
         // Fast path: lock-free read
         if let Some(config) = self.topic_config_table.get(topic) {
             return Some(config.value().clone());
@@ -403,6 +413,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             drop(_lock);
 
             self.register_broker_data(config_for_register).await;
+            Self::record_topic_create_latency(start_time);
         }
         topic_config
     }
@@ -415,6 +426,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         is_order: bool,
         topic_sys_flag: u32,
     ) -> Option<ArcMut<TopicConfig>> {
+        let start_time = Instant::now();
+
         // Fast path: check existing config
         if let Some(mut config) = self.get_topic_config(topic) {
             if is_order != config.order {
@@ -459,6 +472,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             drop(_lock);
 
             self.register_broker_data(config_for_register).await;
+            Self::record_topic_create_latency(start_time);
         }
         topic_config
     }
@@ -519,6 +533,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     }
 
     pub fn update_topic_config(&mut self, mut topic_config: ArcMut<TopicConfig>) {
+        let start_time = Instant::now();
         let new_attributes = Self::request(topic_config.as_ref());
         let current_attributes = self.current(topic_config.topic_name.as_ref().unwrap().as_str());
         let create = self
@@ -561,6 +576,9 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             topic_config.topic_name.as_ref().unwrap().as_str(),
             Box::new(topic_config.clone()),
         );
+        if create {
+            Self::record_topic_create_latency(start_time);
+        }
     }
 
     fn request(topic_config: &TopicConfig) -> HashMap<CheetahString, CheetahString> {
@@ -695,6 +713,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         mut topic_config: TopicConfig,
         register: bool,
     ) -> Option<ArcMut<TopicConfig>> {
+        let start_time = Instant::now();
         if topic_config.topic_name.is_none() {
             error!("createTopicIfAbsent: TopicName cannot be None");
             return None;
@@ -743,6 +762,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             if let Some(config) = config_for_register {
                 self.register_broker_data(config).await;
             }
+            Self::record_topic_create_latency(start_time);
         }
 
         result

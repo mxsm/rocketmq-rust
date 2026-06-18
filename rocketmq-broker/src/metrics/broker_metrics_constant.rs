@@ -77,6 +77,7 @@ impl BrokerMetricsConstant {
     pub const LABEL_MESSAGE_TYPE: &'static str = "message_type";
     pub const LABEL_LANGUAGE: &'static str = "language";
     pub const LABEL_VERSION: &'static str = "version";
+    pub const LABEL_PROTOCOL_TYPE: &'static str = "protocol_type";
     pub const LABEL_CONSUME_MODE: &'static str = "consume_mode";
     pub const LABEL_AUTH_METRIC: &'static str = "auth_metric";
 }
@@ -241,6 +242,7 @@ impl BrokerMetricsConstant {
             Self::LABEL_MESSAGE_TYPE,
             Self::LABEL_LANGUAGE,
             Self::LABEL_VERSION,
+            Self::LABEL_PROTOCOL_TYPE,
             Self::LABEL_CONSUME_MODE,
             Self::LABEL_AUTH_METRIC,
         ]

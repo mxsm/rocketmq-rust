@@ -154,6 +154,19 @@ where
             pop_revive_service.set_should_run_pop_revive(status);
         }
     }
+
+    pub fn pop_revive_metrics(&self) -> Vec<(i32, i64, i64)> {
+        self.pop_revive_services
+            .iter()
+            .map(|service| {
+                (
+                    service.queue_id(),
+                    service.get_revive_behind_messages(),
+                    service.get_revive_behind_millis(),
+                )
+            })
+            .collect()
+    }
 }
 
 impl<MS> AckMessageProcessor<MS>

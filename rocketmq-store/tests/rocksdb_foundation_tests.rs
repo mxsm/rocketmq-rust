@@ -2904,6 +2904,11 @@ async fn rocksdb_store_metrics_count_core_operations_and_errors() {
     assert_eq!(metrics.manual_compaction_count, 1);
     assert_eq!(metrics.checkpoint_count, 1);
     assert_eq!(metrics.error_count, 1);
+
+    let ticker_metrics = store.ticker_metrics();
+    assert!(ticker_metrics.bytes_written > 0);
+    assert!(ticker_metrics.times_written_self + ticker_metrics.times_written_other > 0);
+    assert!(ticker_metrics.times_read > 0);
 }
 
 #[test]

@@ -24,11 +24,34 @@ use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 use tracing::warn;
 
+#[cfg(feature = "observability")]
+use crate::config::ProxyConfig;
+#[cfg(feature = "observability")]
+use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::error::ProxyResult;
 use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyPayloadStatus;
+
+#[cfg(feature = "observability")]
+pub(crate) fn init_observability_metrics(config: &ProxyConfig) {
+    let _ = rocketmq_observability::metrics::proxy::init_global_with_proxy_up_attributes(proxy_up_attributes(config));
+}
+
+#[cfg(feature = "observability")]
+fn proxy_up_attributes(config: &ProxyConfig) -> rocketmq_observability::metrics::proxy::ProxyUpAttributes {
+    let (cluster, node_id) = match config.mode {
+        ProxyMode::Cluster => (&config.cluster.broker_cluster_name, &config.cluster.instance_name),
+        ProxyMode::Local => (&config.local.broker_cluster_name, &config.local.broker_name),
+    };
+    let proxy_mode = match config.mode {
+        ProxyMode::Cluster => "cluster",
+        ProxyMode::Local => "local",
+    };
+
+    rocketmq_observability::metrics::proxy::ProxyUpAttributes::new("proxy", cluster, node_id, proxy_mode)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProxyRequestOutcome {
@@ -270,8 +293,14 @@ fn duration_millis_u64(duration: Duration) -> u64 {
 mod tests {
     use tonic::Status;
 
+    #[cfg(feature = "observability")]
+    use super::proxy_up_attributes;
     use super::ProxyMetrics;
     use super::ProxyRequestOutcome;
+    #[cfg(feature = "observability")]
+    use crate::config::ProxyConfig;
+    #[cfg(feature = "observability")]
+    use crate::config::ProxyMode;
     use crate::proto::v2;
     use crate::session::ClientSessionRegistry;
 
@@ -310,5 +339,35 @@ mod tests {
         assert_eq!(snapshot.thread_stack_trace_reports, 0);
         assert_eq!(snapshot.verify_message_reports, 0);
         assert_eq!(snapshot.pending_lite_unsubscribe_notices, 0);
+    }
+
+    #[cfg(feature = "observability")]
+    #[test]
+    fn proxy_up_attributes_use_runtime_identity() {
+        let mut cluster_config = ProxyConfig::default();
+        cluster_config.cluster.broker_cluster_name = "ClusterA".to_owned();
+        cluster_config.cluster.instance_name = "proxy-a".to_owned();
+
+        assert_eq!(
+            proxy_up_attributes(&cluster_config),
+            rocketmq_observability::metrics::proxy::ProxyUpAttributes::new("proxy", "ClusterA", "proxy-a", "cluster")
+        );
+
+        let mut local_config = ProxyConfig {
+            mode: ProxyMode::Local,
+            ..ProxyConfig::default()
+        };
+        local_config.local.broker_cluster_name = "LocalCluster".to_owned();
+        local_config.local.broker_name = "local-proxy-a".to_owned();
+
+        assert_eq!(
+            proxy_up_attributes(&local_config),
+            rocketmq_observability::metrics::proxy::ProxyUpAttributes::new(
+                "proxy",
+                "LocalCluster",
+                "local-proxy-a",
+                "local"
+            )
+        );
     }
 }

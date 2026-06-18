@@ -118,6 +118,21 @@ impl ProducerManager {
         self.group_channel_table.len()
     }
 
+    /// Returns connected producer counts grouped by client language and version.
+    pub fn connection_count_by_client_attrs(&self) -> Vec<(rocketmq_remoting::protocol::LanguageCode, i32, i64)> {
+        let mut counts: HashMap<(rocketmq_remoting::protocol::LanguageCode, i32), i64> = HashMap::new();
+        for group_entry in self.group_channel_table.iter() {
+            for channel_entry in group_entry.value().iter() {
+                let client = channel_entry.value();
+                *counts.entry((client.language(), client.version())).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .map(|((language, version), count)| (language, version, count))
+            .collect()
+    }
+
     /// Returns a snapshot of all connected producers organized by group.
     ///
     /// The snapshot reflects the state at the time of the call and may become stale

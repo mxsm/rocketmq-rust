@@ -12,13 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use crate::semantic::metrics::BROKER_PERMISSION;
+pub use crate::semantic::metrics::COMMIT_MESSAGES_TOTAL;
+pub use crate::semantic::metrics::CONSUMER_CONNECTIONS;
+pub use crate::semantic::metrics::CONSUMER_GROUP_CREATE_EXECUTION_TIME;
+pub use crate::semantic::metrics::CONSUMER_GROUP_NUMBER;
+pub use crate::semantic::metrics::CONSUMER_INFLIGHT_MESSAGES;
+pub use crate::semantic::metrics::CONSUMER_LAG_LATENCY;
+pub use crate::semantic::metrics::CONSUMER_LAG_MESSAGES;
+pub use crate::semantic::metrics::CONSUMER_QUEUEING_LATENCY;
+pub use crate::semantic::metrics::CONSUMER_READY_MESSAGES;
+pub use crate::semantic::metrics::FINISH_MESSAGE_LATENCY;
+pub use crate::semantic::metrics::HALF_MESSAGES;
 pub use crate::semantic::metrics::MESSAGES_IN_TOTAL;
 pub use crate::semantic::metrics::MESSAGES_OUT_TOTAL;
 pub use crate::semantic::metrics::MESSAGE_SIZE;
 pub use crate::semantic::metrics::METRICS_LABEL_DROPPED_TOTAL;
+pub use crate::semantic::metrics::PROCESSOR_WATERMARK;
+pub use crate::semantic::metrics::PRODUCER_CONNECTIONS;
+pub use crate::semantic::metrics::ROLLBACK_MESSAGES_TOTAL;
 pub use crate::semantic::metrics::SEND_MESSAGE_LATENCY;
+pub use crate::semantic::metrics::SEND_TO_DLQ_MESSAGES_TOTAL;
 pub use crate::semantic::metrics::THROUGHPUT_IN_TOTAL;
 pub use crate::semantic::metrics::THROUGHPUT_OUT_TOTAL;
+pub use crate::semantic::metrics::TOPIC_CREATE_EXECUTION_TIME;
+pub use crate::semantic::metrics::TOPIC_NUMBER;
 
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]

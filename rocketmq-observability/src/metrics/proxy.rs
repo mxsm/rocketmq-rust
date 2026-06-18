@@ -16,6 +16,7 @@ pub use crate::semantic::metrics::PROXY_ACTIVE_CONNECTIONS;
 pub use crate::semantic::metrics::PROXY_FORWARD_LATENCY;
 pub use crate::semantic::metrics::PROXY_GRPC_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::PROXY_GRPC_REQUEST_LATENCY;
+pub use crate::semantic::metrics::PROXY_UP;
 
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
@@ -29,6 +30,18 @@ static PROXY_GLOBAL_METRICS: OnceLock<ProxyMetrics> = OnceLock::new();
 #[cfg(feature = "otel-metrics")]
 pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
     PROXY_METRICS.set(ProxyMetrics::new(meter)).is_ok()
+}
+
+#[cfg(feature = "otel-metrics")]
+pub fn init_global_with_proxy_up(meter: &opentelemetry::metrics::Meter, attributes: ProxyUpAttributes) -> bool {
+    PROXY_METRICS
+        .set(ProxyMetrics::new_with_proxy_up(meter, attributes))
+        .is_ok()
+}
+
+#[cfg(feature = "otel-metrics")]
+pub fn init_global_with_proxy_up_attributes(attributes: ProxyUpAttributes) -> bool {
+    init_global_with_proxy_up(&opentelemetry::global::meter("rocketmq-proxy"), attributes)
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -72,6 +85,36 @@ pub fn record_active_connections(count: u64) {
     let _ = count;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyUpAttributes {
+    pub node_type: String,
+    pub cluster: String,
+    pub node_id: String,
+    pub proxy_mode: String,
+}
+
+impl ProxyUpAttributes {
+    pub fn new(
+        node_type: impl Into<String>,
+        cluster: impl Into<String>,
+        node_id: impl Into<String>,
+        proxy_mode: impl Into<String>,
+    ) -> Self {
+        Self {
+            node_type: node_type.into(),
+            cluster: cluster.into(),
+            node_id: node_id.into(),
+            proxy_mode: proxy_mode.into(),
+        }
+    }
+}
+
+impl Default for ProxyUpAttributes {
+    fn default() -> Self {
+        Self::new("proxy", "DefaultCluster", "rocketmq-proxy", "cluster")
+    }
+}
+
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProxyMetrics;
@@ -107,6 +150,10 @@ pub struct ProxyMetrics {
 #[cfg(feature = "otel-metrics")]
 impl ProxyMetrics {
     pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self::new_with_proxy_up(meter, ProxyUpAttributes::default())
+    }
+
+    pub fn new_with_proxy_up(meter: &opentelemetry::metrics::Meter, proxy_up_attributes: ProxyUpAttributes) -> Self {
         let grpc_requests_total = meter
             .u64_counter(PROXY_GRPC_REQUESTS_TOTAL)
             .with_description("Total number of proxy gRPC requests")
@@ -129,6 +176,16 @@ impl ProxyMetrics {
             .u64_gauge(PROXY_ACTIVE_CONNECTIONS)
             .with_description("Number of active proxy connections")
             .with_unit("{connection}")
+            .build();
+
+        let proxy_up_attributes = proxy_up_attributes.into_key_values();
+        let _proxy_up = meter
+            .i64_observable_gauge(PROXY_UP)
+            .with_description("Proxy process availability")
+            .with_unit("1")
+            .with_callback(move |observer| {
+                observer.observe(1, &proxy_up_attributes);
+            })
             .build();
 
         Self {
@@ -160,6 +217,18 @@ impl ProxyMetrics {
     }
 }
 
+#[cfg(feature = "otel-metrics")]
+impl ProxyUpAttributes {
+    fn into_key_values(self) -> Vec<opentelemetry::KeyValue> {
+        vec![
+            opentelemetry::KeyValue::new(crate::semantic::labels::NODE_TYPE, self.node_type),
+            opentelemetry::KeyValue::new(crate::semantic::labels::CLUSTER, self.cluster),
+            opentelemetry::KeyValue::new(crate::semantic::labels::NODE_ID, self.node_id),
+            opentelemetry::KeyValue::new(crate::semantic::labels::PROXY_MODE, self.proxy_mode),
+        ]
+    }
+}
+
 #[cfg(all(test, feature = "otel-metrics"))]
 mod tests {
     use opentelemetry::metrics::MeterProvider;
@@ -178,6 +247,16 @@ mod tests {
         metrics.record_grpc_request_latency(6, &attrs);
         metrics.record_forward_latency(12, &attrs);
         metrics.record_active_connections(4, &attrs);
+    }
+
+    #[test]
+    fn proxy_metrics_constructs_with_proxy_up_identity() {
+        let provider = SdkMeterProvider::builder().build();
+        let meter = provider.meter("proxy-up-metrics-test");
+        let metrics =
+            ProxyMetrics::new_with_proxy_up(&meter, ProxyUpAttributes::new("proxy", "ClusterA", "proxy-a", "local"));
+
+        metrics.record_active_connections(1, &[]);
     }
 
     #[test]

@@ -222,9 +222,18 @@ where
             ));
         }
         let end = range.end.min(commit_position);
-        self.provider
+        let started = std::time::Instant::now();
+        let result = self
+            .provider
             .read(self.path.clone(), range.start, (end - range.start) as usize)
-            .await
+            .await;
+        crate::metrics::record_provider_read(
+            &self.path,
+            result.as_ref().map(|bytes| bytes.len() as u64).unwrap_or(0),
+            result.is_ok(),
+            started.elapsed().as_millis() as u64,
+        );
+        result
     }
 
     async fn commit(&self) -> Result<(), RocketMQError> {
@@ -238,7 +247,15 @@ where
 
         let mut position = self.commit_position.load(Ordering::Acquire);
         for (index, buffer) in buffers.iter().cloned().enumerate() {
-            match self.provider.write(self.path.clone(), position, buffer).await {
+            let started = std::time::Instant::now();
+            let result = self.provider.write(self.path.clone(), position, buffer).await;
+            crate::metrics::record_provider_write(
+                &self.path,
+                result.as_ref().map(|written| *written as u64).unwrap_or(0),
+                result.is_ok(),
+                started.elapsed().as_millis() as u64,
+            );
+            match result {
                 Ok(written) => {
                     position = position.saturating_add(written as u64);
                     self.commit_position.store(position, Ordering::Release);
