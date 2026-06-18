@@ -961,6 +961,7 @@ impl TimerMessageStore {
                 Ok(()) => {
                     let real_topic =
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+                    #[cfg(feature = "observability")]
                     crate::observability_metrics::record_timer_enqueue_total(
                         real_topic.as_ref().map(|topic| topic.as_str()),
                     );
@@ -1100,6 +1101,7 @@ impl TimerMessageStore {
                     }
                     if let Some(real_topic) = rolled_topic {
                         self.timer_metrics.add_timing_count(&real_topic, -1);
+                        #[cfg(feature = "observability")]
                         crate::observability_metrics::record_timer_dequeue_total(real_topic.as_str());
                     }
                     self.dequeue_tps_counter.record(1);
@@ -1117,6 +1119,7 @@ impl TimerMessageStore {
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                     {
                         self.timer_metrics.add_timing_count(&real_topic, -1);
+                        #[cfg(feature = "observability")]
                         crate::observability_metrics::record_timer_dequeue_total(real_topic.as_str());
                     }
                     processed += 1;
@@ -1138,6 +1141,7 @@ impl TimerMessageStore {
                 break;
             }
             self.timer_metrics.add_timing_count(&delivered_topic, -1);
+            #[cfg(feature = "observability")]
             crate::observability_metrics::record_timer_dequeue_total(delivered_topic.as_str());
             self.dequeue_tps_counter.record(1);
             processed += 1;
@@ -1417,10 +1421,16 @@ fn extract_delete_timer_key(message: &MessageExt) -> Option<CheetahString> {
 }
 
 fn record_delay_message_latency(deliver_time_ms: i64, born_timestamp_ms: i64, topic: Option<&str>) {
-    let latency_ms = deliver_time_ms.saturating_sub(born_timestamp_ms);
-    if latency_ms > 0 {
-        crate::observability_metrics::record_delay_message_latency((latency_ms / 1000) as u64, topic);
+    #[cfg(feature = "observability")]
+    {
+        let latency_ms = deliver_time_ms.saturating_sub(born_timestamp_ms);
+        if latency_ms > 0 {
+            crate::observability_metrics::record_delay_message_latency((latency_ms / 1000) as u64, topic);
+        }
     }
+
+    #[cfg(not(feature = "observability"))]
+    let _ = (deliver_time_ms, born_timestamp_ms, topic);
 }
 
 fn build_delete_key_for_message(message: &MessageExt) -> Option<CheetahString> {
