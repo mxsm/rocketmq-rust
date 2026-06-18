@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-runtime architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust runtime crate, showing workspace consumers, the RocketMQRuntime facade, Tokio multi-thread runtime, runtime handles, fixed-rate schedulers, and shutdown controls.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text x="54" y="54" class="title">rocketmq-runtime Architecture</text>
+  <text x="54" y="80" class="subtitle">A small Tokio multi-thread runtime facade for RocketMQ Rust background work, scheduling, and shutdown control</text>
+
+  <rect x="44" y="124" width="222" height="438" rx="12" class="panel"/>
+  <text x="72" y="157" class="section-title">Workspace Consumers</text>
+  <rect x="72" y="186" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="94" y="210" class="label">Broker Runtime</text>
+  <text x="94" y="228" class="small">broker-thread pool</text>
+  <rect x="72" y="270" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="94" y="294" class="label">Pull Processor</text>
+  <text x="94" y="312" class="small">write message runtime</text>
+  <rect x="72" y="354" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="94" y="378" class="label">Transaction Producer</text>
+  <text x="94" y="396" class="small">check runtime injection</text>
+  <rect x="72" y="458" width="166" height="58" rx="8" class="chip-gray"/>
+  <text x="94" y="482" class="label">Future Integrations</text>
+  <text x="94" y="500" class="small">runtime-owned tasks</text>
+
+  <rect x="326" y="124" width="280" height="438" rx="14" class="panel"/>
+  <text x="356" y="157" class="section-title">RocketMQRuntime Facade</text>
+  <line x1="356" y1="173" x2="576" y2="173" class="bus"/>
+  <rect x="358" y="198" width="216" height="64" rx="9" class="chip-teal"/>
+  <text x="382" y="223" class="label">new_multi(threads, name)</text>
+  <text x="382" y="241" class="small">builds named worker pool</text>
+  <rect x="358" y="286" width="216" height="64" rx="9" class="chip-teal"/>
+  <text x="382" y="311" class="label">get_handle()</text>
+  <text x="382" y="329" class="small">borrow Tokio Handle</text>
+  <rect x="358" y="374" width="216" height="64" rx="9" class="chip-teal"/>
+  <text x="382" y="399" class="label">get_runtime()</text>
+  <text x="382" y="417" class="small">borrow Tokio Runtime</text>
+  <rect x="358" y="462" width="216" height="64" rx="9" class="chip-amber"/>
+  <text x="382" y="487" class="label">shutdown controls</text>
+  <text x="382" y="505" class="small">background or timeout</text>
+
+  <rect x="666" y="124" width="260" height="438" rx="14" class="panel"/>
+  <text x="696" y="157" class="section-title">Tokio Runtime</text>
+  <line x1="696" y1="173" x2="898" y2="173" class="bus"/>
+  <rect x="696" y="198" width="200" height="64" rx="9" class="chip-violet"/>
+  <text x="720" y="223" class="label">Runtime::Builder</text>
+  <text x="720" y="241" class="small">new_multi_thread</text>
+  <rect x="696" y="286" width="200" height="64" rx="9" class="chip-violet"/>
+  <text x="720" y="311" class="label">enable_all()</text>
+  <text x="720" y="329" class="small">IO, time, sync drivers</text>
+  <rect x="696" y="374" width="200" height="64" rx="9" class="chip-violet"/>
+  <text x="720" y="399" class="label">spawn tasks</text>
+  <text x="720" y="417" class="small">via borrowed handle</text>
+  <rect x="696" y="462" width="200" height="64" rx="9" class="chip-violet"/>
+  <text x="720" y="487" class="label">worker threads</text>
+  <text x="720" y="505" class="small">named for diagnostics</text>
+
+  <rect x="986" y="124" width="236" height="438" rx="14" class="panel"/>
+  <text x="1014" y="157" class="section-title">Fixed-rate Scheduling</text>
+  <rect x="1014" y="198" width="180" height="64" rx="9" class="chip-amber"/>
+  <text x="1036" y="223" class="label">initial_delay</text>
+  <text x="1036" y="241" class="small">optional first sleep</text>
+  <rect x="1014" y="286" width="180" height="64" rx="9" class="chip-amber"/>
+  <text x="1036" y="311" class="label">Fn task</text>
+  <text x="1036" y="329" class="small">schedule_at_fixed_rate</text>
+  <rect x="1014" y="374" width="180" height="64" rx="9" class="chip-amber"/>
+  <text x="1036" y="399" class="label">FnMut task</text>
+  <text x="1036" y="417" class="small">mutable state allowed</text>
+  <rect x="1014" y="462" width="180" height="64" rx="9" class="chip-amber"/>
+  <text x="1036" y="487" class="label">period alignment</text>
+  <text x="1036" y="505" class="small">Instant + saturating wait</text>
+
+  <rect x="326" y="610" width="896" height="88" rx="12" class="panel"/>
+  <text x="356" y="634" class="label">Design boundary</text>
+  <text x="356" y="656" class="small">This crate intentionally wraps Tokio runtime ownership for RocketMQ background work.</text>
+  <text x="356" y="674" class="small">It does not replace Tokio task cancellation or scheduled task managers.</text>
+
+  <path d="M238 215 H356" class="arrow"/>
+  <path d="M238 299 H356" class="arrow"/>
+  <path d="M238 383 H356" class="arrow"/>
+  <path d="M574 230 H696" class="arrow"/>
+  <path d="M574 318 H696" class="arrow"/>
+  <path d="M574 406 H696" class="arrow"/>
+  <path d="M896 406 H1014" class="arrow"/>
+  <path d="M796 526 V610" class="dash"/>
+  <path d="M466 526 V610" class="dash"/>
+</svg>

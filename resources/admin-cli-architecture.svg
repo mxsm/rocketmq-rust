@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-admin-cli architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust admin CLI crate, showing shell input, Clap parsing, Java-compatible argument normalization, command domains, core service delegation, admin transport, output rendering, prompts, progress display, and completion generation.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 650 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; stroke-width: 1; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; stroke-width: 1; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; stroke-width: 1; }
+      .chip-rose { fill: #fff1f2; stroke: #fecdd3; stroke-width: 1; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text x="54" y="54" class="title">rocketmq-admin-cli Architecture</text>
+  <text x="54" y="80" class="subtitle">Command-line adapter for RocketMQ administration, Java-compatible command names, shared core services, and terminal rendering</text>
+
+  <rect x="42" y="122" width="214" height="438" rx="12" class="panel"/>
+  <text x="70" y="156" class="section-title">Operator Entry Points</text>
+  <rect x="72" y="184" width="154" height="46" rx="8" class="chip-blue"/>
+  <text x="93" y="204" class="label">Shell command</text>
+  <text x="93" y="221" class="small">rocketmq-admin-cli</text>
+  <rect x="72" y="250" width="154" height="46" rx="8" class="chip-blue"/>
+  <text x="93" y="270" class="label">Help and show</text>
+  <text x="93" y="287" class="small">command catalog</text>
+  <rect x="72" y="316" width="154" height="46" rx="8" class="chip-blue"/>
+  <text x="93" y="336" class="label">Completion</text>
+  <text x="93" y="353" class="small">bash, zsh, fish</text>
+  <rect x="72" y="382" width="154" height="46" rx="8" class="chip-blue"/>
+  <text x="93" y="402" class="label">NameServer</text>
+  <text x="93" y="419" class="small">-n / --namesrvAddr</text>
+  <rect x="72" y="448" width="154" height="46" rx="8" class="chip-blue"/>
+  <text x="93" y="468" class="label">Safety flags</text>
+  <text x="93" y="485" class="small">--yes, prompts</text>
+
+  <rect x="300" y="122" width="248" height="438" rx="12" class="panel"/>
+  <text x="328" y="156" class="section-title">CLI Adapter</text>
+  <rect x="330" y="184" width="188" height="50" rx="8" class="chip-teal"/>
+  <text x="352" y="205" class="label">RocketMQCli</text>
+  <text x="352" y="222" class="small">clap parser and root command</text>
+  <rect x="330" y="254" width="188" height="50" rx="8" class="chip-teal"/>
+  <text x="352" y="275" class="label">Java compatibility</text>
+  <text x="352" y="292" class="small">normalizes legacy flags</text>
+  <rect x="330" y="324" width="188" height="50" rx="8" class="chip-teal"/>
+  <text x="352" y="345" class="label">CommandExecute</text>
+  <text x="352" y="362" class="small">domain dispatch trait</text>
+  <rect x="330" y="394" width="188" height="50" rx="8" class="chip-teal"/>
+  <text x="352" y="415" class="label">Command modules</text>
+  <text x="352" y="432" class="small">96 Java-compatible commands</text>
+  <rect x="330" y="464" width="188" height="50" rx="8" class="chip-teal"/>
+  <text x="352" y="485" class="label">Tokio runtime</text>
+  <text x="352" y="502" class="small">dedicated CLI main thread</text>
+
+  <rect x="592" y="112" width="306" height="250" rx="12" class="panel"/>
+  <text x="620" y="146" class="section-title">Command Domains</text>
+  <rect x="620" y="174" width="116" height="42" rx="8" class="chip-amber"/>
+  <text x="644" y="199" class="label">topic</text>
+  <rect x="754" y="174" width="116" height="42" rx="8" class="chip-amber"/>
+  <text x="778" y="199" class="label">broker</text>
+  <rect x="620" y="228" width="116" height="42" rx="8" class="chip-amber"/>
+  <text x="644" y="253" class="label">consumer</text>
+  <rect x="754" y="228" width="116" height="42" rx="8" class="chip-amber"/>
+  <text x="778" y="253" class="label">message</text>
+  <rect x="620" y="282" width="116" height="42" rx="8" class="chip-amber"/>
+  <text x="644" y="307" class="label">auth</text>
+  <rect x="754" y="282" width="116" height="42" rx="8" class="chip-amber"/>
+  <text x="778" y="307" class="label">export</text>
+  <rect x="620" y="336" width="250" height="16" rx="6" class="chip-amber"/>
+  <text x="646" y="348" class="tiny">cluster, controller, nameserver, offset, queue, lite, ha, stats, connection, container, producer</text>
+
+  <rect x="592" y="402" width="306" height="158" rx="12" class="panel"/>
+  <text x="620" y="436" class="section-title">Terminal Output</text>
+  <rect x="620" y="464" width="76" height="42" rx="8" class="chip-violet"/>
+  <text x="644" y="489" class="label">table</text>
+  <rect x="710" y="464" width="76" height="42" rx="8" class="chip-violet"/>
+  <text x="737" y="489" class="label">json</text>
+  <rect x="800" y="464" width="70" height="42" rx="8" class="chip-violet"/>
+  <text x="824" y="489" class="label">yaml</text>
+  <rect x="620" y="522" width="250" height="22" rx="6" class="chip-violet"/>
+  <text x="650" y="537" class="tiny">colored status, confirmation prompts, progress bars</text>
+
+  <rect x="940" y="122" width="296" height="438" rx="12" class="panel"/>
+  <text x="968" y="156" class="section-title">Shared Admin Stack</text>
+  <rect x="970" y="184" width="236" height="52" rx="8" class="chip-gray"/>
+  <text x="1000" y="205" class="label">rocketmq-admin-core</text>
+  <text x="1000" y="222" class="small">request DTOs and reusable services</text>
+  <rect x="970" y="262" width="236" height="52" rx="8" class="chip-gray"/>
+  <text x="1000" y="283" class="label">DefaultMQAdminExt</text>
+  <text x="1000" y="300" class="small">admin operations and routing</text>
+  <rect x="970" y="340" width="236" height="52" rx="8" class="chip-gray"/>
+  <text x="1000" y="361" class="label">rocketmq-remoting</text>
+  <text x="1000" y="378" class="small">NameServer and broker RPC</text>
+  <rect x="970" y="418" width="236" height="52" rx="8" class="chip-gray"/>
+  <text x="1000" y="439" class="label">RocketMQ cluster</text>
+  <text x="1000" y="456" class="small">NameServer, broker, controller</text>
+  <rect x="970" y="496" width="236" height="36" rx="8" class="chip-rose"/>
+  <text x="998" y="518" class="small">TUI and future GUI depend on core, not CLI</text>
+
+  <path class="arrow" d="M226 207 C262 207 286 207 330 207"/>
+  <path class="arrow" d="M226 339 C272 339 296 279 330 279"/>
+  <path class="arrow" d="M518 349 C552 349 576 249 620 249"/>
+  <path class="arrow" d="M518 419 C552 419 576 485 620 485"/>
+  <path class="arrow" d="M870 249 C906 249 928 210 970 210"/>
+  <path class="arrow" d="M1088 236 C1088 246 1088 252 1088 262"/>
+  <path class="arrow" d="M1088 314 C1088 324 1088 330 1088 340"/>
+  <path class="arrow" d="M1088 392 C1088 402 1088 408 1088 418"/>
+  <path class="dash" d="M226 471 C418 620 736 620 970 514"/>
+  <path class="dash" d="M424 254 C516 88 1030 82 1088 184"/>
+  <path class="bus" d="M745 544 C704 590 420 592 154 520"/>
+
+  <rect x="42" y="604" width="1194" height="76" rx="12" class="panel"/>
+  <text x="72" y="630" class="section-title">Command Flow</text>
+  <text x="72" y="653" class="small">Shell arguments are normalized for Java-compatible options, parsed by Clap, and routed to a command-domain executor.</text>
+  <text x="72" y="671" class="small">Executors build admin-core request DTOs, call shared admin services, then render table, JSON, YAML, status, progress, or completion output.</text>
+</svg>

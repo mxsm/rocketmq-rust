@@ -1,165 +1,149 @@
-# The Rust Implementation of Apache RocketMQ Broker
+# rocketmq-broker
 
-## Overview
+[English](README.md) | [简体中文](README-zh_cn.md)
 
-This module is mainly the implementation of the [Apache RocketMQ](https://github.com/apache/rocketmq) Broker, containing all the functionalities of the Java version Broker.
+Broker runtime, remoting request processors, message-store integration, and service orchestration for
+[RocketMQ-Rust](../README.md).
 
-## Getting Started
+`rocketmq-broker` is the server-side broker crate in the RocketMQ-Rust workspace. It provides the
+`rocketmq-broker-rust` binary, wires the broker runtime, registers remoting processors, initializes message storage,
+integrates authentication and authorization, and coordinates broker services such as offsets, subscriptions, topic
+metadata, long polling, pop consumption, transaction checks, metrics, and shutdown.
 
-### Requirements
+## Capabilities
 
-1. rust toolchain MSRV is 1.75.(stable,nightly)
+| Area | What it provides |
+|------|------------------|
+| Broker bootstrap | `rocketmq-broker-rust` binary with RocketMQ-style CLI flags, config loading, startup logging, and graceful shutdown. |
+| Remoting processors | Send, pull, pop, ack, invisible-time change, notification, polling info, reply, recall, query, client management, consumer management, lite, transaction, and admin request routing. |
+| Message storage | Local file store by default, optional RocksDB store support, timer/schedule message integration, HA service wiring, and tieredstore validation. |
+| Metadata managers | Topic config, queue mapping, subscription group, consumer offset, consumer order, consumer filter, and route metadata managers. |
+| Auth integration | Broker-level `rocketmq-auth` runtime, ACL file loading/reload, auth admin request handling, and auth metrics exposure. |
+| Operations | Fast-failure queues, client housekeeping, long polling, broker stats, scheduled services, controller-mode hooks, and graceful service shutdown. |
+| Observability | Optional OpenTelemetry metrics/traces/logs, Prometheus metrics exporter, broker metric labels, and auth metric gauges. |
 
-### Run Broker
+## Architecture
 
-**Run the following command to see usage：**
+![rocketmq-broker architecture](../resources/broker-architecture.svg)
 
-```shell
-cargo run --bin rocketmq-broker-rust -- --help
+The broker starts from `rocketmq-broker-rust`, resolves CLI/configuration inputs, and delegates lifecycle management to
+`BrokerBootstrap`. `BrokerRuntime` then wires the remoting surface, request processors, auth runtime, metadata managers,
+message store, operational services, and observability integrations into the running broker process.
+
+The public library surface exports:
+
+| API | Purpose |
+|-----|---------|
+| `Builder` | Builds a broker runtime from `BrokerConfig` and `MessageStoreConfig`. |
+| `BrokerBootstrap` | Owns the lifecycle used by the binary: initialize, start, wait for signal, and shutdown. |
+| `ProxyBrokerFacade` | Broker facade used by proxy-side integrations. |
+
+## Crate Layout
+
+| Module | Purpose |
+|--------|---------|
+| [`src/bin/broker_bootstrap_server.rs`](src/bin/broker_bootstrap_server.rs) | Binary entry point, CLI parsing, config loading, validation, and startup flow. |
+| [`src/broker_bootstrap.rs`](src/broker_bootstrap.rs) | Lifecycle wrapper around `BrokerRuntime`. |
+| [`src/broker_runtime.rs`](src/broker_runtime.rs) | Main service graph: storage, managers, processors, auth, observability, scheduled tasks, and shutdown. |
+| [`src/processor.rs`](src/processor.rs) | Request processor registry, auth pre-check, fast-failure dispatch, and processor variants. |
+| [`src/auth.rs`](src/auth.rs) | Broker auth admin service and ACL/user conversion helpers. |
+| [`src/topic`](src/topic) | Topic config, route info, and topic queue mapping management. |
+| [`src/subscription`](src/subscription) | Subscription group management and lite subscription registry. |
+| [`src/offset`](src/offset) | Consumer offset, broadcast offset, and consumer order info management. |
+| [`src/pop`](src/pop) | Pop consumption support and checkpoint/revive services. |
+| [`src/transaction`](src/transaction) | Transactional message service, bridge, check service, and transaction metrics flushing. |
+| [`src/metrics`](src/metrics) | Broker metrics constants, labels, and OpenTelemetry-backed metric manager. |
+
+## Requirements
+
+- Rust `1.85.0` or newer.
+- `ROCKETMQ_HOME` must be set before starting the broker. If `$ROCKETMQ_HOME/conf/broker.toml` exists, it is used as
+  the default config file.
+- A reachable NameServer is recommended for normal broker registration. If no address is provided, the broker defaults
+  to `127.0.0.1:9876`.
+
+## Build
+
+Build the broker binary from the workspace root:
+
+```bash
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --release
 ```
 
-**Output:**
+Use feature flags for storage and observability variants:
 
-```
-Apache RocketMQ Broker Server implemented in Rust
-For more information: https://github.com/mxsm/rocketmq-rust
-
-Usage: rocketmq-broker-rust [OPTIONS]
-
-Options:
-  -c, --configFile <FILE>
-          Broker config properties file path
-
-          If not specified, will try to load from:
-
-          1. $ROCKETMQ_HOME/conf/broker.toml (if ROCKETMQ_HOME is set)
-
-          2. Default configuration values
-
-  -p, --printConfigItem
-          Print all configuration items and exit
-
-          Prints all broker configuration properties including:
-
-          - Broker configuration
-
-          - Netty server configuration
-
-          - Netty client configuration
-
-          - Message store configuration
-
-          - Authentication configuration
-
-  -m, --printImportantConfig
-          Print important configuration items and exit
-
-          Prints only the important configuration items that are most
-
-          commonly used for broker setup and troubleshooting.
-
-  -n, --namesrvAddr <ADDR>
-          Name server address list
-
-          Format: '192.168.0.1:9876' or '192.168.0.1:9876;192.168.0.2:9876'
-
-          Multiple addresses should be separated by semicolon (;)
-
-          Can also be set via NAMESRV_ADDR environment variable
-
-  -h, --help
-          Print help (see a summary with '-h')
-
-  -V, --version
-          Print version
+```bash
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --release --features rocksdb_store
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --release --features tieredstore
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --release --features prometheus
 ```
 
-**Run the following command to start the broker:**
+## Quick Start
 
-```shell
-cargo run --bin rocketmq-broker-rust
+Start with a local NameServer and default broker configuration:
+
+```bash
+# Windows PowerShell
+$env:ROCKETMQ_HOME = "D:\rocketmq"
+$env:NAMESRV_ADDR = "127.0.0.1:9876"
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust
 ```
 
-### Usage Examples
-
-#### 1. Start with default configuration
-
-```shell
-# Set ROCKETMQ_HOME environment variable first
-# Windows
-set ROCKETMQ_HOME=D:\rocketmq
-
+```bash
 # Linux/macOS
 export ROCKETMQ_HOME=/opt/rocketmq
-
-# Then start broker
-cargo run --bin rocketmq-broker-rust
+export NAMESRV_ADDR=127.0.0.1:9876
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust
 ```
 
-#### 2. Start with custom configuration file
+Start with an explicit config file:
 
-```shell
-cargo run --bin rocketmq-broker-rust -- -c ./conf/broker.toml
+```bash
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- -c ./conf/broker.toml
 ```
 
-#### 3. Start with custom name server address
+Start with one or more NameServer addresses:
 
-```shell
-# Single name server
-cargo run --bin rocketmq-broker-rust -- -n 192.168.1.100:9876
-
-# Multiple name servers
-cargo run --bin rocketmq-broker-rust -- -n "192.168.1.100:9876;192.168.1.101:9876"
+```bash
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- -n 192.168.1.100:9876
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- -n "192.168.1.100:9876;192.168.1.101:9876"
 ```
 
-#### 4. Print all configuration items
+Inspect available CLI options:
 
-```shell
-cargo run --bin rocketmq-broker-rust -- -p
+```bash
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- --help
 ```
 
-#### 5. Print important configuration items only
+## Command Line
 
-```shell
-cargo run --bin rocketmq-broker-rust -- -m
-```
+| Flag | Purpose |
+|------|---------|
+| `-c, --configFile <FILE>` | Load broker and message-store config from a TOML file. |
+| `-p, --printConfigItem` | Print all broker and message-store configuration items, then exit. |
+| `-m, --printImportantConfig` | Print the most important runtime configuration items, then exit. |
+| `-n, --namesrvAddr <ADDR>` | Override the NameServer address list. Use semicolon-separated addresses for multiple servers. |
+| `-h, --help` | Print CLI help. |
+| `-V, --version` | Print the binary version. |
 
-#### 6. Using environment variables
+Exit codes used by the binary:
 
-```shell
-# Set name server via environment variable
-# Windows
-set NAMESRV_ADDR=192.168.1.100:9876
+| Code | Meaning |
+|------|---------|
+| `0` | Normal exit, including config-printing modes. |
+| `-1` | Invalid command-line arguments. |
+| `-2` | `ROCKETMQ_HOME` is not set. |
+| `-3` | Configuration parsing failed. |
+| `-4` | Broker configuration validation failed. |
 
-# Linux/macOS
-export NAMESRV_ADDR=192.168.1.100:9876
+## Configuration
 
-# Then start broker (will use the environment variable)
-cargo run --bin rocketmq-broker-rust
-```
+Configuration is resolved in two layers:
 
-### Configuration
+1. Config file source: explicit `-c <FILE>`, then `$ROCKETMQ_HOME/conf/broker.toml` if it exists, then defaults.
+2. NameServer override: `-n` takes precedence over `NAMESRV_ADDR`, then the config file value, then `127.0.0.1:9876`.
 
-#### Configuration Priority
-
-The broker uses the following configuration priority (highest to lowest):
-
-1. **Command-line arguments** (`-c`, `-n`)
-2. **Environment variables** (`NAMESRV_ADDR`)
-3. **Configuration file** (`broker.toml`)
-4. **Default values**
-
-#### Environment Variables
-
-- `ROCKETMQ_HOME`: RocketMQ installation directory (required)
-- `NAMESRV_ADDR`: Name server address (optional), format: `127.0.0.1:9876` or `192.168.0.1:9876;192.168.0.2:9876`
-
-#### Configuration File
-
-If no configuration file is specified via `-c`, the broker will try to load from:
-- `$ROCKETMQ_HOME/conf/broker.toml`
-
-Example `broker.toml`:
+Minimal `broker.toml`:
 
 ```toml
 namesrvAddr = "127.0.0.1:9876"
@@ -168,6 +152,7 @@ listenPort = 10911
 storePathRootDir = "./store"
 storePathCommitLog = "./store/commitlog"
 enableControllerMode = false
+storeType = "LocalFile"
 
 [brokerServerConfig]
 listenPort = 10911
@@ -179,66 +164,107 @@ brokerClusterName = "DefaultCluster"
 brokerId = 0
 ```
 
-#### Exit Codes
+Common operational fields:
 
-- **0**: Normal exit (when using `-p` or `-m` flags)
-- **-1**: Invalid command-line arguments
-- **-2**: `ROCKETMQ_HOME` environment variable not set
-- **-3**: Failed to parse configuration file
-- **-4**: Invalid broker configuration
+| Field | Purpose |
+|-------|---------|
+| `namesrvAddr` | NameServer address list, using `;` as the separator. |
+| `brokerIp1` / `listenPort` | Broker listen identity advertised to clients and NameServer. |
+| `storePathRootDir` / `storePathCommitLog` | Message-store root and commitlog locations. |
+| `storeType` | Message-store backend. `LocalFile` is the default; `RocksDB` requires the `rocksdb_store` feature. |
+| `authConfigPath` / `aclFile` | Broker auth metadata path and Java-style ACL file location. |
+| `authenticationEnabled` / `authorizationEnabled` | Enable broker authentication and authorization checks through `rocketmq-auth`. |
+| `metricsExporterType` | Metrics exporter: `disable`, `otlp_grpc`, `prom`, or `log`. |
+| `traceExporterType` / `logExporterType` | Trace/log exporters: `disable`, `otlp_grpc`, or `log`. |
 
-## Feature
+Authentication example:
 
-**Feature list**:
+```toml
+authConfigPath = "./store/auth"
+aclFile = "./conf/plain_acl.yml"
+aclFileWatchEnabled = true
+authenticationEnabled = true
+authorizationEnabled = true
+signatureAlgorithm = "HmacSHA1"
+```
 
-- **Not support**: 💔 ❌
-- **Base support**: ❤️ ✅
-- **Perfect support**: 💖 ✅
+Prometheus metrics example:
 
-| Feature                      | request code       | Support | remark                                  |
-|------------------------------|--------------------|---------|-----------------------------------------|
-| topic config load            | :heavy_minus_sign: | 💔 ❌    | TopicConfigManager class function       |
-| topic queue mapping load     | :heavy_minus_sign: | 💔 ❌    | TopicQueueMappingManager class function |
-| consume offset load          | :heavy_minus_sign: | 💔 ❌    | ConsumerOffsetManager class function    |
-| subscription group load      | :heavy_minus_sign: | 💔 ❌    | SubscriptionGroupManager class function |
-| consumer filter load         | :heavy_minus_sign: | 💔 ❌    | ConsumerFilterManager class function    |
-| consumer order info load     | :heavy_minus_sign: | 💔 ❌    | ConsumerOrderInfoManager class function |
-| message store load           | :heavy_minus_sign: | 💔 ❌    |                                         |
-| timer message store load     | :heavy_minus_sign: | 💔 ❌    |                                         |
-| schedule message store load  | :heavy_minus_sign: | 💔 ❌    |                                         |
-| send message hook            | :heavy_minus_sign: | 💔 ❌    |                                         |
-| consume message hook         | :heavy_minus_sign: | 💔 ❌    |                                         |
-| send message                 | 10                 | ❤️ ✅    |                                         |
-| send message v2              | 310                | ❤️ ✅    |                                         |
-| send batch message           | 320                | ❤️ ✅    |                                         |
-| consume send message back    | 36                 | ❤️ ✅    |                                         |
-| pull message                 | 11                 | ❤️ ✅    |                                         |
-| lite pull message            | 361                | ❤️ ✅    |                                         |
-| peek message                 | 200052             | 💔 ❌    |                                         |
-| pop message                  | 200050             | ❤️ ✅    |                                         |
-| ack message                  | 200051             | ❤️ ✅    |                                         |
-| batch ack message            | 200151             | ❤️ ✅    |                                         |
-| change message invisibletime | 200053             | ❤️ ✅    |                                         |
-| notification                 | 200054             | 💔 ❌    |                                         |
-| polling info                 | 200055             | 💔 ❌    |                                         |
-| send reply message           | 324                | ❤️ ✅    |                                         |
-| send reply message v2        | 325                | ❤️ ✅    |                                         |
-| query message                | 12                 | ❤️ ✅    |                                         |
-| view message by id           | 33                 | ❤️ ✅    |                                         |
-| heart beat                   | 34                 | ❤️ ✅    |                                         |
-| unregister client            | 35                 | ❤️ ✅    |                                         |
-| check client config          | 46                 | 💔 ❌    |                                         |
-| get consumer list by group   | 38                 | ❤️ ✅    |                                         |
-| update consumer offset       | 15                 | ❤️ ✅    |                                         |
-| query consumer offset        | 14                 | ❤️ ✅    |                                         |
-| query assignment             | 400                | ❤️ ✅    |                                         |
-| set message request mode     | 401                | ❤️ ✅    |                                         |
-| end transacation             | 37                 | ❤️ ✅    |                                         |
-| default processor            | :heavy_minus_sign: | 💔 ❌    | AdminBrokerProcessor class function     |
+```toml
+metricsExporterType = "prom"
+metricsPromExporterHost = "127.0.0.1"
+metricsPromExporterPort = 5557
+metricsPromExporterPath = "/metrics"
+```
 
+Tiered storage currently requires `storeType = "LocalFile"` when the `tieredstore` feature is enabled.
 
+## Feature Flags
 
+| Feature | Purpose |
+|---------|---------|
+| `local_file_store` | Default feature; enables the local file message store path. |
+| `rocksdb_store` | Enables RocksDB-backed message store and broker metadata config managers. |
+| `rocksdb-store` | Compatibility alias for `rocksdb_store`. |
+| `tieredstore` | Enables tieredstore integration on top of local file storage. |
+| `observability` | Enables the metrics and traces observability stack. |
+| `otel-metrics` | Enables OpenTelemetry metrics instrumentation. |
+| `otel-traces` | Enables OpenTelemetry tracing instrumentation. |
+| `otel-logs` | Enables OpenTelemetry log export support. |
+| `otlp-metrics` / `otlp-traces` / `otlp-logs` | Enables OTLP exporters for the selected signal. |
+| `prometheus` | Enables the Prometheus metrics endpoint. |
 
+## Request Processing Surface
 
+The broker runtime registers processors for the primary remoting request families:
 
+| Processor family | Request examples |
+|------------------|------------------|
+| Send | `SendMessage`, `SendMessageV2`, `SendBatchMessage`, `ConsumerSendMsgBack` |
+| Pull | `PullMessage`, `LitePullMessage` |
+| Pop and ack | `PopMessage`, `PopLiteMessage`, `AckMessage`, `BatchAckMessage`, `ChangeMessageInvisibleTime` |
+| Long polling | `Notification`, `PollingInfo` |
+| Reply and recall | `SendReplyMessage`, `SendReplyMessageV2`, `RecallMessage` |
+| Query | `QueryMessage`, `ViewMessageById` |
+| Client and consumer management | `HeartBeat`, `UnregisterClient`, `CheckClientConfig`, offset and consumer-list requests |
+| Lite mode | Broker, topic, client, group, dispatch, and lite subscription control requests |
+| Transaction | `EndTransaction` |
+| Admin default processor | Topic, subscription, broker config, runtime info, stats, auth user, auth ACL, and other admin requests |
 
+Authentication and authorization checks run before request dispatch when auth is enabled.
+
+## Validation
+
+Useful broker-focused checks:
+
+```bash
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- --help
+cargo test -p rocketmq-broker --lib
+cargo test -p rocketmq-broker --features tieredstore --lib
+cargo test -p rocketmq-broker --features rocksdb_store --lib
+```
+
+Workspace-level validation from the repository root:
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+```
+
+## Benchmarks
+
+Broker benchmarks are available for manager and service hot paths:
+
+```bash
+cargo bench -p rocketmq-broker --bench consumer_manager_benchmark
+cargo bench -p rocketmq-broker --bench consumer_filter_benchmark
+cargo bench -p rocketmq-broker --bench subscription_group_manager_benchmark
+cargo bench -p rocketmq-broker --bench schedule_message_service_performance
+cargo bench -p rocketmq-broker --bench syncunsafecell_mut
+```
+
+Use the same toolchain, feature set, and storage backend when comparing benchmark baselines.
+
+## License
+
+RocketMQ-Rust is licensed under the Apache License 2.0. See [../LICENSE-APACHE](../LICENSE-APACHE).

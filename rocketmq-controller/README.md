@@ -1,241 +1,249 @@
-# RocketMQ Controller
+# rocketmq-controller
 
-RocketMQ Controller Module - High Availability Controller based on Raft
+[English](README.md) | [简体中文](README-zh_cn.md)
 
-## Introduction
+High-availability controller, broker metadata coordinator, and OpenRaft-based election service for
+[RocketMQ-Rust](../README.md).
 
-RocketMQ Controller is the core management component of RocketMQ cluster, responsible for:
+`rocketmq-controller` provides the controller runtime used by RocketMQ-Rust clusters. It owns controller bootstrap,
+OpenRaft consensus, broker heartbeat tracking, master election, replica metadata, controller request processing,
+persistent controller state, and optional metrics integration.
 
-- **Cluster Metadata Management**: Broker registration, Topic configuration, cluster configuration, etc.
-- **High Availability**: Master-slave failover based on Raft consensus algorithm
-- **Leader Election**: Automatic leader node election and failover
-- **Data Consistency**: Ensures strong data consistency through Raft log replication
+The crate exposes both a library API and the `rocketmq-controller-rust` binary.
+
+## Capabilities
+
+| Area | What it provides |
+|------|------------------|
+| Controller bootstrap | `rocketmq-controller-rust` binary, CLI parsing, configuration loading, startup logging, remoting version setup, single-node bootstrap, and graceful shutdown. |
+| Raft coordination | OpenRaft integration, gRPC raft transport, log store, state machine, cluster initialization, leader checks, and replicated controller events. |
+| Broker coordination | Broker registration, heartbeats, inactive broker scanning, master election, sync-state-set management, broker ID allocation, broker cleanup, and role-change notifications. |
+| Metadata management | Broker replica metadata, topic/config metadata, controller metadata queries, sync-state snapshots, and Java-compatible controller response models. |
+| Request processing | Broker-facing remoting request processor for controller request codes such as elect-master, alter-sync-state-set, get-replica-info, broker heartbeat, and register broker. |
+| Storage | Memory backend for tests, file backend enabled by default, and optional RocksDB backend through the `storage-rocksdb` feature. |
+| Observability | Controller metrics manager, request/election/DLedger-style counters and latencies, plus optional OpenTelemetry, OTLP, and Prometheus exporters. |
 
 ## Architecture
 
+![rocketmq-controller architecture](../resources/controller-architecture.svg)
+
+The controller starts from `rocketmq-controller-rust`, loads `ControllerConfig`, and builds `ControllerManager`.
+`ControllerManager` owns broker-facing remoting, request processing, heartbeat tracking, role-change notifications,
+OpenRaft-backed state replication, storage, snapshots, and optional metrics exporters.
+
+The binary requires a non-empty `rocketmqHome` value after configuration loading. For normal runs, set
+`ROCKETMQ_HOME` or provide `rocketmqHome` in the controller config file.
+
+## Crate Layout
+
+| Path | Purpose |
+|------|---------|
+| [`src/bin/controller_bootstrap.rs`](src/bin/controller_bootstrap.rs) | Binary entry point, logger setup, CLI/config loading, manager lifecycle, single-node bootstrap, and shutdown signal handling. |
+| [`src/cli.rs`](src/cli.rs) | Clap-based CLI model and config-file loading through `rocketmq-common`'s config parser. |
+| [`src/config.rs`](src/config.rs) | Re-exports the shared `ControllerConfig`, `RaftPeer`, and `StorageBackendType` from `rocketmq-common`. |
+| [`src/controller`](src/controller) | Controller trait implementations, `ControllerManager`, OpenRaft controller wrapper, heartbeat manager, and housekeeping service. |
+| [`src/openraft`](src/openraft) | OpenRaft node manager, gRPC network, log store, state machine, storage bridge, and generated raft service glue. |
+| [`src/processor`](src/processor) | Controller request processor and domain processors for broker, topic, and metadata operations. |
+| [`src/manager`](src/manager) | Replica information manager, broker replica metadata, and sync-state models. |
+| [`src/metadata`](src/metadata) | Broker, topic, config, and replica metadata stores. |
+| [`src/heartbeat`](src/heartbeat) | Broker identity, live-info tracking, and default heartbeat manager. |
+| [`src/event`](src/event) | Replicated controller event models and event serialization. |
+| [`src/storage`](src/storage) | Storage backend abstraction, default file backend, optional RocksDB backend, and in-memory backend for tests. |
+| [`src/metrics`](src/metrics) | Controller metric constants, request/election status enums, and metrics manager. |
+| [`proto`](proto) | gRPC protobuf definitions for controller and OpenRaft RPCs. |
+| [`examples`](examples) | Runnable examples for single-node raft, three-node raft, manager usage, metrics, and CLI parsing. |
+| [`tests`](tests) | Integration and contract tests for raft, snapshots, multi-node setup, request processor behavior, and metrics. |
+
+## Requirements
+
+- Rust `1.85.0` or newer is the workspace minimum.
+- Build this crate with the repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml). The crate
+  currently enables a nightly Rust feature.
+- `ROCKETMQ_HOME` or `rocketmqHome` must be set before starting the controller binary.
+- Use `storageBackend = "File"` with the default feature set. Use `storageBackend = "RocksDB"` only when building with
+  `storage-rocksdb`.
+
+## Build
+
+Build the controller binary from the workspace root:
+
+```bash
+cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release
 ```
-┌──────────────────────────────────────────┐
-│         Controller Manager               │
-├──────────────────────────────────────────┤
-│                                          │
-│  ┌────────────┐  ┌────────────────────┐ │
-│  │   Raft     │  │   Metadata Store   │ │
-│  │ Controller │  │                    │ │
-│  │            │  │  - Broker Manager  │ │
-│  │ - Election │  │  - Topic Manager   │ │
-│  │ - Replica  │  │  - Config Manager  │ │
-│  └────────────┘  └────────────────────┘ │
-│                                          │
-│  ┌────────────────────────────────────┐  │
-│  │     Processor Manager              │  │
-│  │                                    │  │
-│  │  - Register Broker                │  │
-│  │  - Heartbeat                      │  │
-│  │  - Create/Update Topic            │  │
-│  │  - Query Metadata                 │  │
-│  └────────────────────────────────────┘  │
-└──────────────────────────────────────────┘
+
+Build with optional storage or metrics features:
+
+```bash
+cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release --features storage-rocksdb
+cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release --features metrics
+cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release --features metrics-otlp
+cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release --features metrics-prometheus
 ```
+
+## Configuration
+
+The CLI loads TOML, JSON, YAML, and other formats supported by the `config` crate. Current file loading deserializes
+directly into `ControllerConfig`, so a config file should provide the full set of required fields instead of relying on
+partial overrides.
+
+Use camelCase field names:
+
+```toml
+rocketmqHome = "/opt/rocketmq"
+configStorePath = "/opt/rocketmq/controller/controller.properties"
+controllerType = "Raft"
+scanNotActiveBrokerInterval = 5000
+controllerThreadPoolNums = 16
+controllerRequestThreadPoolQueueCapacity = 50000
+mappedFileSize = 1073741824
+controllerStorePath = ""
+electMasterMaxRetryCount = 3
+enableElectUncleanMaster = false
+isProcessReadEvent = false
+notifyBrokerRoleChanged = true
+scanInactiveMasterInterval = 5000
+raftScanWaitTimeoutMs = 1000
+metricsExporterType = "disable"
+metricsGrpcExporterTarget = ""
+metricsGrpcExporterHeader = ""
+metricGrpcExporterTimeOutInMills = 3000
+metricGrpcExporterIntervalInMills = 60000
+metricLoggingExporterIntervalInMills = 10000
+metricsPromExporterPort = 5557
+metricsPromExporterHost = ""
+metricsLabel = ""
+metricsInDelta = false
+configBlackList = "configBlackList;configStorePath"
+
+nodeId = 1
+listenAddr = "127.0.0.1:9878"
+controllerPeers = []
+electionTimeoutMs = 1000
+heartbeatIntervalMs = 300
+storagePath = "/opt/rocketmq/controller/node-1"
+storageBackend = "File"
+enableElectUncleanMasterLocal = false
+
+[[raftPeers]]
+id = 1
+addr = "127.0.0.1:9878"
+```
+
+For a multi-node controller cluster, each node should use its own `nodeId`, `listenAddr`, and `storagePath`, while all
+nodes share the same `raftPeers` list.
 
 ## Quick Start
 
-### Installation
-
-Build from source:
+Start a single-node controller with a config file:
 
 ```bash
-cargo build --release --bin rocketmq-controller-rust
-```
-
-The binary will be located at `target/release/rocketmq-controller-rust`.
-
-### Running the Controller
-
-#### 1. Using Default Configuration
-
-Start the controller with default settings:
-
-```bash
-# Set ROCKETMQ_HOME environment variable
+# Linux/macOS
 export ROCKETMQ_HOME=/opt/rocketmq
-
-# Run the controller
-./target/release/rocketmq-controller-rust
+cargo run -p rocketmq-controller --bin rocketmq-controller-rust -- -c ./controller-node1.toml
 ```
 
-#### 2. Using Configuration File (TOML)
-
-Create a configuration file `controller.toml`:
-
-```toml
-# Basic Configuration
-rocketmq_home = "/opt/rocketmq"
-controller_type = "Raft"
-
-# Node Configuration
-node_id = 1
-listen_addr = "127.0.0.1:9878"
-
-# Controller Behavior
-scan_not_active_broker_interval = 3000
-controller_thread_pool_nums = 16
-
-# Raft Configuration
-election_timeout_ms = 1000
-heartbeat_interval_ms = 500
-storage_path = "/opt/rocketmq/controller/storage"
-
-# Raft Peers (3-node cluster example)
-[[raft_peers]]
-id = 1
-addr = "127.0.0.1:9878"
-
-[[raft_peers]]
-id = 2
-addr = "127.0.0.1:9879"
-
-[[raft_peers]]
-id = 3
-addr = "127.0.0.1:9880"
+```powershell
+# Windows PowerShell
+$env:ROCKETMQ_HOME = "C:\rocketmq"
+cargo run -p rocketmq-controller --bin rocketmq-controller-rust -- -c .\controller-node1.toml
 ```
 
-Start with configuration file:
+Inspect CLI options:
 
 ```bash
-./target/release/rocketmq-controller-rust -c controller.toml
+cargo run -p rocketmq-controller --bin rocketmq-controller-rust -- --help
 ```
 
-Or using the long form:
+Run the single-node OpenRaft example:
 
 ```bash
-./target/release/rocketmq-controller-rust --config-file /path/to/controller.toml
+cargo run -p rocketmq-controller --example single_node
 ```
 
-#### 3. Print Configuration
-
-View the current configuration without starting:
+Run a three-node OpenRaft example in separate terminals:
 
 ```bash
-./target/release/rocketmq-controller-rust -c controller.toml -p
+cargo run -p rocketmq-controller --example three_node_cluster -- --node-id 1 --init
+cargo run -p rocketmq-controller --example three_node_cluster -- --node-id 2
+cargo run -p rocketmq-controller --example three_node_cluster -- --node-id 3
 ```
 
-Output example:
-```
-========== Controller Configuration ==========
-RocketMQ Home:           /opt/rocketmq
-Config Store Path:       "/opt/rocketmq/controller/controller.toml"
-Controller Type:         Raft
-Scan Interval:           3000 ms
-Thread Pool Nums:        16
+## Library Usage
 
-========== Node Configuration ==========
-Node ID:                 1
-Listen Address:          127.0.0.1:9878
+Create and manage a controller directly from Rust:
 
-========== Raft Configuration ==========
-Election Timeout:        1000 ms
-Heartbeat Interval:      500 ms
-Raft Peers:              3 peers
-  - Node 1: 127.0.0.1:9878
-  - Node 2: 127.0.0.1:9879
-  - Node 3: 127.0.0.1:9880
+```rust
+use rocketmq_controller::config::{ControllerConfig, RaftPeer};
+use rocketmq_controller::manager::ControllerManager;
+use rocketmq_error::Result;
+use rocketmq_rust::ArcMut;
 
-========== Storage Configuration ==========
-Storage Path:            /opt/rocketmq/controller/storage
-Storage Backend:         RocksDB
-Mapped File Size:        1073741824 bytes
-```
+#[tokio::main]
+async fn main() -> Result<()> {
+    let listen_addr = "127.0.0.1:9878".parse().unwrap();
+    let config = ControllerConfig::new_node(1, listen_addr)
+        .with_raft_peers(vec![RaftPeer {
+            id: 1,
+            addr: listen_addr,
+        }])
+        .with_storage_path("/tmp/rocketmq-controller/node-1");
 
-#### 4. View Help
+    let manager = ArcMut::new(ControllerManager::new(config).await?);
+    if !manager.clone().initialize().await? {
+        return Err(rocketmq_controller::error::ControllerError::InitializationFailed.into());
+    }
 
-```bash
-./target/release/rocketmq-controller-rust --help
-```
-
-Output:
-```
-RocketMQ Controller Server (Rust)
-
-Usage: rocketmq-controller-rust [OPTIONS]
-
-Options:
-  -c, --config-file <FILE>  Controller config file (TOML/JSON/YAML)
-  -p, --print-config-item   Print all config items
-  -m, --print-important-config  Print important config items
-  -h, --help               Print help
-  -V, --version            Print version
-```
-
-### Running a 3-Node Cluster
-
-For a production setup with 3 controller nodes:
-
-**Node 1** (controller.toml):
-```bash
-export ROCKETMQ_HOME=/opt/rocketmq
-./rocketmq-controller-rust -c controller-node1.toml
-```
-
-**Node 2** (controller-node2.toml):
-```toml
-node_id = 2
-listen_addr = "192.168.1.102:9878"
-# ... same raft_peers configuration
-```
-
-```bash
-export ROCKETMQ_HOME=/opt/rocketmq
-./rocketmq-controller-rust -c controller-node2.toml
-```
-
-**Node 3** (controller-node3.toml):
-```toml
-node_id = 3
-listen_addr = "192.168.1.103:9878"
-# ... same raft_peers configuration
-```
-
-```bash
-export ROCKETMQ_HOME=/opt/rocketmq
-./rocketmq-controller-rust -c controller-node3.toml
-```
-
-### Configuration Formats
-
-The controller supports multiple configuration formats:
-
-- **TOML** (`.toml`) - Recommended, Rust-native format
-- **JSON** (`.json`) - Standard JSON format
-- **YAML** (`.yaml`, `.yml`) - YAML format
-
-Example JSON configuration:
-
-```json
-{
-  "rocketmq_home": "/opt/rocketmq",
-  "node_id": 1,
-  "listen_addr": "127.0.0.1:9878",
-  "election_timeout_ms": 1000,
-  "raft_peers": [
-    {"id": 1, "addr": "127.0.0.1:9878"},
-    {"id": 2, "addr": "127.0.0.1:9879"},
-    {"id": 3, "addr": "127.0.0.1:9880"}
-  ]
+    manager.clone().start().await?;
+    manager.shutdown().await?;
+    Ok(())
 }
 ```
 
-### Stopping the Controller
+## Feature Flags
 
-Press `Ctrl+C` to gracefully shutdown the controller:
+| Feature | Default | Purpose |
+|---------|---------|---------|
+| `storage-file` | Yes | Enables the file-based controller storage backend. |
+| `storage-rocksdb` | No | Enables the RocksDB storage backend for `storageBackend = "RocksDB"`. |
+| `metrics` | No | Enables controller metrics integration through `rocketmq-observability`. |
+| `metrics-otlp` | No | Enables OTLP metrics export support. |
+| `metrics-prometheus` | No | Enables Prometheus metrics export support. |
+| `debug` | No | Reserved debug feature flag for controller builds. |
 
+## Examples
+
+```bash
+cargo run -p rocketmq-controller --example single_node
+cargo run -p rocketmq-controller --example three_node_cluster -- --node-id 1 --init
+cargo run -p rocketmq-controller --example controller_manager_basic
+cargo run -p rocketmq-controller --example controller_manager_cluster
+cargo run -p rocketmq-controller --example controller_metrics_example
+cargo run -p rocketmq-controller --example cli_usage -- -c ./controller-node1.toml -p
 ```
-Controller is running. Press Ctrl+C to stop.
-^C
-Received shutdown signal, shutting down controller...
-Controller shutdown completed.
+
+## Validation
+
+Focused checks for this crate:
+
+```bash
+cargo test -p rocketmq-controller --lib
+cargo test -p rocketmq-controller --tests --no-run
+cargo test -p rocketmq-controller --examples --no-run
 ```
 
-## Development
+Workspace-level Rust validation is required from the repository root when Rust code changes:
 
-See [CLI_README.md](CLI_README.md) for detailed CLI usage and [CLI_MAPPING.md](CLI_MAPPING.md) for Java-Rust parameter mapping.
+```bash
+cargo fmt --all
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+```
 
+## Benchmarks
+
+```bash
+cargo bench -p rocketmq-controller --bench controller_bench
+```
+
+## License
+
+Licensed under the [Apache License, Version 2.0](../LICENSE-APACHE).

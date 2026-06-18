@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-store architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust store crate, showing the MessageStore boundary, local file and RocksDB implementations, commit log, consume queue, index, timer, HA, observability, and tiered storage extensions.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 650 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; stroke-width: 1; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; stroke-width: 1; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; stroke-width: 1; }
+      .chip-rose { fill: #fff1f2; stroke: #fecdd3; stroke-width: 1; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text x="54" y="54" class="title">rocketmq-store Architecture</text>
+  <text x="54" y="80" class="subtitle">Storage boundary for RocketMQ Rust: CommitLog, ConsumeQueue, index, timer, HA, RocksDB metadata, and optional tiered storage</text>
+
+  <rect x="42" y="122" width="214" height="438" rx="12" class="panel"/>
+  <text x="68" y="156" class="section-title">Store Consumers</text>
+  <rect x="68" y="184" width="162" height="46" rx="8" class="chip-blue"/>
+  <text x="88" y="204" class="label">rocketmq-broker</text>
+  <text x="88" y="221" class="small">put, pull, query, offsets</text>
+  <rect x="68" y="250" width="162" height="46" rx="8" class="chip-blue"/>
+  <text x="88" y="270" class="label">Admin paths</text>
+  <text x="88" y="287" class="small">runtime info and cleanup</text>
+  <rect x="68" y="316" width="162" height="46" rx="8" class="chip-blue"/>
+  <text x="88" y="336" class="label">Replication</text>
+  <text x="88" y="353" class="small">master, slave, controller</text>
+  <rect x="68" y="382" width="162" height="46" rx="8" class="chip-blue"/>
+  <text x="88" y="402" class="label">Delay and POP</text>
+  <text x="88" y="419" class="small">timer, ack checkpoints</text>
+  <rect x="68" y="448" width="162" height="46" rx="8" class="chip-blue"/>
+  <text x="88" y="468" class="label">Observability</text>
+  <text x="88" y="485" class="small">stats and optional metrics</text>
+
+  <rect x="300" y="122" width="246" height="438" rx="12" class="panel"/>
+  <text x="328" y="156" class="section-title">Public Boundary</text>
+  <rect x="330" y="184" width="186" height="58" rx="8" class="chip-teal"/>
+  <text x="354" y="205" class="label">MessageStore trait</text>
+  <text x="354" y="222" class="small">load, start, shutdown</text>
+  <text x="354" y="237" class="tiny">put, get, query, offsets, HA</text>
+  <rect x="330" y="270" width="186" height="58" rx="8" class="chip-teal"/>
+  <text x="354" y="291" class="label">GenericMessageStore</text>
+  <text x="354" y="308" class="small">LocalFileStore variant</text>
+  <text x="354" y="323" class="tiny">RocksDBStore with feature flag</text>
+  <rect x="330" y="356" width="186" height="58" rx="8" class="chip-teal"/>
+  <text x="354" y="377" class="label">MessageStoreConfig</text>
+  <text x="354" y="394" class="small">store paths and flush policy</text>
+  <text x="354" y="409" class="tiny">store_type, timer, HA, RocksDB</text>
+  <rect x="330" y="442" width="186" height="58" rx="8" class="chip-teal"/>
+  <text x="354" y="463" class="label">StoreError</text>
+  <text x="354" y="480" class="small">typed store failures</text>
+  <text x="354" y="495" class="tiny">HA and RocksDB adapters</text>
+
+  <rect x="592" y="112" width="322" height="262" rx="12" class="panel"/>
+  <text x="620" y="146" class="section-title">Local File Message Store</text>
+  <rect x="620" y="174" width="122" height="54" rx="8" class="chip-amber"/>
+  <text x="648" y="195" class="label">CommitLog</text>
+  <text x="642" y="212" class="small">append-only files</text>
+  <rect x="766" y="174" width="120" height="54" rx="8" class="chip-amber"/>
+  <text x="791" y="195" class="label">MappedFile</text>
+  <text x="787" y="212" class="small">mmap and IO hints</text>
+  <rect x="620" y="254" width="122" height="54" rx="8" class="chip-amber"/>
+  <text x="643" y="275" class="label">FlushManager</text>
+  <text x="635" y="292" class="small">sync and async flush</text>
+  <rect x="766" y="254" width="120" height="54" rx="8" class="chip-amber"/>
+  <text x="793" y="275" class="label">Checkpoint</text>
+  <text x="789" y="292" class="small">recovery positions</text>
+  <rect x="620" y="326" width="266" height="32" rx="8" class="chip-amber"/>
+  <text x="652" y="347" class="small">fast-load parallel CommitLog loading by default</text>
+
+  <rect x="954" y="112" width="282" height="262" rx="12" class="panel"/>
+  <text x="982" y="146" class="section-title">RocksDB Store Feature</text>
+  <rect x="982" y="174" width="102" height="54" rx="8" class="chip-violet"/>
+  <text x="1002" y="195" class="label">CQ CFs</text>
+  <text x="1002" y="212" class="small">queue offsets</text>
+  <rect x="1100" y="174" width="106" height="54" rx="8" class="chip-violet"/>
+  <text x="1121" y="195" class="label">Message CFs</text>
+  <text x="1115" y="212" class="small">index, timer, trans</text>
+  <rect x="982" y="254" width="102" height="54" rx="8" class="chip-violet"/>
+  <text x="1005" y="275" class="label">Batch writer</text>
+  <text x="1001" y="292" class="small">metadata writes</text>
+  <rect x="1100" y="254" width="106" height="54" rx="8" class="chip-violet"/>
+  <text x="1123" y="275" class="label">Maintenance</text>
+  <text x="1119" y="292" class="small">flush, compact</text>
+  <rect x="982" y="326" width="224" height="32" rx="8" class="chip-violet"/>
+  <text x="1004" y="347" class="small">reuses local CommitLog, stores metadata in RocksDB</text>
+
+  <rect x="592" y="416" width="644" height="164" rx="12" class="panel"/>
+  <text x="620" y="449" class="section-title">Derived Indexes and Background Services</text>
+  <rect x="620" y="478" width="110" height="46" rx="8" class="chip-gray"/>
+  <text x="642" y="498" class="label">ConsumeQueue</text>
+  <text x="643" y="515" class="small">logical offsets</text>
+  <rect x="746" y="478" width="104" height="46" rx="8" class="chip-gray"/>
+  <text x="776" y="498" class="label">Index</text>
+  <text x="766" y="515" class="small">key lookup</text>
+  <rect x="866" y="478" width="104" height="46" rx="8" class="chip-gray"/>
+  <text x="893" y="498" class="label">Timer</text>
+  <text x="882" y="515" class="small">delayed messages</text>
+  <rect x="986" y="478" width="104" height="46" rx="8" class="chip-gray"/>
+  <text x="1012" y="498" class="label">HA</text>
+  <text x="1003" y="515" class="small">replication</text>
+  <rect x="1106" y="478" width="104" height="46" rx="8" class="chip-gray"/>
+  <text x="1129" y="498" class="label">Stats</text>
+  <text x="1122" y="515" class="small">broker metrics</text>
+  <rect x="620" y="542" width="590" height="22" rx="6" class="chip-rose"/>
+  <text x="664" y="557" class="tiny">Optional extensions: tieredstore dispatcher, observability metrics, io_uring mapped-file backend on Linux</text>
+
+  <path class="arrow" d="M230 206 C258 206 270 206 300 206"/>
+  <path class="arrow" d="M516 213 C552 213 558 201 620 201"/>
+  <path class="arrow" d="M516 299 C570 299 570 282 620 282"/>
+  <path class="arrow" d="M742 201 C752 201 756 201 766 201"/>
+  <path class="arrow" d="M742 282 C752 282 756 282 766 282"/>
+  <path class="arrow" d="M886 201 C922 201 940 201 982 201"/>
+  <path class="arrow" d="M742 342 C704 396 686 440 675 478"/>
+  <path class="arrow" d="M753 342 C769 392 786 430 798 478"/>
+  <path class="arrow" d="M764 342 C828 391 886 421 918 478"/>
+  <path class="arrow" d="M826 282 C920 348 1000 394 1038 478"/>
+  <path class="dash" d="M1084 281 C1090 350 1108 400 1158 478"/>
+  <path class="bus" d="M149 494 C210 552 620 572 915 568 C1094 566 1162 548 1180 564"/>
+  <path class="dash" d="M149 494 C220 590 300 600 423 500"/>
+
+  <rect x="42" y="604" width="1194" height="76" rx="12" class="panel"/>
+  <text x="72" y="631" class="section-title">Write and Read Flow</text>
+  <text x="72" y="654" class="small">Writes append encoded messages to CommitLog, then dispatch metadata to ConsumeQueue, index, timer, compaction, RocksDB, and optional tiered storage.</text>
+  <text x="72" y="672" class="small">Reads use logical queues or key indexes to resolve CommitLog offsets and return selected buffers or decoded messages.</text>
+</svg>

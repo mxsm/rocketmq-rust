@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-namesrv architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust NameServer crate, showing remoting ingress, request processors, route manager selection, route tables, KV configuration, broker housekeeping, inactive broker scans, and optional embedded controller mode.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .subpanel { fill: #f8fafc; stroke: #dbe4ef; stroke-width: 1; }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; stroke-width: 1; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; stroke-width: 1; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; stroke-width: 1; }
+      .chip-rose { fill: #fff1f2; stroke: #fecdd3; stroke-width: 1; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1; }
+      .chip-green { fill: #f0fdf4; stroke: #bbf7d0; stroke-width: 1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="780"/>
+  <text x="54" y="58" class="title">rocketmq-namesrv Architecture</text>
+  <text x="54" y="84" class="subtitle">Service discovery and routing core for RocketMQ brokers, clients, admin tools, route tables, KV configuration, and optional controller mode.</text>
+
+  <rect x="42" y="124" width="218" height="330" rx="14" class="panel"/>
+  <text x="72" y="157" class="section-title">Ingress Callers</text>
+  <rect x="72" y="198" width="158" height="56" rx="9" class="chip-blue"/>
+  <text x="96" y="221" class="label">Brokers</text>
+  <text x="96" y="238" class="small">register / heartbeat</text>
+  <rect x="72" y="278" width="158" height="56" rx="9" class="chip-teal"/>
+  <text x="96" y="301" class="label">Clients</text>
+  <text x="96" y="318" class="small">topic route lookup</text>
+  <rect x="72" y="358" width="158" height="56" rx="9" class="chip-amber"/>
+  <text x="96" y="381" class="label">Admin tools</text>
+  <text x="96" y="398" class="small">KV, config, permissions</text>
+
+  <rect x="320" y="124" width="270" height="330" rx="14" class="panel"/>
+  <text x="350" y="157" class="section-title">Remoting Runtime</text>
+  <rect x="350" y="198" width="210" height="58" rx="9" class="chip-violet"/>
+  <text x="372" y="221" class="label">RocketMQ remoting server</text>
+  <text x="372" y="238" class="small">port 9876 by default</text>
+  <rect x="350" y="286" width="210" height="58" rx="9" class="chip-violet"/>
+  <text x="372" y="309" class="label">NameServerRequestProcessor</text>
+  <text x="372" y="326" class="small">request-code dispatcher</text>
+  <rect x="350" y="374" width="210" height="58" rx="9" class="chip-gray"/>
+  <text x="372" y="397" class="label">Default fallback</text>
+  <text x="372" y="414" class="small">RequestCodeNotSupported</text>
+
+  <rect x="650" y="124" width="278" height="330" rx="14" class="panel"/>
+  <text x="680" y="157" class="section-title">Request Processors</text>
+  <rect x="680" y="198" width="218" height="58" rx="9" class="chip-blue"/>
+  <text x="702" y="221" class="label">ClientRequestProcessor</text>
+  <text x="702" y="238" class="small">GetRouteinfoByTopic</text>
+  <rect x="680" y="286" width="218" height="58" rx="9" class="chip-teal"/>
+  <text x="702" y="309" class="label">ClusterTestRequestProcessor</text>
+  <text x="702" y="326" class="small">product-env fallback lookup</text>
+  <rect x="680" y="374" width="218" height="58" rx="9" class="chip-rose"/>
+  <text x="702" y="397" class="label">DefaultRequestProcessor</text>
+  <text x="702" y="414" class="small">broker, topic, KV, config, perms</text>
+
+  <rect x="988" y="124" width="236" height="330" rx="14" class="panel"/>
+  <text x="1018" y="157" class="section-title">Route Manager</text>
+  <rect x="1018" y="198" width="176" height="58" rx="9" class="chip-green"/>
+  <text x="1040" y="221" class="label">RouteInfoManagerWrapper</text>
+  <text x="1040" y="238" class="small">selects V2 by default</text>
+  <rect x="1018" y="286" width="176" height="58" rx="9" class="chip-green"/>
+  <text x="1040" y="309" class="label">V2 route manager</text>
+  <text x="1040" y="326" class="small">DashMap + segmented locks</text>
+  <rect x="1018" y="374" width="176" height="58" rx="9" class="chip-gray"/>
+  <text x="1040" y="397" class="label">V1 route manager</text>
+  <text x="1040" y="414" class="small">legacy lock-based tables</text>
+
+  <rect x="42" y="508" width="1182" height="88" rx="14" class="panel"/>
+  <text x="72" y="540" class="section-title">Route Tables</text>
+  <rect x="72" y="560" width="188" height="26" rx="7" class="chip-blue"/>
+  <text x="105" y="577" class="small">topic queue table</text>
+  <rect x="282" y="560" width="188" height="26" rx="7" class="chip-teal"/>
+  <text x="327" y="577" class="small">broker table</text>
+  <rect x="492" y="560" width="188" height="26" rx="7" class="chip-amber"/>
+  <text x="535" y="577" class="small">cluster table</text>
+  <rect x="702" y="560" width="188" height="26" rx="7" class="chip-rose"/>
+  <text x="746" y="577" class="small">live broker table</text>
+  <rect x="912" y="560" width="188" height="26" rx="7" class="chip-violet"/>
+  <text x="944" y="577" class="small">filter-server table</text>
+
+  <rect x="42" y="634" width="1182" height="94" rx="14" class="panel"/>
+  <text x="72" y="665" class="section-title">Runtime Support Services</text>
+  <rect x="72" y="686" width="246" height="28" rx="7" class="chip-amber"/>
+  <text x="94" y="704" class="small">KVConfigManager: KV persistence</text>
+  <rect x="342" y="686" width="246" height="28" rx="7" class="chip-blue"/>
+  <text x="364" y="704" class="small">BrokerHousekeeping: channel events</text>
+  <rect x="612" y="686" width="246" height="28" rx="7" class="chip-green"/>
+  <text x="634" y="704" class="small">Scheduled scans: inactive broker cleanup</text>
+  <rect x="882" y="686" width="246" height="28" rx="7" class="chip-violet"/>
+  <text x="904" y="704" class="small">ControllerManager: embedded mode</text>
+
+  <path d="M230 226 H350" class="arrow"/>
+  <path d="M230 306 C272 306 292 227 350 227" class="arrow"/>
+  <path d="M230 386 C272 386 292 316 350 316" class="arrow"/>
+  <path d="M455 256 V286" class="arrow"/>
+  <path d="M560 315 H680" class="arrow"/>
+  <path d="M560 315 C610 315 628 227 680 227" class="arrow"/>
+  <path d="M560 315 C610 315 628 403 680 403" class="arrow"/>
+  <path d="M898 227 H1018" class="arrow"/>
+  <path d="M898 315 H1018" class="arrow"/>
+  <path d="M898 403 H1018" class="arrow"/>
+  <path d="M1106 256 V286" class="arrow"/>
+  <path d="M1106 344 V374" class="dash"/>
+  <path d="M1106 432 V508" class="arrow"/>
+  <path d="M166 454 V508" class="bus"/>
+  <path d="M455 454 V508" class="bus"/>
+  <path d="M789 454 V508" class="bus"/>
+  <path d="M1110 454 V508" class="bus"/>
+  <path d="M633 596 V634" class="arrow"/>
+  <path d="M195 634 C195 612 175 604 166 586" class="dash"/>
+  <path d="M465 634 C465 612 385 604 376 586" class="dash"/>
+  <path d="M735 634 C735 612 805 604 796 586" class="dash"/>
+  <path d="M1005 634 C1005 612 1006 604 1006 586" class="dash"/>
+</svg>

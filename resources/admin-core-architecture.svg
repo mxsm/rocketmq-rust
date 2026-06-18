@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-admin-core architecture</title>
+  <desc id="desc">Architecture diagram showing adapters, admin-core services, admin client integration, shared RocketMQ crates, and RocketMQ cluster targets.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2f7"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e0f2fe"/>
+      <stop offset="1" stop-color="#d1fae5"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 15px; fill: #475569; }
+      .section-title { font-size: 17px; font-weight: 700; }
+      .label { font-size: 14px; font-weight: 600; }
+      .small { font-size: 12px; fill: #475569; }
+      .tiny { font-size: 11px; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; rx: 14; filter: url(#shadow); }
+      .core-panel { fill: url(#core); stroke: #38bdf8; stroke-width: 1.4; rx: 16; filter: url(#shadow); }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1; rx: 10; }
+      .accent-blue { fill: #eff6ff; stroke: #60a5fa; }
+      .accent-green { fill: #ecfdf5; stroke: #34d399; }
+      .accent-amber { fill: #fffbeb; stroke: #f59e0b; }
+      .accent-rose { fill: #fff1f2; stroke: #fb7185; }
+      .accent-violet { fill: #f5f3ff; stroke: #8b5cf6; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .arrow-light { stroke: #64748b; stroke-width: 1.6; fill: none; marker-end: url(#arrow); stroke-dasharray: 6 5; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+
+  <text x="52" y="58" class="title">rocketmq-admin-core</text>
+  <text x="54" y="86" class="subtitle">Reusable RocketMQ administration capability layer for CLI, TUI, tests, and future adapters</text>
+
+  <rect x="50" y="122" width="260" height="460" class="panel"/>
+  <text x="78" y="158" class="section-title">Adapter Layer</text>
+  <text x="78" y="183" class="small">Owns input and presentation</text>
+
+  <rect x="78" y="215" width="204" height="62" class="box accent-blue"/>
+  <text x="96" y="241" class="label">rocketmq-admin-cli</text>
+  <text x="96" y="263" class="small">clap, completion, terminal UX</text>
+
+  <rect x="78" y="300" width="204" height="62" class="box accent-blue"/>
+  <text x="96" y="326" class="label">rocketmq-admin-tui</text>
+  <text x="96" y="348" class="small">state, layout, event loop</text>
+
+  <rect x="78" y="385" width="204" height="62" class="box accent-blue"/>
+  <text x="96" y="411" class="label">Custom tooling</text>
+  <text x="96" y="433" class="small">automation and tests</text>
+
+  <rect x="78" y="495" width="204" height="50" class="box accent-amber"/>
+  <text x="96" y="516" class="label">Adapter contract</text>
+  <text x="96" y="536" class="small">Map input to core DTOs</text>
+
+  <rect x="370" y="116" width="560" height="500" class="core-panel"/>
+  <text x="404" y="152" class="section-title">rocketmq-admin-core</text>
+  <text x="404" y="177" class="small">Presentation-independent request models, services, lifecycle, and results</text>
+
+  <rect x="405" y="210" width="220" height="92" class="box accent-green"/>
+  <text x="425" y="236" class="label">Request DTOs</text>
+  <text x="425" y="258" class="small">Trim and validate inputs</text>
+  <text x="425" y="279" class="small">No CLI parser structs</text>
+
+  <rect x="655" y="210" width="220" height="92" class="box accent-green"/>
+  <text x="675" y="236" class="label">Structured Results</text>
+  <text x="675" y="258" class="small">Adapter-neutral data</text>
+  <text x="675" y="279" class="small">RocketMQResult / ToolsError</text>
+
+  <rect x="405" y="326" width="470" height="112" class="box accent-violet"/>
+  <text x="425" y="352" class="label">Domain Services</text>
+  <text x="425" y="375" class="small">Topic, Broker, Consumer, Message, Auth, Export</text>
+  <text x="425" y="397" class="small">NameServer, Controller, Cluster, Queue, Offset</text>
+  <text x="425" y="419" class="small">Producer, Connection, Container, HA, Lite, Stats</text>
+
+  <rect x="405" y="462" width="220" height="92" class="box accent-rose"/>
+  <text x="425" y="488" class="label">Admin Lifecycle</text>
+  <text x="425" y="510" class="small">AdminBuilder / AdminGuard</text>
+  <text x="425" y="531" class="small">Timeouts, RPC hook, cleanup</text>
+
+  <rect x="655" y="462" width="220" height="92" class="box accent-rose"/>
+  <text x="675" y="488" class="label">Admin Client Bridge</text>
+  <text x="675" y="510" class="small">DefaultMQAdminExt</text>
+  <text x="675" y="531" class="small">MQAdminExt async operations</text>
+
+  <path d="M 625 256 L 655 256" class="arrow"/>
+  <path d="M 640 302 L 640 326" class="arrow"/>
+  <path d="M 640 438 L 640 462" class="arrow"/>
+  <path d="M 625 508 L 655 508" class="arrow"/>
+
+  <rect x="988" y="122" width="240" height="460" class="panel"/>
+  <text x="1016" y="158" class="section-title">RocketMQ Stack</text>
+  <text x="1016" y="183" class="small">Shared crates and cluster targets</text>
+
+  <rect x="1016" y="214" width="184" height="68" class="box accent-green"/>
+  <text x="1034" y="240" class="label">Shared Crates</text>
+  <text x="1034" y="262" class="small">client, remoting, common</text>
+
+  <rect x="1016" y="306" width="184" height="68" class="box accent-green"/>
+  <text x="1034" y="332" class="label">Protocol / RPC</text>
+  <text x="1034" y="354" class="small">headers, bodies, routes</text>
+
+  <rect x="1016" y="398" width="184" height="68" class="box accent-amber"/>
+  <text x="1034" y="424" class="label">Optional Storage</text>
+  <text x="1034" y="446" class="small">rocksdb-export feature</text>
+
+  <rect x="1016" y="500" width="184" height="46" class="box accent-blue"/>
+  <text x="1034" y="528" class="label">RocketMQ Cluster</text>
+
+  <path d="M 310 246 C 332 246 344 246 370 246" class="arrow"/>
+  <path d="M 310 331 C 332 331 344 360 370 360" class="arrow"/>
+  <path d="M 310 416 C 332 416 344 420 370 420" class="arrow"/>
+  <path d="M 875 508 C 918 508 946 248 1016 248" class="arrow"/>
+  <path d="M 875 508 C 918 508 946 340 1016 340" class="arrow"/>
+  <path d="M 875 508 C 918 508 946 523 1016 523" class="arrow"/>
+  <path d="M 1016 432 C 960 432 940 530 875 530" class="arrow-light"/>
+
+  <rect x="142" y="636" width="996" height="44" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="168" y="664" class="small">Flow: adapter input -> request DTO -> domain service -> admin lifecycle/client bridge -> RocketMQ remoting -> structured result -> adapter renderer</text>
+</svg>

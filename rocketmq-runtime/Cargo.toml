@@ -23,7 +23,7 @@ repository.workspace   = true
 license.workspace      = true
 keywords               = ["Runtime", "async", "tokio", "futures"]
 categories             = ["asynchronous"]
-readme.workspace       = true
+readme                 = "README.md"
 description.workspace  = true
 rust-version.workspace = true
 

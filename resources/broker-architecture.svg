@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-broker architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust broker runtime, showing bootstrap, broker runtime, remoting processors, auth, metadata managers, message store, services, observability, and external integrations.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .subpanel { fill: #f8fafc; stroke: #dbe4ef; stroke-width: 1; }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; }
+      .chip-red { fill: #fff1f2; stroke: #fecdd3; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="760"/>
+  <text x="54" y="54" class="title">rocketmq-broker Runtime Architecture</text>
+  <text x="54" y="80" class="subtitle">Broker bootstrap, remoting processors, storage, metadata managers, auth, operations, and observability</text>
+
+  <rect x="42" y="112" width="204" height="520" rx="12" class="panel"/>
+  <text x="68" y="145" class="section-title">External Plane</text>
+  <rect x="66" y="170" width="156" height="54" rx="8" class="chip-blue"/>
+  <text x="88" y="193" class="label">Clients</text>
+  <text x="88" y="211" class="small">producers / consumers</text>
+  <rect x="66" y="244" width="156" height="54" rx="8" class="chip-blue"/>
+  <text x="88" y="267" class="label">Admin Tools</text>
+  <text x="88" y="285" class="small">topic / config / ACL</text>
+  <rect x="66" y="318" width="156" height="54" rx="8" class="chip-blue"/>
+  <text x="88" y="341" class="label">Proxy</text>
+  <text x="88" y="359" class="small">optional front door</text>
+  <rect x="66" y="416" width="156" height="54" rx="8" class="chip-teal"/>
+  <text x="88" y="439" class="label">NameServer</text>
+  <text x="88" y="457" class="small">route registration</text>
+  <rect x="66" y="490" width="156" height="54" rx="8" class="chip-teal"/>
+  <text x="88" y="513" class="label">Controller</text>
+  <text x="88" y="531" class="small">master election mode</text>
+
+  <rect x="294" y="112" width="214" height="520" rx="12" class="panel"/>
+  <text x="322" y="145" class="section-title">Bootstrap</text>
+  <rect x="322" y="173" width="158" height="58" rx="8" class="chip-violet"/>
+  <text x="344" y="197" class="label">broker binary</text>
+  <text x="344" y="215" class="small">rocketmq-broker-rust</text>
+  <rect x="322" y="259" width="158" height="58" rx="8" class="chip-violet"/>
+  <text x="344" y="283" class="label">Args + config</text>
+  <text x="344" y="301" class="small">CLI, env, TOML</text>
+  <rect x="322" y="345" width="158" height="58" rx="8" class="chip-violet"/>
+  <text x="344" y="369" class="label">BrokerBootstrap</text>
+  <text x="344" y="387" class="small">initialize / start</text>
+  <rect x="322" y="431" width="158" height="58" rx="8" class="chip-violet"/>
+  <text x="344" y="455" class="label">Builder</text>
+  <text x="344" y="473" class="small">BrokerConfig + store</text>
+
+  <rect x="554" y="112" width="446" height="520" rx="14" class="panel"/>
+  <text x="582" y="145" class="section-title">Broker Runtime</text>
+  <line x1="582" y1="161" x2="972" y2="161" class="bus"/>
+
+  <rect x="584" y="184" width="174" height="92" rx="10" class="chip-blue"/>
+  <text x="606" y="210" class="label">Remoting Layer</text>
+  <text x="606" y="230" class="small">server + client</text>
+  <text x="606" y="248" class="tiny">request / response commands</text>
+
+  <rect x="788" y="184" width="174" height="92" rx="10" class="chip-blue"/>
+  <text x="810" y="210" class="label">Processor Registry</text>
+  <text x="810" y="230" class="small">send, pull, pop, ack</text>
+  <text x="810" y="248" class="tiny">admin, lite, transaction</text>
+
+  <rect x="584" y="304" width="174" height="104" rx="10" class="chip-amber"/>
+  <text x="606" y="330" class="label">Auth Runtime</text>
+  <text x="606" y="350" class="small">authentication</text>
+  <text x="606" y="368" class="small">authorization</text>
+  <text x="606" y="386" class="tiny">ACL reload + admin service</text>
+
+  <rect x="788" y="304" width="174" height="104" rx="10" class="chip-teal"/>
+  <text x="810" y="330" class="label">Metadata Managers</text>
+  <text x="810" y="350" class="small">topic / subscription</text>
+  <text x="810" y="368" class="small">offset / filter / route</text>
+  <text x="810" y="386" class="tiny">queue mapping + order info</text>
+
+  <rect x="584" y="438" width="174" height="118" rx="10" class="chip-gray"/>
+  <text x="606" y="464" class="label">Message Store</text>
+  <text x="606" y="484" class="small">commitlog + consumequeue</text>
+  <text x="606" y="502" class="small">timer / schedule store</text>
+  <text x="606" y="520" class="tiny">local file, RocksDB, tieredstore</text>
+  <text x="606" y="538" class="tiny">HA service wiring</text>
+
+  <rect x="788" y="438" width="174" height="118" rx="10" class="chip-red"/>
+  <text x="810" y="464" class="label">Operational Services</text>
+  <text x="810" y="484" class="small">long polling + pop revive</text>
+  <text x="810" y="502" class="small">transaction checks</text>
+  <text x="810" y="520" class="tiny">fast failure + housekeeping</text>
+  <text x="810" y="538" class="tiny">stats + scheduled tasks</text>
+
+  <rect x="1050" y="112" width="188" height="520" rx="12" class="panel"/>
+  <text x="1078" y="145" class="section-title">Integrations</text>
+  <rect x="1074" y="184" width="140" height="64" rx="8" class="chip-teal"/>
+  <text x="1096" y="210" class="label">Route Sync</text>
+  <text x="1096" y="228" class="small">NameServer updates</text>
+  <rect x="1074" y="278" width="140" height="64" rx="8" class="chip-teal"/>
+  <text x="1096" y="304" class="label">Controller Mode</text>
+  <text x="1096" y="322" class="small">role change hooks</text>
+  <rect x="1074" y="372" width="140" height="64" rx="8" class="chip-gray"/>
+  <text x="1096" y="398" class="label">Storage Files</text>
+  <text x="1096" y="416" class="small">store root paths</text>
+  <rect x="1074" y="466" width="140" height="64" rx="8" class="chip-violet"/>
+  <text x="1096" y="492" class="label">Observability</text>
+  <text x="1096" y="510" class="small">metrics / traces / logs</text>
+
+  <path d="M 222 197 C 254 197, 264 202, 294 202" class="arrow"/>
+  <path d="M 222 271 C 254 271, 264 288, 294 288" class="arrow"/>
+  <path d="M 222 345 C 254 345, 264 230, 294 230" class="arrow"/>
+
+  <path d="M 401 231 L 401 259" class="arrow"/>
+  <path d="M 401 317 L 401 345" class="arrow"/>
+  <path d="M 480 374 C 516 374, 526 230, 584 230" class="arrow"/>
+  <path d="M 480 460 C 520 460, 530 496, 584 496" class="arrow"/>
+
+  <path d="M 758 230 L 788 230" class="arrow"/>
+  <path d="M 875 276 L 875 304" class="arrow"/>
+  <path d="M 671 276 L 671 304" class="arrow"/>
+  <path d="M 671 408 L 671 438" class="arrow"/>
+  <path d="M 875 408 L 875 438" class="arrow"/>
+  <path d="M 758 356 L 788 356" class="arrow"/>
+  <path d="M 758 497 L 788 497" class="arrow"/>
+
+  <path d="M 962 216 C 1000 216, 1024 216, 1074 216" class="dash"/>
+  <path d="M 962 314 C 1004 314, 1026 310, 1074 310" class="dash"/>
+  <path d="M 671 556 C 690 626, 1030 626, 1074 404" class="dash"/>
+  <path d="M 962 498 C 1000 498, 1024 498, 1074 498" class="dash"/>
+
+  <rect x="54" y="670" width="1172" height="44" rx="10" fill="#ffffff" stroke="#dbe4ef"/>
+  <text x="78" y="697" class="small">Flow: external requests enter through remoting, pass auth and processor dispatch, update metadata or message storage, and publish route, role, metrics, trace, and lifecycle side effects.</text>
+</svg>
