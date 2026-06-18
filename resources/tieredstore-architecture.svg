@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-tieredstore architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust tieredstore crate, showing broker dispatch integration, TieredStore composition, dispatcher and fetcher paths, flat files, metadata, providers, and background services.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 650 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; stroke-width: 1; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; stroke-width: 1; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; stroke-width: 1; }
+      .chip-rose { fill: #fff1f2; stroke: #fecdd3; stroke-width: 1; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="720"/>
+  <text x="54" y="54" class="title">rocketmq-tieredstore Architecture</text>
+  <text x="54" y="80" class="subtitle">A tiered storage layer for RocketMQ Rust with async dispatch, logical fetch, metadata recovery, and pluggable segment providers</text>
+
+  <rect x="42" y="124" width="226" height="424" rx="12" class="panel"/>
+  <text x="70" y="158" class="section-title">RocketMQ Store Side</text>
+  <rect x="72" y="188" width="166" height="46" rx="8" class="chip-blue"/>
+  <text x="91" y="208" class="label">CommitLog dispatch</text>
+  <text x="92" y="225" class="small">message body and offsets</text>
+  <rect x="72" y="254" width="166" height="46" rx="8" class="chip-blue"/>
+  <text x="91" y="274" class="label">TieredCommitLogDispatcher</text>
+  <text x="92" y="291" class="small">rocketmq-store adapter</text>
+  <rect x="72" y="320" width="166" height="46" rx="8" class="chip-blue"/>
+  <text x="91" y="340" class="label">TieredDispatchRequest</text>
+  <text x="92" y="357" class="small">topic, queue, body, keys</text>
+  <rect x="72" y="386" width="166" height="46" rx="8" class="chip-blue"/>
+  <text x="91" y="406" class="label">Fetch fallback</text>
+  <text x="92" y="423" class="small">offset/time/key queries</text>
+  <rect x="72" y="452" width="166" height="46" rx="8" class="chip-blue"/>
+  <text x="91" y="472" class="label">Storage level policy</text>
+  <text x="92" y="489" class="small">Disable, NotInDisk, Force</text>
+
+  <rect x="318" y="110" width="246" height="438" rx="12" class="panel"/>
+  <text x="346" y="144" class="section-title">TieredStore Composition</text>
+  <rect x="348" y="174" width="186" height="52" rx="8" class="chip-teal"/>
+  <text x="368" y="195" class="label">TieredStoreConfig</text>
+  <text x="368" y="212" class="small">segment sizes and policies</text>
+  <rect x="348" y="248" width="186" height="52" rx="8" class="chip-teal"/>
+  <text x="368" y="269" class="label">JsonMetadataStore</text>
+  <text x="368" y="286" class="small">topics, queues, segments, index</text>
+  <rect x="348" y="322" width="186" height="52" rx="8" class="chip-teal"/>
+  <text x="368" y="343" class="label">TieredFlatFileStore</text>
+  <text x="368" y="360" class="small">topic/queue flat files</text>
+  <rect x="348" y="396" width="186" height="52" rx="8" class="chip-teal"/>
+  <text x="368" y="417" class="label">Dispatcher and Fetcher</text>
+  <text x="368" y="434" class="small">write queue and read API</text>
+  <rect x="348" y="470" width="186" height="52" rx="8" class="chip-teal"/>
+  <text x="368" y="491" class="label">Lifecycle</text>
+  <text x="368" y="508" class="small">load, start, shutdown, destroy</text>
+
+  <rect x="614" y="110" width="282" height="228" rx="12" class="panel"/>
+  <text x="642" y="144" class="section-title">Write Path</text>
+  <rect x="642" y="174" width="108" height="48" rx="8" class="chip-amber"/>
+  <text x="663" y="194" class="label">Dispatcher</text>
+  <text x="658" y="211" class="small">bounded mpsc</text>
+  <rect x="764" y="174" width="104" height="48" rx="8" class="chip-amber"/>
+  <text x="786" y="194" class="label">Validation</text>
+  <text x="779" y="211" class="small">body and size</text>
+  <rect x="642" y="244" width="108" height="48" rx="8" class="chip-amber"/>
+  <text x="661" y="264" class="label">CommitLog</text>
+  <text x="657" y="281" class="small">message bytes</text>
+  <rect x="764" y="244" width="104" height="48" rx="8" class="chip-amber"/>
+  <text x="781" y="264" class="label">ConsumeQueue</text>
+  <text x="785" y="281" class="small">20-byte units</text>
+  <rect x="642" y="306" width="226" height="18" rx="6" class="chip-amber"/>
+  <text x="688" y="319" class="tiny">commit metadata and append index entries</text>
+
+  <rect x="614" y="380" width="282" height="168" rx="12" class="panel"/>
+  <text x="642" y="414" class="section-title">Read Path</text>
+  <rect x="642" y="444" width="108" height="48" rx="8" class="chip-violet"/>
+  <text x="668" y="464" class="label">Fetcher</text>
+  <text x="656" y="481" class="small">queue offset reads</text>
+  <rect x="764" y="444" width="104" height="48" rx="8" class="chip-violet"/>
+  <text x="792" y="464" class="label">Index</text>
+  <text x="780" y="481" class="small">key and uniq key</text>
+  <rect x="642" y="506" width="226" height="24" rx="6" class="chip-violet"/>
+  <text x="677" y="522" class="tiny">timestamp boundary lookup and read-ahead limits</text>
+
+  <rect x="940" y="110" width="296" height="438" rx="12" class="panel"/>
+  <text x="968" y="144" class="section-title">Segments, Providers, Services</text>
+  <rect x="970" y="174" width="108" height="52" rx="8" class="chip-gray"/>
+  <text x="992" y="195" class="label">FileSegment</text>
+  <text x="987" y="212" class="small">append, commit, read</text>
+  <rect x="1100" y="174" width="106" height="52" rx="8" class="chip-gray"/>
+  <text x="1120" y="195" class="label">Metadata</text>
+  <text x="1116" y="212" class="small">JSON checkpoint</text>
+  <rect x="970" y="250" width="108" height="52" rx="8" class="chip-gray"/>
+  <text x="996" y="271" class="label">POSIX</text>
+  <text x="991" y="288" class="small">durable files</text>
+  <rect x="1100" y="250" width="106" height="52" rx="8" class="chip-gray"/>
+  <text x="1123" y="271" class="label">Memory</text>
+  <text x="1114" y="288" class="small">tests and examples</text>
+  <rect x="970" y="326" width="108" height="52" rx="8" class="chip-gray"/>
+  <text x="989" y="347" class="label">Recovery</text>
+  <text x="986" y="364" class="small">metadata reconcile</text>
+  <rect x="1100" y="326" width="106" height="52" rx="8" class="chip-gray"/>
+  <text x="1124" y="347" class="label">Cleanup</text>
+  <text x="1118" y="364" class="small">retention policy</text>
+  <rect x="970" y="402" width="236" height="52" rx="8" class="chip-rose"/>
+  <text x="1002" y="423" class="label">Integration feature</text>
+  <text x="993" y="440" class="small">rocketmq-store-integration adapter boundary</text>
+  <rect x="970" y="478" width="236" height="36" rx="8" class="chip-gray"/>
+  <text x="992" y="500" class="small">paths: topic / queue / segment-type / base-offset</text>
+
+  <path class="arrow" d="M238 343 C282 343 292 348 348 348"/>
+  <path class="arrow" d="M534 422 C570 422 588 198 642 198"/>
+  <path class="arrow" d="M750 198 C754 198 758 198 764 198"/>
+  <path class="arrow" d="M696 222 C696 232 696 238 696 244"/>
+  <path class="arrow" d="M816 222 C816 232 816 238 816 244"/>
+  <path class="arrow" d="M868 268 C908 268 930 200 970 200"/>
+  <path class="arrow" d="M868 315 C934 315 1002 292 1024 250"/>
+  <path class="arrow" d="M534 422 C570 422 588 468 642 468"/>
+  <path class="arrow" d="M750 468 C754 468 758 468 764 468"/>
+  <path class="arrow" d="M816 444 C854 380 918 352 970 352"/>
+  <path class="arrow" d="M1078 200 C1088 200 1092 200 1100 200"/>
+  <path class="arrow" d="M1078 276 C1088 276 1092 276 1100 276"/>
+  <path class="dash" d="M441 248 C575 92 940 82 1154 174"/>
+  <path class="dash" d="M441 470 C640 636 1076 614 1153 378"/>
+  <path class="bus" d="M155 498 C220 560 620 566 914 562 C1080 560 1150 540 1176 514"/>
+
+  <rect x="42" y="590" width="1194" height="76" rx="12" class="panel"/>
+  <text x="72" y="616" class="section-title">Operational Flow</text>
+  <text x="72" y="639" class="small">Writes are accepted as TieredDispatchRequest values, persisted into CommitLog and ConsumeQueue segments, then indexed by message keys.</text>
+  <text x="72" y="657" class="small">Reads resolve queue offsets, timestamps, or keys back to segment ranges; lifecycle services recover metadata and remove expired segments.</text>
+</svg>

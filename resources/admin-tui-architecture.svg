@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-admin-tui architecture</title>
+  <desc id="desc">Architecture diagram showing the RocketMQ Admin TUI event loop, state model, command catalog, facade, admin-core integration, and terminal rendering.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2f7"/>
+    </linearGradient>
+    <linearGradient id="tui" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0f9ff"/>
+      <stop offset="1" stop-color="#ecfdf5"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 15px; fill: #475569; }
+      .section-title { font-size: 17px; font-weight: 700; }
+      .label { font-size: 14px; font-weight: 600; }
+      .small { font-size: 12px; fill: #475569; }
+      .tiny { font-size: 11px; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.2; rx: 14; filter: url(#shadow); }
+      .tui-panel { fill: url(#tui); stroke: #38bdf8; stroke-width: 1.4; rx: 16; filter: url(#shadow); }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1; rx: 10; }
+      .accent-blue { fill: #eff6ff; stroke: #60a5fa; }
+      .accent-green { fill: #ecfdf5; stroke: #34d399; }
+      .accent-amber { fill: #fffbeb; stroke: #f59e0b; }
+      .accent-rose { fill: #fff1f2; stroke: #fb7185; }
+      .accent-violet { fill: #f5f3ff; stroke: #8b5cf6; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .arrow-light { stroke: #64748b; stroke-width: 1.6; fill: none; marker-end: url(#arrow); stroke-dasharray: 6 5; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+
+  <text x="52" y="58" class="title">rocketmq-admin-tui</text>
+  <text x="54" y="86" class="subtitle">Keyboard-driven RocketMQ administration panel backed by rocketmq-admin-core</text>
+
+  <rect x="50" y="120" width="260" height="462" class="panel"/>
+  <text x="78" y="156" class="section-title">Terminal User</text>
+  <text x="78" y="181" class="small">Interactive terminal session</text>
+
+  <rect x="78" y="216" width="204" height="58" class="box accent-blue"/>
+  <text x="96" y="241" class="label">Keyboard Events</text>
+  <text x="96" y="262" class="small">Tab, search, arrows, Enter</text>
+
+  <rect x="78" y="300" width="204" height="58" class="box accent-green"/>
+  <text x="96" y="325" class="label">NameServer Input</text>
+  <text x="96" y="346" class="small">Set cluster endpoint in UI</text>
+
+  <rect x="78" y="384" width="204" height="58" class="box accent-amber"/>
+  <text x="96" y="409" class="label">Safety Confirmation</text>
+  <text x="96" y="430" class="small">confirm or target value</text>
+
+  <rect x="78" y="500" width="204" height="44" class="box accent-violet"/>
+  <text x="96" y="528" class="label">Ratatui Screen</text>
+
+  <rect x="370" y="112" width="560" height="512" class="tui-panel"/>
+  <text x="404" y="148" class="section-title">TUI Runtime</text>
+  <text x="404" y="173" class="small">Event loop, state, command forms, background execution, and result rendering</text>
+
+  <rect x="405" y="206" width="210" height="82" class="box accent-blue"/>
+  <text x="425" y="232" class="label">RocketmqTuiApp</text>
+  <text x="425" y="254" class="small">30 FPS tick loop</text>
+  <text x="425" y="274" class="small">EventStream + action channel</text>
+
+  <rect x="665" y="206" width="210" height="82" class="box accent-green"/>
+  <text x="685" y="232" class="label">AppState</text>
+  <text x="685" y="254" class="small">focus, search, execution</text>
+  <text x="685" y="274" class="small">form validation and scroll</text>
+
+  <rect x="405" y="320" width="210" height="90" class="box accent-violet"/>
+  <text x="425" y="346" class="label">Command Catalog</text>
+  <text x="425" y="368" class="small">102 commands, 18 domains</text>
+  <text x="425" y="389" class="small">args, risk, result kind</text>
+
+  <rect x="665" y="320" width="210" height="90" class="box accent-amber"/>
+  <text x="685" y="346" class="label">Executor</text>
+  <text x="685" y="368" class="small">spawn_blocking runtime</text>
+  <text x="685" y="389" class="small">progress updates, cancellation</text>
+
+  <rect x="405" y="442" width="210" height="90" class="box accent-rose"/>
+  <text x="425" y="468" class="label">TuiAdminFacade</text>
+  <text x="425" y="490" class="small">DTO builders and async ops</text>
+  <text x="425" y="511" class="small">no CLI dependency</text>
+
+  <rect x="665" y="442" width="210" height="90" class="box accent-green"/>
+  <text x="685" y="468" class="label">Result View Models</text>
+  <text x="685" y="490" class="small">table, JSON, text, summary</text>
+  <text x="685" y="511" class="small">viewport and scrolling</text>
+
+  <path d="M 615 247 L 665 247" class="arrow"/>
+  <path d="M 770 288 L 770 320" class="arrow"/>
+  <path d="M 665 365 L 615 365" class="arrow"/>
+  <path d="M 510 410 L 510 442" class="arrow"/>
+  <path d="M 615 487 L 665 487" class="arrow"/>
+  <path d="M 665 520 C 610 584 470 584 430 532" class="arrow-light"/>
+
+  <rect x="988" y="120" width="240" height="462" class="panel"/>
+  <text x="1016" y="156" class="section-title">Admin Backend</text>
+  <text x="1016" y="181" class="small">Reusable core and RocketMQ cluster</text>
+
+  <rect x="1016" y="216" width="184" height="64" class="box accent-green"/>
+  <text x="1034" y="241" class="label">admin-core</text>
+  <text x="1034" y="263" class="small">request DTOs and services</text>
+
+  <rect x="1016" y="310" width="184" height="64" class="box accent-blue"/>
+  <text x="1034" y="335" class="label">RocketMQ RPC</text>
+  <text x="1034" y="357" class="small">client and remoting APIs</text>
+
+  <rect x="1016" y="404" width="184" height="64" class="box accent-amber"/>
+  <text x="1034" y="429" class="label">Export / Local Ops</text>
+  <text x="1034" y="451" class="small">files, RocksDB metadata</text>
+
+  <rect x="1016" y="506" width="184" height="42" class="box accent-violet"/>
+  <text x="1034" y="532" class="label">RocketMQ Cluster</text>
+
+  <path d="M 310 245 C 334 245 346 245 370 245" class="arrow"/>
+  <path d="M 310 329 C 334 329 346 247 370 247" class="arrow-light"/>
+  <path d="M 310 413 C 334 413 346 365 370 365" class="arrow"/>
+  <path d="M 665 487 C 568 548 412 552 310 522" class="arrow-light"/>
+  <path d="M 875 487 C 930 487 955 248 1016 248" class="arrow"/>
+  <path d="M 1200 342 C 1230 380 1230 488 1200 527" class="arrow"/>
+  <path d="M 1016 436 C 950 436 922 508 875 508" class="arrow-light"/>
+
+  <rect x="142" y="642" width="996" height="44" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="168" y="670" class="small">Flow: terminal event -> action -> AppState and form validation -> command executor -> TuiAdminFacade -> admin-core -> result view model -> Ratatui renderer</text>
+</svg>

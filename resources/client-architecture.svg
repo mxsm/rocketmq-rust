@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-client-rust architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust client crate, showing application APIs, producer, consumer, admin surfaces, shared client runtime, remoting implementation, hooks, routing, trace, offset store, and external NameServer and broker integrations.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; }
+      .chip-red { fill: #fff1f2; stroke: #fecdd3; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="780"/>
+  <text x="54" y="54" class="title">rocketmq-client-rust Runtime Architecture</text>
+  <text x="54" y="80" class="subtitle">Async producer, consumer, admin, route management, remoting, hooks, trace, ACL, latency strategy, and offset storage</text>
+
+  <rect x="42" y="112" width="214" height="536" rx="12" class="panel"/>
+  <text x="70" y="145" class="section-title">Application Surface</text>
+  <rect x="66" y="172" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="196" class="label">Producer API</text>
+  <text x="88" y="214" class="small">DefaultMQProducer</text>
+  <rect x="66" y="250" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="274" class="label">Transaction API</text>
+  <text x="88" y="292" class="small">TransactionMQProducer</text>
+  <rect x="66" y="328" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="352" class="label">Push Consumer API</text>
+  <text x="88" y="370" class="small">DefaultMQPushConsumer</text>
+  <rect x="66" y="406" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="430" class="label">Lite Pull API</text>
+  <text x="88" y="448" class="small">DefaultLitePullConsumer</text>
+  <rect x="66" y="484" width="166" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="508" class="label">Admin API</text>
+  <text x="88" y="526" class="small">DefaultMQAdminExt</text>
+
+  <rect x="300" y="112" width="260" height="536" rx="12" class="panel"/>
+  <text x="328" y="145" class="section-title">Client Facades</text>
+  <rect x="330" y="174" width="200" height="72" rx="9" class="chip-violet"/>
+  <text x="352" y="200" class="label">Producer Runtime</text>
+  <text x="352" y="220" class="small">send / batch / request-reply</text>
+  <text x="352" y="238" class="tiny">retry, compression, backpressure</text>
+  <rect x="330" y="274" width="200" height="72" rx="9" class="chip-violet"/>
+  <text x="352" y="300" class="label">Consumer Runtime</text>
+  <text x="352" y="320" class="small">push, pop, lite-pull</text>
+  <text x="352" y="338" class="tiny">rebalance, listeners, flow control</text>
+  <rect x="330" y="374" width="200" height="72" rx="9" class="chip-violet"/>
+  <text x="352" y="400" class="label">Admin Runtime</text>
+  <text x="352" y="420" class="small">topic, broker, cluster APIs</text>
+  <text x="352" y="438" class="tiny">stats, ACL, route, config ops</text>
+  <rect x="330" y="494" width="200" height="72" rx="9" class="chip-violet"/>
+  <text x="352" y="520" class="label">Client Config</text>
+  <text x="352" y="540" class="small">namespace, TLS, access channel</text>
+  <text x="352" y="558" class="tiny">groups, timeouts, namesrv addr</text>
+
+  <rect x="606" y="112" width="374" height="536" rx="14" class="panel"/>
+  <text x="634" y="145" class="section-title">Shared Client Core</text>
+  <line x1="634" y1="161" x2="952" y2="161" class="bus"/>
+
+  <rect x="636" y="184" width="150" height="92" rx="10" class="chip-teal"/>
+  <text x="656" y="210" class="label">MQClientManager</text>
+  <text x="656" y="230" class="small">client instance cache</text>
+  <text x="656" y="248" class="tiny">client id + lifecycle</text>
+
+  <rect x="816" y="184" width="134" height="92" rx="10" class="chip-teal"/>
+  <text x="836" y="210" class="label">MQClientInstance</text>
+  <text x="836" y="230" class="small">tables + services</text>
+  <text x="836" y="248" class="tiny">producer / consumer / admin</text>
+
+  <rect x="636" y="304" width="150" height="96" rx="10" class="chip-amber"/>
+  <text x="656" y="330" class="label">Route + Heartbeat</text>
+  <text x="656" y="350" class="small">NameServer discovery</text>
+  <text x="656" y="368" class="small">broker tables</text>
+  <text x="656" y="386" class="tiny">HeartbeatV2 support</text>
+
+  <rect x="816" y="304" width="134" height="96" rx="10" class="chip-gray"/>
+  <text x="836" y="330" class="label">Services</text>
+  <text x="836" y="350" class="small">pull service</text>
+  <text x="836" y="368" class="small">rebalance service</text>
+  <text x="836" y="386" class="tiny">scheduled refresh</text>
+
+  <rect x="636" y="430" width="150" height="96" rx="10" class="chip-red"/>
+  <text x="656" y="456" class="label">Hooks + Security</text>
+  <text x="656" y="476" class="small">send / consume hooks</text>
+  <text x="656" y="494" class="small">ACL RPC hook</text>
+  <text x="656" y="512" class="tiny">namespace + forbidden checks</text>
+
+  <rect x="816" y="430" width="134" height="96" rx="10" class="chip-red"/>
+  <text x="836" y="456" class="label">Client State</text>
+  <text x="836" y="476" class="small">offset stores</text>
+  <text x="836" y="494" class="small">process queues</text>
+  <text x="836" y="512" class="tiny">stats + running info</text>
+
+  <rect x="1030" y="112" width="208" height="536" rx="12" class="panel"/>
+  <text x="1058" y="145" class="section-title">Network + Brokers</text>
+  <rect x="1058" y="182" width="154" height="72" rx="8" class="chip-teal"/>
+  <text x="1080" y="208" class="label">NameServer</text>
+  <text x="1080" y="228" class="small">route discovery</text>
+  <text x="1080" y="246" class="tiny">topic route data</text>
+  <rect x="1058" y="284" width="154" height="72" rx="8" class="chip-teal"/>
+  <text x="1080" y="310" class="label">Broker Cluster</text>
+  <text x="1080" y="330" class="small">send / pull / pop</text>
+  <text x="1080" y="348" class="tiny">admin + transaction RPC</text>
+  <rect x="1058" y="386" width="154" height="72" rx="8" class="chip-gray"/>
+  <text x="1080" y="412" class="label">Remoting Client</text>
+  <text x="1080" y="432" class="small">MQClientAPIImpl</text>
+  <text x="1080" y="450" class="tiny">request / callback / timeout</text>
+  <rect x="1058" y="488" width="154" height="72" rx="8" class="chip-violet"/>
+  <text x="1080" y="514" class="label">Trace + Metrics</text>
+  <text x="1080" y="534" class="small">trace dispatcher</text>
+  <text x="1080" y="552" class="tiny">OpenTelemetry features</text>
+
+  <rect x="636" y="572" width="314" height="46" rx="8" class="chip-blue"/>
+  <text x="658" y="600" class="label">Latency Fault Strategy + Queue Selectors</text>
+
+  <path d="M 232 201 C 260 201, 274 210, 330 210" class="arrow"/>
+  <path d="M 232 279 C 260 279, 274 222, 330 222" class="arrow"/>
+  <path d="M 232 357 C 260 357, 274 310, 330 310" class="arrow"/>
+  <path d="M 232 435 C 260 435, 274 322, 330 322" class="arrow"/>
+  <path d="M 232 513 C 260 513, 274 410, 330 410" class="arrow"/>
+
+  <path d="M 530 210 C 568 210, 590 230, 636 230" class="arrow"/>
+  <path d="M 530 310 C 568 310, 590 360, 636 360" class="arrow"/>
+  <path d="M 530 410 C 568 410, 590 230, 636 230" class="arrow"/>
+  <path d="M 530 530 C 568 530, 590 476, 636 476" class="arrow"/>
+
+  <path d="M 786 230 L 816 230" class="arrow"/>
+  <path d="M 883 276 L 883 304" class="arrow"/>
+  <path d="M 711 276 L 711 304" class="arrow"/>
+  <path d="M 711 400 L 711 430" class="arrow"/>
+  <path d="M 883 400 L 883 430" class="arrow"/>
+  <path d="M 883 526 L 883 572" class="arrow"/>
+  <path d="M 711 526 L 711 572" class="arrow"/>
+
+  <path d="M 950 230 C 992 230, 1018 422, 1058 422" class="arrow"/>
+  <path d="M 1058 422 C 1018 422, 996 218, 1058 218" class="dash"/>
+  <path d="M 950 352 C 994 352, 1014 218, 1058 218" class="dash"/>
+  <path d="M 950 594 C 994 594, 1014 320, 1058 320" class="dash"/>
+  <path d="M 950 478 C 996 478, 1016 524, 1058 524" class="dash"/>
+  <path d="M 950 478 C 995 478, 1018 422, 1058 422" class="dash"/>
+
+  <rect x="54" y="686" width="1172" height="44" rx="10" fill="#ffffff" stroke="#dbe4ef"/>
+  <text x="78" y="713" class="small">Flow: application APIs register with MQClientInstance, discover routes from NameServer, dispatch remoting commands to brokers, and apply hooks, ACL signing, trace, latency strategy, and offset management around the call path.</text>
+</svg>

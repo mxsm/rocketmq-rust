@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-remoting architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust remoting crate, showing protocol models, codec and transport, client runtime, server runtime, processor dispatch, TLS, observability, and external RocketMQ integrations.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .subpanel { fill: #f8fafc; stroke: #dbe4ef; stroke-width: 1; }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; }
+      .chip-red { fill: #fff1f2; stroke: #fecdd3; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="780"/>
+  <text x="54" y="54" class="title">rocketmq-remoting Runtime Architecture</text>
+  <text x="54" y="80" class="subtitle">Protocol models, wire codec, Tokio transport, client/server runtimes, processor dispatch, TLS, metrics, and Java-compatible request codes</text>
+
+  <rect x="42" y="112" width="205" height="534" rx="12" class="panel"/>
+  <text x="68" y="145" class="section-title">Workspace Consumers</text>
+  <rect x="66" y="174" width="157" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="198" class="label">Broker</text>
+  <text x="88" y="216" class="small">processors + RPC</text>
+  <rect x="66" y="254" width="157" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="278" class="label">NameServer</text>
+  <text x="88" y="296" class="small">route protocol</text>
+  <rect x="66" y="334" width="157" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="358" class="label">Proxy</text>
+  <text x="88" y="376" class="small">remoting ingress</text>
+  <rect x="66" y="414" width="157" height="58" rx="8" class="chip-blue"/>
+  <text x="88" y="438" class="label">Client</text>
+  <text x="88" y="456" class="small">cluster calls</text>
+  <rect x="66" y="514" width="157" height="58" rx="8" class="chip-gray"/>
+  <text x="88" y="538" class="label">External Peers</text>
+  <text x="88" y="556" class="small">RocketMQ network</text>
+
+  <rect x="292" y="112" width="238" height="534" rx="12" class="panel"/>
+  <text x="320" y="145" class="section-title">Protocol Model</text>
+  <rect x="320" y="174" width="182" height="64" rx="8" class="chip-teal"/>
+  <text x="342" y="199" class="label">RemotingCommand</text>
+  <text x="342" y="217" class="small">code, opaque, flag, body</text>
+  <rect x="320" y="260" width="182" height="64" rx="8" class="chip-teal"/>
+  <text x="342" y="285" class="label">Request/Response Code</text>
+  <text x="342" y="303" class="small">Java-compatible values</text>
+  <rect x="320" y="346" width="182" height="64" rx="8" class="chip-teal"/>
+  <text x="342" y="371" class="label">Headers + Bodies</text>
+  <text x="342" y="389" class="small">admin, broker, client ops</text>
+  <rect x="320" y="432" width="182" height="64" rx="8" class="chip-teal"/>
+  <text x="342" y="457" class="label">Route + Heartbeat</text>
+  <text x="342" y="475" class="small">topic, subscription, static</text>
+  <rect x="320" y="530" width="182" height="64" rx="8" class="chip-amber"/>
+  <text x="342" y="555" class="label">Serde Surface</text>
+  <text x="342" y="573" class="small">JSON, fast headers, SIMD</text>
+
+  <rect x="574" y="112" width="288" height="534" rx="14" class="panel"/>
+  <text x="602" y="145" class="section-title">Codec + Transport Core</text>
+  <line x1="602" y1="161" x2="834" y2="161" class="bus"/>
+  <rect x="604" y="182" width="228" height="64" rx="9" class="chip-violet"/>
+  <text x="626" y="207" class="label">RemotingCommandCodec</text>
+  <text x="626" y="225" class="small">Tokio encoder / decoder</text>
+  <rect x="604" y="268" width="228" height="64" rx="9" class="chip-violet"/>
+  <text x="626" y="293" class="label">CompositeCodec</text>
+  <text x="626" y="311" class="small">command decode, bytes encode</text>
+  <rect x="604" y="354" width="228" height="64" rx="9" class="chip-violet"/>
+  <text x="626" y="379" class="label">Connection + Channel</text>
+  <text x="626" y="397" class="small">framing, send, receive</text>
+  <rect x="604" y="440" width="228" height="64" rx="9" class="chip-violet"/>
+  <text x="626" y="465" class="label">TLS Runtime</text>
+  <text x="626" y="483" class="small">disabled, permissive, enforcing</text>
+  <rect x="604" y="526" width="228" height="64" rx="9" class="chip-violet"/>
+  <text x="626" y="551" class="label">Smart Encode Buffer</text>
+  <text x="626" y="569" class="small">adaptive allocation control</text>
+
+  <rect x="904" y="112" width="324" height="246" rx="14" class="panel"/>
+  <text x="932" y="145" class="section-title">Client Runtime</text>
+  <rect x="932" y="174" width="124" height="54" rx="8" class="chip-blue"/>
+  <text x="950" y="197" class="label">DefaultClient</text>
+  <text x="950" y="215" class="small">async RPC</text>
+  <rect x="1080" y="174" width="120" height="54" rx="8" class="chip-blue"/>
+  <text x="1098" y="197" class="label">Response Table</text>
+  <text x="1098" y="215" class="small">opaque future</text>
+  <rect x="932" y="254" width="124" height="54" rx="8" class="chip-blue"/>
+  <text x="950" y="277" class="label">NameServer</text>
+  <text x="950" y="295" class="small">latency selector</text>
+  <rect x="1080" y="254" width="120" height="54" rx="8" class="chip-blue"/>
+  <text x="1098" y="277" class="label">Pool + Retry</text>
+  <text x="1098" y="295" class="small">circuit breaker</text>
+
+  <rect x="904" y="400" width="324" height="246" rx="14" class="panel"/>
+  <text x="932" y="433" class="section-title">Server Runtime</text>
+  <rect x="932" y="462" width="124" height="54" rx="8" class="chip-amber"/>
+  <text x="950" y="485" class="label">TcpListener</text>
+  <text x="950" y="503" class="small">accept loop</text>
+  <rect x="1080" y="462" width="120" height="54" rx="8" class="chip-amber"/>
+  <text x="1098" y="485" class="label">ConnectionTask</text>
+  <text x="1098" y="503" class="small">idle + shutdown</text>
+  <rect x="932" y="542" width="124" height="54" rx="8" class="chip-amber"/>
+  <text x="950" y="565" class="label">Processor</text>
+  <text x="950" y="583" class="small">RequestProcessor</text>
+  <rect x="1080" y="542" width="120" height="54" rx="8" class="chip-amber"/>
+  <text x="1098" y="565" class="label">Processor V2</text>
+  <text x="1098" y="583" class="small">core + plugin</text>
+
+  <rect x="292" y="684" width="936" height="56" rx="12" class="panel"/>
+  <text x="320" y="716" class="section-title">Cross-cutting: RPCHook, channel events, reconnect backoff, observability metrics, protocol compatibility tests, benchmarks</text>
+
+  <path d="M224 204 H318" class="arrow"/>
+  <path d="M224 284 H318" class="arrow"/>
+  <path d="M224 364 H318" class="arrow"/>
+  <path d="M224 444 H318" class="arrow"/>
+  <path d="M502 206 H602" class="arrow"/>
+  <path d="M502 292 H602" class="arrow"/>
+  <path d="M502 378 H602" class="arrow"/>
+  <path d="M502 562 H602" class="arrow"/>
+  <path d="M832 214 H932" class="arrow"/>
+  <path d="M832 386 H932" class="arrow"/>
+  <path d="M832 472 H932" class="arrow"/>
+  <path d="M1060 228 V254" class="dash"/>
+  <path d="M1060 516 V542" class="dash"/>
+  <path d="M718 590 V684" class="dash"/>
+</svg>

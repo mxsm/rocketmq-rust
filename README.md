@@ -36,7 +36,6 @@ enterprise-grade message middleware to the Rust ecosystem.
 [![Documentation](https://img.shields.io/badge/📚_Documentation-FF8C42?style=flat-square&labelColor=CC6A2F&color=FF8C42)](#-documentation)
 [![Components](https://img.shields.io/badge/📦_Components-9B59B6?style=flat-square&labelColor=6C3483&color=9B59B6)](#-components--crates)
 <br/>
-[![Roadmap](https://img.shields.io/badge/🗺️_Roadmap-E74C3C?style=flat-square&labelColor=B03A2E&color=E74C3C)](#️-roadmap)
 [![Contributing](https://img.shields.io/badge/🤝_Contributing-F39C12?style=flat-square&labelColor=B9770E&color=F39C12)](#-contributing)
 [![Community](https://img.shields.io/badge/👥_Community-8E44AD?style=flat-square&labelColor=633974&color=8E44AD)](#-community--support)
 
@@ -73,7 +72,7 @@ RocketMQ-Rust implements a distributed architecture with the following core comp
 - **Producer Client**: High-performance message publishing with various sending modes
 - **Consumer Client**: Flexible message consumption with push and pull models
 - **Store**: Efficient local storage engine optimized for sequential writes
-- **Controller** (In Development): Advanced high availability and failover capabilities
+- **Controller**: Advanced high availability and failover capabilities
 
 ## 📚 Documentation
 
@@ -86,100 +85,75 @@ RocketMQ-Rust implements a distributed architecture with the following core comp
 
 ### Prerequisites
 
-- Rust toolchain 1.85.0 or later (stable or nightly)
-- Basic familiarity with message queue concepts
+- Rust toolchain 1.85.0 or later
+- A shell with `cargo` available
+- Separate terminals for the NameServer, Broker, and client examples
 
-### Installation
-
-Add the client SDK to your `Cargo.toml`:
-
-```toml
-[dependencies]
-rocketmq-client-rust = "0.9.0"
-```
-
-Or for specific components:
-
-```toml
-[dependencies]
-# Client SDK (Producer & Consumer)
-rocketmq-client-rust = "0.9.0"
-
-# Core utilities and data structures
-rocketmq-common = "0.9.0"
-
-# Low-level runtime abstractions
-rocketmq-rust = "0.9.0"
-```
-
-### Start Name Server
+### 1. Build the Workspace
 
 ```bash
-# Start with default configuration (listening on 0.0.0.0:9876)
+git clone https://github.com/mxsm/rocketmq-rust.git
+cd rocketmq-rust
+cargo build --workspace
+```
+
+If you only want to use the client SDK from your own application, add the current release to `Cargo.toml`:
+
+```toml
+[dependencies]
+rocketmq-client-rust = "1.0.0"
+rocketmq-common = "1.0.0"
+```
+
+### 2. Start the NameServer
+
+```bash
 cargo run --bin rocketmq-namesrv-rust
-
-# Or specify custom host and port
-cargo run --bin rocketmq-namesrv-rust -- --ip 127.0.0.1 --port 9876
-
-# View all options
-cargo run --bin rocketmq-namesrv-rust -- --help
 ```
 
-### Start Broker
+The default NameServer endpoint is `127.0.0.1:9876`. To bind explicitly:
 
 ```bash
-# Set ROCKETMQ_HOME environment variable (required)
-export ROCKETMQ_HOME=/path/to/rocketmq  # Linux/macOS
-set ROCKETMQ_HOME=D:\rocketmq           # Windows
-
-# Start broker with default configuration
-cargo run --bin rocketmq-broker-rust
-
-# Start with custom name server address
-cargo run --bin rocketmq-broker-rust -- -n "127.0.0.1:9876"
-
-# Start with custom configuration file
-cargo run --bin rocketmq-broker-rust -- -c ./conf/broker.toml
-
-# View all options
-cargo run --bin rocketmq-broker-rust -- --help
+cargo run --bin rocketmq-namesrv-rust -- --ip 127.0.0.1 --port 9876
 ```
 
-### Send Your First Message
+### 3. Start the Broker
 
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::Result;
-use rocketmq_common::common::message::message_single::Message;
+The Broker requires `ROCKETMQ_HOME`. Point it at an existing RocketMQ home or create a local runtime directory for quick testing.
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Create producer instance
-    let mut producer = DefaultMQProducer::builder()
-        .producer_group("example_producer_group")
-        .name_server_addr("127.0.0.1:9876")
-        .build();
+Linux/macOS:
 
-    // Start producer
-    producer.start().await?;
-
-    // Create and send message
-    let message = Message::builder()
-        .topic("TestTopic")
-        .body("Hello RocketMQ from Rust!".as_bytes().to_vec())
-        .build();
-
-    let send_result = producer.send(message).await?;
-    println!("Message sent: {:?}", send_result);
-
-    // Shutdown producer
-    producer.shutdown().await;
-    Ok(())
-}
+```bash
+export ROCKETMQ_HOME="$(pwd)/.rocketmq"
+mkdir -p "$ROCKETMQ_HOME/conf"
+cargo run --bin rocketmq-broker-rust -- -n 127.0.0.1:9876
 ```
 
-For more examples including batch sending, transactions, and consumer patterns, check out:
+Windows PowerShell:
+
+```powershell
+$env:ROCKETMQ_HOME = "$PWD\.rocketmq"
+New-Item -ItemType Directory -Force "$env:ROCKETMQ_HOME\conf" | Out-Null
+cargo run --bin rocketmq-broker-rust -- -n 127.0.0.1:9876
+```
+
+Use `cargo run --bin rocketmq-broker-rust -- --help` to inspect configuration flags such as `--configFile`, `--namesrvAddr`, and config printing options.
+
+### 4. Send and Receive Messages
+
+Start the consumer example first:
+
+```bash
+cargo run -p rocketmq-client-rust --example consumer
+```
+
+Then send messages from another terminal:
+
+```bash
+cargo run -p rocketmq-client-rust --example producer
+```
+
+The quickstart examples use `127.0.0.1:9876` and `TopicTest` by default. For more messaging patterns, see:
 
 - [Send single messages](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-a-single-message)
 - [Send batch messages](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-batch-messages)
@@ -188,120 +162,82 @@ For more examples including batch sending, transactions, and consumer patterns, 
 
 ## 📦 Components & Crates
 
-RocketMQ-Rust is organized as a monorepo with the following crates:
+RocketMQ-Rust is organized into deployable services, reusable protocol/runtime crates, and operational applications. The tables below focus on responsibility and integration boundaries instead of per-crate maturity labels.
 
-| Crate                                        | Description                                | Status            |
-|----------------------------------------------|--------------------------------------------|-------------------|
-| [rocketmq](./rocketmq)                       | Core library and main entry point          | ✅ Production      |
-| [rocketmq-namesrv](./rocketmq-namesrv)       | Name server for service discovery          | ✅ Production      |
-| [rocketmq-broker](./rocketmq-broker)         | Message broker and storage engine          | ✅ Production      |
-| [rocketmq-client](./rocketmq-client)         | Producer and consumer SDK                  | ✅ Production      |
-| [rocketmq-store](./rocketmq-store)           | Local storage implementation               | ✅ Production      |
-| [rocketmq-remoting](./rocketmq-remoting)     | Network communication layer                | ✅ Production      |
-| [rocketmq-common](./rocketmq-common)         | Common utilities and data structures       | ✅ Production      |
-| [rocketmq-runtime](./rocketmq-runtime)       | Async runtime abstractions                 | ✅ Production      |
-| [rocketmq-filter](./rocketmq-filter)         | Message filtering engine                   | ✅ Production      |
-| [rocketmq-auth](./rocketmq-auth)             | Authentication and authorization           | ✅ Production      |
-| [rocketmq-error](./rocketmq-error)           | Error types and handling                   | ✅ Production      |
-| [rocketmq-macros](./rocketmq-macros)         | Procedural macros and derive macros        | ✅ Production      |
-| [rocketmq-controller](./rocketmq-controller) | High availability controller               | 🚧 In Development |
-| [rocketmq-proxy](./rocketmq-proxy)           | Protocol proxy layer                       | 🚧 In Development |
-| [rocketmq-example](./rocketmq-example)       | Example applications and demos             | ✅ Production      |
-| [rocketmq-tools](./rocketmq-tools)           | Command-line tools and utilities           | 🚧 In Development |
-| ├─ [rocketmq-admin](./rocketmq-tools/rocketmq-admin) | Admin tools for cluster management | 🚧 In Development |
-| │  ├─ [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | Core admin functionality | 🚧 In Development |
-| │  └─ [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | Terminal UI for admin operations | 🚧 In Development |
-| └─ [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | Storage inspection tools | ✅ Production |
-| [rocketmq-dashboard](./rocketmq-dashboard)   | Management dashboard and UI                | 🚧 In Development |
-| ├─ [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | Shared dashboard components | 🚧 In Development |
-| ├─ [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | GPUI-based desktop dashboard | 🚧 In Development |
-| └─ [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | Tauri-based cross-platform dashboard | 🚧 In Development |
+### Core Runtime Services
 
-## 🗺️ Roadmap
+| Crate | Responsibility |
+|-------|----------------|
+| [rocketmq](./rocketmq) | Public foundation crate and shared runtime entry points. |
+| [rocketmq-namesrv](./rocketmq-namesrv) | NameServer implementation for broker registration, topic routing, and service discovery. |
+| [rocketmq-broker](./rocketmq-broker) | Broker implementation for message storage, dispatch, delivery, and consumer coordination. |
+| [rocketmq-controller](./rocketmq-controller) | Controller service for broker coordination and high availability workflows. |
+| [rocketmq-proxy](./rocketmq-proxy) | Proxy layer for gateway-style client access and protocol integration. |
 
-Our development follows the RocketMQ architecture with focus on:
+### Client, Protocol, and Shared Libraries
 
-- [x] **Core Messaging**: Topic management, message storage, and basic publish/subscribe
-- [x] **Client SDK**: Producer and consumer APIs with async support
-- [x] **Name Server**: Service discovery and routing
-- [x] **Broker**: Message persistence and delivery guarantees
-- [ ] **Message Filtering**: Tag-based and SQL92 filtering
-- [ ] **Transactions**: Distributed transaction message support
-- [ ] **Controller Mode**: Enhanced high availability with Raft consensus
-- [ ] **Tiered Storage**: Cloud-native tiered storage implementation
-- [ ] **Proxy**: Multi-protocol gateway support
-- [ ] **Observability**: Metrics, tracing, and monitoring integration
+| Crate | Responsibility |
+|-------|----------------|
+| [rocketmq-client](./rocketmq-client) | Async producer, consumer, and admin SDK for application integration. |
+| [rocketmq-remoting](./rocketmq-remoting) | RocketMQ remoting protocol, command encoding/decoding, and network integration. |
+| [rocketmq-common](./rocketmq-common) | Shared message models, configuration types, constants, and utility code. |
+| [rocketmq-auth](./rocketmq-auth) | Authentication, authorization, ACL evaluation, and request context support. |
+| [rocketmq-filter](./rocketmq-filter) | Message filtering support, including tag and expression-based filtering. |
 
-For detailed progress and planned features, see our [roadmap diagram](resources/rocektmq-rust-roadmap.png).
+### Storage, Runtime, and Observability
 
-## 💡 Features & Highlights
+| Crate | Responsibility |
+|-------|----------------|
+| [rocketmq-store](./rocketmq-store) | Durable local storage engine for commit logs, consume queues, and message indexes. |
+| [rocketmq-tieredstore](./rocketmq-tieredstore) | Tiered storage abstractions for extending message data beyond local disks. |
+| [rocketmq-runtime](./rocketmq-runtime) | Async runtime abstractions and runtime-friendly coordination utilities. |
+| [rocketmq-error](./rocketmq-error) | Shared error types and result conventions across workspace crates. |
+| [rocketmq-macros](./rocketmq-macros) | Procedural macros used by RocketMQ-Rust crates and examples. |
+| [rocketmq-observability](./rocketmq-observability) | Metrics and tracing integration for service and client instrumentation. |
 
-### Performance
+### Tools, Examples, and Dashboards
 
-- **High Throughput**: Optimized for millions of messages per second
-- **Low Latency**: Sub-millisecond message publishing with async I/O
-- **Memory Efficient**: Smart memory management with zero-copy where possible
-- **Concurrent Processing**: Fully leverages multi-core processors
+| Project | Responsibility |
+|---------|----------------|
+| [rocketmq-example](./rocketmq-example) | Standalone examples covering producer, consumer, request/reply, ordering, delay, and transaction flows. |
+| [rocketmq-tools](./rocketmq-tools) | Command-line tools and operational utilities. |
+| [rocketmq-admin-cli](./rocketmq-tools/rocketmq-admin/rocketmq-admin-cli) | Command-line administration interface for cluster and broker operations. |
+| [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | Shared admin functionality used by CLI and terminal interfaces. |
+| [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | Terminal UI for interactive administration workflows. |
+| [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | Storage inspection utilities for broker data files. |
+| [rocketmq-dashboard](./rocketmq-dashboard) | Dashboard workspace for desktop, web, and shared management UI components. |
+| [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | Shared dashboard models and reusable dashboard infrastructure. |
+| [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | GPUI-based desktop dashboard. |
+| [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | Tauri-based cross-platform dashboard shell and backend. |
+| [rocketmq-dashboard-web](./rocketmq-dashboard/rocketmq-dashboard-web) | Web dashboard frontend and backend project. |
 
-### Reliability
+## 💡 Capabilities
 
-- **Data Durability**: Configurable message persistence with fsync control
-- **Message Ordering**: FIFO ordering guarantees within message queues
-- **Failure Recovery**: Automatic failover and recovery mechanisms
-- **Idempotency**: Built-in deduplication support
+RocketMQ-Rust focuses on RocketMQ-compatible messaging services and Rust-native integration points.
 
-### Developer Experience
+| Area | What it provides |
+|------|------------------|
+| Messaging services | NameServer, Broker, Controller, and Proxy services for routing, storage, delivery, coordination, and gateway access. |
+| Client integration | Async producer, consumer, admin, request/reply, batch, ordered, delayed, and transactional messaging APIs. |
+| Protocol compatibility | RocketMQ remoting command models, headers, serialization, route discovery, and client/broker interoperability. |
+| Storage engine | Durable commit log, consume queue, index, checkpoint, and tiered storage building blocks. |
+| Security and governance | Authentication, authorization, ACL evaluation, request context, and broker/client-side integration points. |
+| Operations | Metrics, tracing, admin tools, storage inspection utilities, and dashboard projects for cluster visibility. |
 
-- **Intuitive API**: Ergonomic Rust APIs with builder patterns
-- **Type Safety**: Strong typing prevents runtime errors
-- **Rich Examples**: Comprehensive examples for common use cases
-- **Active Development**: Regular updates and community support
+## 🧪 Build & Validation
 
-## 🧪 Development
+Quick Start covers the first local run. For regular development and review, use the root workspace commands below.
 
-### Building from Source
+| Task | Command |
+|------|---------|
+| Build the workspace | `cargo build --workspace` |
+| Run workspace tests | `cargo test --workspace` |
+| Run a focused crate test | `cargo test -p rocketmq-client` |
+| Format Rust code | `cargo fmt --all` |
+| Run clippy with workspace features | `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` |
+| Build local API documentation | `cargo doc --workspace --no-deps` |
 
-```bash
-# Clone the repository
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust
-
-# Build all components
-cargo build --release
-
-# Run tests
-cargo test
-
-# Run specific component
-cargo run --bin rocketmq-namesrv-rust
-cargo run --bin rocketmq-broker-rust
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-cargo test --workspace
-
-# Run tests for specific crate
-cargo test -p rocketmq-client
-
-# Run with logging
-RUST_LOG=debug cargo test
-```
-
-### Code Quality
-
-```bash
-# Format code
-cargo fmt
-
-# Run clippy
-cargo clippy --all-targets --all-features
-
-# Check documentation
-cargo doc --no-deps --open
-```
+Standalone projects under `rocketmq-example/` and `rocketmq-dashboard/` are validated from their own project roots.
 
 ## 🤝 Contributing
 
@@ -325,7 +261,7 @@ We welcome contributions from the community! Whether you're fixing bugs, adding 
 
 For detailed guidelines, please read our [Contribution Guide](https://rocketmqrust.com/docs/contribute-guide/).
 
-### Development Resources
+### Repository Activity
 
 ![Repository Activity](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
 
@@ -334,7 +270,7 @@ For detailed guidelines, please read our [Contribution Guide](https://rocketmqru
 <details>
 <summary><b>Is RocketMQ-Rust production-ready?</b></summary>
 
-Yes, core components (NameServer, Broker, Client SDK) are production-ready and actively maintained. Controller and Proxy modules are still in development.
+Yes. The core services and client SDK are designed for production-oriented deployments and are actively maintained.
 </details>
 
 <details>

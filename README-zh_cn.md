@@ -32,7 +32,6 @@
 [![文档](https://img.shields.io/badge/📚_文档-FF8C42?style=flat-square&labelColor=CC6A2F&color=FF8C42)](#-文档)
 [![组件](https://img.shields.io/badge/📦_组件-9B59B6?style=flat-square&labelColor=6C3483&color=9B59B6)](#-组件--crate)
 <br/>
-[![路线图](https://img.shields.io/badge/🗺️_路线图-E74C3C?style=flat-square&labelColor=B03A2E&color=E74C3C)](#️-路线图)
 [![贡献](https://img.shields.io/badge/🤝_贡献-F39C12?style=flat-square&labelColor=B9770E&color=F39C12)](#-贡献)
 [![社区](https://img.shields.io/badge/👥_社区-8E44AD?style=flat-square&labelColor=633974&color=8E44AD)](#社区--支持)
 
@@ -66,7 +65,7 @@ RocketMQ-Rust 实现了分布式架构，包含以下核心组件：
 - **Producer Client**：高性能消息发布，支持多种发送模式
 - **Consumer Client**：灵活的消息消费，支持推送和拉取模式
 - **Store**：高效的本地存储引擎，针对顺序写入进行了优化
-- **Controller**（开发中）：高级高可用性和故障转移能力
+- **Controller**：高级高可用性和故障转移能力
 
 ## 📚 文档
 
@@ -79,100 +78,76 @@ RocketMQ-Rust 实现了分布式架构，包含以下核心组件：
 
 ### 前置要求
 
-- Rust 工具链 1.85.0 或更高版本（stable 或 nightly）
-- 对消息队列概念的基本了解
+- Rust 工具链 1.85.0 或更高版本
+- 可用的 shell 和 `cargo`
+- 为 NameServer、Broker 和客户端示例准备独立终端
 
-### 安装
-
-将客户端 SDK 添加到您的 `Cargo.toml`：
-
-```toml
-[dependencies]
-rocketmq-client-rust = "0.9.0"
-```
-
-或者针对特定组件：
-
-```toml
-[dependencies]
-# 客户端 SDK（Producer 和 Consumer）
-rocketmq-client-rust = "0.9.0"
-
-# 核心工具和数据结构
-rocketmq-common = "0.9.0"
-
-# 低级运行时抽象
-rocketmq-rust = "0.9.0"
-```
-
-### 启动 Name Server
+### 1. 构建工作区
 
 ```bash
-# 使用默认配置启动（监听 0.0.0.0:9876）
+git clone https://github.com/mxsm/rocketmq-rust.git
+cd rocketmq-rust
+cargo build --workspace
+```
+
+如果只想在自己的应用中使用客户端 SDK，请在 `Cargo.toml` 中添加当前版本：
+
+```toml
+[dependencies]
+rocketmq-client-rust = "1.0.0"
+rocketmq-common = "1.0.0"
+```
+
+### 2. 启动 NameServer
+
+```bash
 cargo run --bin rocketmq-namesrv-rust
-
-# 或者指定自定义主机和端口
-cargo run --bin rocketmq-namesrv-rust -- --ip 127.0.0.1 --port 9876
-
-# 查看所有选项
-cargo run --bin rocketmq-namesrv-rust -- --help
 ```
 
-### 启动 Broker
+默认 NameServer 地址为 `127.0.0.1:9876`。如需显式指定绑定地址：
 
 ```bash
-# 设置 ROCKETMQ_HOME 环境变量（必需）
-export ROCKETMQ_HOME=/path/to/rocketmq  # Linux/macOS
-set ROCKETMQ_HOME=D:\rocketmq           # Windows
-
-# 使用默认配置启动 broker
-cargo run --bin rocketmq-broker-rust
-
-# 使用自定义 name server 地址启动
-cargo run --bin rocketmq-broker-rust -- -n "127.0.0.1:9876"
-
-# 使用自定义配置文件启动
-cargo run --bin rocketmq-broker-rust -- -c ./conf/broker.toml
-
-# 查看所有选项
-cargo run --bin rocketmq-broker-rust -- --help
+cargo run --bin rocketmq-namesrv-rust -- --ip 127.0.0.1 --port 9876
 ```
 
-### 发送第一条消息
+### 3. 启动 Broker
 
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::Result;
-use rocketmq_common::common::message::message_single::Message;
+Broker 需要设置 `ROCKETMQ_HOME`。可以指向已有 RocketMQ 目录，也可以为本地快速测试创建一个运行目录。
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // 创建生产者实例
-    let mut producer = DefaultMQProducer::builder()
-        .producer_group("example_producer_group")
-        .name_server_addr("127.0.0.1:9876")
-        .build();
+Linux/macOS：
 
-    // 启动生产者
-    producer.start().await?;
-
-    // 创建并发送消息
-    let message = Message::builder()
-        .topic("TestTopic")
-        .body("Hello RocketMQ from Rust!".as_bytes().to_vec())
-        .build();
-
-    let send_result = producer.send(message).await?;
-    println!("消息已发送: {:?}", send_result);
-
-    // 关闭生产者
-    producer.shutdown().await;
-    Ok(())
-}
+```bash
+export ROCKETMQ_HOME="$(pwd)/.rocketmq"
+mkdir -p "$ROCKETMQ_HOME/conf"
+cargo run --bin rocketmq-broker-rust -- -n 127.0.0.1:9876
 ```
 
-更多示例包括批量发送、事务和消费者模式，请查看：
+Windows PowerShell：
+
+```powershell
+$env:ROCKETMQ_HOME = "$PWD\.rocketmq"
+New-Item -ItemType Directory -Force "$env:ROCKETMQ_HOME\conf" | Out-Null
+cargo run --bin rocketmq-broker-rust -- -n 127.0.0.1:9876
+```
+
+使用 `cargo run --bin rocketmq-broker-rust -- --help` 查看 `--configFile`、`--namesrvAddr` 和配置打印等参数。
+
+### 4. 收发消息
+
+先启动消费者示例：
+
+```bash
+cargo run -p rocketmq-client-rust --example consumer
+```
+
+然后在另一个终端发送消息：
+
+```bash
+cargo run -p rocketmq-client-rust --example producer
+```
+
+快速开始示例默认使用 `127.0.0.1:9876` 和 `TopicTest`。更多消息模式请查看：
+
 - [发送单条消息](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-a-single-message)
 - [批量发送消息](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-batch-messages)
 - [RPC 消息](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-rpc-messages)
@@ -180,120 +155,82 @@ async fn main() -> Result<()> {
 
 ## 📦 组件 & Crate
 
-RocketMQ-Rust 组织为具有以下 crate 的单体仓库：
+RocketMQ-Rust 按可部署服务、可复用协议/运行时 crate 和运维应用组织。下表关注职责和集成边界，不再按单个 crate 标注成熟度。
 
-| Crate                                        | 描述                                | 状态            |
-|----------------------------------------------|-------------------------------------|-----------------|
-| [rocketmq](./rocketmq)                       | 核心库和主入口点                    | ✅ 生产环境      |
-| [rocketmq-namesrv](./rocketmq-namesrv)       | 服务发现的 Name server              | ✅ 生产环境      |
-| [rocketmq-broker](./rocketmq-broker)         | 消息代理和存储引擎                  | ✅ 生产环境      |
-| [rocketmq-client](./rocketmq-client)         | Producer 和 Consumer SDK            | ✅ 生产环境      |
-| [rocketmq-store](./rocketmq-store)           | 本地存储实现                        | ✅ 生产环境      |
-| [rocketmq-remoting](./rocketmq-remoting)     | 网络通信层                          | ✅ 生产环境      |
-| [rocketmq-common](./rocketmq-common)         | 通用工具和数据结构                  | ✅ 生产环境      |
-| [rocketmq-runtime](./rocketmq-runtime)       | 异步运行时抽象                      | ✅ 生产环境      |
-| [rocketmq-filter](./rocketmq-filter)         | 消息过滤引擎                        | ✅ 生产环境      |
-| [rocketmq-auth](./rocketmq-auth)             | 认证和授权                          | ✅ 生产环境      |
-| [rocketmq-error](./rocketmq-error)           | 错误类型和处理                      | ✅ 生产环境      |
-| [rocketmq-macros](./rocketmq-macros)         | 过程宏和派生宏                      | ✅ 生产环境      |
-| [rocketmq-controller](./rocketmq-controller) | 高可用控制器                        | 🚧 开发中       |
-| [rocketmq-proxy](./rocketmq-proxy)           | 协议代理层                          | 🚧 开发中       |
-| [rocketmq-example](./rocketmq-example)       | 示例应用程序和演示                  | ✅ 生产环境      |
-| [rocketmq-tools](./rocketmq-tools)           | 命令行工具和实用程序                | 🚧 开发中       |
-| ├─ [rocketmq-admin](./rocketmq-tools/rocketmq-admin) | 集群管理的管理工具         | 🚧 开发中       |
-| │  ├─ [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | 核心管理功能 | 🚧 开发中 |
-| │  └─ [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | 管理操作的终端 UI | 🚧 开发中 |
-| └─ [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | 存储检查工具 | ✅ 生产环境 |
-| [rocketmq-dashboard](./rocketmq-dashboard)   | 管理仪表板和 UI                     | 🚧 开发中       |
-| ├─ [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | 共享仪表板组件 | 🚧 开发中 |
-| ├─ [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | 基于 GPUI 的桌面仪表板 | 🚧 开发中 |
-| └─ [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | 基于 Tauri 的跨平台仪表板 | 🚧 开发中 |
+### 核心运行时服务
 
-## 🗺️ 路线图
+| Crate | 职责 |
+|-------|------|
+| [rocketmq](./rocketmq) | 公共基础 crate 和共享运行时入口。 |
+| [rocketmq-namesrv](./rocketmq-namesrv) | NameServer 实现，负责 broker 注册、主题路由和服务发现。 |
+| [rocketmq-broker](./rocketmq-broker) | Broker 实现，负责消息存储、分发、投递和消费协调。 |
+| [rocketmq-controller](./rocketmq-controller) | Controller 服务，负责 broker 协调和高可用工作流。 |
+| [rocketmq-proxy](./rocketmq-proxy) | Proxy 层，提供网关式客户端访问和协议集成。 |
 
-我们的开发遵循 RocketMQ 架构，重点关注：
+### 客户端、协议与共享库
 
-- [x] **核心消息**：主题管理、消息存储和基本发布/订阅
-- [x] **客户端 SDK**：支持异步的 Producer 和 Consumer API
-- [x] **Name Server**：服务发现和路由
-- [x] **Broker**：消息持久化和传递保证
-- [ ] **消息过滤**：基于标签和 SQL92 的过滤
-- [ ] **事务**：分布式事务消息支持
-- [ ] **控制器模式**：基于 Raft 共识的增强高可用性
-- [ ] **分层存储**：云原生分层存储实现
-- [ ] **代理**：多协议网关支持
-- [ ] **可观察性**：指标、跟踪和监控集成
+| Crate | 职责 |
+|-------|------|
+| [rocketmq-client](./rocketmq-client) | 面向应用集成的异步 producer、consumer 和 admin SDK。 |
+| [rocketmq-remoting](./rocketmq-remoting) | RocketMQ remoting 协议、命令编解码和网络集成。 |
+| [rocketmq-common](./rocketmq-common) | 共享消息模型、配置类型、常量和工具代码。 |
+| [rocketmq-auth](./rocketmq-auth) | 认证、授权、ACL 判断和请求上下文支持。 |
+| [rocketmq-filter](./rocketmq-filter) | 消息过滤支持，包括 tag 和表达式过滤。 |
 
-详细的进度和计划功能，请参阅我们的[路线图](resources/rocektmq-rust-roadmap.excalidraw)。
+### 存储、运行时与可观测性
 
-## 💡 特性与亮点
+| Crate | 职责 |
+|-------|------|
+| [rocketmq-store](./rocketmq-store) | 持久化本地存储引擎，覆盖 commit log、consume queue 和消息索引。 |
+| [rocketmq-tieredstore](./rocketmq-tieredstore) | 分层存储抽象，用于将消息数据扩展到本地磁盘之外。 |
+| [rocketmq-runtime](./rocketmq-runtime) | 异步运行时抽象和适配异步运行时的协调工具。 |
+| [rocketmq-error](./rocketmq-error) | 工作区 crate 共享的错误类型和结果约定。 |
+| [rocketmq-macros](./rocketmq-macros) | RocketMQ-Rust crate 和示例使用的过程宏。 |
+| [rocketmq-observability](./rocketmq-observability) | 服务端和客户端埋点使用的 metrics 与 tracing 集成。 |
 
-### 性能
+### 工具、示例与 Dashboard
 
-- **高吞吐量**：针对每秒数百万条消息进行了优化
-- **低延迟**：通过异步 I/O 实现亚毫秒级消息发布
-- **内存高效**：智能内存管理，尽可能实现零拷贝
-- **并发处理**：充分利用多核处理器
+| Project | 职责 |
+|---------|------|
+| [rocketmq-example](./rocketmq-example) | 独立示例，覆盖 producer、consumer、请求/响应、顺序、延迟和事务流程。 |
+| [rocketmq-tools](./rocketmq-tools) | 命令行工具和运维实用程序。 |
+| [rocketmq-admin-cli](./rocketmq-tools/rocketmq-admin/rocketmq-admin-cli) | 用于集群和 broker 运维操作的命令行管理接口。 |
+| [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | CLI 和终端界面复用的管理核心能力。 |
+| [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | 面向交互式运维流程的终端 UI。 |
+| [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | broker 数据文件的存储检查工具。 |
+| [rocketmq-dashboard](./rocketmq-dashboard) | Dashboard 工作区，覆盖桌面、Web 和共享管理 UI 组件。 |
+| [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | 共享 dashboard 模型和可复用 dashboard 基础设施。 |
+| [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | 基于 GPUI 的桌面 dashboard。 |
+| [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | 基于 Tauri 的跨平台 dashboard shell 和后端。 |
+| [rocketmq-dashboard-web](./rocketmq-dashboard/rocketmq-dashboard-web) | Web dashboard 前端和后端项目。 |
 
-### 可靠性
+## 💡 能力边界
 
-- **数据持久性**：可配置的消息持久化，支持 fsync 控制
-- **消息顺序**：消息队列内的 FIFO 顺序保证
-- **故障恢复**：自动故障转移和恢复机制
-- **幂等性**：内置去重支持
+RocketMQ-Rust 聚焦 RocketMQ 兼容的消息服务和 Rust 原生集成能力。
 
-### 开发者体验
+| 领域 | 提供能力 |
+|------|----------|
+| 消息服务 | NameServer、Broker、Controller 和 Proxy 服务，覆盖路由、存储、投递、协调和网关访问。 |
+| 客户端集成 | 异步 producer、consumer、admin、请求/响应、批量、顺序、延迟和事务消息 API。 |
+| 协议兼容 | RocketMQ remoting 命令模型、header、序列化、路由发现以及 client/broker 互操作。 |
+| 存储引擎 | durable commit log、consume queue、index、checkpoint 和分层存储构建块。 |
+| 安全与治理 | 认证、授权、ACL 判断、请求上下文以及 broker/client 侧集成点。 |
+| 运维能力 | metrics、tracing、admin 工具、存储检查工具和用于集群可视化的 dashboard 项目。 |
 
-- **直观的 API**：符合人体工程学的 Rust API，采用构建器模式
-- **类型安全**：强类型防止运行时错误
-- **丰富的示例**：常见用例的综合示例
-- **活跃开发**：定期更新和社区支持
+## 🧪 构建与校验
 
-## 🧪 开发
+快速开始章节覆盖首次本地运行。日常开发和代码审查请使用以下根工作区命令。
 
-### 从源代码构建
+| 任务 | 命令 |
+|------|------|
+| 构建工作区 | `cargo build --workspace` |
+| 运行工作区测试 | `cargo test --workspace` |
+| 运行指定 crate 测试 | `cargo test -p rocketmq-client` |
+| 格式化 Rust 代码 | `cargo fmt --all` |
+| 按工作区 feature 运行 clippy | `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` |
+| 构建本地 API 文档 | `cargo doc --workspace --no-deps` |
 
-```bash
-# 克隆仓库
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust
-
-# 构建所有组件
-cargo build --release
-
-# 运行测试
-cargo test
-
-# 运行特定组件
-cargo run --bin rocketmq-namesrv-rust
-cargo run --bin rocketmq-broker-rust
-```
-
-### 运行测试
-
-```bash
-# 运行所有测试
-cargo test --workspace
-
-# 运行特定 crate 的测试
-cargo test -p rocketmq-client
-
-# 带日志运行测试
-RUST_LOG=debug cargo test
-```
-
-### 代码质量
-
-```bash
-# 格式化代码
-cargo fmt
-
-# 运行 clippy
-cargo clippy --all-targets --all-features
-
-# 检查文档
-cargo doc --no-deps --open
-```
+`rocketmq-example/` 和 `rocketmq-dashboard/` 下的独立项目需要在各自项目根目录中单独校验。
 
 ## 🤝 贡献
 
@@ -317,7 +254,7 @@ cargo doc --no-deps --open
 
 详细指南，请阅读我们的[贡献指南](https://rocketmqrust.com/docs/contribute-guide/)。
 
-### 开发资源
+### 仓库活动
 
 ![Repository Activity](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
 
@@ -326,7 +263,7 @@ cargo doc --no-deps --open
 <details>
 <summary><b>RocketMQ-Rust 是否生产就绪？</b></summary>
 
-是的，核心组件（NameServer、Broker、客户端 SDK）已生产就绪并积极维护。Controller 和 Proxy 模块仍在开发中。
+是的。核心服务和客户端 SDK 面向生产部署设计，并保持积极维护。
 </details>
 
 <details>

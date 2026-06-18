@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
+  <title id="title">rocketmq-controller architecture</title>
+  <desc id="desc">Architecture diagram for the RocketMQ Rust controller runtime, showing bootstrap, ControllerManager, broker-facing remoting, heartbeat tracking, request processing, OpenRaft consensus, metadata state, storage, and metrics integrations.</desc>
+  <defs>
+    <linearGradient id="titleGradient" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: url(#titleGradient); }
+      .subtitle { font: 500 14px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .section-title { font: 700 15px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .label { font: 600 13px "Segoe UI", Arial, sans-serif; fill: #0f172a; }
+      .small { font: 500 11.5px "Segoe UI", Arial, sans-serif; fill: #475569; }
+      .tiny { font: 500 10.5px "Segoe UI", Arial, sans-serif; fill: #64748b; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; filter: url(#softShadow); }
+      .chip-blue { fill: #eff6ff; stroke: #bfdbfe; }
+      .chip-teal { fill: #ecfdf5; stroke: #a7f3d0; }
+      .chip-amber { fill: #fffbeb; stroke: #fde68a; }
+      .chip-violet { fill: #f5f3ff; stroke: #ddd6fe; }
+      .chip-red { fill: #fff1f2; stroke: #fecdd3; }
+      .chip-gray { fill: #f1f5f9; stroke: #cbd5e1; }
+      .arrow { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; fill: none; marker-end: url(#arrow); }
+      .bus { stroke: #94a3b8; stroke-width: 1.1; fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="780"/>
+  <text x="54" y="54" class="title">rocketmq-controller Runtime Architecture</text>
+  <text x="54" y="80" class="subtitle">Controller bootstrap, broker coordination, OpenRaft consensus, metadata replication, storage, and metrics</text>
+
+  <rect x="42" y="112" width="214" height="536" rx="12" class="panel"/>
+  <text x="70" y="145" class="section-title">External Plane</text>
+  <rect x="66" y="174" width="166" height="62" rx="8" class="chip-blue"/>
+  <text x="88" y="199" class="label">Broker Nodes</text>
+  <text x="88" y="218" class="small">registration + heartbeat</text>
+  <rect x="66" y="264" width="166" height="62" rx="8" class="chip-blue"/>
+  <text x="88" y="289" class="label">Broker Runtime</text>
+  <text x="88" y="308" class="small">role-change callback</text>
+  <rect x="66" y="354" width="166" height="62" rx="8" class="chip-teal"/>
+  <text x="88" y="379" class="label">Controller Peers</text>
+  <text x="88" y="398" class="small">raft replication</text>
+  <rect x="66" y="444" width="166" height="62" rx="8" class="chip-violet"/>
+  <text x="88" y="469" class="label">CLI / Admin</text>
+  <text x="88" y="488" class="small">config + inspection</text>
+
+  <rect x="300" y="112" width="236" height="536" rx="12" class="panel"/>
+  <text x="328" y="145" class="section-title">Bootstrap</text>
+  <rect x="330" y="174" width="176" height="62" rx="8" class="chip-violet"/>
+  <text x="352" y="199" class="label">controller binary</text>
+  <text x="352" y="218" class="small">rocketmq-controller-rust</text>
+  <rect x="330" y="264" width="176" height="62" rx="8" class="chip-violet"/>
+  <text x="352" y="289" class="label">CLI + Config</text>
+  <text x="352" y="308" class="small">ControllerConfig</text>
+  <rect x="330" y="354" width="176" height="62" rx="8" class="chip-violet"/>
+  <text x="352" y="379" class="label">ControllerManager</text>
+  <text x="352" y="398" class="small">initialize / start</text>
+  <rect x="330" y="444" width="176" height="62" rx="8" class="chip-violet"/>
+  <text x="352" y="469" class="label">Single-node Bootstrap</text>
+  <text x="352" y="488" class="small">optional cluster init</text>
+
+  <rect x="582" y="112" width="392" height="536" rx="14" class="panel"/>
+  <text x="610" y="145" class="section-title">Controller Manager</text>
+  <line x1="610" y1="161" x2="946" y2="161" class="bus"/>
+
+  <rect x="612" y="184" width="152" height="92" rx="10" class="chip-blue"/>
+  <text x="632" y="210" class="label">Remoting Server</text>
+  <text x="632" y="230" class="small">broker-facing RPC</text>
+  <text x="632" y="248" class="tiny">controller request codes</text>
+
+  <rect x="792" y="184" width="152" height="92" rx="10" class="chip-blue"/>
+  <text x="812" y="210" class="label">Remoting Client</text>
+  <text x="812" y="230" class="small">broker notifications</text>
+  <text x="812" y="248" class="tiny">role-change dispatch</text>
+
+  <rect x="612" y="304" width="152" height="102" rx="10" class="chip-amber"/>
+  <text x="632" y="330" class="label">Request Processor</text>
+  <text x="632" y="350" class="small">elect master</text>
+  <text x="632" y="368" class="small">sync-state-set</text>
+  <text x="632" y="386" class="tiny">replica + metadata queries</text>
+
+  <rect x="792" y="304" width="152" height="102" rx="10" class="chip-red"/>
+  <text x="812" y="330" class="label">Heartbeat Manager</text>
+  <text x="812" y="350" class="small">broker live table</text>
+  <text x="812" y="368" class="small">inactive scans</text>
+  <text x="812" y="386" class="tiny">election trigger</text>
+
+  <rect x="612" y="438" width="152" height="100" rx="10" class="chip-teal"/>
+  <text x="632" y="464" class="label">Raft Controller</text>
+  <text x="632" y="484" class="small">OpenRaft wrapper</text>
+  <text x="632" y="502" class="tiny">client write + leader checks</text>
+
+  <rect x="792" y="438" width="152" height="100" rx="10" class="chip-violet"/>
+  <text x="812" y="464" class="label">Metrics Manager</text>
+  <text x="812" y="484" class="small">request / election</text>
+  <text x="812" y="502" class="tiny">OTLP + Prometheus features</text>
+
+  <rect x="1020" y="112" width="218" height="536" rx="12" class="panel"/>
+  <text x="1048" y="145" class="section-title">OpenRaft + State</text>
+  <rect x="1048" y="182" width="164" height="72" rx="8" class="chip-teal"/>
+  <text x="1070" y="208" class="label">OpenRaft Node</text>
+  <text x="1070" y="228" class="small">leader election</text>
+  <text x="1070" y="246" class="tiny">committed log pipeline</text>
+  <rect x="1048" y="284" width="164" height="72" rx="8" class="chip-teal"/>
+  <text x="1070" y="310" class="label">gRPC Raft Network</text>
+  <text x="1070" y="330" class="small">peer replication</text>
+  <text x="1070" y="348" class="tiny">openraft service</text>
+  <rect x="1048" y="386" width="164" height="72" rx="8" class="chip-gray"/>
+  <text x="1070" y="412" class="label">Log Store</text>
+  <text x="1070" y="432" class="small">file / RocksDB / memory</text>
+  <text x="1070" y="450" class="tiny">feature selected backend</text>
+  <rect x="1048" y="488" width="164" height="72" rx="8" class="chip-gray"/>
+  <text x="1070" y="514" class="label">State Machine</text>
+  <text x="1070" y="534" class="small">ReplicasInfoManager</text>
+  <text x="1070" y="552" class="tiny">broker, topic, config metadata</text>
+  <rect x="1048" y="590" width="164" height="40" rx="8" class="chip-gray"/>
+  <text x="1070" y="615" class="label">Snapshots + Events</text>
+
+  <path d="M 232 205 C 272 205, 292 205, 330 205" class="arrow"/>
+  <path d="M 232 475 C 270 475, 292 295, 330 295" class="arrow"/>
+  <path d="M 418 236 L 418 264" class="arrow"/>
+  <path d="M 418 326 L 418 354" class="arrow"/>
+  <path d="M 418 416 L 418 444" class="arrow"/>
+
+  <path d="M 506 385 C 542 385, 560 230, 612 230" class="arrow"/>
+  <path d="M 506 385 C 544 385, 562 355, 612 355" class="arrow"/>
+  <path d="M 506 475 C 548 475, 562 488, 612 488" class="arrow"/>
+
+  <path d="M 764 230 L 792 230" class="arrow"/>
+  <path d="M 688 276 L 688 304" class="arrow"/>
+  <path d="M 868 276 L 868 304" class="arrow"/>
+  <path d="M 688 406 L 688 438" class="arrow"/>
+  <path d="M 868 406 L 868 438" class="dash"/>
+  <path d="M 764 488 C 850 610, 966 526, 1048 526" class="arrow"/>
+  <path d="M 1130 254 L 1130 284" class="arrow"/>
+  <path d="M 1130 356 L 1130 386" class="arrow"/>
+  <path d="M 1130 458 L 1130 488" class="arrow"/>
+  <path d="M 1130 560 L 1130 590" class="arrow"/>
+  <path d="M 944 488 C 992 488, 1004 610, 1048 610" class="dash"/>
+
+  <rect x="54" y="686" width="1172" height="44" rx="10" fill="#ffffff" stroke="#dbe4ef"/>
+  <text x="78" y="713" class="small">Flow: brokers send heartbeats and controller requests through remoting; ControllerManager routes writes through OpenRaft; replicated events update metadata, storage, snapshots, and metrics.</text>
+</svg>
