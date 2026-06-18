@@ -627,6 +627,17 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         count
     }
 
+    pub fn checkpoint_buffer_size(&self) -> usize {
+        self.counter.load(Ordering::Acquire).max(0) as usize
+    }
+
+    pub fn offset_buffer_size_snapshot(&self) -> usize {
+        self.commit_offsets
+            .iter()
+            .filter_map(|entry| entry.value().get().try_lock().ok().map(|queue| queue.len()))
+            .sum()
+    }
+
     pub fn start(this: ArcMut<Self>) {
         tokio::spawn(async move {
             let interval = this.interval * 200 * 5;

@@ -50,6 +50,7 @@ use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType
 use rocketmq_common::common::metrics::nop_long_counter::NopLongCounter;
 use rocketmq_common::common::metrics::nop_long_histogram::NopLongHistogram;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::topic::TopicValidator;
 #[cfg(feature = "otel-metrics")]
 use rocketmq_observability::metrics::broker::BrokerMetrics;
@@ -68,6 +69,7 @@ use super::producer_attr::ProducerAttr;
 
 /// System group prefixes for identifying system consumer groups
 const SYSTEM_GROUP_PREFIX_LIST: &[&str] = &["cid_rmq_sys_"];
+const PROTOCOL_TYPE_REMOTING: &str = "remoting";
 
 // ============================================================================
 // Types and Traits
@@ -195,6 +197,15 @@ fn guarded_bounded_label(label_guard: &RwLock<LabelGuard>, key: &'static str, va
         key_value: KeyValue::new(key, value),
         dropped,
     }
+}
+
+fn connection_version_label_value(version: i32) -> String {
+    let ordinal = u32::try_from(version).unwrap_or(u32::MAX);
+    RocketMqVersion::from_ordinal(ordinal).name().to_lowercase()
+}
+
+fn remoting_protocol_type_label() -> KeyValue {
+    KeyValue::new(BrokerMetricsConstant::LABEL_PROTOCOL_TYPE, PROTOCOL_TYPE_REMOTING)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,22 +406,59 @@ impl BrokerMetricsManager {
         F5: Fn() -> Vec<(ProducerAttr, i64)> + Send + Sync + 'static,
         F6: Fn() -> Vec<(ConsumerAttr, i64)> + Send + Sync + 'static,
     {
+        Self::init_with_observables_and_label_config(
+            meter_provider,
+            attributes_supplier,
+            BrokerMetricsLabelConfig::default(),
+            Some(processor_watermark_fn),
+            broker_permission_fn,
+            topic_num_fn,
+            consumer_group_num_fn,
+            producer_connections_fn,
+            consumer_connections_fn,
+        )
+    }
+
+    /// Initialize with observable gauges and an explicit label guard configuration.
+    pub fn init_with_observables_and_label_config<F1, F2, F3, F4, F5, F6>(
+        meter_provider: &SdkMeterProvider,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+        // Stats callbacks
+        processor_watermark_fn: Option<F1>,
+        broker_permission_fn: F2,
+        topic_num_fn: F3,
+        consumer_group_num_fn: F4,
+        // Connection callbacks
+        producer_connections_fn: F5,
+        consumer_connections_fn: F6,
+    ) -> Self
+    where
+        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static, // (processor_name, count)
+        F2: Fn() -> i64 + Send + Sync + 'static,
+        F3: Fn() -> i64 + Send + Sync + 'static,
+        F4: Fn() -> i64 + Send + Sync + 'static,
+        F5: Fn() -> Vec<(ProducerAttr, i64)> + Send + Sync + 'static,
+        F6: Fn() -> Vec<(ConsumerAttr, i64)> + Send + Sync + 'static,
+    {
         let meter = meter_provider.meter(BrokerMetricsConstant::OPEN_TELEMETRY_METER_NAME);
-        let manager = Self::new(meter.clone(), attributes_supplier.clone());
+        let manager = Self::new_with_label_config(meter.clone(), attributes_supplier.clone(), label_config);
 
         // Register stats observable gauges
-        let attrs1 = attributes_supplier.clone();
-        let _processor_watermark = meter
-            .i64_observable_gauge(BrokerMetricsConstant::GAUGE_PROCESSOR_WATERMARK)
-            .with_description("Request processor watermark")
-            .with_callback(move |observer| {
-                for (processor_name, count) in processor_watermark_fn() {
-                    let mut attrs = attrs1.get();
-                    attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_PROCESSOR, processor_name));
-                    observer.observe(count, &attrs);
-                }
-            })
-            .build();
+        if let Some(processor_watermark_fn) = processor_watermark_fn {
+            let attrs1 = attributes_supplier.clone();
+            let _processor_watermark = meter
+                .i64_observable_gauge(BrokerMetricsConstant::GAUGE_PROCESSOR_WATERMARK)
+                .with_description("Request processor watermark")
+                .with_callback(move |observer| {
+                    for (processor_name, count) in processor_watermark_fn() {
+                        let mut attrs = attrs1.get();
+                        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_PROCESSOR, processor_name));
+                        observer.observe(count, &attrs);
+                    }
+                })
+                .build();
+        }
 
         let attrs2 = attributes_supplier.clone();
         let _broker_permission = meter
@@ -455,7 +503,11 @@ impl BrokerMetricsManager {
                             BrokerMetricsConstant::LABEL_LANGUAGE,
                             attr.language.to_string().to_lowercase(),
                         ),
-                        KeyValue::new(BrokerMetricsConstant::LABEL_VERSION, attr.version.to_string()),
+                        KeyValue::new(
+                            BrokerMetricsConstant::LABEL_VERSION,
+                            connection_version_label_value(attr.version),
+                        ),
+                        remoting_protocol_type_label(),
                     ]);
                     observer.observe(count, &attrs);
                 }
@@ -487,7 +539,11 @@ impl BrokerMetricsManager {
                             BrokerMetricsConstant::LABEL_LANGUAGE,
                             attr.language.to_string().to_lowercase(),
                         ),
-                        KeyValue::new(BrokerMetricsConstant::LABEL_VERSION, attr.version.to_string()),
+                        KeyValue::new(
+                            BrokerMetricsConstant::LABEL_VERSION,
+                            connection_version_label_value(attr.version),
+                        ),
+                        remoting_protocol_type_label(),
                         KeyValue::new(
                             BrokerMetricsConstant::LABEL_CONSUME_MODE,
                             attr.consume_mode.to_string().to_lowercase(),
@@ -518,6 +574,39 @@ impl BrokerMetricsManager {
         let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
         let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
         let _ = BROKER_METRICS_MANAGER.set(Self::new_with_label_config(meter, attributes_supplier, label_config));
+    }
+
+    pub fn init_global_with_observables_and_label_config<F1, F2, F3, F4, F5, F6>(
+        meter_provider: &SdkMeterProvider,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_config: BrokerMetricsLabelConfig,
+        processor_watermark_fn: Option<F1>,
+        broker_permission_fn: F2,
+        topic_num_fn: F3,
+        consumer_group_num_fn: F4,
+        producer_connections_fn: F5,
+        consumer_connections_fn: F6,
+    ) where
+        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static,
+        F2: Fn() -> i64 + Send + Sync + 'static,
+        F3: Fn() -> i64 + Send + Sync + 'static,
+        F4: Fn() -> i64 + Send + Sync + 'static,
+        F5: Fn() -> Vec<(ProducerAttr, i64)> + Send + Sync + 'static,
+        F6: Fn() -> Vec<(ConsumerAttr, i64)> + Send + Sync + 'static,
+    {
+        let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
+        let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
+        let _ = BROKER_METRICS_MANAGER.set(Self::init_with_observables_and_label_config(
+            meter_provider,
+            attributes_supplier,
+            label_config,
+            processor_watermark_fn,
+            broker_permission_fn,
+            topic_num_fn,
+            consumer_group_num_fn,
+            producer_connections_fn,
+            consumer_connections_fn,
+        ));
     }
 
     /// Get the global BrokerMetricsManager instance
@@ -628,6 +717,52 @@ impl BrokerMetricsManager {
         self.broker_metrics.record_messages_in_total(num, &attrs);
         #[cfg(not(feature = "otel-metrics"))]
         self.messages_in_total.add(num, &attrs);
+    }
+
+    /// Record all Java-compatible incoming message metrics for a successful send.
+    pub fn record_messages_in_success(
+        &self,
+        topic: &str,
+        message_type: &TopicMessageType,
+        num: u64,
+        bytes: u64,
+        message_size: u64,
+        is_system: bool,
+    ) {
+        let mut message_attrs = self.base_attributes();
+        message_attrs.extend([
+            self.topic_label(topic),
+            KeyValue::new(
+                BrokerMetricsConstant::LABEL_MESSAGE_TYPE,
+                message_type.to_string().to_lowercase(),
+            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
+        ]);
+
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_messages_in_total(num, &message_attrs);
+        #[cfg(not(feature = "otel-metrics"))]
+        self.messages_in_total.add(num, &message_attrs);
+
+        let mut throughput_attrs = self.base_attributes();
+        throughput_attrs.push(self.topic_label(topic));
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_throughput_in_total(bytes, &throughput_attrs);
+        #[cfg(not(feature = "otel-metrics"))]
+        self.throughput_in_total.add(bytes, &throughput_attrs);
+
+        let mut size_attrs = self.base_attributes();
+        size_attrs.extend([
+            self.topic_label(topic),
+            KeyValue::new(
+                BrokerMetricsConstant::LABEL_MESSAGE_TYPE,
+                message_type.to_string().to_lowercase(),
+            ),
+        ]);
+        #[cfg(feature = "otel-metrics")]
+        self.broker_metrics.record_message_size(message_size, &size_attrs);
+        #[cfg(not(feature = "otel-metrics"))]
+        self.message_size.record(message_size, &size_attrs);
     }
 
     /// Record outgoing message count
@@ -1009,6 +1144,21 @@ mod tests {
     }
 
     #[test]
+    fn connection_version_label_uses_java_version_description() {
+        let version = rocketmq_common::common::mq_version::RocketMqVersion::V5_0_0.ordinal() as i32;
+
+        assert_eq!(connection_version_label_value(version), "v5_0_0");
+    }
+
+    #[test]
+    fn remoting_connection_protocol_label_matches_java_schema() {
+        let label = remoting_protocol_type_label();
+
+        assert_eq!(label.key.as_str(), BrokerMetricsConstant::LABEL_PROTOCOL_TYPE);
+        assert_eq!(label.value.to_string(), "remoting");
+    }
+
+    #[test]
     fn test_noop_attributes_supplier() {
         let supplier = NoopAttributesSupplier;
         assert!(supplier.get().is_empty());
@@ -1065,6 +1215,15 @@ mod tests {
                 ..AuthMetricsSnapshot::default()
             })
         });
+    }
+
+    #[test]
+    fn test_record_messages_in_success() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let meter = meter_provider.meter("messages-in-success-test");
+        let manager = BrokerMetricsManager::new(meter, Arc::new(NoopAttributesSupplier));
+
+        manager.record_messages_in_success("topic-a", &TopicMessageType::Normal, 2, 128, 64, false);
     }
 
     #[test]

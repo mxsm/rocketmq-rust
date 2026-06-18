@@ -25,6 +25,7 @@ use crate::file::TieredFlatFileStore;
 use crate::lifecycle::TieredLifecycle;
 use crate::metadata::JsonMetadataStore;
 use crate::metadata::TieredMetadataStore;
+use crate::metrics::TieredStoreMetrics;
 use crate::provider::ProviderKind;
 use crate::provider::TieredStoreProvider;
 use crate::service::CommitLogRecoverService;
@@ -39,6 +40,7 @@ where
     flat_file_store: Arc<TieredFlatFileStore<P>>,
     dispatcher: Arc<DefaultTieredDispatcher<P>>,
     fetcher: Arc<DefaultTieredMessageFetcher<P>>,
+    metrics: Arc<TieredStoreMetrics>,
     services: TieredServiceSet<P>,
     shutdown: CancellationToken,
 }
@@ -58,19 +60,22 @@ where
         let config = Arc::new(config);
         let shutdown = CancellationToken::new();
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let metrics = Arc::new(TieredStoreMetrics::default());
         let flat_file_store = Arc::new(TieredFlatFileStore::new(
             config.clone(),
             metadata_store.clone(),
             provider,
         ));
-        let dispatcher = Arc::new(DefaultTieredDispatcher::new(
+        let dispatcher = Arc::new(DefaultTieredDispatcher::new_with_metrics(
             config.clone(),
             flat_file_store.clone(),
             shutdown.child_token(),
+            metrics.clone(),
         ));
-        let fetcher = Arc::new(DefaultTieredMessageFetcher::new(
+        let fetcher = Arc::new(DefaultTieredMessageFetcher::new_with_metrics(
             config.clone(),
             flat_file_store.clone(),
+            metrics.clone(),
         ));
 
         Ok(Self {
@@ -79,6 +84,7 @@ where
             flat_file_store,
             dispatcher,
             fetcher,
+            metrics,
             services: TieredServiceSet::new(),
             shutdown,
         })
@@ -94,6 +100,10 @@ where
 
     pub fn fetcher(&self) -> Arc<DefaultTieredMessageFetcher<P>> {
         self.fetcher.clone()
+    }
+
+    pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
+        self.metrics.clone()
     }
 }
 

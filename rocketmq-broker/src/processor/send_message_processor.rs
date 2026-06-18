@@ -19,6 +19,7 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rand::RngExt;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
@@ -401,6 +402,7 @@ where
         let transaction_id =
             MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
         let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
+        let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
         let put_message_result = if is_inner_batch {
             self.inner
                 .broker_runtime_inner
@@ -427,6 +429,7 @@ where
                 queue_id,
                 start,
                 &mut mapping_context,
+                topic_message_type,
                 MessageType::NormalMsg,
             )
             .await;
@@ -572,6 +575,7 @@ where
 
         let start = Instant::now();
         let topic = message_ext.topic().clone();
+        let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
         let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
         let recall_handle = self.build_recall_handle(&message_ext);
         let put_message_result = if send_transaction_prepare_message {
@@ -599,6 +603,7 @@ where
                 queue_id,
                 start,
                 &mut mapping_context,
+                topic_message_type,
                 MessageType::NormalMsg,
             )
             .await;
@@ -715,6 +720,7 @@ where
         queue_id: i32,
         put_message_result: &PutMessageResult,
         begin_time_millis: Instant,
+        topic_message_type: &TopicMessageType,
     ) {
         // SAFETY: When send_ok is true, append_message_result must exist
         let result = put_message_result
@@ -752,6 +758,11 @@ where
             .inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
 
         if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+            let msg_num = u64::try_from(result.msg_num.max(0)).unwrap_or_default();
+            let bytes = u64::try_from(result.wrote_bytes.max(0)).unwrap_or_default();
+            let message_size = bytes / msg_num.max(1);
+            let is_system = TopicValidator::is_system_topic(topic);
+            metrics.record_messages_in_success(topic, topic_message_type, msg_num, bytes, message_size, is_system);
             metrics.record_send_message_latency(topic, latency_millis.min(u64::MAX as u128) as u64);
         }
     }
@@ -868,6 +879,7 @@ where
         queue_id_int: i32,
         begin_time_millis: Instant,
         mapping_context: &mut TopicQueueMappingContext,
+        topic_message_type: TopicMessageType,
         _message_type: MessageType,
     ) -> (Option<RemotingCommand>, bool) {
         let send_ok = self.map_put_status_to_response_code(put_message_result.put_message_status(), response);
@@ -880,7 +892,13 @@ where
         let owner_self = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF).cloned();
 
         if send_ok {
-            self.update_broker_stats_on_success(topic, queue_id_int, &put_message_result, begin_time_millis);
+            self.update_broker_stats_on_success(
+                topic,
+                queue_id_int,
+                &put_message_result,
+                begin_time_millis,
+                &topic_message_type,
+            );
 
             {
                 let response_header = response
@@ -1356,7 +1374,9 @@ where
                 }
 
                 if is_dlq {
-                    // TODO: implement this
+                    if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+                        metrics.inc_send_to_dlq_messages(inner_topic.as_str(), request_header.group.as_str(), 1);
+                    }
                 }
                 (RemotingCommand::create_response_command(), true)
             }

@@ -1012,6 +1012,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let diff = max_offset - revive_offset;
         std::cmp::max(0, diff)
     }
+
+    pub fn queue_id(&self) -> i32 {
+        self.queue_id
+    }
 }
 
 fn reach_tail(pull_result: &PullResult, offset: i64) -> bool {

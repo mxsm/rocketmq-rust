@@ -29,6 +29,19 @@ pub struct RocksDbMetrics {
     pub error_count: u64,
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct RocksDbTickerMetrics {
+    pub bytes_written: u64,
+    pub bytes_read: u64,
+    pub times_written_self: u64,
+    pub times_written_other: u64,
+    pub block_cache_hit: u64,
+    pub block_cache_miss: u64,
+    pub times_compressed: u64,
+    pub read_amplification_bytes: u64,
+    pub times_read: u64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct RocksDbMetricsCollector {
     write_count: AtomicU64,

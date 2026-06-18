@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -135,6 +136,42 @@ impl ConsumerManager {
 impl ConsumerManager {
     pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Weak<BrokerStatsManager>) {
         self.broker_stats_manager = Some(broker_stats_manager);
+    }
+
+    /// Returns connected consumer counts grouped by group, language, version, and consume mode.
+    pub fn connection_count_by_client_attrs(
+        &self,
+    ) -> Vec<(
+        CheetahString,
+        rocketmq_remoting::protocol::LanguageCode,
+        i32,
+        ConsumeType,
+        i64,
+    )> {
+        let mut counts: HashMap<
+            (
+                CheetahString,
+                rocketmq_remoting::protocol::LanguageCode,
+                i32,
+                ConsumeType,
+            ),
+            i64,
+        > = HashMap::new();
+        for entry in self.consumer_table.iter() {
+            let group_info = entry.value();
+            let group = group_info.get_group_name().clone();
+            let consume_type = group_info.get_consume_type();
+            for channel_info in group_info.get_channel_info_table().iter() {
+                let client = channel_info.value();
+                *counts
+                    .entry((group.clone(), client.language(), client.version(), consume_type))
+                    .or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .map(|((group, language, version, consume_type), count)| (group, language, version, consume_type, count))
+            .collect()
     }
 
     /// Checks if fast channel event processing is enabled.

@@ -160,6 +160,9 @@ where
         metrics: ProxyMetrics,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     ) -> Self {
+        #[cfg(feature = "observability")]
+        crate::observability::init_observability_metrics(&config);
+
         let config = Arc::new(config);
         let processor_ref = Arc::clone(&processor);
         let sessions = session_registry.clone();

@@ -20,6 +20,7 @@ use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
+use crate::metrics::TieredStoreMetrics;
 use crate::provider::TieredStoreProvider;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -96,6 +97,7 @@ where
 {
     config: Arc<TieredStoreConfig>,
     flat_file_store: Arc<TieredFlatFileStore<P>>,
+    metrics: Arc<TieredStoreMetrics>,
 }
 
 impl<P> DefaultTieredMessageFetcher<P>
@@ -103,25 +105,33 @@ where
     P: TieredStoreProvider,
 {
     pub fn new(config: Arc<TieredStoreConfig>, flat_file_store: Arc<TieredFlatFileStore<P>>) -> Self {
+        Self::new_with_metrics(config, flat_file_store, Arc::new(TieredStoreMetrics::default()))
+    }
+
+    pub fn new_with_metrics(
+        config: Arc<TieredStoreConfig>,
+        flat_file_store: Arc<TieredFlatFileStore<P>>,
+        metrics: Arc<TieredStoreMetrics>,
+    ) -> Self {
         Self {
             config,
             flat_file_store,
+            metrics,
         }
     }
-}
 
-impl<P> TieredMessageFetcher for DefaultTieredMessageFetcher<P>
-where
-    P: TieredStoreProvider,
-{
-    async fn get_message(
+    pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
+        self.metrics.clone()
+    }
+
+    async fn get_message_inner(
         &self,
-        topic: String,
+        topic: &str,
         queue_id: i32,
         queue_offset: i64,
         max_msg_nums: i32,
     ) -> Result<TieredGetMessageResult, RocketMQError> {
-        let Some(flat_file) = self.flat_file_store.get(&topic, queue_id) else {
+        let Some(flat_file) = self.flat_file_store.get(topic, queue_id) else {
             return Ok(TieredGetMessageResult {
                 status: TieredGetMessageStatus::NoMatchedLogicQueue,
                 ..TieredGetMessageResult::default()
@@ -219,7 +229,6 @@ where
             }
         }
 
-        let _ = &self.config;
         if messages.is_empty() {
             return Ok(TieredGetMessageResult {
                 status: TieredGetMessageStatus::NoMatchedMessage,
@@ -237,6 +246,32 @@ where
             next_begin_offset,
         })
     }
+}
+
+impl<P> TieredMessageFetcher for DefaultTieredMessageFetcher<P>
+where
+    P: TieredStoreProvider,
+{
+    async fn get_message(
+        &self,
+        topic: String,
+        queue_id: i32,
+        queue_offset: i64,
+        max_msg_nums: i32,
+    ) -> Result<TieredGetMessageResult, RocketMQError> {
+        self.metrics.record_fetch_request();
+        let started = std::time::Instant::now();
+        let result = self
+            .get_message_inner(&topic, queue_id, queue_offset, max_msg_nums)
+            .await;
+        let success = result
+            .as_ref()
+            .map(|fetched| fetched.status == TieredGetMessageStatus::Found)
+            .unwrap_or(false);
+        self.metrics
+            .record_api_latency("get_message", success, started.elapsed().as_millis() as u64);
+        result
+    }
 
     async fn get_message_timestamp(
         &self,
@@ -244,16 +279,26 @@ where
         queue_id: i32,
         queue_offset: i64,
     ) -> Result<i64, RocketMQError> {
+        let started = std::time::Instant::now();
         let Some(flat_file) = self.flat_file_store.get(&topic, queue_id) else {
+            self.metrics
+                .record_api_latency("get_message_timestamp", false, started.elapsed().as_millis() as u64);
             return Ok(-1);
         };
-        if queue_offset.saturating_add(1) == flat_file.consume_queue_commit_offset() {
-            return Ok(flat_file.max_store_timestamp());
-        }
-        Ok(flat_file
-            .read_message_store_timestamp(queue_offset)
-            .await?
-            .unwrap_or(-1))
+        let timestamp = if queue_offset.saturating_add(1) == flat_file.consume_queue_commit_offset() {
+            flat_file.max_store_timestamp()
+        } else {
+            flat_file
+                .read_message_store_timestamp(queue_offset)
+                .await?
+                .unwrap_or(-1)
+        };
+        self.metrics.record_api_latency(
+            "get_message_timestamp",
+            timestamp >= 0,
+            started.elapsed().as_millis() as u64,
+        );
+        Ok(timestamp)
     }
 
     async fn get_offset_by_time(
@@ -273,12 +318,24 @@ where
         timestamp_millis: i64,
         boundary_type: BoundaryType,
     ) -> Result<i64, RocketMQError> {
+        let started = std::time::Instant::now();
         let Some(flat_file) = self.flat_file_store.get(&topic, queue_id) else {
+            self.metrics.record_api_latency(
+                "get_offset_by_time_with_boundary",
+                false,
+                started.elapsed().as_millis() as u64,
+            );
             return Ok(-1);
         };
-        flat_file
+        let result = flat_file
             .queue_offset_by_time_with_boundary(timestamp_millis, boundary_type)
-            .await
+            .await;
+        self.metrics.record_api_latency(
+            "get_offset_by_time_with_boundary",
+            result.as_ref().map(|offset| *offset >= 0).unwrap_or(false),
+            started.elapsed().as_millis() as u64,
+        );
+        result
     }
 
     async fn query_message(
@@ -289,12 +346,15 @@ where
         begin: i64,
         end: i64,
     ) -> Result<TieredQueryResult<Bytes>, RocketMQError> {
+        let started = std::time::Instant::now();
         let max_num = max_num.max(0) as usize;
         let entries = self
             .flat_file_store
             .query_index_entries(&topic, &key, max_num, begin, end)
             .await?;
         if entries.is_empty() {
+            self.metrics
+                .record_api_latency("query_message", false, started.elapsed().as_millis() as u64);
             return Ok(TieredQueryResult::default());
         }
 
@@ -313,6 +373,9 @@ where
                 values.push(message);
             }
         }
+        let success = !values.is_empty();
+        self.metrics
+            .record_api_latency("query_message", success, started.elapsed().as_millis() as u64);
         Ok(TieredQueryResult { values })
     }
 }

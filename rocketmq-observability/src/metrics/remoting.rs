@@ -15,6 +15,7 @@
 pub use crate::semantic::metrics::REMOTING_NETWORK_BYTES;
 pub use crate::semantic::metrics::REMOTING_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::REMOTING_REQUEST_LATENCY;
+pub use crate::semantic::metrics::RPC_LATENCY;
 
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
@@ -57,6 +58,23 @@ pub fn record_network_bytes(bytes: u64) {
     let _ = bytes;
 }
 
+pub fn record_rpc_latency(latency_ms: u64, request_code: i32, response_code: i32, is_long_polling: bool, result: &str) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = REMOTING_METRICS.get() {
+        let attrs = [
+            opentelemetry::KeyValue::new(crate::semantic::labels::PROTOCOL_TYPE, "remoting"),
+            opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_CODE, request_code.to_string()),
+            opentelemetry::KeyValue::new(crate::semantic::labels::RESPONSE_CODE, response_code.to_string()),
+            opentelemetry::KeyValue::new(crate::semantic::labels::IS_LONG_POLLING, is_long_polling.to_string()),
+            opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result.to_owned()),
+        ];
+        metrics.record_rpc_latency(latency_ms, &attrs);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = (latency_ms, request_code, response_code, is_long_polling, result);
+}
+
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RemotingMetrics;
@@ -75,6 +93,9 @@ impl RemotingMetrics {
 
     #[inline]
     pub fn record_network_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_rpc_latency(&self, _latency_ms: u64, _attributes: &[()]) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -83,6 +104,7 @@ pub struct RemotingMetrics {
     requests_total: opentelemetry::metrics::Counter<u64>,
     request_latency: opentelemetry::metrics::Histogram<u64>,
     network_bytes: opentelemetry::metrics::Counter<u64>,
+    rpc_latency: opentelemetry::metrics::Histogram<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -106,10 +128,17 @@ impl RemotingMetrics {
             .with_unit("By")
             .build();
 
+        let rpc_latency = meter
+            .u64_histogram(RPC_LATENCY)
+            .with_description("Rpc latency")
+            .with_unit("milliseconds")
+            .build();
+
         Self {
             requests_total,
             request_latency,
             network_bytes,
+            rpc_latency,
         }
     }
 
@@ -126,6 +155,11 @@ impl RemotingMetrics {
     #[inline]
     pub fn record_network_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
         self.network_bytes.add(bytes, attributes);
+    }
+
+    #[inline]
+    pub fn record_rpc_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.rpc_latency.record(latency_ms, attributes);
     }
 }
 
@@ -146,5 +180,7 @@ mod tests {
         metrics.record_requests_total(1, &attrs);
         metrics.record_request_latency(3, &attrs);
         metrics.record_network_bytes(256, &attrs);
+        metrics.record_rpc_latency(5, &attrs);
+        record_rpc_latency(5, 10, 0, false, "success");
     }
 }

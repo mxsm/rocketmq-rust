@@ -26,3 +26,18 @@ pub(crate) fn record_flush_latency(latency_ms: u64) {
 pub(crate) fn record_dispatch_latency(latency_ms: u64) {
     rocketmq_observability::metrics::store::record_dispatch_latency(latency_ms);
 }
+
+#[inline]
+pub(crate) fn record_delay_message_latency(latency_seconds: u64, topic: Option<&str>) {
+    rocketmq_observability::metrics::store::record_delay_message_latency_with_topic(latency_seconds, topic);
+}
+
+#[inline]
+pub(crate) fn record_timer_enqueue_total(topic: Option<&str>) {
+    rocketmq_observability::metrics::timer::record_enqueue_total(topic);
+}
+
+#[inline]
+pub(crate) fn record_timer_dequeue_total(topic: &str) {
+    rocketmq_observability::metrics::timer::record_dequeue_total(topic);
+}

@@ -129,7 +129,8 @@ pub(crate) mod inner {
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
             #[cfg(feature = "observability")]
-            let _metrics_guard = crate::observability_metrics::RequestMetricsGuard::start(
+            let mut metrics_guard = crate::observability_metrics::RequestMetricsGuard::start(
+                &cmd,
                 cmd.body().map_or(0, |body| body.len() as u64),
             );
             let reject_request = self.request_processor.reject_request(cmd.code());
@@ -143,10 +144,23 @@ pub(crate) mod inner {
                         REJECT_REQUEST_MSG,
                     )
                 };
-                ctx.channel
+                let response_code = response.code();
+                let result = ctx
+                    .channel
                     .connection_mut()
                     .send_command(response.set_opaque(opaque))
-                    .await?;
+                    .await;
+                match result {
+                    Ok(_) => {
+                        #[cfg(feature = "observability")]
+                        metrics_guard.complete_response(response_code);
+                    }
+                    Err(error) => {
+                        #[cfg(feature = "observability")]
+                        metrics_guard.complete_write_channel_failed(response_code);
+                        return Err(error);
+                    }
+                }
                 return Ok(());
             }
             let oneway_rpc = cmd.is_oneway_rpc();
@@ -154,50 +168,70 @@ pub(crate) mod inner {
             let exception = self.do_before_rpc_hooks(ctx.channel(), Some(&mut cmd)).err();
             //handle error if return have
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
-                HandleErrorResult::ReturnMethod => return Ok(()),
+                HandleErrorResult::ReturnMethod => {
+                    #[cfg(feature = "observability")]
+                    metrics_guard.complete_process_request_failed();
+                    return Ok(());
+                }
                 HandleErrorResult::GoHead => {}
             }
 
             let mut response = {
                 let channel = ctx.channel.clone();
                 let ctx = ctx.clone();
-                let result = self
-                    .request_processor
-                    .process_request(channel, ctx, &mut cmd)
-                    .await
-                    .unwrap_or_else(|_err| {
+                match self.request_processor.process_request(channel, ctx, &mut cmd).await {
+                    Ok(result) => result,
+                    Err(_err) => {
+                        #[cfg(feature = "observability")]
+                        metrics_guard.complete_process_request_failed();
                         Some(RemotingCommand::create_response_command_with_code(
                             ResponseCode::SystemError,
                         ))
-                    });
-                result
+                    }
+                }
             };
 
             let exception = self.do_after_rpc_hooks(ctx.channel(), &cmd, response.as_mut()).err();
 
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
-                HandleErrorResult::ReturnMethod => return Ok(()),
+                HandleErrorResult::ReturnMethod => {
+                    #[cfg(feature = "observability")]
+                    metrics_guard.complete_process_request_failed();
+                    return Ok(());
+                }
                 HandleErrorResult::GoHead => {}
             }
             if oneway_rpc {
+                #[cfg(feature = "observability")]
+                metrics_guard.complete_oneway();
                 return Ok(());
             }
             let Some(response) = response else {
+                #[cfg(feature = "observability")]
+                metrics_guard.complete_cancelled();
                 return Ok(());
             };
+            let response_code = response.code();
             let result = ctx
                 .channel_mut()
                 .connection_mut()
                 .send_command(response.set_opaque(opaque))
                 .await;
             match result {
-                Ok(_) => {}
+                Ok(_) => {
+                    #[cfg(feature = "observability")]
+                    metrics_guard.complete_response(response_code);
+                }
                 Err(err) => match err {
                     RocketMQError::IO(io_error) => {
+                        #[cfg(feature = "observability")]
+                        metrics_guard.complete_write_channel_failed(response_code);
                         error!("connection disconnect: {}", io_error);
                         return Ok(());
                     }
                     _ => {
+                        #[cfg(feature = "observability")]
+                        metrics_guard.complete_write_channel_failed(response_code);
                         error!("send response failed: {}", err);
                     }
                 },

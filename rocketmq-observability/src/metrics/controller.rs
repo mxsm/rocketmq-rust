@@ -13,9 +13,17 @@
 // limitations under the License.
 
 pub use crate::semantic::metrics::CONTROLLER_ACTIVE_BROKERS;
+pub use crate::semantic::metrics::CONTROLLER_ACTIVE_BROKER_NUM;
+pub use crate::semantic::metrics::CONTROLLER_DLEDGER_DISK_USAGE;
+pub use crate::semantic::metrics::CONTROLLER_DLEDGER_OP_LATENCY;
+pub use crate::semantic::metrics::CONTROLLER_DLEDGER_OP_TOTAL;
 pub use crate::semantic::metrics::CONTROLLER_ELECTION_LATENCY;
 pub use crate::semantic::metrics::CONTROLLER_ELECTION_TOTAL;
+pub use crate::semantic::metrics::CONTROLLER_ELECTION_TOTAL_JAVA;
 pub use crate::semantic::metrics::CONTROLLER_LEADER_CHANGES_TOTAL;
+pub use crate::semantic::metrics::CONTROLLER_REQUEST_LATENCY;
+pub use crate::semantic::metrics::CONTROLLER_REQUEST_TOTAL;
+pub use crate::semantic::metrics::CONTROLLER_ROLE;
 
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;

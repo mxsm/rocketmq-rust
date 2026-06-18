@@ -35,6 +35,7 @@ use crate::rocksdb::iterator::RocksDbScanItem;
 use crate::rocksdb::iterator::RocksDbScanOptions;
 use crate::rocksdb::metrics::RocksDbMetrics;
 use crate::rocksdb::metrics::RocksDbMetricsCollector;
+use crate::rocksdb::metrics::RocksDbTickerMetrics;
 use crate::rocksdb::options::RocksDbOptionsFactory;
 use crate::rocksdb::snapshot::RocksDbSnapshot;
 use tracing::warn;
@@ -74,6 +75,7 @@ impl RocksDbStoreState {
 
 pub struct RocksDbStore {
     db: Arc<::rocksdb::DB>,
+    db_options: ::rocksdb::Options,
     state: AtomicU8,
     write_options: ::rocksdb::WriteOptions,
     metrics: Arc<RocksDbMetricsCollector>,
@@ -112,6 +114,7 @@ impl RocksDbStore {
 
         Ok(Self {
             db: Arc::new(db),
+            db_options,
             state: AtomicU8::new(RocksDbStoreState::Open.as_u8()),
             write_options: RocksDbOptionsFactory::write_options(config.write_profile()),
             metrics: Arc::new(RocksDbMetricsCollector::default()),
@@ -339,6 +342,22 @@ impl RocksDbStore {
 
     pub fn metrics(&self) -> RocksDbMetrics {
         self.metrics.snapshot()
+    }
+
+    pub fn ticker_metrics(&self) -> RocksDbTickerMetrics {
+        use ::rocksdb::statistics::Ticker;
+
+        RocksDbTickerMetrics {
+            bytes_written: self.db_options.get_ticker_count(Ticker::BytesWritten),
+            bytes_read: self.db_options.get_ticker_count(Ticker::BytesRead),
+            times_written_self: self.db_options.get_ticker_count(Ticker::WriteDoneBySelf),
+            times_written_other: self.db_options.get_ticker_count(Ticker::WriteDoneByOther),
+            block_cache_hit: self.db_options.get_ticker_count(Ticker::BlockCacheHit),
+            block_cache_miss: self.db_options.get_ticker_count(Ticker::BlockCacheMiss),
+            times_compressed: self.db_options.get_ticker_count(Ticker::NumberBlockCompressed),
+            read_amplification_bytes: self.db_options.get_ticker_count(Ticker::ReadAmpTotalReadBytes),
+            times_read: self.db_options.get_ticker_count(Ticker::NumberKeysRead),
+        }
     }
 
     pub fn property_value(&self, property: &str) -> Result<Option<String>, RocketMQError> {

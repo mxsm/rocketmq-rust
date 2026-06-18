@@ -33,6 +33,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -203,27 +204,36 @@ impl ControllerMetricsManager {
     /// # Returns
     /// Arc reference to the ControllerMetricsManager instance
     pub fn get_instance(config: ArcMut<ControllerConfig>) -> Arc<Self> {
+        Self::get_instance_with_active_broker_source(config, || 0)
+    }
+
+    pub fn get_instance_with_active_broker_source<F>(
+        config: ArcMut<ControllerConfig>,
+        active_broker_source: F,
+    ) -> Arc<Self>
+    where
+        F: Fn() -> u64 + Send + Sync + 'static,
+    {
+        let active_broker_source = Arc::new(active_broker_source);
         INSTANCE
             .get_or_init(|| {
-                let manager = Self::new(config);
+                let manager = Self::new(config, active_broker_source);
                 Arc::new(manager)
             })
             .clone()
     }
 
     /// Create a new ControllerMetricsManager
-    fn new(config: ArcMut<ControllerConfig>) -> Self {
+    fn new(config: ArcMut<ControllerConfig>, active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         // Initialize label map
         let label_map = LABEL_MAP.get_or_init(|| RwLock::new(HashMap::new()));
 
         // Populate base labels
         {
             let mut map = label_map.write().unwrap();
-            // TODO: Add actual address/group/peer_id from config when available
-            // This will depend on whether using DLedger or JRaft controller
-            map.insert(LABEL_ADDRESS.to_string(), "localhost:9876".to_string());
-            map.insert(LABEL_GROUP.to_string(), "DefaultControllerGroup".to_string());
-            map.insert(LABEL_PEER_ID.to_string(), "controller-1".to_string());
+            map.insert(LABEL_ADDRESS.to_string(), config.listen_addr.to_string());
+            map.insert(LABEL_GROUP.to_string(), config.controller_type.clone());
+            map.insert(LABEL_PEER_ID.to_string(), config.node_id.to_string());
         }
 
         // Parse custom labels from config if available
@@ -233,7 +243,7 @@ impl ControllerMetricsManager {
 
         if !Self::check_config(&config, metrics_type) {
             warn!("Metrics are disabled or configuration is invalid");
-            return Self::create_noop_manager(config);
+            return Self::create_noop_manager(config, active_broker_source);
         }
 
         #[cfg(feature = "metrics")]
@@ -246,13 +256,13 @@ impl ControllerMetricsManager {
                         "Failed to initialize controller observability: {:?}, falling back to no-op",
                         error
                     );
-                    return Self::create_noop_manager(config);
+                    return Self::create_noop_manager(config, active_broker_source.clone());
                 }
             };
 
             let Some(meter_provider) = telemetry_guard.meter_provider().cloned() else {
                 warn!("Controller metrics exporter did not initialize a meter provider");
-                return Self::create_noop_manager(config);
+                return Self::create_noop_manager(config, active_broker_source.clone());
             };
 
             let meter = meter_provider.meter(OPEN_TELEMETRY_METER_NAME);
@@ -261,6 +271,7 @@ impl ControllerMetricsManager {
             let manager = Self::init_metrics(
                 meter.clone(),
                 config.clone(),
+                active_broker_source,
                 Some(meter_provider),
                 Some(telemetry_guard),
             );
@@ -274,15 +285,18 @@ impl ControllerMetricsManager {
         #[cfg(not(feature = "metrics"))]
         {
             warn!("Controller metrics require the 'metrics' feature");
-            Self::create_noop_manager(config)
+            Self::create_noop_manager(config, active_broker_source)
         }
     }
 
     /// Create a no-op manager when metrics are disabled
-    fn create_noop_manager(config: ArcMut<ControllerConfig>) -> Self {
+    fn create_noop_manager(
+        config: ArcMut<ControllerConfig>,
+        active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("noop");
-        Self::init_metrics(meter, config, Some(provider), None)
+        Self::init_metrics(meter, config, active_broker_source, Some(provider), None)
     }
 
     /// Check if metrics configuration is valid
@@ -337,6 +351,7 @@ impl ControllerMetricsManager {
     fn init_metrics(
         meter: Meter,
         config: ArcMut<ControllerConfig>,
+        active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>,
         meter_provider: Option<SdkMeterProvider>,
         telemetry_guard: Option<ControllerTelemetryGuard>,
     ) -> Self {
@@ -347,40 +362,37 @@ impl ControllerMetricsManager {
             .build();
 
         // Register observable gauges
+        let dledger_disk_usage_path = controller_storage_path(&config);
         let _dledger_disk_usage = meter
             .u64_observable_gauge(GAUGE_DLEDGER_DISK_USAGE)
             .with_description("Disk usage of dledger storage in bytes")
             .with_unit("bytes")
             .with_callback(move |observer| {
-                // TODO: Get actual storage path from config
-                let path = Path::new("./controller-store");
-
-                if !path.exists() {
+                if !dledger_disk_usage_path.exists() {
                     return;
                 }
 
-                match calculate_directory_size(path) {
+                match calculate_directory_size(&dledger_disk_usage_path) {
                     Ok(size) => {
                         let attrs = Self::new_attributes_builder();
                         observer.observe(size, &attrs);
                     }
                     Err(e) => {
-                        error!("Failed to calculate disk usage for {:?}: {:?}", path, e);
+                        error!(
+                            "Failed to calculate disk usage for {:?}: {:?}",
+                            dledger_disk_usage_path, e
+                        );
                     }
                 }
             })
             .build();
 
-        // TODO: Register active_broker_num observable gauge
-        // This requires access to HeartbeatManager
         let _active_broker_num = meter
             .u64_observable_gauge(GAUGE_ACTIVE_BROKER_NUM)
             .with_description("Number of currently active brokers")
             .with_callback(move |observer| {
-                // TODO: Call controllerManager.getHeartbeatManager().getActiveBrokersNum()
-                // For now, this is a placeholder
                 let attrs = Self::new_attributes_builder();
-                observer.observe(0, &attrs);
+                observer.observe(active_broker_source(), &attrs);
             })
             .build();
 
@@ -609,6 +621,24 @@ fn record_observability_leader_change() {
     rocketmq_observability::metrics::controller::record_leader_changes_total(1);
 }
 
+fn controller_storage_path(config: &ControllerConfig) -> PathBuf {
+    if !config.storage_path.trim().is_empty() {
+        return PathBuf::from(&config.storage_path);
+    }
+    if !config.controller_store_path.trim().is_empty() {
+        return PathBuf::from(&config.controller_store_path);
+    }
+    PathBuf::from("./controller-store")
+}
+
+pub(crate) fn active_broker_count_from_snapshot(snapshot: &HashMap<String, HashMap<String, u32>>) -> u64 {
+    snapshot
+        .values()
+        .flat_map(|broker_sets| broker_sets.values())
+        .map(|count| u64::from(*count))
+        .sum()
+}
+
 /// Calculate total size of a directory recursively
 fn calculate_directory_size(path: &Path) -> std::io::Result<u64> {
     let mut total_size = 0u64;
@@ -712,6 +742,30 @@ mod tests {
         assert_eq!(values.get("region").map(String::as_str), Some("local"));
         assert!(!values.contains_key("invalid"));
         assert!(!values.contains_key(""));
+    }
+
+    #[test]
+    fn controller_storage_path_prefers_runtime_storage_path() {
+        let mut config = ControllerConfig::default()
+            .with_controller_store_path("controller-store-path")
+            .with_storage_path("runtime-storage-path");
+
+        assert_eq!(controller_storage_path(&config), PathBuf::from("runtime-storage-path"));
+
+        config.storage_path.clear();
+        assert_eq!(controller_storage_path(&config), PathBuf::from("controller-store-path"));
+    }
+
+    #[test]
+    fn active_broker_count_sums_all_cluster_broker_sets() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert(
+            "cluster-a".to_owned(),
+            HashMap::from([("broker-a".to_owned(), 2), ("broker-b".to_owned(), 1)]),
+        );
+        snapshot.insert("cluster-b".to_owned(), HashMap::from([("broker-c".to_owned(), 3)]));
+
+        assert_eq!(active_broker_count_from_snapshot(&snapshot), 6);
     }
 
     #[cfg(feature = "metrics")]

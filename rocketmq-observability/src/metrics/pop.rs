@@ -12,16 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod broker;
-pub mod catalog;
-pub mod client;
-pub mod controller;
-pub mod instruments;
-pub mod labels;
-pub mod namesrv;
-pub mod proxy;
-pub mod remoting;
-pub mod rocksdb;
-pub mod store;
-pub mod tiered_store;
-pub mod timer;
+pub use crate::semantic::metrics::POP_BUFFER_SCAN_TIME_CONSUME;
+pub use crate::semantic::metrics::POP_CHECKPOINT_BUFFER_SIZE;
+pub use crate::semantic::metrics::POP_OFFSET_BUFFER_SIZE;
+pub use crate::semantic::metrics::POP_REVIVE_IN_MESSAGE_TOTAL;
+pub use crate::semantic::metrics::POP_REVIVE_LAG;
+pub use crate::semantic::metrics::POP_REVIVE_LATENCY;
+pub use crate::semantic::metrics::POP_REVIVE_OUT_MESSAGE_TOTAL;
+pub use crate::semantic::metrics::POP_REVIVE_RETRY_MESSAGES_TOTAL;

@@ -121,6 +121,30 @@ where
         &self.directory
     }
 
+    async fn provider_read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+        let started = std::time::Instant::now();
+        let result = self.provider.read(path.clone(), position, length).await;
+        crate::metrics::record_provider_read(
+            &path,
+            result.as_ref().map(|bytes| bytes.len() as u64).unwrap_or(0),
+            result.is_ok(),
+            started.elapsed().as_millis() as u64,
+        );
+        result
+    }
+
+    async fn provider_write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+        let started = std::time::Instant::now();
+        let result = self.provider.write(path.clone(), position, data).await;
+        crate::metrics::record_provider_write(
+            &path,
+            result.as_ref().map(|written| *written as u64).unwrap_or(0),
+            result.is_ok(),
+            started.elapsed().as_millis() as u64,
+        );
+        result
+    }
+
     pub async fn append_entry(&self, entry: &TieredIndexEntry) -> Result<(), RocketMQError> {
         let mut segment_timestamps = self.load_manifest().await?;
         if segment_timestamps.is_empty() {
@@ -155,7 +179,7 @@ where
             if size == 0 {
                 continue;
             }
-            let bytes = self.provider.read(path, 0, size as usize).await?;
+            let bytes = self.provider_read(path, 0, size as usize).await?;
             entries.extend(decode_segment_entries(&bytes)?.into_iter().map(|record| record.entry));
         }
         entries.sort_by_key(|entry| (entry.store_timestamp, entry.queue_id, entry.queue_offset));
@@ -259,9 +283,8 @@ where
             previous_offset,
         };
         let bytes = encode_record(&record, header.begin_timestamp)?;
-        self.provider.write(path.to_owned(), append_position, bytes).await?;
-        self.provider
-            .write(path.to_owned(), slot_position as u64, encode_u64(append_position))
+        self.provider_write(path.to_owned(), append_position, bytes).await?;
+        self.provider_write(path.to_owned(), slot_position as u64, encode_u64(append_position))
             .await?;
 
         let occupied_slot_count = if previous_offset == 0 {
@@ -297,19 +320,18 @@ where
     }
 
     async fn read_header(&self, path: &str) -> Result<IndexSegmentHeader, RocketMQError> {
-        let bytes = self.provider.read(path.to_owned(), 0, HEADER_SIZE).await?;
+        let bytes = self.provider_read(path.to_owned(), 0, HEADER_SIZE).await?;
         decode_header(&bytes)
     }
 
     async fn write_header(&self, path: &str, header: &IndexSegmentHeader) -> Result<(), RocketMQError> {
-        self.provider.write(path.to_owned(), 0, encode_header(header)).await?;
+        self.provider_write(path.to_owned(), 0, encode_header(header)).await?;
         Ok(())
     }
 
     async fn read_slot(&self, path: &str, slot_position: usize) -> Result<u64, RocketMQError> {
         let bytes = self
-            .provider
-            .read(path.to_owned(), slot_position as u64, SLOT_SIZE)
+            .provider_read(path.to_owned(), slot_position as u64, SLOT_SIZE)
             .await?;
         if bytes.len() < SLOT_SIZE {
             return Ok(0);
@@ -356,7 +378,7 @@ where
         position: u64,
         segment_begin_timestamp: i64,
     ) -> Result<Option<IndexRecord>, RocketMQError> {
-        let header = self.provider.read(path.to_owned(), position, ITEM_HEADER_SIZE).await?;
+        let header = self.provider_read(path.to_owned(), position, ITEM_HEADER_SIZE).await?;
         if header.len() < ITEM_HEADER_SIZE {
             return Ok(None);
         }
@@ -382,7 +404,7 @@ where
         if size == 0 {
             return Ok(Vec::new());
         }
-        let bytes = self.provider.read(path.clone(), 0, size as usize).await?;
+        let bytes = self.provider_read(path.clone(), 0, size as usize).await?;
         let text =
             std::str::from_utf8(&bytes).map_err(|err| error::storage_read_failed(path.clone(), err.to_string()))?;
         let mut timestamps = Vec::new();
@@ -411,7 +433,7 @@ where
             data.push('\n');
         }
         self.provider.delete(self.manifest_path()).await?;
-        self.provider.write(self.manifest_path(), 0, Bytes::from(data)).await?;
+        self.provider_write(self.manifest_path(), 0, Bytes::from(data)).await?;
         Ok(())
     }
 

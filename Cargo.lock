@@ -4512,6 +4512,7 @@ dependencies = [
  "parking_lot",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-runtime",
  "serde",
  "serde_json",

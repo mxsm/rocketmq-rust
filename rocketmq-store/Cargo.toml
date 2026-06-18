@@ -46,7 +46,11 @@ fast-load = []
 # Safe sequential loading fallback (disables fast-load)
 safe-load = []
 tieredstore = ["dep:rocketmq-tieredstore"]
-observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+observability = [
+  "dep:rocketmq-observability",
+  "rocketmq-observability/otel-metrics",
+  "rocketmq-tieredstore?/otel-metrics",
+]
 observability-traces = ["dep:rocketmq-observability"]
 
 
