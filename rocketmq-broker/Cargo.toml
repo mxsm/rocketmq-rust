@@ -36,17 +36,15 @@ rocksdb-store    = ["rocksdb_store"]
 tieredstore      = ["local_file_store", "rocketmq-store/tieredstore"]
 observability    = ["otel-metrics", "otel-traces"]
 otel-metrics     = [
-  "dep:rocketmq-observability",
   "rocketmq-observability/otel-metrics",
   "rocketmq-store/observability",
   "rocketmq-remoting/observability",
 ]
 otel-traces      = [
-  "dep:rocketmq-observability",
   "rocketmq-observability/otel-traces",
   "rocketmq-store/observability-traces",
 ]
-otel-logs        = ["dep:rocketmq-observability", "rocketmq-observability/otel-logs"]
+otel-logs        = ["rocketmq-observability/otel-logs"]
 otlp-metrics     = ["otel-metrics", "rocketmq-observability/otlp-metrics"]
 otlp-traces      = ["otel-traces", "rocketmq-observability/otlp-traces"]
 otlp-logs        = ["otel-logs", "rocketmq-observability/otlp-logs"]
@@ -62,7 +60,7 @@ rocketmq-runtime     = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 rocketmq-error       = { workspace = true }
 rocketmq-auth        = { workspace = true }
-rocketmq-observability = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true }
 
 anyhow.workspace = true
 
@@ -98,9 +96,6 @@ arc-swap       = "1.9"
 crossbeam-skiplist = "0.1"
 
 futures = "0.3.32"
-
-opentelemetry     = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 
 [dev-dependencies]
 criterion            = { version = "0.8", features = ["html_reports"] }

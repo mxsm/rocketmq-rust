@@ -35,7 +35,7 @@ use crate::authentication::strategy::authentication_strategy::AuthenticationStra
 use crate::authentication::strategy::block_on_authentication_provider;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
-use crate::observability::AuthMetrics;
+use crate::AuthMetrics;
 
 const POUND: &str = "#";
 

@@ -33,7 +33,7 @@ rocketmq-error    = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-runtime  = { workspace = true }
 rocketmq-rust     = { workspace = true }
-rocketmq-observability = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true }
 
 # Core async runtime
 tokio      = { workspace = true }
@@ -73,10 +73,6 @@ anyhow      = { workspace = true }
 # Logging and tracing
 tracing = { workspace = true }
 
-# Metrics and observability
-opentelemetry = { workspace = true }
-opentelemetry_sdk = { workspace = true }
-
 # Async trait support
 async-trait = "0.1"
 
@@ -99,7 +95,7 @@ harness = false
 default         = ["storage-file"]
 storage-rocksdb = ["rocksdb"]
 storage-file    = []
-metrics         = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+metrics         = ["rocketmq-observability/otel-metrics"]
 metrics-otlp    = ["metrics", "rocketmq-observability/otlp-metrics"]
 metrics-prometheus = ["metrics", "rocketmq-observability/prometheus"]
 debug           = []

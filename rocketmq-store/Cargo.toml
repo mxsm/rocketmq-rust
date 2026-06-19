@@ -47,11 +47,10 @@ fast-load = []
 safe-load = []
 tieredstore = ["dep:rocketmq-tieredstore"]
 observability = [
-  "dep:rocketmq-observability",
   "rocketmq-observability/otel-metrics",
   "rocketmq-tieredstore?/otel-metrics",
 ]
-observability-traces = ["dep:rocketmq-observability"]
+observability-traces = ["rocketmq-observability/otel-traces"]
 
 
 [dependencies]
@@ -59,7 +58,7 @@ rocketmq-common   = { workspace = true }
 rocketmq-rust     = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
-rocketmq-observability = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true }
 rocketmq-tieredstore = { version = "1.0.0", path = "../rocketmq-tieredstore", optional = true }
 rocksdb             = { workspace = true, optional = true }
 

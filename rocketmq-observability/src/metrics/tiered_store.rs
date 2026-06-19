@@ -26,14 +26,17 @@ pub use crate::semantic::metrics::TIERED_STORE_READ_AHEAD_CACHE_BYTES;
 pub use crate::semantic::metrics::TIERED_STORE_READ_AHEAD_CACHE_COUNT;
 pub use crate::semantic::metrics::TIERED_STORE_READ_AHEAD_CACHE_HIT_TOTAL;
 
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
 
 #[cfg(feature = "otel-metrics")]
-static TIERED_STORE_METRICS: OnceLock<TieredStoreMetrics> = OnceLock::new();
+static TIERED_STORE_METRICS: OnceLock<TieredStoreOtelMetrics> = OnceLock::new();
 
 #[cfg(feature = "otel-metrics")]
-static TIERED_STORE_GLOBAL_METRICS: OnceLock<TieredStoreMetrics> = OnceLock::new();
+static TIERED_STORE_GLOBAL_METRICS: OnceLock<TieredStoreOtelMetrics> = OnceLock::new();
 
 #[derive(Debug, Clone, Default)]
 pub struct TieredStoreObservableValues {
@@ -50,6 +53,150 @@ pub struct TieredDispatchBehind {
     pub count: i64,
 }
 
+#[derive(Default)]
+pub struct TieredStoreMetrics {
+    dispatch_requests: AtomicU64,
+    dispatch_behind: AtomicU64,
+    commit_failures: AtomicU64,
+    fetch_requests: AtomicU64,
+    messages_dispatch_total: AtomicU64,
+    messages_out_total: AtomicU64,
+    get_message_fallback_total: AtomicU64,
+    provider_upload_bytes: AtomicU64,
+    provider_download_bytes: AtomicU64,
+    read_ahead_cache_access_total: AtomicU64,
+    read_ahead_cache_hit_total: AtomicU64,
+    read_ahead_cache_count: AtomicU64,
+    read_ahead_cache_bytes: AtomicU64,
+}
+
+impl TieredStoreMetrics {
+    pub fn record_dispatch_request(&self) {
+        self.dispatch_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_dispatch_dequeued(&self) {
+        let _ = self
+            .dispatch_behind
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_sub(1));
+    }
+
+    pub fn record_commit_failure(&self) {
+        self.commit_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_fetch_request(&self) {
+        self.fetch_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_messages_dispatch(&self, topic: &str, queue_id: i32, file_type: &str, count: u64) {
+        self.messages_dispatch_total.fetch_add(count, Ordering::Relaxed);
+        record_messages_dispatch(topic, queue_id, file_type, count);
+    }
+
+    pub fn record_messages_out(&self, topic: &str, group: &str, count: u64) {
+        self.messages_out_total.fetch_add(count, Ordering::Relaxed);
+        record_messages_out(topic, group, count);
+    }
+
+    pub fn record_get_message_fallback(&self, topic: &str, group: &str) {
+        self.get_message_fallback_total.fetch_add(1, Ordering::Relaxed);
+        record_get_message_fallback(topic, group);
+    }
+
+    pub fn record_dispatch_latency(&self, topic: &str, queue_id: i32, file_type: &str, latency_ms: u64) {
+        record_dispatch_latency(topic, queue_id, file_type, latency_ms);
+    }
+
+    pub fn record_api_latency(&self, operation: &str, success: bool, latency_ms: u64) {
+        record_api_latency(operation, success, latency_ms);
+    }
+
+    pub fn record_read_ahead_cache_access(&self, success: bool, count: u64) {
+        self.read_ahead_cache_access_total.fetch_add(count, Ordering::Relaxed);
+        record_read_ahead_cache_access(success, count);
+    }
+
+    pub fn record_read_ahead_cache_hit(&self, success: bool, count: u64) {
+        self.read_ahead_cache_hit_total.fetch_add(count, Ordering::Relaxed);
+        record_read_ahead_cache_hit(success, count);
+    }
+
+    pub fn set_read_ahead_cache_gauges(&self, count: u64, bytes: u64) {
+        self.read_ahead_cache_count.store(count, Ordering::Relaxed);
+        self.read_ahead_cache_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    pub fn dispatch_requests(&self) -> u64 {
+        self.dispatch_requests.load(Ordering::Relaxed)
+    }
+
+    pub fn commit_failures(&self) -> u64 {
+        self.commit_failures.load(Ordering::Relaxed)
+    }
+
+    pub fn fetch_requests(&self) -> u64 {
+        self.fetch_requests.load(Ordering::Relaxed)
+    }
+
+    pub fn messages_dispatch_total(&self) -> u64 {
+        self.messages_dispatch_total.load(Ordering::Relaxed)
+    }
+
+    pub fn messages_out_total(&self) -> u64 {
+        self.messages_out_total.load(Ordering::Relaxed)
+    }
+
+    pub fn get_message_fallback_total(&self) -> u64 {
+        self.get_message_fallback_total.load(Ordering::Relaxed)
+    }
+
+    pub fn provider_upload_bytes(&self) -> u64 {
+        self.provider_upload_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn provider_download_bytes(&self) -> u64 {
+        self.provider_download_bytes.load(Ordering::Relaxed)
+    }
+
+    pub fn read_ahead_cache_access_total(&self) -> u64 {
+        self.read_ahead_cache_access_total.load(Ordering::Relaxed)
+    }
+
+    pub fn read_ahead_cache_hit_total(&self) -> u64 {
+        self.read_ahead_cache_hit_total.load(Ordering::Relaxed)
+    }
+
+    pub fn observable_values(&self) -> TieredStoreObservableValues {
+        let dispatch_behind = self.dispatch_behind.load(Ordering::Relaxed) as i64;
+        TieredStoreObservableValues {
+            dispatch_behind: vec![TieredDispatchBehind {
+                topic: "ALL".to_owned(),
+                queue_id: -1,
+                file_type: "commitlog".to_owned(),
+                count: dispatch_behind,
+            }],
+            read_ahead_cache_count: self.read_ahead_cache_count.load(Ordering::Relaxed) as i64,
+            read_ahead_cache_bytes: self.read_ahead_cache_bytes.load(Ordering::Relaxed) as i64,
+        }
+    }
+}
+
+pub fn record_dispatch_queued(metrics: &TieredStoreMetrics) {
+    metrics.record_dispatch_request();
+    metrics.dispatch_behind.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn record_provider_read(path: &str, bytes: u64, success: bool, latency_ms: u64) {
+    record_provider_download_bytes("read", success, path, bytes);
+    record_provider_rpc_latency("read", success, path, latency_ms);
+}
+
+pub fn record_provider_write(path: &str, bytes: u64, success: bool, latency_ms: u64) {
+    record_provider_upload_bytes("write", success, path, bytes);
+    record_provider_rpc_latency("write", success, path, latency_ms);
+}
+
 #[cfg(feature = "otel-metrics")]
 pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
     init_global_with_observables(meter, TieredStoreObservableValues::default)
@@ -61,18 +208,18 @@ where
     F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
 {
     TIERED_STORE_METRICS
-        .set(TieredStoreMetrics::new_with_observables(meter, source))
+        .set(TieredStoreOtelMetrics::new_with_observables(meter, source))
         .is_ok()
 }
 
 #[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static TieredStoreMetrics {
+fn global_metrics() -> &'static TieredStoreOtelMetrics {
     if let Some(metrics) = TIERED_STORE_METRICS.get() {
         return metrics;
     }
 
     TIERED_STORE_GLOBAL_METRICS.get_or_init(|| {
-        TieredStoreMetrics::new_with_observables(
+        TieredStoreOtelMetrics::new_with_observables(
             &opentelemetry::global::meter("rocketmq-tieredstore"),
             TieredStoreObservableValues::default,
         )
@@ -161,10 +308,10 @@ pub fn record_read_ahead_cache_hit(success: bool, count: u64) {
 
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TieredStoreMetrics;
+pub struct TieredStoreOtelMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
-impl TieredStoreMetrics {
+impl TieredStoreOtelMetrics {
     pub fn noop() -> Self {
         Self
     }
@@ -202,7 +349,7 @@ impl TieredStoreMetrics {
 
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
-pub struct TieredStoreMetrics {
+pub struct TieredStoreOtelMetrics {
     messages_dispatch_total: opentelemetry::metrics::Counter<u64>,
     messages_out_total: opentelemetry::metrics::Counter<u64>,
     get_message_fallback_total: opentelemetry::metrics::Counter<u64>,
@@ -216,7 +363,7 @@ pub struct TieredStoreMetrics {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl TieredStoreMetrics {
+impl TieredStoreOtelMetrics {
     pub fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
     where
         F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
@@ -438,7 +585,7 @@ mod tests {
     fn tiered_store_metrics_constructs_and_records() {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("tiered-store-metrics-test");
-        let metrics = TieredStoreMetrics::new_with_observables(&meter, || TieredStoreObservableValues {
+        let metrics = TieredStoreOtelMetrics::new_with_observables(&meter, || TieredStoreObservableValues {
             dispatch_behind: vec![TieredDispatchBehind {
                 topic: "TopicA".to_owned(),
                 queue_id: 0,
@@ -475,5 +622,34 @@ mod tests {
         record_read_ahead_cache_hit(true, 1);
 
         assert!(TIERED_STORE_METRICS.get().is_some() || TIERED_STORE_GLOBAL_METRICS.get().is_some());
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn tiered_store_runtime_metrics_count_local_events() {
+        let metrics = TieredStoreMetrics::default();
+
+        record_dispatch_queued(&metrics);
+        metrics.record_dispatch_dequeued();
+        metrics.record_commit_failure();
+        metrics.record_fetch_request();
+        metrics.record_messages_dispatch("TopicA", 0, "commitlog", 2);
+        metrics.record_messages_out("TopicA", "GroupA", 3);
+        metrics.record_get_message_fallback("TopicA", "GroupA");
+        metrics.record_read_ahead_cache_access(true, 4);
+        metrics.record_read_ahead_cache_hit(true, 2);
+
+        assert_eq!(metrics.dispatch_requests(), 1);
+        assert_eq!(metrics.commit_failures(), 1);
+        assert_eq!(metrics.fetch_requests(), 1);
+        assert_eq!(metrics.messages_dispatch_total(), 2);
+        assert_eq!(metrics.messages_out_total(), 3);
+        assert_eq!(metrics.get_message_fallback_total(), 1);
+        assert_eq!(metrics.read_ahead_cache_access_total(), 4);
+        assert_eq!(metrics.read_ahead_cache_hit_total(), 2);
     }
 }

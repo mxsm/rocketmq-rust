@@ -14,9 +14,6 @@
 
 pub mod log_exporter_type;
 pub mod metrics_exporter_type;
-pub mod nop_long_counter;
-pub mod nop_long_histogram;
-pub mod nop_observable_long_gauge;
 pub mod trace_exporter_type;
 
 pub use log_exporter_type::LogExporterType;

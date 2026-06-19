@@ -18,6 +18,8 @@ pub use crate::semantic::metrics::CLIENT_REBALANCE_TOTAL;
 pub use crate::semantic::metrics::CLIENT_SEND_LATENCY;
 pub use crate::semantic::metrics::CLIENT_SEND_TOTAL;
 
+use std::time::Duration;
+
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
 
@@ -79,6 +81,25 @@ pub fn record_rebalance_total(count: u64) {
 
     #[cfg(not(feature = "otel-metrics"))]
     let _ = count;
+}
+
+pub fn record_send(elapsed: Duration) {
+    record_send_total(1);
+    record_send_latency(duration_millis_u64(elapsed));
+}
+
+pub fn record_consume(message_count: usize, latency_ms: u64) {
+    record_consume_total(message_count as u64);
+    record_consume_latency(latency_ms);
+}
+
+pub fn record_rebalance() {
+    record_rebalance_total(1);
+}
+
+#[inline]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -215,5 +236,19 @@ mod tests {
         record_rebalance_total(1);
 
         assert!(CLIENT_METRICS.get().is_some() || CLIENT_GLOBAL_METRICS.get().is_some());
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn client_high_level_recorders_are_safe_without_explicit_meter() {
+        record_send(Duration::from_millis(1));
+        record_consume(1, 2);
+        record_rebalance();
     }
 }

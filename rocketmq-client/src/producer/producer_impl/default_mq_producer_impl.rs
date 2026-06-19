@@ -743,7 +743,7 @@ impl DefaultMQProducerImpl {
                     if let Err(e) = mq_client_api.send_oneway_unbounded(&broker_addr, request).await {
                         tracing::debug!("Oneway batch send failed: {:?}", e);
                     }
-                    crate::observability_metrics::record_send(send_start.elapsed());
+                    rocketmq_observability::metrics::client::record_send(send_start.elapsed());
                 }
                 Err(e) => tracing::debug!("Oneway batch send skipped: {:?}", e),
             }
@@ -1642,7 +1642,7 @@ impl DefaultMQProducerImpl {
             }
         };
 
-        crate::observability_metrics::record_send(begin_start_time.elapsed());
+        rocketmq_observability::metrics::client::record_send(begin_start_time.elapsed());
 
         match send_result {
             Ok(result) => {

@@ -124,7 +124,7 @@ where
     async fn provider_read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
         let started = std::time::Instant::now();
         let result = self.provider.read(path.clone(), position, length).await;
-        crate::metrics::record_provider_read(
+        rocketmq_observability::metrics::tiered_store::record_provider_read(
             &path,
             result.as_ref().map(|bytes| bytes.len() as u64).unwrap_or(0),
             result.is_ok(),
@@ -136,7 +136,7 @@ where
     async fn provider_write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
         let started = std::time::Instant::now();
         let result = self.provider.write(path.clone(), position, data).await;
-        crate::metrics::record_provider_write(
+        rocketmq_observability::metrics::tiered_store::record_provider_write(
             &path,
             result.as_ref().map(|written| *written as u64).unwrap_or(0),
             result.is_ok(),

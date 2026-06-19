@@ -81,6 +81,7 @@ pub(crate) mod inner {
     use tracing::warn;
 
     use crate::base::response_future::ResponseFuture;
+    use crate::code::request_code::RequestCode;
     use crate::code::response_code::ResponseCode;
     use crate::net::channel::Channel;
     use crate::protocol::remoting_command::RemotingCommand;
@@ -129,9 +130,10 @@ pub(crate) mod inner {
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
             #[cfg(feature = "observability")]
-            let mut metrics_guard = crate::observability_metrics::RequestMetricsGuard::start(
-                &cmd,
+            let mut metrics_guard = rocketmq_observability::metrics::remoting::RequestMetricsGuard::start(
+                cmd.code(),
                 cmd.body().map_or(0, |body| body.len() as u64),
+                is_long_polling_request(cmd.code()),
             );
             let reject_request = self.request_processor.reject_request(cmd.code());
             const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
@@ -170,7 +172,7 @@ pub(crate) mod inner {
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => {
                     #[cfg(feature = "observability")]
-                    metrics_guard.complete_process_request_failed();
+                    metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
                     return Ok(());
                 }
                 HandleErrorResult::GoHead => {}
@@ -183,7 +185,7 @@ pub(crate) mod inner {
                     Ok(result) => result,
                     Err(_err) => {
                         #[cfg(feature = "observability")]
-                        metrics_guard.complete_process_request_failed();
+                        metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
                         Some(RemotingCommand::create_response_command_with_code(
                             ResponseCode::SystemError,
                         ))
@@ -196,7 +198,7 @@ pub(crate) mod inner {
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => {
                     #[cfg(feature = "observability")]
-                    metrics_guard.complete_process_request_failed();
+                    metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
                     return Ok(());
                 }
                 HandleErrorResult::GoHead => {}
@@ -313,6 +315,20 @@ pub(crate) mod inner {
             self.rpc_hooks.clear();
         }
     }
+
+    #[inline]
+    fn is_long_polling_request(request_code: i32) -> bool {
+        matches!(
+            RequestCode::from(request_code),
+            RequestCode::PullMessage
+                | RequestCode::PopMessage
+                | RequestCode::PopLiteMessage
+                | RequestCode::LitePullMessage
+                | RequestCode::Notification
+                | RequestCode::PollingInfo
+        )
+    }
+
     async fn handle_error(
         ctx: &mut ConnectionHandlerContext,
         oneway_rpc: bool,
@@ -373,5 +389,20 @@ pub(crate) mod inner {
     enum HandleErrorResult {
         ReturnMethod,
         GoHead,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::code::request_code::RequestCode;
+
+        use super::is_long_polling_request;
+
+        #[test]
+        fn long_polling_request_codes_match_broker_poll_paths() {
+            assert!(is_long_polling_request(RequestCode::PullMessage.to_i32()));
+            assert!(is_long_polling_request(RequestCode::PopMessage.to_i32()));
+            assert!(is_long_polling_request(RequestCode::Notification.to_i32()));
+            assert!(!is_long_polling_request(RequestCode::SendMessage.to_i32()));
+        }
     }
 }

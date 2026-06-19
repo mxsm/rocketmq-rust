@@ -12,13 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod auth;
 pub mod broker;
+pub mod broker_constants;
+#[cfg(feature = "otel-metrics")]
+pub mod broker_manager;
 pub mod catalog;
 pub mod client;
 pub mod controller;
+pub mod controller_constants;
+#[cfg(feature = "otel-metrics")]
+pub mod controller_manager;
 pub mod instruments;
 pub mod labels;
 pub mod namesrv;
+pub mod noop_instruments;
+pub mod pop_constants;
+#[cfg(feature = "otel-metrics")]
+pub mod pop_manager;
+pub mod pop_revive_message_type;
 pub mod proxy;
 pub mod remoting;
 pub mod rocksdb;

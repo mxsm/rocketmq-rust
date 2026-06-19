@@ -33,11 +33,11 @@ use crate::rocksdb::error::RocksDbResultExt;
 use crate::rocksdb::iterator::RocksDbRangeScanOptions;
 use crate::rocksdb::iterator::RocksDbScanItem;
 use crate::rocksdb::iterator::RocksDbScanOptions;
-use crate::rocksdb::metrics::RocksDbMetrics;
-use crate::rocksdb::metrics::RocksDbMetricsCollector;
-use crate::rocksdb::metrics::RocksDbTickerMetrics;
 use crate::rocksdb::options::RocksDbOptionsFactory;
 use crate::rocksdb::snapshot::RocksDbSnapshot;
+use rocketmq_observability::metrics::rocksdb::RocksDbMetrics;
+use rocketmq_observability::metrics::rocksdb::RocksDbMetricsCollector;
+use rocketmq_observability::metrics::rocksdb::RocksDbTickerMetrics;
 use tracing::warn;
 
 pub trait KeyValueStore {

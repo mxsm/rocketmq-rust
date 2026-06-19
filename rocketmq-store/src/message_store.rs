@@ -115,7 +115,7 @@ impl GenericMessageStore {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    pub fn rocksdb_ticker_metrics(&self) -> Option<crate::rocksdb::metrics::RocksDbTickerMetrics> {
+    pub fn rocksdb_ticker_metrics(&self) -> Option<rocketmq_observability::metrics::rocksdb::RocksDbTickerMetrics> {
         match self {
             #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(_) => None,
@@ -124,7 +124,9 @@ impl GenericMessageStore {
     }
 
     #[cfg(feature = "tieredstore")]
-    pub fn tiered_store_metrics(&self) -> Option<Arc<rocketmq_tieredstore::metrics::TieredStoreMetrics>> {
+    pub fn tiered_store_metrics(
+        &self,
+    ) -> Option<Arc<rocketmq_observability::metrics::tiered_store::TieredStoreMetrics>> {
         match self {
             #[cfg(feature = "local_file_store")]
             Self::LocalFileStore(store) => store.tiered_store_metrics(),

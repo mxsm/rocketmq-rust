@@ -85,6 +85,16 @@ impl TelemetryGuard {
     }
 }
 
+#[cfg(feature = "otel-metrics")]
+pub fn meter(
+    provider: &opentelemetry_sdk::metrics::SdkMeterProvider,
+    name: &'static str,
+) -> opentelemetry::metrics::Meter {
+    use opentelemetry::metrics::MeterProvider;
+
+    provider.meter(name)
+}
+
 pub fn init_observability(config: &ObservabilityConfig) -> Result<TelemetryGuard, ObservabilityError> {
     validate_config(config)?;
     crate::trace::configure_message_span_recording(&config.traces);

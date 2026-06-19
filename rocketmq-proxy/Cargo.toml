@@ -30,7 +30,6 @@ rust-version.workspace = true
 [features]
 default = []
 observability = [
-  "dep:rocketmq-observability",
   "rocketmq-observability/otel-metrics",
   "rocketmq-broker/otel-metrics",
   "rocketmq-store/observability",
@@ -47,7 +46,7 @@ rocketmq-remoting    = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-rust        = { workspace = true }
-rocketmq-observability = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true }
 
 tokio        = { workspace = true }
 tokio-stream = { workspace = true }

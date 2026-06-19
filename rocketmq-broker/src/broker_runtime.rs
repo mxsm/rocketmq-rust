@@ -27,8 +27,6 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-#[cfg(feature = "otel-metrics")]
-use opentelemetry::metrics::MeterProvider;
 use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthMetricsSnapshot;
@@ -195,42 +193,6 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         stateful_authentication_cache_expired_second: broker_config.stateful_authentication_cache_expired_second,
         stateful_authorization_cache_max_num: broker_config.stateful_authorization_cache_max_num,
         stateful_authorization_cache_expired_second: broker_config.stateful_authorization_cache_expired_second,
-    }
-}
-
-#[cfg(feature = "otel-metrics")]
-struct BrokerObservabilityAttributesSupplier {
-    cluster: String,
-    node_id: String,
-}
-
-#[cfg(feature = "otel-metrics")]
-impl BrokerObservabilityAttributesSupplier {
-    fn new(broker_config: &BrokerConfig) -> Self {
-        Self {
-            cluster: broker_config.broker_identity.broker_cluster_name.to_string(),
-            node_id: broker_config.broker_identity.get_canonical_name(),
-        }
-    }
-}
-
-#[cfg(feature = "otel-metrics")]
-impl crate::metrics::broker_metrics_manager::AttributesBuilderSupplier for BrokerObservabilityAttributesSupplier {
-    fn get(&self) -> Vec<opentelemetry::KeyValue> {
-        vec![
-            opentelemetry::KeyValue::new(
-                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::LABEL_CLUSTER_NAME,
-                self.cluster.clone(),
-            ),
-            opentelemetry::KeyValue::new(
-                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::LABEL_NODE_TYPE,
-                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::NODE_TYPE_BROKER,
-            ),
-            opentelemetry::KeyValue::new(
-                crate::metrics::broker_metrics_constant::BrokerMetricsConstant::LABEL_NODE_ID,
-                self.node_id.clone(),
-            ),
-        ]
     }
 }
 
@@ -1046,7 +1008,10 @@ impl BrokerRuntime {
                         config.metrics.consumer_group_label_enabled,
                     );
                     let attributes_supplier =
-                        Arc::new(BrokerObservabilityAttributesSupplier::new(&self.inner.broker_config));
+                        Arc::new(crate::metrics::broker_metrics_manager::BrokerAttributesSupplier::new(
+                            self.inner.broker_config.broker_identity.broker_cluster_name.to_string(),
+                            self.inner.broker_config.broker_identity.get_canonical_name(),
+                        ));
                     let broker_permission = i64::from(self.inner.broker_config.broker_permission);
                     let topic_num_inner = self.inner.clone();
                     let consumer_group_num_inner = self.inner.clone();
@@ -1073,7 +1038,10 @@ impl BrokerRuntime {
                                 .into_iter()
                                 .map(|(language, version, count)| {
                                     (
-                                        crate::metrics::producer_attr::ProducerAttr::new(language, version),
+                                        crate::metrics::broker_metrics_manager::ProducerConnectionAttributes::new(
+                                            language.to_string(),
+                                            version,
+                                        ),
                                         count,
                                     )
                                 })
@@ -1086,11 +1054,11 @@ impl BrokerRuntime {
                                 .into_iter()
                                 .map(|(group, language, version, consume_type, count)| {
                                     (
-                                        crate::metrics::consumer_attr::ConsumerAttr::new(
+                                        crate::metrics::broker_metrics_manager::ConsumerConnectionAttributes::new(
                                             group.to_string(),
-                                            language,
+                                            language.to_string(),
                                             version,
-                                            consume_type,
+                                            consume_type.to_string(),
                                         ),
                                         count,
                                     )
@@ -1135,7 +1103,7 @@ impl BrokerRuntime {
                         },
                     );
 
-                    let store_meter = provider.meter("rocketmq-store");
+                    let store_meter = rocketmq_observability::meter(provider, "rocketmq-store");
                     let store_observable_inner = self.inner.clone();
                     let _ =
                         rocketmq_observability::metrics::store::init_global_with_observables(&store_meter, move || {
@@ -1218,7 +1186,7 @@ impl BrokerRuntime {
                         );
                     }
 
-                    let remoting_meter = provider.meter("rocketmq-remoting");
+                    let remoting_meter = rocketmq_observability::meter(provider, "rocketmq-remoting");
                     let _ = rocketmq_observability::metrics::remoting::init_global(&remoting_meter);
                 }
 

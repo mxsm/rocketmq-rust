@@ -24,8 +24,8 @@ use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
 use crate::file::ConsumeQueueUnit;
 use crate::file::TieredFlatFileStore;
-use crate::metrics::TieredStoreMetrics;
 use crate::provider::TieredStoreProvider;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 #[allow(async_fn_in_trait)]
 pub trait TieredDispatcher: Send + Sync {
@@ -98,7 +98,7 @@ where
         self.sender
             .try_send(request)
             .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
-        crate::metrics::record_dispatch_queued(&self.metrics);
+        rocketmq_observability::metrics::tiered_store::record_dispatch_queued(&self.metrics);
         Ok(())
     }
 
@@ -204,7 +204,7 @@ where
             .send(request)
             .await
             .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
-        crate::metrics::record_dispatch_queued(&self.metrics);
+        rocketmq_observability::metrics::tiered_store::record_dispatch_queued(&self.metrics);
         Ok(())
     }
 

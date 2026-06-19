@@ -28,4 +28,6 @@ pub mod trace;
 pub use config::ObservabilityConfig;
 pub use error::ObservabilityError;
 pub use init::init_observability;
+#[cfg(feature = "otel-metrics")]
+pub use init::meter;
 pub use init::TelemetryGuard;

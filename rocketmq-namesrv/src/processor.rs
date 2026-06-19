@@ -124,7 +124,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
         };
         if let Some(started) = route_request_started {
-            crate::observability_metrics::record_route_request(started.elapsed());
+            rocketmq_observability::metrics::namesrv::record_route_request(started.elapsed());
         }
         response
     }

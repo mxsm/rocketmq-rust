@@ -826,7 +826,9 @@ impl LocalFileMessageStore {
     }
 
     #[cfg(feature = "tieredstore")]
-    pub fn tiered_store_metrics(&self) -> Option<Arc<rocketmq_tieredstore::metrics::TieredStoreMetrics>> {
+    pub fn tiered_store_metrics(
+        &self,
+    ) -> Option<Arc<rocketmq_observability::metrics::tiered_store::TieredStoreMetrics>> {
         self.tiered_store.as_ref().map(|tiered_store| tiered_store.metrics())
     }
 

@@ -38,7 +38,7 @@ use crate::authorization::strategy::abstract_authorization_strategy::Authorizati
 use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
 use crate::authorization::strategy::block_on_base_authorization;
 use crate::config::AuthConfig;
-use crate::observability::AuthMetrics;
+use crate::AuthMetrics;
 
 type AuthCache = HashMap<String, CachedAuthResult>;
 

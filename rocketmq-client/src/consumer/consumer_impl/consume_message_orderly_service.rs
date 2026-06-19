@@ -637,7 +637,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             }
         }
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        crate::observability_metrics::record_consume(msgs.len(), consume_rt);
+        rocketmq_observability::metrics::client::record_consume(msgs.len(), consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(true);
@@ -935,7 +935,7 @@ impl ConsumeRequest {
                     );
                 }
                 let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-                crate::observability_metrics::record_consume(msgs.len(), consume_rt);
+                rocketmq_observability::metrics::client::record_consume(msgs.len(), consume_rt);
                 let return_type = match status {
                     None => {
                         if has_exception {

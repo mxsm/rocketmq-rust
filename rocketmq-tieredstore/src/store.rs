@@ -25,11 +25,11 @@ use crate::file::TieredFlatFileStore;
 use crate::lifecycle::TieredLifecycle;
 use crate::metadata::JsonMetadataStore;
 use crate::metadata::TieredMetadataStore;
-use crate::metrics::TieredStoreMetrics;
 use crate::provider::ProviderKind;
 use crate::provider::TieredStoreProvider;
 use crate::service::CommitLogRecoverService;
 use crate::service::TieredServiceSet;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 pub struct TieredStore<P = ProviderKind>
 where

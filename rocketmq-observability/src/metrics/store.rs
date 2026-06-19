@@ -111,6 +111,13 @@ pub fn record_delay_message_latency_with_topic(latency_seconds: u64, topic: Opti
     let _ = (latency_seconds, topic);
 }
 
+pub fn record_delay_message_latency_from_timestamps(deliver_time_ms: i64, born_timestamp_ms: i64, topic: Option<&str>) {
+    let latency_ms = deliver_time_ms.saturating_sub(born_timestamp_ms);
+    if latency_ms > 0 {
+        record_delay_message_latency_with_topic((latency_ms / 1000) as u64, topic);
+    }
+}
+
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StoreMetrics;
@@ -333,5 +340,21 @@ mod tests {
         assert!(attrs
             .iter()
             .any(|kv| kv.key.as_str() == crate::semantic::labels::TOPIC && kv.value.to_string() == "topic-a"));
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    #[test]
+    fn delay_message_latency_from_timestamps_ignores_non_positive_latency() {
+        record_delay_message_latency_from_timestamps(1, 2, Some("topic-a"));
+        record_delay_message_latency_from_timestamps(2, 2, Some("topic-a"));
+    }
+
+    #[test]
+    fn delay_message_latency_from_timestamps_records_positive_latency() {
+        record_delay_message_latency_from_timestamps(2_000, 1_000, Some("topic-a"));
     }
 }
