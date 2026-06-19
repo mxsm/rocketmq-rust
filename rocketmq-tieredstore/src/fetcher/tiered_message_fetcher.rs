@@ -20,8 +20,8 @@ use rocketmq_error::RocketMQError;
 
 use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
-use crate::metrics::TieredStoreMetrics;
 use crate::provider::TieredStoreProvider;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TieredGetMessageStatus {

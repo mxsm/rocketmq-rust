@@ -313,7 +313,7 @@ impl Connection {
         // This is more efficient than split() + clear() pattern
         let len = self.encode_buffer.len();
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_network_bytes(len as u64);
+        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
 
         // Send and automatically handle state on error
@@ -356,7 +356,7 @@ impl Connection {
         // Zero-copy extraction using split_to() pattern
         let len = self.encode_buffer.len();
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_network_bytes(len as u64);
+        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
 
         // Send and automatically handle state on error
@@ -418,7 +418,7 @@ impl Connection {
         // Send entire batch as one Bytes chunk
         let len = self.encode_buffer.len();
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_network_bytes(len as u64);
+        rocketmq_observability::metrics::remoting::record_network_bytes(len as u64);
         let bytes = self.encode_buffer.split_to(len).freeze();
 
         // Send and automatically handle state on error
@@ -452,7 +452,7 @@ impl Connection {
     /// and serialization overhead.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_network_bytes(bytes.len() as u64);
+        rocketmq_observability::metrics::remoting::record_network_bytes(bytes.len() as u64);
         match self.outbound_sink.send(bytes).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -485,7 +485,7 @@ impl Connection {
     /// ```
     pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_network_bytes(slice.len() as u64);
+        rocketmq_observability::metrics::remoting::record_network_bytes(slice.len() as u64);
         let bytes = slice.into();
         match self.outbound_sink.send(bytes).await {
             Ok(()) => Ok(()),

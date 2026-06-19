@@ -32,8 +32,8 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
 use crate::authentication::provider::local_authentication_metadata_provider::LocalAuthenticationMetadataProvider;
 use crate::config::AuthConfig;
-use crate::observability::AuthMetrics;
 use crate::runtime::ProviderRegistry;
+use crate::AuthMetrics;
 
 use super::authentication_provider::AuthenticationProvider;
 

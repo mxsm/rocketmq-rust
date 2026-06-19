@@ -29,8 +29,8 @@ rust-version.workspace = true
 
 [features]
 default = []
-observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-traces"]
-observability-metrics = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+observability = ["rocketmq-observability/otel-traces"]
+observability-metrics = ["rocketmq-observability/otel-metrics"]
 otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
 
 [dependencies]
@@ -40,7 +40,7 @@ rocketmq-remoting        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-error.workspace = true
 rocketmq-auth.workspace  = true
-rocketmq-observability   = { workspace = true, optional = true }
+rocketmq-observability   = { workspace = true }
 
 #json spupport
 serde.workspace      = true

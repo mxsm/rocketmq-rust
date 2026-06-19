@@ -22,8 +22,6 @@ pub mod code;
 pub mod codec;
 pub mod connection;
 pub mod net;
-#[cfg(feature = "observability")]
-pub(crate) mod observability_metrics;
 pub mod prelude;
 pub mod protocol;
 

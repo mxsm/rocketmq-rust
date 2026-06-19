@@ -30,7 +30,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::model::user::User;
 use crate::authentication::provider::AuthenticationMetadataProvider;
-use crate::observability::AuthMetrics;
+use crate::AuthMetrics;
 
 /// Default authentication handler.
 ///

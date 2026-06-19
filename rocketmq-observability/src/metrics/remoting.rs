@@ -17,8 +17,17 @@ pub use crate::semantic::metrics::REMOTING_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::REMOTING_REQUEST_LATENCY;
 pub use crate::semantic::metrics::RPC_LATENCY;
 
+use std::time::Instant;
+
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
+
+const NO_RESPONSE_CODE: i32 = -1;
+const RESULT_ONEWAY: &str = "oneway";
+const RESULT_SUCCESS: &str = "success";
+const RESULT_CANCELED: &str = "cancelled";
+const RESULT_PROCESS_REQUEST_FAILED: &str = "process_request_failed";
+const RESULT_WRITE_CHANNEL_FAILED: &str = "write_channel_failed";
 
 #[cfg(feature = "otel-metrics")]
 static REMOTING_METRICS: OnceLock<RemotingMetrics> = OnceLock::new();
@@ -49,6 +58,10 @@ pub fn record_request_latency(latency_ms: u64) {
 }
 
 pub fn record_network_bytes(bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+
     #[cfg(feature = "otel-metrics")]
     if let Some(metrics) = REMOTING_METRICS.get() {
         metrics.record_network_bytes(bytes, &[]);
@@ -56,6 +69,77 @@ pub fn record_network_bytes(bytes: u64) {
 
     #[cfg(not(feature = "otel-metrics"))]
     let _ = bytes;
+}
+
+pub struct RequestMetricsGuard {
+    start: Instant,
+    request_code: i32,
+    is_long_polling: bool,
+    rpc_recorded: bool,
+}
+
+impl RequestMetricsGuard {
+    #[inline]
+    pub fn start(request_code: i32, request_bytes: u64, is_long_polling: bool) -> Self {
+        record_requests_total(1);
+        record_network_bytes(request_bytes);
+
+        Self {
+            start: Instant::now(),
+            request_code,
+            is_long_polling,
+            rpc_recorded: false,
+        }
+    }
+
+    #[inline]
+    pub fn complete_response(&mut self, response_code: i32) {
+        self.record_rpc_latency(response_code, RESULT_SUCCESS);
+    }
+
+    #[inline]
+    pub fn complete_oneway(&mut self) {
+        self.record_rpc_latency(NO_RESPONSE_CODE, RESULT_ONEWAY);
+    }
+
+    #[inline]
+    pub fn complete_cancelled(&mut self) {
+        self.record_rpc_latency(NO_RESPONSE_CODE, RESULT_CANCELED);
+    }
+
+    #[inline]
+    pub fn complete_process_request_failed(&mut self, response_code: i32) {
+        self.record_rpc_latency(response_code, RESULT_PROCESS_REQUEST_FAILED);
+    }
+
+    #[inline]
+    pub fn complete_write_channel_failed(&mut self, response_code: i32) {
+        self.record_rpc_latency(response_code, RESULT_WRITE_CHANNEL_FAILED);
+    }
+
+    #[inline]
+    fn record_rpc_latency(&mut self, response_code: i32, result: &str) {
+        if self.rpc_recorded {
+            return;
+        }
+        record_rpc_latency(
+            self.start.elapsed().as_millis() as u64,
+            self.request_code,
+            response_code,
+            self.is_long_polling,
+            result,
+        );
+        self.rpc_recorded = true;
+    }
+}
+
+impl Drop for RequestMetricsGuard {
+    fn drop(&mut self) {
+        record_request_latency(self.start.elapsed().as_millis() as u64);
+        if !self.rpc_recorded {
+            self.complete_cancelled();
+        }
+    }
 }
 
 pub fn record_rpc_latency(latency_ms: u64, request_code: i32, response_code: i32, is_long_polling: bool, result: &str) {
@@ -182,5 +266,12 @@ mod tests {
         metrics.record_network_bytes(256, &attrs);
         metrics.record_rpc_latency(5, &attrs);
         record_rpc_latency(5, 10, 0, false, "success");
+    }
+
+    #[test]
+    fn request_metrics_guard_records_completion_once() {
+        let mut guard = RequestMetricsGuard::start(10, 128, false);
+        guard.complete_response(0);
+        guard.complete_cancelled();
     }
 }

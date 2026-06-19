@@ -33,8 +33,8 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::config::AuthConfig;
-use crate::observability::AuthMetrics;
 use crate::runtime::ProviderRegistry;
+use crate::AuthMetrics;
 
 /// Result type for authorization operations.
 pub type AuthorizationResult<T> = Result<T, AuthorizationError>;

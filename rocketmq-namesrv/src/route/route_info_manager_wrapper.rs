@@ -163,7 +163,7 @@ impl RouteInfoManagerWrapper {
             }
             RouteInfoManagerWrapper::V2(manager) => manager.scan_not_active_broker().unwrap_or(0),
         };
-        crate::observability_metrics::record_active_brokers(self.active_broker_count());
+        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
         cleaned
     }
 
@@ -213,7 +213,7 @@ impl RouteInfoManagerWrapper {
                 .ok(),
         };
         if result.is_some() {
-            crate::observability_metrics::record_broker_registration(self.active_broker_count());
+            rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
         }
         result
     }
@@ -253,7 +253,7 @@ impl RouteInfoManagerWrapper {
             }
         };
         if result.is_ok() {
-            crate::observability_metrics::record_active_brokers(self.active_broker_count());
+            rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
         }
         result
     }
@@ -481,6 +481,6 @@ impl RouteInfoManagerWrapper {
                 manager.un_register_broker(requests);
             }
         }
-        crate::observability_metrics::record_active_brokers(self.active_broker_count());
+        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
     }
 }

@@ -24,7 +24,6 @@ pub mod iterator;
 pub mod key;
 pub mod maintenance;
 pub mod message;
-pub mod metrics;
 pub mod options;
 pub mod snapshot;
 pub mod store;

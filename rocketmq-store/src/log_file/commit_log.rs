@@ -637,7 +637,7 @@ impl CommitLog {
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_append_latency(elapsed_time_in_lock);
+        rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
         drop(_put_message_lock);
         self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -836,7 +836,7 @@ impl CommitLog {
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_append_latency(elapsed_time_in_lock);
+        rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
         drop(_put_message_lock);
         self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -1035,7 +1035,7 @@ impl CommitLog {
             .await;
 
         #[cfg(feature = "observability")]
-        crate::observability_metrics::record_flush_latency(start_time.elapsed().as_millis() as u64);
+        rocketmq_observability::metrics::store::record_flush_latency(start_time.elapsed().as_millis() as u64);
 
         status
     }
@@ -1071,7 +1071,7 @@ impl CommitLog {
             let start_time = Instant::now();
             self.dispatcher.dispatch(request);
             #[cfg(feature = "observability")]
-            crate::observability_metrics::record_dispatch_latency(start_time.elapsed().as_millis() as u64);
+            rocketmq_observability::metrics::store::record_dispatch_latency(start_time.elapsed().as_millis() as u64);
         }
     }
 

@@ -611,7 +611,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         .await;
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        crate::observability_metrics::record_consume(msgs.len(), consume_rt);
+        rocketmq_observability::metrics::client::record_consume(msgs.len(), consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(true);
@@ -782,7 +782,7 @@ impl ConsumeRequest {
         };
         record_orderly_process_event(&process_span, &status, msgs.len());
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        crate::observability_metrics::record_consume(msgs.len(), consume_rt);
+        rocketmq_observability::metrics::client::record_consume(msgs.len(), consume_rt);
 
         let continue_consume = consume_message_pop_orderly_service
             .process_consume_result(msgs, status, &context)

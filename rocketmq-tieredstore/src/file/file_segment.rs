@@ -227,7 +227,7 @@ where
             .provider
             .read(self.path.clone(), range.start, (end - range.start) as usize)
             .await;
-        crate::metrics::record_provider_read(
+        rocketmq_observability::metrics::tiered_store::record_provider_read(
             &self.path,
             result.as_ref().map(|bytes| bytes.len() as u64).unwrap_or(0),
             result.is_ok(),
@@ -249,7 +249,7 @@ where
         for (index, buffer) in buffers.iter().cloned().enumerate() {
             let started = std::time::Instant::now();
             let result = self.provider.write(self.path.clone(), position, buffer).await;
-            crate::metrics::record_provider_write(
+            rocketmq_observability::metrics::tiered_store::record_provider_write(
                 &self.path,
                 result.as_ref().map(|written| *written as u64).unwrap_or(0),
                 result.is_ok(),

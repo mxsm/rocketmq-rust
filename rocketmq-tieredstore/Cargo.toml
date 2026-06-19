@@ -37,12 +37,12 @@ posix-provider = []
 memory-provider = []
 serde = ["dep:serde", "dep:serde_json"]
 rocketmq-store-integration = []
-otel-metrics = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+otel-metrics = ["rocketmq-observability/otel-metrics"]
 
 [dependencies]
 rocketmq-common = { workspace = true }
 rocketmq-error = { workspace = true }
-rocketmq-observability = { workspace = true, optional = true }
+rocketmq-observability = { workspace = true }
 rocketmq-runtime = { workspace = true }
 
 bytes = { workspace = true }

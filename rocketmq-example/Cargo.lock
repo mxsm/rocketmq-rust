@@ -1653,20 +1653,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "opentelemetry"
-version = "0.32.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0142c63252a9e054e68a4c61a5778f7b14f576274d593f8ce883d191a099682"
-dependencies = [
- "futures-core",
- "futures-sink",
- "js-sys",
- "pin-project-lite",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2222,6 +2208,7 @@ dependencies = [
  "moka",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "serde",
  "serde_json",
@@ -2247,6 +2234,7 @@ dependencies = [
  "rocketmq-auth",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-observability",
  "rocketmq-remoting",
  "rocketmq-runtime",
  "rocketmq-rust",
@@ -2283,7 +2271,6 @@ dependencies = [
  "lz4_flex",
  "md-5 0.10.6",
  "num_cpus",
- "opentelemetry",
  "parking_lot",
  "regex",
  "reqwest",
@@ -2336,6 +2323,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "rocketmq-observability"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "cheetah-string",
+ "dashmap",
+ "rocketmq-common",
+ "rocketmq-error",
+ "rocketmq-runtime",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

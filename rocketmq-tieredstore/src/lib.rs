@@ -19,7 +19,6 @@ pub mod fetcher;
 pub mod file;
 pub mod lifecycle;
 pub mod metadata;
-pub mod metrics;
 pub mod provider;
 pub mod service;
 pub mod store;

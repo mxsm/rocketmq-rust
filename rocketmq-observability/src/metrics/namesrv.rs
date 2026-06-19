@@ -17,6 +17,8 @@ pub use crate::semantic::metrics::NAMESRV_BROKER_REGISTRATIONS;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_TOTAL;
 
+use std::time::Duration;
+
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
 
@@ -70,6 +72,25 @@ pub fn record_active_brokers(count: u64) {
 
     #[cfg(not(feature = "otel-metrics"))]
     let _ = count;
+}
+
+pub fn record_route_request(elapsed: Duration) {
+    record_route_request_total(1);
+    record_route_request_latency(duration_millis_u64(elapsed));
+}
+
+pub fn record_broker_registration(active_brokers: usize) {
+    record_broker_registrations(1);
+    record_active_brokers(active_brokers as u64);
+}
+
+pub fn record_active_broker_count(active_brokers: usize) {
+    record_active_brokers(active_brokers as u64);
+}
+
+#[inline]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -188,5 +209,19 @@ mod tests {
         record_active_brokers(2);
 
         assert!(NAMESRV_METRICS.get().is_some() || NAMESRV_GLOBAL_METRICS.get().is_some());
+    }
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn namesrv_high_level_recorders_are_safe_without_explicit_meter() {
+        record_route_request(Duration::from_millis(1));
+        record_broker_registration(2);
+        record_active_broker_count(2);
     }
 }

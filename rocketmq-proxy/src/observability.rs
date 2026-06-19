@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use rocketmq_auth::AuthMetricsSnapshot;
+use rocketmq_observability::metrics::proxy::ProxyRpcMetrics;
+pub use rocketmq_observability::metrics::proxy::ProxyRpcMetricsSnapshot;
+use rocketmq_observability::metrics::proxy::ProxyRpcOutcome;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 use tracing::warn;
@@ -73,6 +72,14 @@ impl ProxyRequestOutcome {
 
     pub fn is_success(&self) -> bool {
         matches!(self, Self::Payload(status) if status.is_ok())
+    }
+
+    fn rpc_metrics_outcome(&self) -> ProxyRpcOutcome {
+        match self {
+            Self::Payload(status) if status.is_ok() => ProxyRpcOutcome::Succeeded,
+            Self::Payload(_) => ProxyRpcOutcome::PayloadFailed,
+            Self::Transport { .. } => ProxyRpcOutcome::TransportFailed,
+        }
     }
 }
 
@@ -129,18 +136,6 @@ impl ProxyHookChain {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProxyRpcMetricsSnapshot {
-    pub rpc_name: String,
-    pub started: u64,
-    pub completed: u64,
-    pub in_flight: u64,
-    pub succeeded: u64,
-    pub payload_failures: u64,
-    pub transport_failures: u64,
-    pub total_latency_micros: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyMetricsSnapshot {
     pub rpcs: Vec<ProxyRpcMetricsSnapshot>,
     pub auth: Option<AuthMetricsSnapshot>,
@@ -155,52 +150,24 @@ pub struct ProxyMetricsSnapshot {
     pub pending_lite_unsubscribe_notices: usize,
 }
 
-#[derive(Default)]
-struct RpcMetricsCell {
-    started: AtomicU64,
-    completed: AtomicU64,
-    in_flight: AtomicU64,
-    succeeded: AtomicU64,
-    payload_failures: AtomicU64,
-    transport_failures: AtomicU64,
-    total_latency_micros: AtomicU64,
-}
-
 #[derive(Clone, Default)]
 pub struct ProxyMetrics {
-    rpcs: Arc<DashMap<&'static str, Arc<RpcMetricsCell>>>,
+    rpcs: ProxyRpcMetrics,
 }
 
 impl ProxyMetrics {
     pub fn record_request_started(&self, rpc_name: &'static str) {
-        let bucket = self.bucket(rpc_name);
-        bucket.started.fetch_add(1, Ordering::Relaxed);
-        bucket.in_flight.fetch_add(1, Ordering::Relaxed);
-        record_observability_grpc_request();
+        self.rpcs.record_request_started(rpc_name);
     }
 
-    pub fn record_request_completed(&self, rpc_name: &'static str, outcome: &ProxyRequestOutcome, elapsed: Duration) {
-        let bucket = self.bucket(rpc_name);
-        bucket.completed.fetch_add(1, Ordering::Relaxed);
-        decrement_saturating(&bucket.in_flight);
-        bucket.total_latency_micros.fetch_add(
-            elapsed.as_micros().clamp(0, u128::from(u64::MAX)) as u64,
-            Ordering::Relaxed,
-        );
-
-        match outcome {
-            ProxyRequestOutcome::Payload(status) if status.is_ok() => {
-                bucket.succeeded.fetch_add(1, Ordering::Relaxed);
-            }
-            ProxyRequestOutcome::Payload(_) => {
-                bucket.payload_failures.fetch_add(1, Ordering::Relaxed);
-            }
-            ProxyRequestOutcome::Transport { .. } => {
-                bucket.transport_failures.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
-        record_observability_grpc_latency(elapsed);
+    pub fn record_request_completed(
+        &self,
+        rpc_name: &'static str,
+        outcome: &ProxyRequestOutcome,
+        elapsed: std::time::Duration,
+    ) {
+        self.rpcs
+            .record_request_completed(rpc_name, outcome.rpc_metrics_outcome(), elapsed);
     }
 
     pub fn snapshot(
@@ -208,30 +175,10 @@ impl ProxyMetrics {
         sessions: &ClientSessionRegistry,
         auth: Option<AuthMetricsSnapshot>,
     ) -> ProxyMetricsSnapshot {
-        record_observability_active_connections(sessions.len());
-
-        let mut rpcs = self
-            .rpcs
-            .iter()
-            .map(|entry| {
-                let rpc_name = (*entry.key()).to_owned();
-                let cell = entry.value();
-                ProxyRpcMetricsSnapshot {
-                    rpc_name,
-                    started: cell.started.load(Ordering::Relaxed),
-                    completed: cell.completed.load(Ordering::Relaxed),
-                    in_flight: cell.in_flight.load(Ordering::Relaxed),
-                    succeeded: cell.succeeded.load(Ordering::Relaxed),
-                    payload_failures: cell.payload_failures.load(Ordering::Relaxed),
-                    transport_failures: cell.transport_failures.load(Ordering::Relaxed),
-                    total_latency_micros: cell.total_latency_micros.load(Ordering::Relaxed),
-                }
-            })
-            .collect::<Vec<_>>();
-        rpcs.sort_by(|left, right| left.rpc_name.cmp(&right.rpc_name));
+        rocketmq_observability::metrics::proxy::record_active_connections(sessions.len() as u64);
 
         ProxyMetricsSnapshot {
-            rpcs,
+            rpcs: self.rpcs.snapshot(),
             auth,
             sessions: sessions.len(),
             tracked_receipt_handles: sessions.tracked_handle_count(),
@@ -244,49 +191,6 @@ impl ProxyMetrics {
             pending_lite_unsubscribe_notices: sessions.pending_lite_unsubscribe_notice_count(),
         }
     }
-
-    fn bucket(&self, rpc_name: &'static str) -> Arc<RpcMetricsCell> {
-        self.rpcs
-            .entry(rpc_name)
-            .or_insert_with(|| Arc::new(RpcMetricsCell::default()))
-            .clone()
-    }
-}
-
-fn decrement_saturating(counter: &AtomicU64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-        Some(current.saturating_sub(1))
-    });
-}
-
-#[inline]
-fn record_observability_grpc_request() {
-    #[cfg(feature = "observability")]
-    rocketmq_observability::metrics::proxy::record_grpc_requests_total(1);
-}
-
-#[inline]
-fn record_observability_grpc_latency(elapsed: Duration) {
-    #[cfg(feature = "observability")]
-    rocketmq_observability::metrics::proxy::record_grpc_request_latency(duration_millis_u64(elapsed));
-
-    #[cfg(not(feature = "observability"))]
-    let _ = elapsed;
-}
-
-#[inline]
-fn record_observability_active_connections(count: usize) {
-    #[cfg(feature = "observability")]
-    rocketmq_observability::metrics::proxy::record_active_connections(count as u64);
-
-    #[cfg(not(feature = "observability"))]
-    let _ = count;
-}
-
-#[cfg(feature = "observability")]
-#[inline]
-fn duration_millis_u64(duration: Duration) -> u64 {
-    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(test)]

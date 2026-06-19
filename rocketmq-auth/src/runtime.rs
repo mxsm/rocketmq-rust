@@ -47,9 +47,9 @@ use crate::config::AuthConfig;
 use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_permission_manager::PlainPermissionManager;
-use crate::observability::AuthMetrics;
-use crate::observability::AuthMetricsSnapshot;
 use crate::permission::Permission;
+use crate::AuthMetrics;
+use crate::AuthMetricsSnapshot;
 
 const ACCESS_KEY: &str = "AccessKey";
 

@@ -245,7 +245,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         })
         .await;
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        crate::observability_metrics::record_consume(1, consume_rt);
+        rocketmq_observability::metrics::client::record_consume(1, consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
@@ -742,7 +742,7 @@ impl ConsumeRequest {
             }
         };
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        crate::observability_metrics::record_consume(self.msgs.len(), consume_rt);
+        rocketmq_observability::metrics::client::record_consume(self.msgs.len(), consume_rt);
         let return_type = classify_pop_consume_return_type(status, has_exception, consume_rt, self.invisible_time);
 
         if default_mqpush_consumer_impl.has_hook() {

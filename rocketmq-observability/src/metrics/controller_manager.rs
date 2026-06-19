@@ -1,0 +1,844 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! # ControllerMetricsManager
+//!
+//! Comprehensive metrics management for RocketMQ Controller using OpenTelemetry.
+//!
+//! ## Overview
+//! This module provides complete metrics collection for the Controller component,
+//! tracking:
+//! - Node status (role, disk usage, active broker count)
+//! - Request metrics (total requests, latency)
+//! - DLedger operations (operation count, latency)
+//! - Election metrics (election count and results)
+//!
+//! ## Design Philosophy
+//! - Thread-safe singleton pattern with lazy initialization
+//! - OpenTelemetry-based with support for multiple exporters (OTLP gRPC, Prometheus, Log)
+//! - No-op fallback when metrics are disabled
+//! - Efficient metric updates with minimal overhead
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::RwLock;
+
+#[cfg(feature = "otel-metrics")]
+use crate::config::ObservabilityConfig;
+use crate::metrics::noop_instruments::NopLongCounter;
+use crate::metrics::noop_instruments::NopLongHistogram;
+#[cfg(feature = "otel-metrics")]
+use crate::TelemetryGuard;
+use opentelemetry::metrics::Counter;
+use opentelemetry::metrics::Histogram;
+use opentelemetry::metrics::Meter;
+use opentelemetry::metrics::MeterProvider;
+use opentelemetry::metrics::UpDownCounter;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
+use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType;
+use tracing::error;
+#[cfg(feature = "otel-metrics")]
+use tracing::info;
+use tracing::warn;
+
+use super::controller_constants::*;
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// ============================================================================
+// Global State
+// ============================================================================
+
+/// Global singleton instance
+static INSTANCE: OnceLock<Arc<ControllerMetricsManager>> = OnceLock::new();
+
+/// Global label map for common labels
+static LABEL_MAP: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+
+const CONTROLLER_ROLE_LEADER: i64 = 3;
+
+#[cfg(not(feature = "otel-metrics"))]
+#[derive(Debug)]
+struct ControllerTelemetryGuard;
+
+#[derive(Debug, Clone)]
+pub struct ControllerMetricsConfig {
+    pub listen_addr: String,
+    pub controller_type: String,
+    pub node_id: String,
+    pub metrics_exporter_type: MetricsExporterType,
+    pub metric_logging_exporter_interval_in_mills: u64,
+    pub metric_grpc_exporter_interval_in_mills: u64,
+    pub metric_grpc_exporter_time_out_in_mills: u64,
+    pub metrics_grpc_exporter_target: String,
+    pub metrics_grpc_exporter_header: String,
+    pub metrics_prom_exporter_host: String,
+    pub metrics_prom_exporter_port: u16,
+    pub metrics_label: String,
+    pub storage_path: String,
+    pub controller_store_path: String,
+}
+
+impl Default for ControllerMetricsConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: "0.0.0.0:9878".to_owned(),
+            controller_type: "controller".to_owned(),
+            node_id: "0".to_owned(),
+            metrics_exporter_type: MetricsExporterType::Disable,
+            metric_logging_exporter_interval_in_mills: 10_000,
+            metric_grpc_exporter_interval_in_mills: 60_000,
+            metric_grpc_exporter_time_out_in_mills: 3_000,
+            metrics_grpc_exporter_target: String::new(),
+            metrics_grpc_exporter_header: String::new(),
+            metrics_prom_exporter_host: String::new(),
+            metrics_prom_exporter_port: 5557,
+            metrics_label: String::new(),
+            storage_path: String::new(),
+            controller_store_path: String::new(),
+        }
+    }
+}
+
+// ============================================================================
+// Metric Wrappers for Static Access
+// ============================================================================
+
+/// Wrapper for Counter that can be either real or no-op
+pub enum CounterWrapper {
+    Real(Counter<u64>),
+    Nop(NopLongCounter),
+}
+
+impl CounterWrapper {
+    #[inline]
+    pub fn add(&self, value: u64, attributes: &[KeyValue]) {
+        match self {
+            Self::Real(counter) => counter.add(value, attributes),
+            Self::Nop(_) => {}
+        }
+    }
+}
+
+/// Wrapper for UpDownCounter that can be either real or no-op
+pub enum UpDownCounterWrapper {
+    Real(UpDownCounter<i64>),
+    Nop,
+}
+
+impl UpDownCounterWrapper {
+    #[inline]
+    pub fn add(&self, value: i64, attributes: &[KeyValue]) {
+        match self {
+            Self::Real(counter) => counter.add(value, attributes),
+            Self::Nop => {}
+        }
+    }
+}
+
+/// Wrapper for Histogram that can be either real or no-op
+pub enum HistogramWrapper {
+    Real(Histogram<u64>),
+    Nop(NopLongHistogram),
+}
+
+impl HistogramWrapper {
+    #[inline]
+    pub fn record(&self, value: u64, attributes: &[KeyValue]) {
+        match self {
+            Self::Real(histogram) => histogram.record(value, attributes),
+            Self::Nop(_) => {}
+        }
+    }
+}
+
+// ============================================================================
+// Static Metrics
+// ============================================================================
+
+/// Static role metric (up-down counter)
+static ROLE: OnceLock<UpDownCounterWrapper> = OnceLock::new();
+
+/// Static request total metric (counter)
+static REQUEST_TOTAL: OnceLock<CounterWrapper> = OnceLock::new();
+
+/// Static dledger operation total metric (counter)
+static DLEDGER_OP_TOTAL: OnceLock<CounterWrapper> = OnceLock::new();
+
+/// Static election total metric (counter)
+static ELECTION_TOTAL: OnceLock<CounterWrapper> = OnceLock::new();
+
+/// Static request latency metric (histogram)
+static REQUEST_LATENCY: OnceLock<HistogramWrapper> = OnceLock::new();
+
+/// Static dledger operation latency metric (histogram)
+static DLEDGER_OP_LATENCY: OnceLock<HistogramWrapper> = OnceLock::new();
+
+// ============================================================================
+// ControllerMetricsManager
+// ============================================================================
+
+/// Controller metrics manager for comprehensive controller-level metrics
+///
+/// This struct manages all controller-related metrics including:
+/// - Node status metrics (role, disk usage, active broker count)
+/// - Request metrics (total requests, latency)
+/// - DLedger operation metrics (total operations, latency)
+/// - Election metrics (total elections, results)
+pub struct ControllerMetricsManager {
+    // Node status metrics
+    role: UpDownCounter<i64>,
+
+    // Request metrics
+    request_total: Counter<u64>,
+    request_latency: Histogram<u64>,
+
+    // DLedger operation metrics
+    dledger_op_total: Counter<u64>,
+    dledger_op_latency: Histogram<u64>,
+
+    // Election metrics
+    election_total: Counter<u64>,
+
+    // Meter reference for creating additional instruments
+    _meter: Meter,
+
+    // Configuration
+    _config: ControllerMetricsConfig,
+
+    // OpenTelemetry SDK components
+    _meter_provider: Option<SdkMeterProvider>,
+    _telemetry_guard: Option<ControllerTelemetryGuard>,
+}
+
+#[cfg(feature = "otel-metrics")]
+type ControllerTelemetryGuard = TelemetryGuard;
+
+impl ControllerMetricsManager {
+    /// Get or initialize the global singleton instance
+    ///
+    /// # Arguments
+    /// * `config` - Controller configuration
+    ///
+    /// # Returns
+    /// Arc reference to the ControllerMetricsManager instance
+    pub fn get_instance(config: ControllerMetricsConfig) -> Arc<Self> {
+        Self::get_instance_with_active_broker_source(config, || 0)
+    }
+
+    pub fn get_instance_with_active_broker_source<F>(
+        config: ControllerMetricsConfig,
+        active_broker_source: F,
+    ) -> Arc<Self>
+    where
+        F: Fn() -> u64 + Send + Sync + 'static,
+    {
+        let active_broker_source = Arc::new(active_broker_source);
+        INSTANCE
+            .get_or_init(|| {
+                let manager = Self::new(config, active_broker_source);
+                Arc::new(manager)
+            })
+            .clone()
+    }
+
+    /// Create a new ControllerMetricsManager
+    fn new(config: ControllerMetricsConfig, active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+        // Initialize label map
+        let label_map = LABEL_MAP.get_or_init(|| RwLock::new(HashMap::new()));
+
+        // Populate base labels
+        {
+            let mut map = label_map.write().unwrap();
+            map.insert(LABEL_ADDRESS.to_string(), config.listen_addr.clone());
+            map.insert(LABEL_GROUP.to_string(), config.controller_type.clone());
+            map.insert(LABEL_PEER_ID.to_string(), config.node_id.clone());
+        }
+
+        let metrics_type = config.metrics_exporter_type;
+
+        if !Self::check_config(&config, metrics_type) {
+            warn!("Metrics are disabled or configuration is invalid");
+            return Self::create_noop_manager(config, active_broker_source);
+        }
+
+        #[cfg(feature = "otel-metrics")]
+        {
+            let telemetry_config = Self::build_observability_config(&config, metrics_type);
+            let telemetry_guard = match crate::init_observability(&telemetry_config) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    error!(
+                        "Failed to initialize controller observability: {:?}, falling back to no-op",
+                        error
+                    );
+                    return Self::create_noop_manager(config, active_broker_source.clone());
+                }
+            };
+
+            let Some(meter_provider) = telemetry_guard.meter_provider().cloned() else {
+                warn!("Controller metrics exporter did not initialize a meter provider");
+                return Self::create_noop_manager(config, active_broker_source.clone());
+            };
+
+            let meter = meter_provider.meter(OPEN_TELEMETRY_METER_NAME);
+            let _ = crate::metrics::controller::init_global(&meter);
+
+            let manager = Self::init_metrics(
+                meter.clone(),
+                config.clone(),
+                active_broker_source,
+                Some(meter_provider),
+                Some(telemetry_guard),
+            );
+
+            Self::init_static_metrics(&manager);
+
+            info!("ControllerMetricsManager initialized successfully");
+            manager
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            warn!("Controller metrics require the 'metrics' feature");
+            Self::create_noop_manager(config, active_broker_source)
+        }
+    }
+
+    /// Create a no-op manager when metrics are disabled
+    fn create_noop_manager(
+        config: ControllerMetricsConfig,
+        active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        let provider = SdkMeterProvider::builder().build();
+        let meter = provider.meter("noop");
+        Self::init_metrics(meter, config, active_broker_source, Some(provider), None)
+    }
+
+    /// Check if metrics configuration is valid
+    fn check_config(_config: &ControllerMetricsConfig, metrics_type: MetricsExporterType) -> bool {
+        if !metrics_type.is_enable() {
+            return false;
+        }
+
+        match metrics_type {
+            MetricsExporterType::OtlpGrpc => true,
+            MetricsExporterType::Prom => true,
+            MetricsExporterType::Log => true,
+            MetricsExporterType::Disable => false,
+        }
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    fn build_observability_config(
+        config: &ControllerMetricsConfig,
+        metrics_type: MetricsExporterType,
+    ) -> ObservabilityConfig {
+        let mut observability_config = ObservabilityConfig {
+            enabled: true,
+            service_name: "rocketmq-controller".to_string(),
+            service_namespace: "rocketmq".to_string(),
+            node_type: "controller".to_string(),
+            node_id: config.node_id.clone(),
+            ..ObservabilityConfig::default()
+        };
+
+        observability_config.metrics.enabled = true;
+        observability_config.metrics.exporter = metrics_type.into();
+        observability_config.metrics.export_interval_millis = match metrics_type {
+            MetricsExporterType::Log => config.metric_logging_exporter_interval_in_mills,
+            _ => config.metric_grpc_exporter_interval_in_mills,
+        };
+        observability_config.metrics.export_timeout_millis = config.metric_grpc_exporter_time_out_in_mills;
+
+        if !config.metrics_grpc_exporter_target.trim().is_empty() {
+            observability_config.otlp.endpoint = config.metrics_grpc_exporter_target.clone();
+        }
+        observability_config.otlp.timeout_millis = config.metric_grpc_exporter_time_out_in_mills;
+        observability_config.otlp.headers = parse_key_value_list(&config.metrics_grpc_exporter_header);
+
+        if !config.metrics_prom_exporter_host.trim().is_empty() {
+            observability_config.prometheus.host = config.metrics_prom_exporter_host.clone();
+        }
+        observability_config.prometheus.port = config.metrics_prom_exporter_port;
+        observability_config.resource_attributes = parse_key_value_list(&config.metrics_label);
+
+        observability_config
+    }
+
+    /// Initialize all metrics with the given meter
+    fn init_metrics(
+        meter: Meter,
+        config: ControllerMetricsConfig,
+        active_broker_source: Arc<dyn Fn() -> u64 + Send + Sync>,
+        meter_provider: Option<SdkMeterProvider>,
+        telemetry_guard: Option<ControllerTelemetryGuard>,
+    ) -> Self {
+        // Node status metrics
+        let role = meter
+            .i64_up_down_counter(GAUGE_ROLE)
+            .with_description("Role of current controller node (0=UNKNOWN, 1=CANDIDATE, 2=FOLLOWER, 3=LEADER)")
+            .build();
+
+        // Register observable gauges
+        let dledger_disk_usage_path = controller_storage_path(&config);
+        let _dledger_disk_usage = meter
+            .u64_observable_gauge(GAUGE_DLEDGER_DISK_USAGE)
+            .with_description("Disk usage of dledger storage in bytes")
+            .with_unit("bytes")
+            .with_callback(move |observer| {
+                if !dledger_disk_usage_path.exists() {
+                    return;
+                }
+
+                match calculate_directory_size(&dledger_disk_usage_path) {
+                    Ok(size) => {
+                        let attrs = Self::new_attributes_builder();
+                        observer.observe(size, &attrs);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to calculate disk usage for {:?}: {:?}",
+                            dledger_disk_usage_path, e
+                        );
+                    }
+                }
+            })
+            .build();
+
+        let _active_broker_num = meter
+            .u64_observable_gauge(GAUGE_ACTIVE_BROKER_NUM)
+            .with_description("Number of currently active brokers")
+            .with_callback(move |observer| {
+                let attrs = Self::new_attributes_builder();
+                observer.observe(active_broker_source(), &attrs);
+            })
+            .build();
+
+        // Request metrics
+        let request_total = meter
+            .u64_counter(COUNTER_REQUEST_TOTAL)
+            .with_description("Total number of controller requests")
+            .build();
+
+        let request_latency = meter
+            .u64_histogram(HISTOGRAM_REQUEST_LATENCY)
+            .with_description("Controller request latency in microseconds")
+            .with_unit("us")
+            .build();
+
+        // DLedger operation metrics
+        let dledger_op_total = meter
+            .u64_counter(COUNTER_DLEDGER_OP_TOTAL)
+            .with_description("Total number of DLedger operations")
+            .build();
+
+        let dledger_op_latency = meter
+            .u64_histogram(HISTOGRAM_DLEDGER_OP_LATENCY)
+            .with_description("DLedger operation latency in microseconds")
+            .with_unit("us")
+            .build();
+
+        // Election metrics
+        let election_total = meter
+            .u64_counter(COUNTER_ELECTION_TOTAL)
+            .with_description("Total number of controller elections")
+            .build();
+
+        Self {
+            role,
+            request_total,
+            request_latency,
+            dledger_op_total,
+            dledger_op_latency,
+            election_total,
+            _meter: meter,
+            _config: config,
+            _meter_provider: meter_provider,
+            _telemetry_guard: telemetry_guard,
+        }
+    }
+
+    /// Initialize static metric references for global access
+    fn init_static_metrics(manager: &Self) {
+        ROLE.get_or_init(|| UpDownCounterWrapper::Real(manager.role.clone()));
+        REQUEST_TOTAL.get_or_init(|| CounterWrapper::Real(manager.request_total.clone()));
+        DLEDGER_OP_TOTAL.get_or_init(|| CounterWrapper::Real(manager.dledger_op_total.clone()));
+        ELECTION_TOTAL.get_or_init(|| CounterWrapper::Real(manager.election_total.clone()));
+        REQUEST_LATENCY.get_or_init(|| HistogramWrapper::Real(manager.request_latency.clone()));
+        DLEDGER_OP_LATENCY.get_or_init(|| HistogramWrapper::Real(manager.dledger_op_latency.clone()));
+    }
+
+    /// Create a new attributes builder with base labels
+    pub fn new_attributes_builder() -> Vec<KeyValue> {
+        let label_map = LABEL_MAP.get_or_init(|| RwLock::new(HashMap::new()));
+        let map = label_map.read().unwrap();
+
+        map.iter().map(|(k, v)| KeyValue::new(k.clone(), v.clone())).collect()
+    }
+
+    // ========================================================================
+    // Public Metric Recording Methods
+    // ========================================================================
+
+    /// Record role change
+    ///
+    /// # Arguments
+    /// * `new_role` - New role value
+    /// * `old_role` - Old role value
+    pub fn record_role_change(new_role: i64, old_role: i64) {
+        if let Some(role) = ROLE.get() {
+            let attrs = Self::new_attributes_builder();
+            role.add(new_role - old_role, &attrs);
+        }
+
+        if is_leader_role_transition(new_role, old_role) {
+            record_observability_leader_change();
+        }
+    }
+
+    /// Record request
+    ///
+    /// # Arguments
+    /// * `request_type` - Type of request
+    /// * `status` - Request handle status
+    pub fn inc_request_total(&self, request_type: &str, status: RequestHandleStatus) {
+        let mut attrs = Self::new_attributes_builder();
+        attrs.push(KeyValue::new(LABEL_REQUEST_TYPE, request_type.to_string()));
+        attrs.push(KeyValue::new(LABEL_REQUEST_HANDLE_STATUS, status.get_lower_case_name()));
+
+        self.request_total.add(1, &attrs);
+    }
+
+    /// Record request latency
+    ///
+    /// # Arguments
+    /// * `request_type` - Type of request
+    /// * `latency_us` - Latency in microseconds
+    pub fn record_request_latency(&self, request_type: &str, latency_us: u64) {
+        let mut attrs = Self::new_attributes_builder();
+        attrs.push(KeyValue::new(LABEL_REQUEST_TYPE, request_type.to_string()));
+
+        self.request_latency.record(latency_us, &attrs);
+    }
+
+    /// Record DLedger operation
+    ///
+    /// # Arguments
+    /// * `operation` - DLedger operation type
+    /// * `status` - Operation status
+    pub fn inc_dledger_op_total(&self, operation: DLedgerOperation, status: DLedgerOperationStatus) {
+        let mut attrs = Self::new_attributes_builder();
+        attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
+        attrs.push(KeyValue::new(
+            LABEL_DLEDGER_OPERATION_STATUS,
+            status.get_lower_case_name(),
+        ));
+
+        self.dledger_op_total.add(1, &attrs);
+    }
+
+    /// Record DLedger operation latency
+    ///
+    /// # Arguments
+    /// * `operation` - DLedger operation type
+    /// * `latency_us` - Latency in microseconds
+    pub fn record_dledger_op_latency(&self, operation: DLedgerOperation, latency_us: u64) {
+        let mut attrs = Self::new_attributes_builder();
+        attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
+
+        self.dledger_op_latency.record(latency_us, &attrs);
+    }
+
+    /// Record election
+    ///
+    /// # Arguments
+    /// * `result` - Election result
+    pub fn inc_election_total(&self, result: ElectionResult) {
+        let mut attrs = Self::new_attributes_builder();
+        attrs.push(KeyValue::new(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
+
+        self.election_total.add(1, &attrs);
+        record_observability_election();
+    }
+
+    // ========================================================================
+    // Static Global Methods
+    // ========================================================================
+
+    /// Static method to increment request total
+    pub fn inc_request_total_static(request_type: &str, status: RequestHandleStatus) {
+        if let Some(counter) = REQUEST_TOTAL.get() {
+            let mut attrs = Self::new_attributes_builder();
+            attrs.push(KeyValue::new(LABEL_REQUEST_TYPE, request_type.to_string()));
+            attrs.push(KeyValue::new(LABEL_REQUEST_HANDLE_STATUS, status.get_lower_case_name()));
+            counter.add(1, &attrs);
+        }
+    }
+
+    /// Static method to record request latency
+    pub fn record_request_latency_static(request_type: &str, latency_us: u64) {
+        if let Some(histogram) = REQUEST_LATENCY.get() {
+            let mut attrs = Self::new_attributes_builder();
+            attrs.push(KeyValue::new(LABEL_REQUEST_TYPE, request_type.to_string()));
+            histogram.record(latency_us, &attrs);
+        }
+    }
+
+    /// Static method to increment DLedger operation total
+    pub fn inc_dledger_op_total_static(operation: DLedgerOperation, status: DLedgerOperationStatus) {
+        if let Some(counter) = DLEDGER_OP_TOTAL.get() {
+            let mut attrs = Self::new_attributes_builder();
+            attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
+            attrs.push(KeyValue::new(
+                LABEL_DLEDGER_OPERATION_STATUS,
+                status.get_lower_case_name(),
+            ));
+            counter.add(1, &attrs);
+        }
+    }
+
+    /// Static method to record DLedger operation latency
+    pub fn record_dledger_op_latency_static(operation: DLedgerOperation, latency_us: u64) {
+        if let Some(histogram) = DLEDGER_OP_LATENCY.get() {
+            let mut attrs = Self::new_attributes_builder();
+            attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
+            histogram.record(latency_us, &attrs);
+        }
+    }
+
+    /// Static method to increment election total
+    pub fn inc_election_total_static(result: ElectionResult) {
+        if let Some(counter) = ELECTION_TOTAL.get() {
+            let mut attrs = Self::new_attributes_builder();
+            attrs.push(KeyValue::new(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
+            counter.add(1, &attrs);
+        }
+
+        record_observability_election();
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+#[inline]
+fn is_leader_role_transition(new_role: i64, old_role: i64) -> bool {
+    new_role != old_role && (new_role == CONTROLLER_ROLE_LEADER || old_role == CONTROLLER_ROLE_LEADER)
+}
+
+#[inline]
+fn record_observability_election() {
+    #[cfg(feature = "otel-metrics")]
+    crate::metrics::controller::record_election_total(1);
+}
+
+#[inline]
+fn record_observability_leader_change() {
+    #[cfg(feature = "otel-metrics")]
+    crate::metrics::controller::record_leader_changes_total(1);
+}
+
+fn controller_storage_path(config: &ControllerMetricsConfig) -> PathBuf {
+    if !config.storage_path.trim().is_empty() {
+        return PathBuf::from(&config.storage_path);
+    }
+    if !config.controller_store_path.trim().is_empty() {
+        return PathBuf::from(&config.controller_store_path);
+    }
+    PathBuf::from("./controller-store")
+}
+
+#[cfg(test)]
+fn active_broker_count_from_snapshot(snapshot: &HashMap<String, HashMap<String, u32>>) -> u64 {
+    snapshot
+        .values()
+        .flat_map(|broker_sets| broker_sets.values())
+        .map(|count| u64::from(*count))
+        .sum()
+}
+
+/// Calculate total size of a directory recursively
+fn calculate_directory_size(path: &Path) -> std::io::Result<u64> {
+    let mut total_size = 0u64;
+
+    if path.is_file() {
+        return Ok(fs::metadata(path)?.len());
+    }
+
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+
+            if metadata.is_file() {
+                total_size += metadata.len();
+            } else if metadata.is_dir() {
+                total_size += calculate_directory_size(&entry.path())?;
+            }
+        }
+    }
+
+    Ok(total_size)
+}
+
+fn parse_key_value_list(value: &str) -> HashMap<String, String> {
+    value
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+
+            let (key, value) = entry.split_once(':').or_else(|| entry.split_once('='))?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_attributes_builder() {
+        let attrs = ControllerMetricsManager::new_attributes_builder();
+        // Just verify it returns a vector
+        assert!(attrs.is_empty() || !attrs.is_empty());
+    }
+
+    #[test]
+    fn test_request_handle_status() {
+        assert_eq!(RequestHandleStatus::Success.get_lower_case_name(), "success");
+        assert_eq!(RequestHandleStatus::Failed.get_lower_case_name(), "failed");
+        assert_eq!(RequestHandleStatus::Timeout.get_lower_case_name(), "timeout");
+    }
+
+    #[test]
+    fn test_dledger_operation() {
+        assert_eq!(DLedgerOperation::Append.get_lower_case_name(), "append");
+    }
+
+    #[test]
+    fn test_election_result() {
+        assert_eq!(
+            ElectionResult::NewMasterElected.get_lower_case_name(),
+            "new_master_elected"
+        );
+        assert_eq!(
+            ElectionResult::KeepCurrentMaster.get_lower_case_name(),
+            "keep_current_master"
+        );
+        assert_eq!(
+            ElectionResult::NoMasterElected.get_lower_case_name(),
+            "no_master_elected"
+        );
+    }
+
+    #[test]
+    fn detects_leader_role_transitions() {
+        assert!(is_leader_role_transition(3, 2));
+        assert!(is_leader_role_transition(2, 3));
+        assert!(!is_leader_role_transition(3, 3));
+        assert!(!is_leader_role_transition(2, 1));
+    }
+
+    #[test]
+    fn parses_metrics_key_value_list() {
+        let values = parse_key_value_list("instance_id:controller-a,region=local, invalid, :empty");
+
+        assert_eq!(values.get("instance_id").map(String::as_str), Some("controller-a"));
+        assert_eq!(values.get("region").map(String::as_str), Some("local"));
+        assert!(!values.contains_key("invalid"));
+        assert!(!values.contains_key(""));
+    }
+
+    #[test]
+    fn controller_storage_path_prefers_runtime_storage_path() {
+        let mut config = ControllerMetricsConfig {
+            controller_store_path: "controller-store-path".to_owned(),
+            storage_path: "runtime-storage-path".to_owned(),
+            ..ControllerMetricsConfig::default()
+        };
+
+        assert_eq!(controller_storage_path(&config), PathBuf::from("runtime-storage-path"));
+
+        config.storage_path.clear();
+        assert_eq!(controller_storage_path(&config), PathBuf::from("controller-store-path"));
+    }
+
+    #[test]
+    fn active_broker_count_sums_all_cluster_broker_sets() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert(
+            "cluster-a".to_owned(),
+            HashMap::from([("broker-a".to_owned(), 2), ("broker-b".to_owned(), 1)]),
+        );
+        snapshot.insert("cluster-b".to_owned(), HashMap::from([("broker-c".to_owned(), 3)]));
+
+        assert_eq!(active_broker_count_from_snapshot(&snapshot), 6);
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    #[test]
+    fn maps_controller_config_to_observability_config() {
+        let config = ControllerMetricsConfig {
+            node_id: "7".to_owned(),
+            metrics_exporter_type: MetricsExporterType::OtlpGrpc,
+            metrics_grpc_exporter_target: "http://127.0.0.1:4317".to_owned(),
+            metrics_grpc_exporter_header: "tenant:rocketmq".to_owned(),
+            metrics_label: "instance_id:controller-a".to_owned(),
+            ..ControllerMetricsConfig::default()
+        };
+
+        let observability_config =
+            ControllerMetricsManager::build_observability_config(&config, MetricsExporterType::OtlpGrpc);
+
+        assert!(observability_config.enabled);
+        assert!(observability_config.metrics.enabled);
+        assert_eq!(observability_config.service_name, "rocketmq-controller");
+        assert_eq!(observability_config.node_type, "controller");
+        assert_eq!(observability_config.node_id, "7");
+        assert_eq!(observability_config.otlp.endpoint, "http://127.0.0.1:4317");
+        assert_eq!(
+            observability_config.otlp.headers.get("tenant").map(String::as_str),
+            Some("rocketmq")
+        );
+        assert_eq!(
+            observability_config
+                .resource_attributes
+                .get("instance_id")
+                .map(String::as_str),
+            Some("controller-a")
+        );
+    }
+}

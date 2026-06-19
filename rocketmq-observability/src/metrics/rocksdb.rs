@@ -21,9 +21,7 @@ pub use crate::semantic::metrics::ROCKSDB_TIMES_READ;
 pub use crate::semantic::metrics::ROCKSDB_TIMES_WRITTEN_OTHER;
 pub use crate::semantic::metrics::ROCKSDB_TIMES_WRITTEN_SELF;
 
-#[cfg(feature = "otel-metrics")]
 use std::sync::atomic::AtomicU64;
-#[cfg(feature = "otel-metrics")]
 use std::sync::atomic::Ordering;
 #[cfg(feature = "otel-metrics")]
 use std::sync::Arc;
@@ -31,7 +29,105 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 #[cfg(feature = "otel-metrics")]
-static ROCKSDB_METRICS: OnceLock<RocksDbMetrics> = OnceLock::new();
+static ROCKSDB_METRICS: OnceLock<RocksDbOtelMetrics> = OnceLock::new();
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RocksDbMetrics {
+    pub write_count: u64,
+    pub read_count: u64,
+    pub batch_write_count: u64,
+    pub scan_count: u64,
+    pub flush_count: u64,
+    pub manual_compaction_count: u64,
+    pub checkpoint_count: u64,
+    pub backup_count: u64,
+    pub property_query_count: u64,
+    pub error_count: u64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct RocksDbTickerMetrics {
+    pub bytes_written: u64,
+    pub bytes_read: u64,
+    pub times_written_self: u64,
+    pub times_written_other: u64,
+    pub block_cache_hit: u64,
+    pub block_cache_miss: u64,
+    pub times_compressed: u64,
+    pub read_amplification_bytes: u64,
+    pub times_read: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct RocksDbMetricsCollector {
+    write_count: AtomicU64,
+    read_count: AtomicU64,
+    batch_write_count: AtomicU64,
+    scan_count: AtomicU64,
+    flush_count: AtomicU64,
+    manual_compaction_count: AtomicU64,
+    checkpoint_count: AtomicU64,
+    backup_count: AtomicU64,
+    property_query_count: AtomicU64,
+    error_count: AtomicU64,
+}
+
+impl RocksDbMetricsCollector {
+    pub fn snapshot(&self) -> RocksDbMetrics {
+        RocksDbMetrics {
+            write_count: self.write_count.load(Ordering::Relaxed),
+            read_count: self.read_count.load(Ordering::Relaxed),
+            batch_write_count: self.batch_write_count.load(Ordering::Relaxed),
+            scan_count: self.scan_count.load(Ordering::Relaxed),
+            flush_count: self.flush_count.load(Ordering::Relaxed),
+            manual_compaction_count: self.manual_compaction_count.load(Ordering::Relaxed),
+            checkpoint_count: self.checkpoint_count.load(Ordering::Relaxed),
+            backup_count: self.backup_count.load(Ordering::Relaxed),
+            property_query_count: self.property_query_count.load(Ordering::Relaxed),
+            error_count: self.error_count.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn record_write(&self) {
+        self.write_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_read(&self) {
+        self.read_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_batch_write(&self) {
+        self.batch_write_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_scan(&self) {
+        self.scan_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_flush(&self) {
+        self.flush_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_manual_compaction(&self) {
+        self.manual_compaction_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_checkpoint(&self) {
+        self.checkpoint_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_backup(&self) {
+        self.backup_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_property_query(&self) {
+        self.property_query_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_error(&self) {
+        self.error_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RocksDbObservableValues {
@@ -52,16 +148,16 @@ where
     F: Fn() -> RocksDbObservableValues + Send + Sync + 'static,
 {
     ROCKSDB_METRICS
-        .set(RocksDbMetrics::new_with_observables(meter, source))
+        .set(RocksDbOtelMetrics::new_with_observables(meter, source))
         .is_ok()
 }
 
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct RocksDbMetrics;
+pub struct RocksDbOtelMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
-impl RocksDbMetrics {
+impl RocksDbOtelMetrics {
     pub fn noop() -> Self {
         Self
     }
@@ -69,10 +165,10 @@ impl RocksDbMetrics {
 
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
-pub struct RocksDbMetrics;
+pub struct RocksDbOtelMetrics;
 
 #[cfg(feature = "otel-metrics")]
-impl RocksDbMetrics {
+impl RocksDbOtelMetrics {
     pub fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
     where
         F: Fn() -> RocksDbObservableValues + Send + Sync + 'static,
@@ -215,7 +311,7 @@ mod tests {
     fn rocksdb_metrics_register_observable_gauges() {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("rocksdb-metrics-test");
-        let _metrics = RocksDbMetrics::new_with_observables(&meter, || RocksDbObservableValues {
+        let _metrics = RocksDbOtelMetrics::new_with_observables(&meter, || RocksDbObservableValues {
             bytes_written: 1,
             bytes_read: 2,
             times_written_self: 3,
@@ -226,5 +322,38 @@ mod tests {
             read_amplification_bytes: 8,
             times_read: 9,
         });
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn rocksdb_runtime_metrics_collector_counts_operations() {
+        let collector = RocksDbMetricsCollector::default();
+
+        collector.record_write();
+        collector.record_read();
+        collector.record_batch_write();
+        collector.record_scan();
+        collector.record_flush();
+        collector.record_manual_compaction();
+        collector.record_checkpoint();
+        collector.record_backup();
+        collector.record_property_query();
+        collector.record_error();
+
+        let snapshot = collector.snapshot();
+        assert_eq!(snapshot.write_count, 1);
+        assert_eq!(snapshot.read_count, 1);
+        assert_eq!(snapshot.batch_write_count, 1);
+        assert_eq!(snapshot.scan_count, 1);
+        assert_eq!(snapshot.flush_count, 1);
+        assert_eq!(snapshot.manual_compaction_count, 1);
+        assert_eq!(snapshot.checkpoint_count, 1);
+        assert_eq!(snapshot.backup_count, 1);
+        assert_eq!(snapshot.property_query_count, 1);
+        assert_eq!(snapshot.error_count, 1);
     }
 }

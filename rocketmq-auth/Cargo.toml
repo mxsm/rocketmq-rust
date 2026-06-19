@@ -35,6 +35,7 @@ grpc    = ["dep:tonic"]
 rocketmq-common   = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
+rocketmq-observability = { workspace = true }
 
 cheetah-string = { workspace = true }
 serde          = { workspace = true }

@@ -18,6 +18,13 @@ pub use crate::semantic::metrics::PROXY_GRPC_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::PROXY_GRPC_REQUEST_LATENCY;
 pub use crate::semantic::metrics::PROXY_UP;
 
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+
+use dashmap::DashMap;
+
 #[cfg(feature = "otel-metrics")]
 use std::sync::OnceLock;
 
@@ -83,6 +90,115 @@ pub fn record_active_connections(count: u64) {
 
     #[cfg(not(feature = "otel-metrics"))]
     let _ = count;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyRpcOutcome {
+    Succeeded,
+    PayloadFailed,
+    TransportFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyRpcMetricsSnapshot {
+    pub rpc_name: String,
+    pub started: u64,
+    pub completed: u64,
+    pub in_flight: u64,
+    pub succeeded: u64,
+    pub payload_failures: u64,
+    pub transport_failures: u64,
+    pub total_latency_micros: u64,
+}
+
+#[derive(Default)]
+struct ProxyRpcMetricsCell {
+    started: AtomicU64,
+    completed: AtomicU64,
+    in_flight: AtomicU64,
+    succeeded: AtomicU64,
+    payload_failures: AtomicU64,
+    transport_failures: AtomicU64,
+    total_latency_micros: AtomicU64,
+}
+
+#[derive(Clone, Default)]
+pub struct ProxyRpcMetrics {
+    rpcs: Arc<DashMap<&'static str, Arc<ProxyRpcMetricsCell>>>,
+}
+
+impl ProxyRpcMetrics {
+    pub fn record_request_started(&self, rpc_name: &'static str) {
+        let bucket = self.bucket(rpc_name);
+        bucket.started.fetch_add(1, Ordering::Relaxed);
+        bucket.in_flight.fetch_add(1, Ordering::Relaxed);
+        record_grpc_requests_total(1);
+    }
+
+    pub fn record_request_completed(&self, rpc_name: &'static str, outcome: ProxyRpcOutcome, elapsed: Duration) {
+        let bucket = self.bucket(rpc_name);
+        bucket.completed.fetch_add(1, Ordering::Relaxed);
+        decrement_saturating(&bucket.in_flight);
+        bucket.total_latency_micros.fetch_add(
+            elapsed.as_micros().clamp(0, u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+
+        match outcome {
+            ProxyRpcOutcome::Succeeded => {
+                bucket.succeeded.fetch_add(1, Ordering::Relaxed);
+            }
+            ProxyRpcOutcome::PayloadFailed => {
+                bucket.payload_failures.fetch_add(1, Ordering::Relaxed);
+            }
+            ProxyRpcOutcome::TransportFailed => {
+                bucket.transport_failures.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        record_grpc_request_latency(duration_millis_u64(elapsed));
+    }
+
+    pub fn snapshot(&self) -> Vec<ProxyRpcMetricsSnapshot> {
+        let mut rpcs = self
+            .rpcs
+            .iter()
+            .map(|entry| {
+                let rpc_name = (*entry.key()).to_owned();
+                let cell = entry.value();
+                ProxyRpcMetricsSnapshot {
+                    rpc_name,
+                    started: cell.started.load(Ordering::Relaxed),
+                    completed: cell.completed.load(Ordering::Relaxed),
+                    in_flight: cell.in_flight.load(Ordering::Relaxed),
+                    succeeded: cell.succeeded.load(Ordering::Relaxed),
+                    payload_failures: cell.payload_failures.load(Ordering::Relaxed),
+                    transport_failures: cell.transport_failures.load(Ordering::Relaxed),
+                    total_latency_micros: cell.total_latency_micros.load(Ordering::Relaxed),
+                }
+            })
+            .collect::<Vec<_>>();
+        rpcs.sort_by(|left, right| left.rpc_name.cmp(&right.rpc_name));
+        rpcs
+    }
+
+    fn bucket(&self, rpc_name: &'static str) -> Arc<ProxyRpcMetricsCell> {
+        self.rpcs
+            .entry(rpc_name)
+            .or_insert_with(|| Arc::new(ProxyRpcMetricsCell::default()))
+            .clone()
+    }
+}
+
+fn decrement_saturating(counter: &AtomicU64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_sub(1))
+    });
+}
+
+#[inline]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,5 +383,32 @@ mod tests {
         record_active_connections(4);
 
         assert!(PROXY_METRICS.get().is_some() || PROXY_GLOBAL_METRICS.get().is_some());
+    }
+}
+
+#[cfg(test)]
+mod rpc_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_rpc_metrics_snapshot_tracks_outcomes() {
+        let metrics = ProxyRpcMetrics::default();
+        metrics.record_request_started("QueryRoute");
+        metrics.record_request_completed("QueryRoute", ProxyRpcOutcome::Succeeded, Duration::from_millis(4));
+        metrics.record_request_started("QueryRoute");
+        metrics.record_request_completed("QueryRoute", ProxyRpcOutcome::TransportFailed, Duration::from_millis(6));
+
+        let snapshot = metrics.snapshot();
+
+        assert_eq!(snapshot.len(), 1);
+        let rpc = &snapshot[0];
+        assert_eq!(rpc.rpc_name, "QueryRoute");
+        assert_eq!(rpc.started, 2);
+        assert_eq!(rpc.completed, 2);
+        assert_eq!(rpc.in_flight, 0);
+        assert_eq!(rpc.succeeded, 1);
+        assert_eq!(rpc.transport_failures, 1);
+        assert_eq!(rpc.payload_failures, 0);
+        assert_eq!(rpc.total_latency_micros, 10_000);
     }
 }
