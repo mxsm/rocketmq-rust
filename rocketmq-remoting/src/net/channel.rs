@@ -26,6 +26,8 @@ use cheetah_string::CheetahString;
 use flume::Receiver;
 use flume::Sender;
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tokio::time::timeout;
 use tracing::error;
@@ -331,6 +333,9 @@ pub struct ChannelInner {
     /// - Send task: Inserts entries when request is sent
     /// - Receive task: Removes and completes entries when response arrives
     pub(crate) response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+
+    /// Tracks the outbound send task for shutdown diagnostics.
+    send_task_group: TaskGroup,
 }
 
 /// Background task that processes the outbound message queue.
@@ -437,15 +442,30 @@ impl ChannelInner {
         let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(QUEUE_CAPACITY);
 
         let connection = ArcMut::new(connection);
-        tokio::spawn(handle_send(
-            connection.clone(),
-            outbound_queue_rx,
-            response_table.clone(),
-        ));
+        let task_group = TaskGroup::root(
+            "rocketmq-remoting.channel",
+            RuntimeHandle::new(tokio::runtime::Handle::current()),
+        );
+        task_group
+            .spawn_service(
+                "remoting.channel.send",
+                handle_send(connection.clone(), outbound_queue_rx, response_table.clone()),
+            )
+            .expect("channel send task must spawn");
         Self {
             outbound_queue_tx,
             connection,
             response_table,
+            send_task_group: task_group,
+        }
+    }
+}
+
+impl Drop for ChannelInner {
+    fn drop(&mut self) {
+        let report = self.send_task_group.shutdown_now();
+        if let Err(error) = report.assert_no_task_leak() {
+            tracing::warn!("channel send task stopped with report: {error}");
         }
     }
 }

@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -54,7 +55,7 @@ impl DefaultFlushManager {
                     notified: Arc::new(Notify::new()),
                     tx_in: None,
                     shutdown_token: CancellationToken::new(),
-                    worker_handle: None,
+                    worker_group: None,
                 }),
                 None,
             ),
@@ -65,7 +66,7 @@ impl DefaultFlushManager {
                     store_checkpoint: store_checkpoint.clone(),
                     notified: Arc::new(Notify::new()),
                     shutdown_token: CancellationToken::new(),
-                    worker_handle: None,
+                    worker_group: None,
                 }),
             ),
         };
@@ -77,7 +78,7 @@ impl DefaultFlushManager {
                 notified: Arc::new(Default::default()),
                 flush_manager: None,
                 shutdown_token: CancellationToken::new(),
-                worker_handle: None,
+                worker_group: None,
             })
         } else {
             None
@@ -237,7 +238,7 @@ struct GroupCommitService {
     notified: Arc<Notify>,
     tx_in: Option<tokio::sync::mpsc::Sender<GroupCommitRequest>>,
     shutdown_token: CancellationToken,
-    worker_handle: Option<JoinHandle<()>>,
+    worker_group: Option<TaskGroup>,
 }
 
 impl GroupCommitService {
@@ -256,17 +257,24 @@ impl GroupCommitService {
     }
 
     fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
-        if self.worker_handle.is_some() {
+        if self.worker_group.is_some() {
             return;
         }
 
+        let worker_group = match crate::runtime::task_group("rocketmq-store.commit-log.group-commit") {
+            Ok(worker_group) => worker_group,
+            Err(error) => {
+                warn!("GroupCommitService cannot start because task group creation failed: {error}");
+                return;
+            }
+        };
         self.shutdown_token = CancellationToken::new();
         let (tx_in, mut rx_in) = tokio::sync::mpsc::channel::<GroupCommitRequest>(1024);
         self.tx_in = Some(tx_in);
         let shutdown_token = self.shutdown_token.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = Arc::clone(&self.notified);
-        self.worker_handle = Some(tokio::spawn(async move {
+        if let Err(error) = worker_group.spawn_service("commit-log-group-commit", async move {
             loop {
                 tokio::select! {
                     _ = shutdown_token.cancelled() => {
@@ -324,7 +332,12 @@ impl GroupCommitService {
                     }
                 }
             }
-        }));
+        }) {
+            warn!("GroupCommitService cannot start because task spawn failed: {error}");
+            self.tx_in.take();
+            return;
+        }
+        self.worker_group = Some(worker_group);
     }
 
     pub fn wakeup(&self) {
@@ -334,17 +347,13 @@ impl GroupCommitService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
+        shutdown_worker_now("GroupCommitService", &mut self.worker_group);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
         self.tx_in.take();
-        if let Some(handle) = self.worker_handle.take() {
-            await_worker("GroupCommitService", handle).await;
-        }
+        shutdown_worker_gracefully("GroupCommitService", &mut self.worker_group).await;
     }
 }
 
@@ -364,21 +373,28 @@ struct FlushRealTimeService {
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
     shutdown_token: CancellationToken,
-    worker_handle: Option<JoinHandle<()>>,
+    worker_group: Option<TaskGroup>,
 }
 
 impl FlushRealTimeService {
     fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
-        if self.worker_handle.is_some() {
+        if self.worker_group.is_some() {
             return;
         }
 
+        let worker_group = match crate::runtime::task_group("rocketmq-store.commit-log.flush-real-time") {
+            Ok(worker_group) => worker_group,
+            Err(error) => {
+                warn!("FlushRealTimeService cannot start because task group creation failed: {error}");
+                return;
+            }
+        };
         self.shutdown_token = CancellationToken::new();
         let message_store_config = self.message_store_config.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
         let shutdown_token = self.shutdown_token.clone();
-        self.worker_handle = Some(tokio::spawn(async move {
+        if let Err(error) = worker_group.spawn_service("commit-log-flush-real-time", async move {
             let mut last_flush_timestamp = 0;
             loop {
                 if shutdown_token.is_cancelled() {
@@ -425,7 +441,11 @@ impl FlushRealTimeService {
                     store_checkpoint.set_physic_msg_timestamp(store_timestamp);
                 }
             }
-        }));
+        }) {
+            warn!("FlushRealTimeService cannot start because task spawn failed: {error}");
+            return;
+        }
+        self.worker_group = Some(worker_group);
     }
 
     pub fn wakeup(&self) {
@@ -437,17 +457,13 @@ impl FlushRealTimeService {
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
+        shutdown_worker_now("FlushRealTimeService", &mut self.worker_group);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        if let Some(handle) = self.worker_handle.take() {
-            await_worker("FlushRealTimeService", handle).await;
-        }
+        shutdown_worker_gracefully("FlushRealTimeService", &mut self.worker_group).await;
     }
 }
 
@@ -457,7 +473,7 @@ pub(crate) struct CommitRealTimeService {
     notified: Arc<Notify>,
     flush_manager: Option<WeakArcMut<DefaultFlushManager>>,
     shutdown_token: CancellationToken,
-    worker_handle: Option<JoinHandle<()>>,
+    worker_group: Option<TaskGroup>,
 }
 
 impl CommitRealTimeService {
@@ -466,17 +482,24 @@ impl CommitRealTimeService {
     }
 
     fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
-        if self.worker_handle.is_some() {
+        if self.worker_group.is_some() {
             return;
         }
 
+        let worker_group = match crate::runtime::task_group("rocketmq-store.commit-log.commit-real-time") {
+            Ok(worker_group) => worker_group,
+            Err(error) => {
+                warn!("CommitRealTimeService cannot start because task group creation failed: {error}");
+                return;
+            }
+        };
         self.shutdown_token = CancellationToken::new();
         let message_store_config = self.message_store_config.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = self.notified.clone();
         let flush_manager = self.flush_manager.clone();
         let shutdown_token = self.shutdown_token.clone();
-        self.worker_handle = Some(tokio::spawn(async move {
+        if let Err(error) = worker_group.spawn_service("commit-log-commit-real-time", async move {
             let mut last_commit_timestamp = 0;
             loop {
                 if shutdown_token.is_cancelled() {
@@ -524,23 +547,23 @@ impl CommitRealTimeService {
                     }
                 }
             }
-        }));
+        }) {
+            warn!("CommitRealTimeService cannot start because task spawn failed: {error}");
+            return;
+        }
+        self.worker_group = Some(worker_group);
     }
 
     pub fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        if let Some(handle) = self.worker_handle.take() {
-            handle.abort();
-        }
+        shutdown_worker_now("CommitRealTimeService", &mut self.worker_group);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
         self.notified.notify_waiters();
-        if let Some(handle) = self.worker_handle.take() {
-            await_worker("CommitRealTimeService", handle).await;
-        }
+        shutdown_worker_gracefully("CommitRealTimeService", &mut self.worker_group).await;
     }
 
     pub fn set_flush_manager(&mut self, flush_manager: WeakArcMut<DefaultFlushManager>) {
@@ -548,10 +571,20 @@ impl CommitRealTimeService {
     }
 }
 
-async fn await_worker(service_name: &str, handle: JoinHandle<()>) {
-    if let Err(error) = handle.await {
-        if !error.is_cancelled() {
-            warn!("{service_name} task failed during shutdown: {error}");
+fn shutdown_worker_now(service_name: &'static str, worker_group: &mut Option<TaskGroup>) {
+    if let Some(worker_group) = worker_group.take() {
+        let report = worker_group.shutdown_now();
+        if let Err(error) = crate::runtime::shutdown_report_result(service_name, report) {
+            warn!("{service_name} task group failed during immediate shutdown: {error}");
+        }
+    }
+}
+
+async fn shutdown_worker_gracefully(service_name: &'static str, worker_group: &mut Option<TaskGroup>) {
+    if let Some(worker_group) = worker_group.take() {
+        let report = worker_group.shutdown(Duration::from_secs(5)).await;
+        if let Err(error) = crate::runtime::shutdown_report_result(service_name, report) {
+            warn!("{service_name} task group failed during graceful shutdown: {error}");
         }
     }
 }
@@ -720,14 +753,14 @@ mod tests {
             notified: Arc::new(Notify::new()),
             tx_in: None,
             shutdown_token: CancellationToken::new(),
-            worker_handle: None,
+            worker_group: None,
         };
         service.start(mapped_file_queue);
 
         let (request, response) = GroupCommitRequest::new(1, 0);
         assert!(service.put_request(request).await);
         service.shutdown_gracefully().await;
-        assert!(service.worker_handle.is_none());
+        assert!(service.worker_group.is_none());
 
         let status = time::timeout(time::Duration::from_secs(1), response)
             .await
@@ -749,14 +782,14 @@ mod tests {
             store_checkpoint,
             notified: Arc::new(Notify::new()),
             shutdown_token: CancellationToken::new(),
-            worker_handle: None,
+            worker_group: None,
         };
 
         service.start(mapped_file_queue);
-        assert!(service.worker_handle.is_some());
+        assert!(service.worker_group.is_some());
 
         service.shutdown_gracefully().await;
 
-        assert!(service.worker_handle.is_none());
+        assert!(service.worker_group.is_none());
     }
 }

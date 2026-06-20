@@ -18,8 +18,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use rocketmq_runtime::BlockingExecutor;
@@ -137,18 +140,29 @@ fn client_blocking_executor() -> io::Result<BlockingExecutor> {
 struct ClientSharedFallbackRegistry {
     state: Mutex<ClientSharedFallbackState>,
     next_generation: AtomicUsize,
+    acquire_count: AtomicUsize,
+    runtime_created: AtomicUsize,
+    runtime_reused: AtomicUsize,
     submitted_tasks: AtomicUsize,
     active_tasks: AtomicUsize,
     active_leases: AtomicUsize,
     idle_shutdowns: AtomicUsize,
     explicit_shutdowns: AtomicUsize,
-    idle_check_scheduled: AtomicBool,
+    idle_reaper_started: AtomicBool,
+    idle_reaper_starts: AtomicUsize,
+    idle_signal: Arc<(StdMutex<ClientFallbackIdleState>, Condvar)>,
 }
 
 #[derive(Default)]
 struct ClientSharedFallbackState {
     runtime: Option<Arc<ClientSharedFallbackRuntime>>,
     explicit_shutdown: bool,
+}
+
+#[derive(Default)]
+struct ClientFallbackIdleState {
+    requested_generation: Option<usize>,
+    deadline: Option<Instant>,
 }
 
 struct ClientSharedFallbackRuntime {
@@ -163,6 +177,9 @@ struct ClientSharedFallbackLease {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClientSharedFallbackSnapshot {
+    pub acquire_count: usize,
+    pub runtime_created: usize,
+    pub runtime_reused: usize,
     pub submitted_tasks: usize,
     pub active_tasks: usize,
     pub active_leases: usize,
@@ -170,6 +187,7 @@ pub(crate) struct ClientSharedFallbackSnapshot {
     pub runtime_available: bool,
     pub idle_shutdowns: usize,
     pub explicit_shutdowns: usize,
+    pub idle_reaper_starts: usize,
 }
 
 impl ClientSharedFallbackRegistry {
@@ -177,16 +195,22 @@ impl ClientSharedFallbackRegistry {
         Self {
             state: Mutex::new(ClientSharedFallbackState::default()),
             next_generation: AtomicUsize::new(0),
+            acquire_count: AtomicUsize::new(0),
+            runtime_created: AtomicUsize::new(0),
+            runtime_reused: AtomicUsize::new(0),
             submitted_tasks: AtomicUsize::new(0),
             active_tasks: AtomicUsize::new(0),
             active_leases: AtomicUsize::new(0),
             idle_shutdowns: AtomicUsize::new(0),
             explicit_shutdowns: AtomicUsize::new(0),
-            idle_check_scheduled: AtomicBool::new(false),
+            idle_reaper_started: AtomicBool::new(false),
+            idle_reaper_starts: AtomicUsize::new(0),
+            idle_signal: Arc::new((StdMutex::new(ClientFallbackIdleState::default()), Condvar::new())),
         }
     }
 
     fn acquire(&'static self) -> io::Result<ClientSharedFallbackLease> {
+        self.acquire_count.fetch_add(1, Ordering::Relaxed);
         let runtime = {
             let mut state = self.state.lock();
             if state.explicit_shutdown {
@@ -195,18 +219,23 @@ impl ClientSharedFallbackRegistry {
                 ));
             }
 
-            match &state.runtime {
-                Some(runtime) => runtime.clone(),
+            let runtime = match &state.runtime {
+                Some(runtime) => {
+                    self.runtime_reused.fetch_add(1, Ordering::Relaxed);
+                    runtime.clone()
+                }
                 None => {
                     let generation = self.next_generation.fetch_add(1, Ordering::AcqRel) + 1;
                     let runtime = Arc::new(ClientSharedFallbackRuntime::new(generation)?);
+                    self.runtime_created.fetch_add(1, Ordering::Relaxed);
                     state.runtime = Some(runtime.clone());
                     runtime
                 }
-            }
-        };
+            };
 
-        self.active_leases.fetch_add(1, Ordering::AcqRel);
+            self.active_leases.fetch_add(1, Ordering::AcqRel);
+            runtime
+        };
         Ok(ClientSharedFallbackLease {
             registry: self,
             runtime,
@@ -222,6 +251,9 @@ impl ClientSharedFallbackRegistry {
             .unwrap_or_default();
 
         ClientSharedFallbackSnapshot {
+            acquire_count: self.acquire_count.load(Ordering::Relaxed),
+            runtime_created: self.runtime_created.load(Ordering::Relaxed),
+            runtime_reused: self.runtime_reused.load(Ordering::Relaxed),
             submitted_tasks: self.submitted_tasks.load(Ordering::Relaxed),
             active_tasks: self.active_tasks.load(Ordering::Relaxed),
             active_leases: self.active_leases.load(Ordering::Relaxed),
@@ -229,6 +261,7 @@ impl ClientSharedFallbackRegistry {
             runtime_available: state.runtime.is_some(),
             idle_shutdowns: self.idle_shutdowns.load(Ordering::Relaxed),
             explicit_shutdowns: self.explicit_shutdowns.load(Ordering::Relaxed),
+            idle_reaper_starts: self.idle_reaper_starts.load(Ordering::Relaxed),
         }
     }
 
@@ -246,8 +279,18 @@ impl ClientSharedFallbackRegistry {
     }
 
     fn schedule_idle_shutdown(&'static self, generation: usize) {
+        self.ensure_idle_reaper_started();
+
+        let (lock, condvar) = &*self.idle_signal;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.requested_generation = Some(generation);
+        state.deadline = Some(Instant::now() + fallback_idle_timeout());
+        condvar.notify_one();
+    }
+
+    fn ensure_idle_reaper_started(&'static self) {
         if self
-            .idle_check_scheduled
+            .idle_reaper_started
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
@@ -256,25 +299,59 @@ impl ClientSharedFallbackRegistry {
 
         let registry = self;
         if let Err(error) = std::thread::Builder::new()
-            .name("rocketmq-client-fallback-idle-shutdown".to_string())
+            .name("rocketmq-client-fallback-idle-reaper".to_string())
             .spawn(move || {
-                std::thread::sleep(fallback_idle_timeout());
-                registry.idle_check_scheduled.store(false, Ordering::Release);
-                registry.shutdown_idle_if_current(generation);
+                registry.run_idle_reaper();
             })
         {
-            self.idle_check_scheduled.store(false, Ordering::Release);
-            tracing::warn!(%error, "failed to schedule client fallback idle shutdown");
+            self.idle_reaper_started.store(false, Ordering::Release);
+            tracing::warn!(%error, "failed to start client fallback idle reaper");
+        } else {
+            self.idle_reaper_starts.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn run_idle_reaper(&'static self) {
+        loop {
+            let generation = self.wait_for_idle_deadline();
+            self.shutdown_idle_if_current(generation);
+        }
+    }
+
+    fn wait_for_idle_deadline(&self) -> usize {
+        let (lock, condvar) = &*self.idle_signal;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        loop {
+            let Some(deadline) = state.deadline else {
+                state = condvar.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+                continue;
+            };
+
+            let now = Instant::now();
+            if now >= deadline {
+                state.deadline = None;
+                return state
+                    .requested_generation
+                    .take()
+                    .expect("idle deadline requires a runtime generation");
+            }
+
+            let wait_duration = deadline.saturating_duration_since(now);
+            let (next_state, _timeout) = condvar
+                .wait_timeout(state, wait_duration)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = next_state;
         }
     }
 
     fn shutdown_idle_if_current(&'static self, generation: usize) {
-        if self.active_leases.load(Ordering::Acquire) != 0 {
-            return;
-        }
-
         let runtime = {
             let mut state = self.state.lock();
+            if self.active_leases.load(Ordering::Acquire) != 0 {
+                return;
+            }
+
             let Some(runtime) = state.runtime.as_ref() else {
                 return;
             };
@@ -407,6 +484,9 @@ mod tests {
         let lease = registry.acquire().expect("fallback runtime should be created");
 
         let snapshot = registry.snapshot();
+        assert_eq!(snapshot.acquire_count, 1);
+        assert_eq!(snapshot.runtime_created, 1);
+        assert_eq!(snapshot.runtime_reused, 0);
         assert_eq!(snapshot.active_leases, 1);
         assert!(snapshot.runtime_available);
         assert_eq!(snapshot.runtime_generation, 1);
@@ -422,5 +502,63 @@ mod tests {
 
         assert!(error.to_string().contains("explicitly shut down"));
         assert_eq!(registry.snapshot().explicit_shutdowns, 1);
+    }
+
+    #[test]
+    fn fallback_registry_idle_reaper_shuts_down_runtime_after_idle_timeout() {
+        let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
+        let lease = registry.acquire().expect("fallback runtime should be created");
+        assert!(registry.snapshot().runtime_available);
+
+        drop(lease);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = registry.snapshot();
+            if !snapshot.runtime_available {
+                assert_eq!(snapshot.idle_shutdowns, 1);
+                assert_eq!(snapshot.idle_reaper_starts, 1);
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "fallback runtime did not shut down after idle timeout"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn fallback_registry_reuses_single_idle_reaper_for_repeated_idle_requests() {
+        let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
+        let first = registry.acquire().expect("fallback runtime should be created");
+        drop(first);
+
+        std::thread::sleep(Duration::from_millis(10));
+
+        let second = registry.acquire().expect("fallback runtime should be reused");
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.runtime_created, 1);
+        assert_eq!(snapshot.runtime_reused, 1);
+        assert_eq!(snapshot.idle_reaper_starts, 1);
+
+        drop(second);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = registry.snapshot();
+            if !snapshot.runtime_available {
+                assert_eq!(snapshot.idle_shutdowns, 1);
+                assert_eq!(snapshot.idle_reaper_starts, 1);
+                break;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "fallback runtime did not shut down after second idle request"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
