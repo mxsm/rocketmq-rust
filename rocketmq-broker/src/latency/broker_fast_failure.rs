@@ -519,6 +519,10 @@ impl BrokerFastFailure {
         self.inner.queues.get(kind).complete(task, response);
     }
 
+    pub(crate) fn cancel(&self, kind: FastFailureQueueKind, task: &FastFailureTask, response: RemotingCommand) -> bool {
+        self.inner.queues.get(kind).cancel_pending(task, response)
+    }
+
     fn clean_expired_request(&self) {
         if !self.is_enabled() {
             return;

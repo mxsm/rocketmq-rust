@@ -59,11 +59,13 @@ use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tracing::error;
 use tracing::info;
@@ -146,7 +148,16 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
         let cluster_name = cluster_name.map(str::to_owned);
         let broker_name = CheetahString::from_string(broker_name.to_owned());
 
-        tokio::spawn(async move {
+        let Some(task_group) = controller_manager.manager_task_group() else {
+            warn!(
+                "Skip inactive broker handling because controller task group is not initialized, cluster={:?}, \
+                 broker={}, broker_id={:?}",
+                cluster_name, broker_name, broker_id
+            );
+            return;
+        };
+
+        if let Err(error) = task_group.spawn("controller.broker-inactive", TaskKind::Worker, async move {
             if !controller_manager.is_leader() {
                 warn!(
                     "Broker inactive event ignored on follower controller, cluster={:?}, broker={}, broker_id={:?}",
@@ -304,7 +315,9 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
                 "Elect-master after broker inactive exhausted retries, cluster={:?}, broker={}, broker_id={:?}",
                 cluster_name, broker_name, broker_id
             );
-        });
+        }) {
+            warn!(?error, "failed to spawn inactive broker handling task");
+        }
     }
 }
 
@@ -369,8 +382,8 @@ pub struct ControllerManager {
 
     /// Remoting server for inbound RPC requests
     remoting_server: Option<RocketMQServer<ControllerRequestProcessor>>,
-    remoting_server_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
 
     /// Remoting client for outbound RPC calls
     remoting_client: ArcMut<RocketmqDefaultClient>,
@@ -386,8 +399,6 @@ pub struct ControllerManager {
     initialized: Arc<AtomicBool>,
 
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
-    leadership_watch_task: Arc<Mutex<Option<JoinHandle<()>>>>,
-    notify_worker_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     notify_dispatch_tx: Arc<Mutex<Option<mpsc::UnboundedSender<NotifyTask>>>>,
     notify_cache: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
     pending_notify_state: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
@@ -482,21 +493,51 @@ impl ControllerManager {
             heartbeat_manager,
             processor,
             remoting_server,
-            remoting_server_handle: Arc::new(Mutex::new(None)),
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
+            manager_task_group: Arc::new(Mutex::new(None)),
             remoting_client,
             #[cfg(feature = "metrics")]
             metrics_manager,
             running: Arc::new(AtomicBool::new(false)),
             initialized: Arc::new(AtomicBool::new(false)),
             broker_housekeeping_service: None,
-            leadership_watch_task: Arc::new(Mutex::new(None)),
-            notify_worker_task: Arc::new(Mutex::new(None)),
             notify_dispatch_tx: Arc::new(Mutex::new(None)),
             notify_cache: Arc::new(RwLock::new(HashMap::new())),
             pending_notify_state: Arc::new(RwLock::new(HashMap::new())),
             notify_generation: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    fn ensure_manager_task_group(&self) -> Result<TaskGroup> {
+        let mut guard = self.manager_task_group.lock();
+        if let Some(task_group) = guard.as_ref() {
+            return Ok(task_group.clone());
+        }
+
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|error| ControllerError::Internal(format!("No Tokio runtime for controller tasks: {error}")))?;
+        let task_group = TaskGroup::root("rocketmq-controller.manager", RuntimeHandle::new(handle));
+        *guard = Some(task_group.clone());
+        Ok(task_group)
+    }
+
+    fn manager_task_group(&self) -> Option<TaskGroup> {
+        self.manager_task_group.lock().clone()
+    }
+
+    async fn shutdown_manager_tasks(&self) {
+        let task_group = self.manager_task_group.lock().take();
+        let Some(task_group) = task_group else {
+            return;
+        };
+
+        let report = task_group.shutdown(Duration::from_secs(10)).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "Controller manager task shutdown report is unhealthy"
+            );
+        }
     }
 
     /// Initialize the controller manager
@@ -703,6 +744,8 @@ impl ControllerManager {
         }
         info!("Processor manager started");
 
+        let manager_task_group = self.ensure_manager_task_group()?;
+
         // Start remoting server (for inbound RPC requests)
         // Reference: NameServerRuntime.start() - register processors then start server
         if let Some(mut server) = self.remoting_server.take() {
@@ -714,14 +757,17 @@ impl ControllerManager {
                 .map(|service| service as Arc<dyn ChannelEventListener>);
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             *self.remoting_server_shutdown_tx.lock() = Some(shutdown_tx);
-            let handle = tokio::spawn(async move {
+            if let Err(error) = manager_task_group.spawn_service("controller.remoting-server", async move {
                 server
                     .run_with_shutdown(request_processor, broker_housekeeping_service, async move {
                         let _ = shutdown_rx.await;
                     })
                     .await;
-            });
-            *self.remoting_server_handle.lock() = Some(handle);
+            }) {
+                return Err(ControllerError::Internal(format!(
+                    "Failed to spawn controller remoting server task: {error}"
+                )));
+            }
             info!("Remoting server started with ControllerRequestProcessor");
         }
 
@@ -732,8 +778,8 @@ impl ControllerManager {
             info!("Remoting client started");
         }
 
-        self.start_notify_worker_loop().await;
-        self.start_leadership_watch_loop();
+        self.start_notify_worker_loop().await?;
+        self.start_leadership_watch_loop()?;
 
         // Metrics are already running if enabled
         #[cfg(feature = "metrics")]
@@ -772,14 +818,8 @@ impl ControllerManager {
 
         info!("Shutting down controller manager...");
 
-        if let Some(handle) = self.leadership_watch_task.lock().take() {
-            handle.abort();
-        }
         if let Some(tx) = self.notify_dispatch_tx.lock().take() {
             drop(tx);
-        }
-        if let Some(handle) = self.notify_worker_task.lock().take() {
-            handle.abort();
         }
         if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
             let _ = shutdown_tx.send(());
@@ -787,6 +827,7 @@ impl ControllerManager {
         if let Err(error) = self.apply_leadership_state(false).await {
             warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
         }
+        self.shutdown_manager_tasks().await;
 
         // Shutdown processor first to stop accepting requests
         // Errors are logged but don't stop the shutdown process
@@ -820,20 +861,6 @@ impl ControllerManager {
             Ok(Ok(())) => info!("Raft controller shut down"),
             Ok(Err(e)) => error!("Failed to shutdown Raft: {}", e),
             Err(_) => warn!("Timed out waiting for Raft controller shutdown"),
-        }
-
-        let remoting_server_handle = { self.remoting_server_handle.lock().take() };
-        if let Some(handle) = remoting_server_handle {
-            let mut handle = handle;
-            match tokio::time::timeout(Duration::from_secs(10), &mut handle).await {
-                Ok(Ok(_)) => info!("Remoting server shut down"),
-                Ok(Err(error)) => warn!("Remoting server task exited with error: {}", error),
-                Err(_) => {
-                    warn!("Timed out waiting for remoting server shutdown");
-                    handle.abort();
-                    let _ = handle.await;
-                }
-            }
         }
 
         // Metrics manager cleanup is automatic via Drop
@@ -972,42 +999,46 @@ impl ControllerManager {
         self.raft_controller.set_runtime_elect_enabled(enabled)
     }
 
-    fn start_leadership_watch_loop(self: &ArcMut<Self>) {
-        if self.leadership_watch_task.lock().is_some() {
-            return;
-        }
-
+    fn start_leadership_watch_loop(self: &ArcMut<Self>) -> Result<()> {
         let weak_manager = ArcMut::downgrade(self);
         let interval = Duration::from_millis(self.config.heartbeat_interval_ms.max(100));
-        let handle = tokio::spawn(async move {
-            let mut was_leader = false;
-            let mut ticker = tokio::time::interval(interval);
+        let task_group = self.ensure_manager_task_group()?;
+        let shutdown_token = task_group.cancellation_token();
+        task_group
+            .spawn_service("controller.leadership-watch", async move {
+                let mut was_leader = false;
+                let mut ticker = tokio::time::interval(interval);
 
-            loop {
-                ticker.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            break;
+                        }
+                        _ = ticker.tick() => {}
+                    }
 
-                let Some(manager) = weak_manager.upgrade() else {
-                    break;
-                };
+                    let Some(manager) = weak_manager.upgrade() else {
+                        break;
+                    };
 
-                if !manager.is_running() {
-                    break;
+                    if !manager.is_running() {
+                        break;
+                    }
+
+                    let is_leader = manager.is_leader();
+                    if is_leader == was_leader {
+                        continue;
+                    }
+
+                    if let Err(error) = manager.apply_leadership_state(is_leader).await {
+                        warn!("Failed to apply leadership state transition: {}", error);
+                    } else {
+                        was_leader = is_leader;
+                    }
                 }
-
-                let is_leader = manager.is_leader();
-                if is_leader == was_leader {
-                    continue;
-                }
-
-                if let Err(error) = manager.apply_leadership_state(is_leader).await {
-                    warn!("Failed to apply leadership state transition: {}", error);
-                } else {
-                    was_leader = is_leader;
-                }
-            }
-        });
-
-        *self.leadership_watch_task.lock() = Some(handle);
+            })
+            .map_err(|error| ControllerError::Internal(format!("Failed to spawn leadership watch task: {error}")))?;
+        Ok(())
     }
 
     async fn apply_leadership_state(&self, is_leader: bool) -> Result<()> {
@@ -1116,15 +1147,27 @@ impl ControllerManager {
         let notify_dispatch_tx = self.notify_dispatch_tx.clone();
         let notify_generation = self.notify_generation.clone();
         let delay = self.notify_retry_delay(task.attempt);
-        tokio::spawn(async move {
-            sleep(delay).await;
+        let Some(task_group) = self.manager_task_group() else {
+            warn!("Skip broker role notify retry because controller task group is not initialized");
+            return;
+        };
+        let shutdown_token = task_group.cancellation_token();
+        if let Err(error) = task_group.spawn("controller.notify-retry", TaskKind::Worker, async move {
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    return;
+                }
+                _ = sleep(delay) => {}
+            }
             if notify_generation.load(Ordering::SeqCst) != task.generation {
                 return;
             }
             if let Some(sender) = notify_dispatch_tx.lock().clone() {
                 let _ = sender.send(task.retry());
             }
-        });
+        }) {
+            warn!(?error, "failed to spawn controller broker role notify retry task");
+        }
     }
 
     async fn process_notify_task(&self, task: NotifyTask) {
@@ -1169,25 +1212,33 @@ impl ControllerManager {
         }
     }
 
-    async fn start_notify_worker_loop(self: &ArcMut<Self>) {
-        if self.notify_worker_task.lock().is_some() {
-            return;
-        }
-
+    async fn start_notify_worker_loop(self: &ArcMut<Self>) -> Result<()> {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         *self.notify_dispatch_tx.lock() = Some(sender);
 
         let weak_manager = ArcMut::downgrade(self);
-        let handle = tokio::spawn(async move {
-            while let Some(task) = receiver.recv().await {
-                let Some(manager) = weak_manager.upgrade() else {
-                    break;
-                };
-                manager.process_notify_task(task).await;
-            }
-        });
-
-        *self.notify_worker_task.lock() = Some(handle);
+        let task_group = self.ensure_manager_task_group()?;
+        let shutdown_token = task_group.cancellation_token();
+        task_group
+            .spawn_service("controller.notify-worker", async move {
+                loop {
+                    let task = tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            break;
+                        }
+                        task = receiver.recv() => task,
+                    };
+                    let Some(task) = task else {
+                        break;
+                    };
+                    let Some(manager) = weak_manager.upgrade() else {
+                        break;
+                    };
+                    manager.process_notify_task(task).await;
+                }
+            })
+            .map_err(|error| ControllerError::Internal(format!("Failed to spawn notify worker task: {error}")))?;
+        Ok(())
     }
 
     pub async fn notify_broker_role_changed(&self, mut response: RemotingCommand) -> Result<()> {
@@ -1294,62 +1345,29 @@ impl Drop for ControllerManager {
         if self.running.load(Ordering::Acquire) {
             warn!("Controller manager dropped while running, attempting emergency shutdown");
 
-            // Spawn blocking emergency shutdown
-            // We use try_lock to avoid blocking the drop
-            let running = self.running.clone();
-            let processor = self.processor.clone();
-            let mut heartbeat_manager = self.heartbeat_manager.clone();
-            let metadata = self.metadata.clone();
-            let leadership_watch_task = self.leadership_watch_task.clone();
-            let notify_worker_task = self.notify_worker_task.clone();
-            let notify_dispatch_tx = self.notify_dispatch_tx.clone();
-            let notify_cache = self.notify_cache.clone();
-            let pending_notify_state = self.pending_notify_state.clone();
-            let notify_generation = self.notify_generation.clone();
-            let remoting_server_handle = self.remoting_server_handle.clone();
-            let remoting_server_shutdown_tx = self.remoting_server_shutdown_tx.clone();
-
-            // Clone remoting_client for emergency shutdown
-            let mut remoting_client = self.remoting_client.clone();
-
-            // Spawn a task to perform shutdown
-            // Note: This is best-effort; drop should not block
-            tokio::spawn(async move {
-                running.store(false, Ordering::SeqCst);
-
-                // Try to shutdown components
-                let _ = processor.shutdown().await;
-
-                BrokerHeartbeatManager::shutdown(heartbeat_manager.as_mut());
-
-                let _ = metadata.shutdown().await;
-
-                // Shutdown remoting client
-                if let Some(shutdown_tx) = remoting_server_shutdown_tx.lock().take() {
-                    let _ = shutdown_tx.send(());
+            self.running.store(false, Ordering::SeqCst);
+            if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
+                let _ = shutdown_tx.send(());
+            }
+            if let Some(tx) = self.notify_dispatch_tx.lock().take() {
+                drop(tx);
+            }
+            self.notify_generation.fetch_add(1, Ordering::SeqCst);
+            self.pending_notify_state.write().clear();
+            self.notify_cache.write().clear();
+            BrokerHeartbeatManager::shutdown(self.heartbeat_manager.as_mut());
+            self.remoting_client.shutdown();
+            if let Some(task_group) = self.manager_task_group.lock().take() {
+                let report = task_group.shutdown_now();
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "Controller manager emergency task shutdown report is unhealthy"
+                    );
                 }
+            }
 
-                remoting_client.shutdown();
-                if let Some(handle) = remoting_server_handle.lock().take() {
-                    handle.abort();
-                }
-                if let Some(handle) = leadership_watch_task.lock().take() {
-                    handle.abort();
-                }
-                if let Some(tx) = notify_dispatch_tx.lock().take() {
-                    drop(tx);
-                }
-                if let Some(handle) = notify_worker_task.lock().take() {
-                    handle.abort();
-                }
-                notify_generation.fetch_add(1, Ordering::SeqCst);
-                pending_notify_state.write().clear();
-                notify_cache.write().clear();
-
-                // Note: raft shutdown handled by Drop impl of RaftController
-
-                info!("Emergency shutdown completed");
-            });
+            info!("Emergency shutdown completed");
         }
     }
 }

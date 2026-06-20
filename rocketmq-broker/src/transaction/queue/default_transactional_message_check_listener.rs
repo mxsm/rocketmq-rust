@@ -15,6 +15,7 @@
 use std::any::Any;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -25,9 +26,13 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use std::time::Duration;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -41,6 +46,7 @@ const TCMT_QUEUE_NUMS: i32 = 1;
 pub struct DefaultTransactionalMessageCheckListener<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     broker_client: ArcMut<Broker2Client>,
+    task_group: Option<TaskGroup>,
 }
 
 impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
@@ -48,15 +54,49 @@ impl<MS: MessageStore> Clone for DefaultTransactionalMessageCheckListener<MS> {
         Self {
             broker_client: self.broker_client.clone(),
             broker_runtime_inner: self.broker_runtime_inner.clone(),
+            task_group: self.task_group.clone(),
         }
     }
 }
 
 impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
     pub fn new(broker_client: Broker2Client, broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        let task_group = Self::create_task_group(broker_runtime_inner.broker_config());
         Self {
             broker_runtime_inner,
             broker_client: ArcMut::new(broker_client),
+            task_group,
+        }
+    }
+
+    fn create_task_group(broker_config: &BrokerConfig) -> Option<TaskGroup> {
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "transaction check listener initialized outside Tokio runtime; check tasks will run inline"
+                );
+                return None;
+            }
+        };
+        Some(TaskGroup::root(
+            format!("rocketmq-broker.transaction-check.{}", broker_config.broker_name()),
+            runtime,
+        ))
+    }
+
+    pub async fn shutdown(&self) {
+        let Some(task_group) = self.task_group.as_ref() else {
+            return;
+        };
+
+        let report = task_group.shutdown(Duration::from_secs(5)).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "DefaultTransactionalMessageCheckListener shutdown report is unhealthy"
+            );
         }
     }
 }
@@ -145,12 +185,27 @@ where
     }
 
     async fn resolve_half_msg(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
+        let Some(task_group) = self.task_group.as_ref() else {
+            self.send_check_message(msg_ext).await?;
+            return Ok(());
+        };
+
         let this = self.clone();
-        tokio::spawn(async move {
-            this.send_check_message(msg_ext).await.unwrap_or_else(|e| {
-                error!("Failed to send check message: {}", e);
-            });
-        });
+        task_group
+            .spawn(
+                "broker.transaction-check.send-check-message",
+                TaskKind::Worker,
+                async move {
+                    this.send_check_message(msg_ext).await.unwrap_or_else(|e| {
+                        error!("Failed to send check message: {}", e);
+                    });
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to spawn transaction check message task: {error}"
+                ))
+            })?;
         Ok(())
     }
 

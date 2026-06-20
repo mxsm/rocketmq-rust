@@ -23,6 +23,8 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::warn;
@@ -30,6 +32,7 @@ use tracing::warn;
 use self::client_manage_processor::ClientManageProcessor;
 use crate::latency::broker_fast_failure::BrokerFastFailure;
 use crate::latency::broker_fast_failure::FastFailureQueueKind;
+use crate::latency::broker_fast_failure::FastFailureTask;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProcessor;
@@ -223,6 +226,7 @@ pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
     default_request_processor: Option<ArcMut<BrokerProcessorType<MS, TS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
     broker_fast_failure: Option<BrokerFastFailure>,
+    request_task_group: Option<TaskGroup>,
 }
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
@@ -236,6 +240,7 @@ where
             default_request_processor: None,
             auth_runtime: None,
             broker_fast_failure: None,
+            request_task_group: None,
         }
     }
 
@@ -253,6 +258,10 @@ where
 
     pub fn set_broker_fast_failure(&mut self, broker_fast_failure: BrokerFastFailure) {
         self.broker_fast_failure = Some(broker_fast_failure);
+    }
+
+    pub fn set_request_task_group(&mut self, request_task_group: TaskGroup) {
+        self.request_task_group = Some(request_task_group);
     }
 }
 
@@ -280,6 +289,7 @@ impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
             default_request_processor: self.default_request_processor.clone(),
             auth_runtime: self.auth_runtime.clone(),
             broker_fast_failure: self.broker_fast_failure.clone(),
+            request_task_group: self.request_task_group.clone(),
         }
     }
 }
@@ -383,36 +393,32 @@ where
         }
 
         let opaque = request.opaque();
-        let mut queued_request = request.clone();
+        let queued_request = request.clone();
         let (task, response_rx) = broker_fast_failure.enqueue(queue_kind, opaque);
         let broker_fast_failure = broker_fast_failure.clone();
 
-        tokio::spawn(async move {
-            let Some(_permit) = broker_fast_failure.acquire_permit(queue_kind).await else {
-                warn!("fast failure queue permit acquisition failed: queue={queue_kind:?}");
-                if broker_fast_failure.try_mark_running(queue_kind, &task) {
-                    broker_fast_failure.complete(
-                        queue_kind,
-                        &task,
-                        Some(system_error_response(
-                            opaque,
-                            "fast failure queue permit acquisition failed",
-                        )),
-                    );
-                }
-                return;
-            };
-
-            if !broker_fast_failure.try_mark_running(queue_kind, &task) {
-                return;
+        let request_task = Self::run_fast_failure_request(
+            queue_kind,
+            broker_fast_failure.clone(),
+            task.clone(),
+            processor,
+            channel,
+            ctx,
+            queued_request,
+            opaque,
+        );
+        if let Some(task_group) = &self.request_task_group {
+            if let Err(error) = task_group.spawn("broker.request.fast-failure", TaskKind::Worker, request_task) {
+                warn!(?error, "failed to spawn fast failure request task");
+                broker_fast_failure.cancel(
+                    queue_kind,
+                    &task,
+                    system_error_response(opaque, "fast failure request task spawn failed"),
+                );
             }
-
-            let response = match processor.process_request(channel, ctx, &mut queued_request).await {
-                Ok(response) => response,
-                Err(error) => Some(system_error_response(opaque, error.to_string())),
-            };
-            broker_fast_failure.complete(queue_kind, &task, response);
-        });
+        } else {
+            request_task.await;
+        }
 
         match response_rx.await {
             Ok(response) => Ok(response),
@@ -421,6 +427,42 @@ where
                 "fast failure response channel closed before request completed",
             ))),
         }
+    }
+
+    async fn run_fast_failure_request(
+        queue_kind: FastFailureQueueKind,
+        broker_fast_failure: BrokerFastFailure,
+        task: Arc<FastFailureTask>,
+        mut processor: BrokerProcessorType<MS, TS>,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        mut queued_request: RemotingCommand,
+        opaque: i32,
+    ) {
+        let Some(_permit) = broker_fast_failure.acquire_permit(queue_kind).await else {
+            warn!("fast failure queue permit acquisition failed: queue={queue_kind:?}");
+            if broker_fast_failure.try_mark_running(queue_kind, &task) {
+                broker_fast_failure.complete(
+                    queue_kind,
+                    &task,
+                    Some(system_error_response(
+                        opaque,
+                        "fast failure queue permit acquisition failed",
+                    )),
+                );
+            }
+            return;
+        };
+
+        if !broker_fast_failure.try_mark_running(queue_kind, &task) {
+            return;
+        }
+
+        let response = match processor.process_request(channel, ctx, &mut queued_request).await {
+            Ok(response) => response,
+            Err(error) => Some(system_error_response(opaque, error.to_string())),
+        };
+        broker_fast_failure.complete(queue_kind, &task, response);
     }
 }
 

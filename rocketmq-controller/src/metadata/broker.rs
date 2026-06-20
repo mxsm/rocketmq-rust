@@ -18,6 +18,9 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
@@ -75,6 +78,9 @@ pub struct BrokerManager {
 
     /// Heartbeat timeout duration
     heartbeat_timeout: Duration,
+
+    /// Background heartbeat checker task group
+    task_group: Mutex<Option<TaskGroup>>,
 }
 
 impl BrokerManager {
@@ -84,6 +90,7 @@ impl BrokerManager {
             brokers: Arc::new(DashMap::new()),
             config,
             heartbeat_timeout: Duration::from_secs(30),
+            task_group: Mutex::new(None),
         }
     }
 
@@ -92,15 +99,36 @@ impl BrokerManager {
         info!("Starting broker manager");
 
         // Start heartbeat checker
+        if self.task_group.lock().is_some() {
+            warn!("Broker manager heartbeat checker already started");
+            return Ok(());
+        }
+
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            ControllerError::Internal(format!(
+                "No Tokio runtime for broker manager heartbeat checker: {error}"
+            ))
+        })?;
         let brokers = self.brokers.clone();
         let timeout = self.heartbeat_timeout;
-        tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(5));
-            loop {
-                interval.tick().await;
-                Self::check_heartbeats(&brokers, timeout);
-            }
-        });
+        let task_group = TaskGroup::root("rocketmq-controller.metadata.broker", RuntimeHandle::new(runtime));
+        let shutdown_token = task_group.cancellation_token();
+        task_group
+            .spawn_service("controller.metadata.broker.heartbeat-checker", async move {
+                let mut interval = time::interval(Duration::from_secs(5));
+                loop {
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            Self::check_heartbeats(&brokers, timeout);
+                        }
+                    }
+                }
+            })
+            .map_err(|error| ControllerError::Internal(format!("Failed to spawn broker heartbeat checker: {error}")))?;
+        *self.task_group.lock() = Some(task_group);
 
         Ok(())
     }
@@ -108,6 +136,16 @@ impl BrokerManager {
     /// Shutdown the broker manager
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down broker manager");
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(10)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "Broker manager heartbeat checker shutdown report is unhealthy"
+                );
+            }
+        }
         self.brokers.clear();
         Ok(())
     }
