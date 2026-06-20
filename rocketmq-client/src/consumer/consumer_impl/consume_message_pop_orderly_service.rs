@@ -16,6 +16,7 @@ use std::future::Future;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -34,6 +35,8 @@ use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeM
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -65,6 +68,9 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
     pub(crate) lock_refresh_task: Option<PopOrderlyTaskHandle>,
+    pop_orderly_task_tracker: TaskTracker,
+    force_stop_token: CancellationToken,
+    submitted_tasks: Arc<AtomicU64>,
 }
 
 pub(crate) enum PopOrderlyTaskHandle {
@@ -117,11 +123,28 @@ where
     }
 }
 
-fn spawn_detached_pop_orderly_task<F>(thread_name: &'static str, task: F)
-where
+fn spawn_tracked_pop_orderly_task<F>(
+    thread_name: &'static str,
+    tracker: &TaskTracker,
+    force_stop_token: &CancellationToken,
+    submitted_tasks: &Arc<AtomicU64>,
+    task: F,
+) where
     F: Future<Output = ()> + Send + 'static,
 {
-    drop(spawn_pop_orderly_task(thread_name, task));
+    submitted_tasks.fetch_add(1, Ordering::Relaxed);
+    let force_stop_token = force_stop_token.clone();
+    let tracked_task = tracker.track_future(async move {
+        tokio::select! {
+            biased;
+            _ = force_stop_token.cancelled() => {}
+            _ = task => {}
+        }
+    });
+
+    if spawn_pop_orderly_task(thread_name, tracked_task).is_none() {
+        warn!("Failed to track {} background task", thread_name);
+    }
 }
 
 /// Default callback implementation for acknowledgment operations
@@ -191,6 +214,9 @@ impl ConsumeMessagePopOrderlyService {
             stopped: Arc::new(AtomicBool::new(false)),
             active_tasks: Arc::new(AtomicUsize::new(0)),
             lock_refresh_task: None,
+            pop_orderly_task_tracker: TaskTracker::new(),
+            force_stop_token: CancellationToken::new(),
+            submitted_tasks: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -256,28 +282,34 @@ impl ConsumeMessagePopOrderlyService {
         let active_tasks = self.active_tasks.clone();
         let concurrency_limiter = self.concurrency_limiter.clone();
 
-        spawn_detached_pop_orderly_task("rocketmq-client-pop-orderly-consume", async move {
-            if stopped.load(Ordering::Acquire) {
-                return;
-            }
-
-            let _permit = match concurrency_limiter.acquire().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-
-            active_tasks.fetch_add(1, Ordering::SeqCst);
-
-            struct TaskGuard(Arc<AtomicUsize>);
-            impl Drop for TaskGuard {
-                fn drop(&mut self) {
-                    self.0.fetch_sub(1, Ordering::SeqCst);
+        spawn_tracked_pop_orderly_task(
+            "rocketmq-client-pop-orderly-consume",
+            &self.pop_orderly_task_tracker,
+            &self.force_stop_token,
+            &self.submitted_tasks,
+            async move {
+                if stopped.load(Ordering::Acquire) {
+                    return;
                 }
-            }
-            let _guard = TaskGuard(active_tasks);
 
-            request.run(this).await;
-        });
+                let _permit = match concurrency_limiter.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                };
+
+                active_tasks.fetch_add(1, Ordering::SeqCst);
+
+                struct TaskGuard(Arc<AtomicUsize>);
+                impl Drop for TaskGuard {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
+                let _guard = TaskGuard(active_tasks);
+
+                request.run(this).await;
+            },
+        );
     }
 
     fn submit_consume_request_later(&self, this: ArcMut<Self>, request: ConsumeRequest, mut suspend_time_millis: u64) {
@@ -286,16 +318,22 @@ impl ConsumeMessagePopOrderlyService {
         let stopped = self.stopped.clone();
         let consume_request_set = self.consume_request_set.clone();
 
-        spawn_detached_pop_orderly_task("rocketmq-client-pop-orderly-consume-delay", async move {
-            tokio::time::sleep(Duration::from_millis(suspend_time_millis)).await;
+        spawn_tracked_pop_orderly_task(
+            "rocketmq-client-pop-orderly-consume-delay",
+            &self.pop_orderly_task_tracker,
+            &self.force_stop_token,
+            &self.submitted_tasks,
+            async move {
+                tokio::time::sleep(Duration::from_millis(suspend_time_millis)).await;
 
-            if stopped.load(Ordering::Acquire) {
-                return;
-            }
+                if stopped.load(Ordering::Acquire) {
+                    return;
+                }
 
-            consume_request_set.insert(request.clone());
-            this.mut_from_ref().submit_consume_request(this.clone(), request, true);
-        });
+                consume_request_set.insert(request.clone());
+                this.mut_from_ref().submit_consume_request(this.clone(), request, true);
+            },
+        );
     }
 
     async fn unlock_all_message_queues(&self) {
@@ -534,6 +572,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         self.stopped.store(true, Ordering::Release);
 
         self.concurrency_limiter.close();
+        self.pop_orderly_task_tracker.close();
 
         if let Some(task) = self.lock_refresh_task.take() {
             let timeout = Duration::from_millis(await_terminate_millis);
@@ -547,6 +586,30 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
         let timeout = Duration::from_millis(await_terminate_millis);
         let start_time = Instant::now();
+
+        match tokio::time::timeout(timeout, self.pop_orderly_task_tracker.wait()).await {
+            Ok(()) => {}
+            Err(_) => {
+                warn!(
+                    "{} ConsumeMessagePopOrderlyService shutdown timeout, {} active consume tasks, {} submitted \
+                     tasks; forcing remaining task futures to stop",
+                    self.consumer_group,
+                    self.active_tasks.load(Ordering::Acquire),
+                    self.submitted_tasks.load(Ordering::Acquire)
+                );
+                self.force_stop_token.cancel();
+                if tokio::time::timeout(Duration::from_secs(1), self.pop_orderly_task_tracker.wait())
+                    .await
+                    .is_err()
+                {
+                    warn!(
+                        "{} ConsumeMessagePopOrderlyService force stop timed out, {} active consume tasks remain",
+                        self.consumer_group,
+                        self.active_tasks.load(Ordering::Acquire)
+                    );
+                }
+            }
+        }
 
         while self.active_tasks.load(Ordering::Acquire) > 0 {
             if start_time.elapsed() >= timeout {
@@ -959,6 +1022,67 @@ mod tests {
 
         assert!(!handle.shutdown(Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn tracked_pop_orderly_task_shutdown_waits_for_completion() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let submitted = Arc::new(AtomicU64::new(0));
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+
+        spawn_tracked_pop_orderly_task(
+            "rocketmq-client-pop-orderly-tracker-test",
+            &tracker,
+            &token,
+            &submitted,
+            async move {
+                completed_in_task.store(true, Ordering::Release);
+            },
+        );
+        tracker.close();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("tracked task should finish before timeout");
+
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(submitted.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn tracked_pop_orderly_task_force_stop_cancels_pending_task() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let submitted = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+
+        spawn_tracked_pop_orderly_task(
+            "rocketmq-client-pop-orderly-tracker-test",
+            &tracker,
+            &token,
+            &submitted,
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        );
+        tracker.close();
+
+        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
+            .await
+            .is_err());
+
+        token.cancel();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("force stop should release pending tracked task");
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(submitted.load(Ordering::Acquire), 1);
     }
 
     #[test]

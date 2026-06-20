@@ -6,8 +6,11 @@ use std::time::Duration;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::DetachedTaskPolicy;
+use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownReport;
@@ -86,6 +89,54 @@ async fn task_group_shutdown_aborts_after_timeout_without_leak() {
 }
 
 #[tokio::test]
+async fn task_group_detached_track_only_reports_policy() {
+    let context = RuntimeContext::from_current("task-group-detached-track-test");
+    let group = context.root_group().child("service");
+
+    group
+        .spawn_detached("detached-task", TaskKind::Worker, async move {
+            std::future::pending::<()>().await;
+        })
+        .unwrap();
+
+    let report = group.shutdown(Duration::from_millis(20)).await;
+
+    assert_eq!(report.aborted, 0, "{}", report.to_json());
+    assert_eq!(report.detached_still_running, 1, "{}", report.to_json());
+    assert!(!report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.remaining_tasks.len(), 1, "{}", report.to_json());
+    assert_eq!(
+        report.remaining_tasks[0].detached_policy,
+        Some(DetachedTaskPolicy::TrackOnly),
+        "{}",
+        report.to_json()
+    );
+}
+
+#[tokio::test]
+async fn task_group_detached_abort_on_shutdown_is_aborted() {
+    let context = RuntimeContext::from_current("task-group-detached-abort-test");
+    let group = context.root_group().child("service");
+
+    group
+        .spawn_detached_with_policy(
+            "detached-abort-task",
+            TaskKind::Worker,
+            DetachedTaskPolicy::AbortOnShutdown,
+            async move {
+                std::future::pending::<()>().await;
+            },
+        )
+        .unwrap();
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+
+    assert_eq!(report.aborted, 1, "{}", report.to_json());
+    assert_eq!(report.detached_still_running, 0, "{}", report.to_json());
+    assert!(report.remaining_tasks.is_empty(), "{}", report.to_json());
+}
+
+#[tokio::test]
 async fn task_group_shutdown_now_aborts_without_async_wait() {
     let context = RuntimeContext::from_current("task-group-shutdown-now-test");
     let group = context.root_group().child("service");
@@ -101,7 +152,7 @@ async fn task_group_shutdown_now_aborts_without_async_wait() {
     assert_eq!(report.leaked, 0, "{}", report.to_json());
     assert_eq!(
         group.lifecycle_state(),
-        rocketmq_runtime::TaskGroupLifecycleState::Closed
+        rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
     );
     assert!(group.spawn_service("late-task", async {}).is_err());
 
@@ -122,7 +173,8 @@ async fn task_group_shutdown_starts_children_concurrently() {
             loop {
                 match second_child_observer.lifecycle_state() {
                     rocketmq_runtime::TaskGroupLifecycleState::Closing
-                    | rocketmq_runtime::TaskGroupLifecycleState::Closed => break,
+                    | rocketmq_runtime::TaskGroupLifecycleState::Closed
+                    | rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted => break,
                     rocketmq_runtime::TaskGroupLifecycleState::Open => tokio::task::yield_now().await,
                 }
             }
@@ -139,6 +191,31 @@ async fn task_group_shutdown_starts_children_concurrently() {
         "{}",
         report.to_json()
     );
+}
+
+#[tokio::test]
+async fn task_group_rejects_child_creation_after_shutdown() {
+    let context = RuntimeContext::from_current("task-group-late-child-test");
+    let group = context.root_group().child("service");
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(
+        group.lifecycle_state(),
+        rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
+    );
+
+    let error = group
+        .try_child("late-child")
+        .expect_err("try_child should reject child creation after shutdown");
+    assert!(matches!(error, RuntimeError::TaskGroupClosing { .. }));
+
+    let late_child = group.child("late-child-compat");
+    assert_eq!(
+        late_child.lifecycle_state(),
+        rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
+    );
+    assert!(late_child.spawn_service("late-task", async {}).is_err());
 }
 
 #[tokio::test]
@@ -293,6 +370,64 @@ async fn blocking_executor_reports_timeout_until_reaper_cleans_late_exit() {
     })
     .await
     .expect("blocking reaper should remove the late-exiting task");
+}
+
+#[test]
+fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
+    let config = RuntimeConfig {
+        worker_threads: 2,
+        max_blocking_threads: 2,
+        shutdown_timeout: Duration::from_millis(50),
+        blocking_pool_policy: BlockingPoolPolicy {
+            name: "configured-blocking-test".to_string(),
+            max_concurrency: 1,
+            queue_timeout: Duration::from_secs(1),
+            task_timeout: Duration::from_millis(20),
+            ..BlockingPoolPolicy::default()
+        },
+        ..RuntimeConfig::default()
+    };
+    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let context = owner.context().clone();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+    let report = owner.block_on(async move {
+        let error = context
+            .blocking()
+            .spawn_io("context-slow-io", move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .await
+            .expect_err("configured task_timeout should return while blocking closure is still running");
+        assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+
+        started_rx.await.expect("blocking task should signal that it started");
+
+        let report = context.shutdown_tasks(Duration::from_millis(50)).await;
+        assert_eq!(report.blocking_still_running, 1, "{}", report.to_json());
+        assert!(!report.blocking_tasks.is_empty(), "{}", report.to_json());
+        assert!(!report.is_healthy(), "{}", report.to_json());
+
+        release_tx
+            .send(())
+            .expect("blocking task release signal should be accepted");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if context.blocking().blocking_still_running() == 0 && context.blocking().snapshot().tasks.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("blocking reaper should clean the configured runtime context task");
+
+        report
+    });
+
+    assert_eq!(report.blocking_tasks[0].name, "context-slow-io");
 }
 
 async fn run_limited_blocking_task(

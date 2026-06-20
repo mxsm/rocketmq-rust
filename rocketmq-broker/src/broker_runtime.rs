@@ -160,6 +160,8 @@ type DefaultServerProcessor =
 type FasterServerProcessor =
     BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
 
+const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     AuthConfig {
         config_name: broker_config.broker_identity.broker_name.clone(),
@@ -614,13 +616,12 @@ impl BrokerRuntime {
 
     pub async fn shutdown(&mut self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
-        self.scheduled_task_manager.abort_all();
 
         self.shutdown_basic_service().await;
 
         self.inner.broker_outer_api.shutdown();
 
-        self.scheduled_task_manager.abort_all();
+        self.shutdown_scheduled_tasks().await;
 
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
             client_housekeeping_service.shutdown().await;
@@ -769,6 +770,26 @@ impl BrokerRuntime {
             {
                 warn!("Timed out shutting down message store");
             }
+        }
+    }
+
+    async fn shutdown_scheduled_tasks(&self) {
+        self.shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+            .await;
+    }
+
+    async fn shutdown_scheduled_tasks_with_timeout(&self, timeout: Duration) {
+        let report = self.scheduled_task_manager.shutdown_all(timeout).await;
+        if !report.is_healthy() {
+            warn!(
+                task_count = report.task_count,
+                completed = report.completed,
+                aborted = report.aborted,
+                panicked = report.panicked,
+                timed_out = report.timed_out,
+                elapsed_ms = report.elapsed.as_millis(),
+                "Broker scheduled task shutdown report is unhealthy"
+            );
         }
     }
 
@@ -4082,9 +4103,11 @@ mod tests {
     use std::collections::BTreeSet;
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::future;
     use std::net::TcpListener;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicU16;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
@@ -4375,6 +4398,55 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
 
         assert!(!runtime.initial_rpc_hooks());
+    }
+
+    #[tokio::test]
+    async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
+        struct DropMarker(Arc<AtomicBool>);
+
+        impl Drop for DropMarker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        runtime
+            .scheduled_task_manager
+            .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
+                let started = Arc::clone(&started);
+                let dropped = Arc::clone(&dropped);
+                move |_token| {
+                    let started = Arc::clone(&started);
+                    let dropped = Arc::clone(&dropped);
+                    async move {
+                        let _marker = DropMarker(dropped);
+                        started.store(true, Ordering::Release);
+                        future::pending::<anyhow::Result<()>>().await
+                    }
+                }
+            });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduled task should start");
+
+        runtime
+            .shutdown_scheduled_tasks_with_timeout(Duration::from_millis(10))
+            .await;
+
+        assert_eq!(runtime.scheduled_task_manager.task_count(), 0);
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "broker scheduled shutdown should wait until aborted tasks release their running future"
+        );
     }
 
     #[tokio::test]

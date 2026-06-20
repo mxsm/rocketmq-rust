@@ -35,11 +35,16 @@ pub struct RuntimeContext {
 
 impl RuntimeContext {
     pub fn new(runtime: RuntimeHandle, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+        Self::new_with_blocking_policy(runtime, name, BlockingPoolPolicy::default())
+    }
+
+    pub fn new_with_blocking_policy(
+        runtime: RuntimeHandle,
+        name: impl Into<Arc<str>>,
+        blocking_policy: BlockingPoolPolicy,
+    ) -> RuntimeResult<Self> {
         let root_group = TaskGroup::root(name, runtime.clone());
-        let blocking = BlockingExecutor::new(
-            BlockingPoolPolicy::default(),
-            root_group.child("runtime.blocking-reaper"),
-        )?;
+        let blocking = BlockingExecutor::new(blocking_policy, root_group.child("runtime.blocking-reaper"))?;
         let diagnostics = RuntimeDiagnostics::new(runtime.clone());
         Ok(Self {
             runtime,

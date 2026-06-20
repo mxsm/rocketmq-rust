@@ -916,10 +916,22 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         if let Some(task_group) = self.background_task_group.lock().take() {
-            task_group.cancel();
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "RemotingClient background task shutdown report is unhealthy"
+                );
+            }
         }
         if let Some(task_group) = self.worker_task_group.lock().take() {
-            task_group.cancel();
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "RemotingClient worker task shutdown report is unhealthy"
+                );
+            }
         }
         self.connection_tables.clear();
         self.namesrv_addr_list.clear();
@@ -1361,7 +1373,7 @@ mod tests {
 
         client.mut_from_ref().shutdown();
 
-        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
     }
 
     #[tokio::test]
@@ -1466,6 +1478,9 @@ mod tests {
 
         server.await.expect("server task");
         client.shutdown();
-        assert_eq!(worker_task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert_eq!(
+            worker_task_group.lifecycle_state(),
+            TaskGroupLifecycleState::ShutdownCompleted
+        );
     }
 }

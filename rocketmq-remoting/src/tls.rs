@@ -840,7 +840,7 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(
             task_group.lifecycle_state(),
-            rocketmq_runtime::TaskGroupLifecycleState::Closed
+            rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
         );
     }
 

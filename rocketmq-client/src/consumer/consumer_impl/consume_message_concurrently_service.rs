@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -33,6 +34,7 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -61,14 +63,16 @@ pub struct ConsumeMessageConcurrentlyService {
     ///   1. Backpressure: limits the number of concurrently executing consume tasks to the
     ///      Java-equivalent core pool size. New tasks that cannot acquire a permit are retried
     ///      after 5 s.
-    ///   2. Graceful shutdown: `shutdown()` acquires all permits, which is only possible once every
-    ///      in-flight task has released its permit.
+    ///   2. Permit ownership: each tracked consume task holds a permit until its future exits.
     consume_semaphore: Arc<Semaphore>,
     max_concurrency: Arc<AtomicUsize>,
     /// Token cancelled by `shutdown()` to prevent new task submissions.
     shutdown_token: CancellationToken,
     /// Background task matching Java's cleanExpireMsgExecutors lifecycle.
     clean_expire_task_handle: Arc<Mutex<Option<ConcurrentTaskHandle>>>,
+    consume_task_tracker: TaskTracker,
+    force_stop_token: CancellationToken,
+    submitted_tasks: Arc<AtomicU64>,
 }
 
 enum ConcurrentTaskHandle {
@@ -121,11 +125,29 @@ where
     }
 }
 
-fn spawn_detached_concurrent_task<F>(thread_name: &'static str, task: F)
-where
+fn spawn_tracked_concurrent_task<F>(
+    thread_name: &'static str,
+    tracker: &TaskTracker,
+    force_stop_token: &CancellationToken,
+    submitted_tasks: &Arc<AtomicU64>,
+    task: F,
+) where
     F: Future<Output = ()> + Send + 'static,
 {
-    drop(spawn_concurrent_task(thread_name, task));
+    submitted_tasks.fetch_add(1, Ordering::Relaxed);
+    let force_stop_token = force_stop_token.clone();
+    let tracked_task = tracker.track_future(async move {
+        let mut task = Box::pin(task);
+        tokio::select! {
+            biased;
+            _ = force_stop_token.cancelled() => {}
+            _ = &mut task => {}
+        }
+    });
+
+    if spawn_concurrent_task(thread_name, tracked_task).is_none() {
+        warn!("Failed to track {} background task", thread_name);
+    }
 }
 
 impl ConsumeMessageConcurrentlyService {
@@ -147,6 +169,9 @@ impl ConsumeMessageConcurrentlyService {
             max_concurrency: Arc::new(AtomicUsize::new(core_pool_size)),
             shutdown_token: CancellationToken::new(),
             clean_expire_task_handle: Arc::new(Mutex::new(None)),
+            consume_task_tracker: TaskTracker::new(),
+            force_stop_token: CancellationToken::new(),
+            submitted_tasks: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -307,14 +332,20 @@ impl ConsumeMessageConcurrentlyService {
         message_queue: MessageQueue,
     ) {
         let shutdown_token = self.shutdown_token.clone();
-        spawn_detached_concurrent_task("rocketmq-client-concurrent-consume-delay", async move {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => return,
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-            }
-            this.submit_consume_request(this.clone(), msgs, process_queue, message_queue, true)
-                .await;
-        });
+        spawn_tracked_concurrent_task(
+            "rocketmq-client-concurrent-consume-delay",
+            &self.consume_task_tracker,
+            &self.force_stop_token,
+            &self.submitted_tasks,
+            async move {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
+                this.submit_consume_request(this.clone(), msgs, process_queue, message_queue, true)
+                    .await;
+            },
+        );
     }
 
     pub async fn send_message_back(&mut self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
@@ -363,6 +394,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
         self.shutdown_token.cancel();
+        self.consume_task_tracker.close();
         let shutdown_timeout = Duration::from_millis(await_terminate_millis);
         let clean_expire_handle = { self.clean_expire_task_handle.lock().take() };
         if let Some(handle) = clean_expire_handle {
@@ -373,25 +405,25 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 );
             }
         }
-        let max = self.max_concurrency.load(Ordering::Acquire) as u32;
-        match tokio::time::timeout(
-            shutdown_timeout,
-            Arc::clone(&self.consume_semaphore).acquire_many_owned(max),
-        )
-        .await
-        {
-            Ok(Ok(_permits)) => {
+
+        match tokio::time::timeout(shutdown_timeout, self.consume_task_tracker.wait()).await {
+            Ok(()) => {
                 info!("ConsumeMessageConcurrentlyService shutdown gracefully");
-            }
-            Ok(Err(_closed)) => {
-                // Semaphore was closed externally; treat as clean.
             }
             Err(_elapsed) => {
                 warn!(
-                    "ConsumeMessageConcurrentlyService shutdown timed out after {}ms; some consume tasks may still be \
-                     running",
-                    await_terminate_millis
+                    "ConsumeMessageConcurrentlyService shutdown timed out after {}ms; {} submitted consume tasks may \
+                     still be running",
+                    await_terminate_millis,
+                    self.submitted_tasks.load(Ordering::Acquire)
                 );
+                self.force_stop_token.cancel();
+                if tokio::time::timeout(Duration::from_secs(1), self.consume_task_tracker.wait())
+                    .await
+                    .is_err()
+                {
+                    warn!("ConsumeMessageConcurrentlyService force stop timed out");
+                }
             }
         }
     }
@@ -566,6 +598,10 @@ impl ConsumeMessageConcurrentlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
+        if self.shutdown_token.is_cancelled() {
+            return;
+        }
+
         match Arc::clone(&self.consume_semaphore).try_acquire_owned() {
             Ok(permit) => {
                 let mut consume_request = ConsumeRequest {
@@ -577,10 +613,16 @@ impl ConsumeMessageConcurrentlyService {
                     consumer_group: self.consumer_group.clone(),
                     default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                 };
-                spawn_detached_concurrent_task("rocketmq-client-concurrent-consume", async move {
-                    let _permit = permit;
-                    consume_request.run(this).await;
-                });
+                spawn_tracked_concurrent_task(
+                    "rocketmq-client-concurrent-consume",
+                    &self.consume_task_tracker,
+                    &self.force_stop_token,
+                    &self.submitted_tasks,
+                    async move {
+                        let _permit = permit;
+                        consume_request.run(this).await;
+                    },
+                );
             }
             Err(_saturated) => {
                 warn!(
@@ -1056,6 +1098,67 @@ mod tests {
 
         assert!(!handle.shutdown(Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn tracked_concurrent_task_shutdown_waits_for_completion() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let submitted = Arc::new(AtomicU64::new(0));
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+
+        spawn_tracked_concurrent_task(
+            "rocketmq-client-concurrent-tracker-test",
+            &tracker,
+            &token,
+            &submitted,
+            async move {
+                completed_in_task.store(true, Ordering::Release);
+            },
+        );
+        tracker.close();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("tracked task should finish before timeout");
+
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(submitted.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn tracked_concurrent_task_force_stop_cancels_pending_task() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let submitted = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+
+        spawn_tracked_concurrent_task(
+            "rocketmq-client-concurrent-tracker-test",
+            &tracker,
+            &token,
+            &submitted,
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        );
+        tracker.close();
+
+        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
+            .await
+            .is_err());
+
+        token.cancel();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("force stop should release pending tracked task");
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(submitted.load(Ordering::Acquire), 1);
     }
 
     #[test]

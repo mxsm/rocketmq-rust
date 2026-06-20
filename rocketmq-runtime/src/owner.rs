@@ -45,7 +45,11 @@ impl RuntimeOwner {
         }
 
         let runtime = builder.build()?;
-        let context = RuntimeContext::new(RuntimeHandle::new(runtime.handle().clone()), config.thread_name.clone())?;
+        let context = RuntimeContext::new_with_blocking_policy(
+            RuntimeHandle::new(runtime.handle().clone()),
+            config.thread_name.clone(),
+            config.blocking_pool_policy.clone(),
+        )?;
         Ok(Self {
             config,
             runtime: Some(runtime),

@@ -42,6 +42,7 @@ use crate::shutdown_report::TaskSnapshot;
 const STATE_OPEN: u8 = 0;
 const STATE_CLOSING: u8 = 1;
 const STATE_CLOSED: u8 = 2;
+const STATE_SHUTDOWN_COMPLETED: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TaskId(u64);
@@ -91,7 +92,7 @@ pub enum TaskResult {
     Panicked,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DetachedTaskPolicy {
     TrackOnly,
     AbortOnShutdown,
@@ -102,6 +103,7 @@ pub enum TaskGroupLifecycleState {
     Open,
     Closing,
     Closed,
+    ShutdownCompleted,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +141,7 @@ struct TaskMeta {
     state: TaskState,
     started_at: Instant,
     detached: bool,
+    detached_policy: Option<DetachedTaskPolicy>,
     abort_handle: Option<AbortHandle>,
 }
 
@@ -184,17 +187,44 @@ impl TaskGroup {
     }
 
     pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
+        let name = name.into();
+        self.try_child(name.clone())
+            .unwrap_or_else(|_error| self.closed_child(name))
+    }
+
+    pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+        let name = name.into();
+        let _spawn_guard = self.inner.spawn_gate.lock();
+        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
+            return Err(RuntimeError::TaskGroupClosing {
+                group_id: self.inner.id,
+                group_name: self.inner.name.clone(),
+            });
+        }
+
+        let child = self.open_child(name);
+        self.inner.children.lock().push(child.clone());
+        Ok(child)
+    }
+
+    fn open_child(&self, name: Arc<str>) -> Self {
         let child_id = TaskGroupId(self.inner.next_child_id.fetch_add(1, Ordering::Relaxed));
-        let child = Self {
+        Self {
             inner: Arc::new(TaskGroupInner::new(
                 child_id,
                 Some(self.inner.id),
-                name.into(),
+                name,
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
             )),
-        };
-        self.inner.children.lock().push(child.clone());
+        }
+    }
+
+    fn closed_child(&self, name: Arc<str>) -> Self {
+        let child = self.open_child(name);
+        child.inner.tracker.close();
+        child.inner.cancellation_token.cancel();
+        child.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         child
     }
 
@@ -202,7 +232,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, false, future)
+        self.spawn_inner(name.into(), kind, None, future)
     }
 
     pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
@@ -221,7 +251,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner_with_handle(name.into(), kind, false, true, future)
+        self.spawn_inner_with_handle(name.into(), kind, None, true, future)
     }
 
     pub fn spawn_service_with_handle<F>(
@@ -239,7 +269,20 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, true, future)
+        self.spawn_detached_with_policy(name, kind, DetachedTaskPolicy::TrackOnly, future)
+    }
+
+    pub fn spawn_detached_with_policy<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: TaskKind,
+        policy: DetachedTaskPolicy,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn_inner(name.into(), kind, Some(policy), future)
     }
 
     pub fn cancel(&self) {
@@ -267,11 +310,17 @@ impl TaskGroup {
         report
     }
 
-    fn spawn_inner<F>(&self, name: Arc<str>, kind: TaskKind, detached: bool, future: F) -> RuntimeResult<TaskId>
+    fn spawn_inner<F>(
+        &self,
+        name: Arc<str>,
+        kind: TaskKind,
+        detached_policy: Option<DetachedTaskPolicy>,
+        future: F,
+    ) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached, false, future)?;
+        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached_policy, false, future)?;
         drop(join_handle);
         Ok(task_id)
     }
@@ -280,7 +329,7 @@ impl TaskGroup {
         &self,
         name: Arc<str>,
         kind: TaskKind,
-        detached: bool,
+        detached_policy: Option<DetachedTaskPolicy>,
         propagate_panic: bool,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
@@ -306,7 +355,8 @@ impl TaskGroup {
                 kind,
                 state: TaskState::Queued,
                 started_at: Instant::now(),
-                detached,
+                detached: detached_policy.is_some(),
+                detached_policy,
                 abort_handle: None,
             },
         );
@@ -332,7 +382,7 @@ impl TaskGroup {
             }
         };
 
-        let join_handle = if detached {
+        let join_handle = if detached_policy.is_some() {
             self.inner.runtime.spawn(wrapped)
         } else {
             self.inner.tracker.spawn_on(wrapped, self.inner.runtime.inner())
@@ -349,14 +399,15 @@ impl TaskGroup {
 
     async fn shutdown_inner(&self, timeout: Duration) -> ShutdownReport {
         let started_at = Instant::now();
-        let children = self.inner.children.lock().clone();
-
-        {
+        let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
             self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
-        }
+            self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+            self.inner.children.lock().clone()
+        };
+        self.abort_detached_abort_on_shutdown_tasks();
 
         let child_reports = async {
             join_all(children.into_iter().map(|child| async move {
@@ -411,26 +462,27 @@ impl TaskGroup {
             )));
         }
 
-        self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+        self.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         report
     }
 
     fn shutdown_now_inner(&self) -> ShutdownReport {
         let started_at = Instant::now();
-        let children = self.inner.children.lock().clone();
-
-        {
+        let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
             self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
-        }
+            self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+            self.inner.children.lock().clone()
+        };
 
         let mut child_reports = Vec::with_capacity(children.len());
         for child in children {
             child_reports.push(child.shutdown_now());
         }
 
+        self.abort_detached_abort_on_shutdown_tasks();
         self.abort_tracked_tasks();
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
@@ -459,7 +511,7 @@ impl TaskGroup {
             )));
         }
 
-        self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+        self.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         report
     }
 
@@ -475,12 +527,24 @@ impl TaskGroup {
         }
     }
 
+    fn abort_detached_abort_on_shutdown_tasks(&self) {
+        for mut entry in self.inner.tasks.iter_mut() {
+            if entry.detached_policy != Some(DetachedTaskPolicy::AbortOnShutdown) {
+                continue;
+            }
+            entry.state = TaskState::Aborted;
+            if let Some(abort_handle) = &entry.abort_handle {
+                abort_handle.abort();
+            }
+        }
+    }
+
     fn remove_aborted_tasks(&self) -> usize {
         let aborted_ids = self
             .inner
             .tasks
             .iter()
-            .filter_map(|entry| (!entry.detached && entry.state == TaskState::Aborted).then_some(*entry.key()))
+            .filter_map(|entry| (entry.state == TaskState::Aborted).then_some(*entry.key()))
             .collect::<Vec<_>>();
 
         for task_id in &aborted_ids {
@@ -531,7 +595,8 @@ impl TaskGroupInner {
         match self.lifecycle.load(Ordering::Acquire) {
             STATE_OPEN => TaskGroupLifecycleState::Open,
             STATE_CLOSING => TaskGroupLifecycleState::Closing,
-            _ => TaskGroupLifecycleState::Closed,
+            STATE_CLOSED => TaskGroupLifecycleState::Closed,
+            _ => TaskGroupLifecycleState::ShutdownCompleted,
         }
     }
 
@@ -564,6 +629,7 @@ impl TaskMeta {
             state: override_state,
             elapsed: self.started_at.elapsed(),
             detached: self.detached,
+            detached_policy: self.detached_policy,
         }
     }
 }

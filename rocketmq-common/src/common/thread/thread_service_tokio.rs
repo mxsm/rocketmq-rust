@@ -15,16 +15,19 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
-use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::common::thread::Runnable;
+
+const SERVICE_THREAD_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ServiceThreadTokio {
     name: String,
@@ -82,6 +85,11 @@ impl ServiceThreadTokio {
     }
 
     pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
+        self.shutdown_interrupt_with_timeout(interrupt, SERVICE_THREAD_SHUTDOWN_TIMEOUT)
+            .await;
+    }
+
+    pub async fn shutdown_interrupt_with_timeout(&mut self, interrupt: bool, join_timeout: Duration) {
         if let Ok(value) = self
             .started
             .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
@@ -95,11 +103,23 @@ impl ServiceThreadTokio {
         self.stopped.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             info!("Shutting down service thread: {}", self.name);
+            let mut thread = thread;
             if interrupt {
                 thread.abort();
-            } else {
-                if let Err(err) = thread.await {
-                    error!("Failed to join service thread {}: {}", self.name, err);
+            }
+            match timeout(join_timeout, &mut thread).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if error.is_cancelled() => {}
+                Ok(Err(error)) => {
+                    error!("Failed to join service thread {}: {}", self.name, error);
+                }
+                Err(_) => {
+                    warn!(
+                        "Timed out joining service thread {} after {}ms; spawn_blocking work may still be running",
+                        self.name,
+                        join_timeout.as_millis()
+                    );
+                    thread.abort();
                 }
             }
         } else {
@@ -152,6 +172,24 @@ mod tests {
         }
     }
 
+    struct BlockingUntilReleaseRunnable {
+        started: Arc<AtomicBool>,
+        finished: Arc<AtomicBool>,
+        release_rx: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl Runnable for BlockingUntilReleaseRunnable {
+        fn run(&mut self) {
+            self.started.store(true, Ordering::Release);
+            let _ = self
+                .release_rx
+                .lock()
+                .expect("release receiver mutex should not be poisoned")
+                .recv();
+            self.finished.store(true, Ordering::Release);
+        }
+    }
+
     #[tokio::test]
     async fn test_start_and_shutdown() {
         let mock_runnable = MockTestRunnable::new();
@@ -196,6 +234,53 @@ mod tests {
         .expect("blocking runnable should start");
 
         service_thread.shutdown_interrupt(false).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_interrupt_with_timeout_bounds_spawn_blocking_join() {
+        let started = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut service_thread = ServiceThreadTokio::new(
+            "BlockingUntilReleaseServiceThread".to_string(),
+            Arc::new(Mutex::new(BlockingUntilReleaseRunnable {
+                started: Arc::clone(&started),
+                finished: Arc::clone(&finished),
+                release_rx: Arc::new(std::sync::Mutex::new(release_rx)),
+            })),
+        );
+
+        service_thread.start();
+        timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("blocking runnable should start");
+
+        let elapsed = Instant::now();
+        service_thread
+            .shutdown_interrupt_with_timeout(false, Duration::from_millis(10))
+            .await;
+
+        assert!(
+            elapsed.elapsed() < Duration::from_millis(250),
+            "shutdown should not wait indefinitely for already-running spawn_blocking work"
+        );
+        assert!(!service_thread.started.load(Ordering::SeqCst));
+        assert!(service_thread.stopped.load(Ordering::SeqCst));
+
+        release_tx
+            .send(())
+            .expect("release signal should be delivered to blocking runnable");
+        timeout(Duration::from_secs(1), async {
+            while !finished.load(Ordering::Acquire) {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("blocking runnable should finish after release");
     }
 
     #[tokio::test]

@@ -17,6 +17,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::blocking::BlockingTaskSnapshot;
+use crate::task_group::DetachedTaskPolicy;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
@@ -66,6 +67,7 @@ impl ShutdownReport {
             && self.panicked == 0
             && self.timed_out == 0
             && self.blocking_still_running == 0
+            && self.detached_still_running == 0
             && self.children.iter().all(Self::is_healthy)
     }
 
@@ -109,6 +111,7 @@ pub struct TaskSnapshot {
     #[serde(with = "duration_millis")]
     pub elapsed: Duration,
     pub detached: bool,
+    pub detached_policy: Option<DetachedTaskPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize)]

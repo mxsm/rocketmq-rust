@@ -24,6 +24,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use tokio::select;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::error;
 use tracing::info;
@@ -32,12 +33,11 @@ use tracing::warn;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::runtime::spawn_client_task;
 
-fn spawn_rebalance_task<F>(task: F) -> std::io::Result<Option<tokio::task::AbortHandle>>
+fn spawn_rebalance_task<F>(task: F) -> std::io::Result<JoinHandle<()>>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let task = spawn_client_task("rocketmq-client-rebalance-service", task)?;
-    Ok(Some(task.abort_handle()))
+    spawn_client_task("rocketmq-client-rebalance-service", task)
 }
 
 /// Configuration for RebalanceService.
@@ -166,7 +166,7 @@ pub struct RebalanceService {
     notify: Arc<Notify>,
     tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
     started: Arc<AtomicBool>,
-    task_abort_handle: Option<Arc<tokio::task::AbortHandle>>,
+    task_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
     // Health check and metrics
     last_success_timestamp: Arc<AtomicU64>,
     total_rebalance_count: Arc<AtomicU64>,
@@ -196,7 +196,7 @@ impl RebalanceService {
             notify: Arc::new(Notify::new()),
             tx_shutdown: None,
             started: Arc::new(AtomicBool::new(false)),
-            task_abort_handle: None,
+            task_handle: Arc::new(tokio::sync::Mutex::new(None)),
             last_success_timestamp: Arc::new(AtomicU64::new(0)),
             total_rebalance_count: Arc::new(AtomicU64::new(0)),
             success_count: Arc::new(AtomicU64::new(0)),
@@ -232,7 +232,7 @@ impl RebalanceService {
         // Clone config for use in spawned task
         let config = self.config.clone();
 
-        let abort_handle = match spawn_rebalance_task(async move {
+        let task_handle = match spawn_rebalance_task(async move {
             let mut last_rebalance_timestamp = tokio::time::Instant::now();
             let min_interval = config.min_interval();
             let mut real_wait_interval = config.wait_interval();
@@ -305,7 +305,7 @@ impl RebalanceService {
                 }
             }
         }) {
-            Ok(abort_handle) => abort_handle,
+            Ok(task_handle) => task_handle,
             Err(error) => {
                 self.started.store(false, Ordering::SeqCst);
                 self.tx_shutdown = None;
@@ -313,7 +313,7 @@ impl RebalanceService {
             }
         };
 
-        self.task_abort_handle = abort_handle.map(Arc::new);
+        *self.task_handle.lock().await = Some(task_handle);
         Ok(())
     }
 
@@ -338,18 +338,43 @@ impl RebalanceService {
             return Ok(());
         }
 
-        // Wait for task to exit (polling with timeout)
-        let start = Instant::now();
         let timeout = Duration::from_millis(timeout_ms);
+        let task_handle = self.task_handle.lock().await.take();
+        if let Some(mut handle) = task_handle {
+            match tokio::time::timeout(timeout, &mut handle).await {
+                Ok(Ok(())) => {
+                    self.started.store(false, Ordering::SeqCst);
+                    info!("RebalanceService shutdown successfully");
+                    return Ok(());
+                }
+                Ok(Err(error)) if error.is_cancelled() => {
+                    self.started.store(false, Ordering::SeqCst);
+                    info!("RebalanceService shutdown successfully");
+                    return Ok(());
+                }
+                Ok(Err(error)) => {
+                    self.started.store(false, Ordering::SeqCst);
+                    return Err(Box::new(error));
+                }
+                Err(_) => {
+                    warn!("RebalanceService shutdown timeout after {}ms", timeout_ms);
+                    handle.abort();
+                    self.started.store(false, Ordering::SeqCst);
+                    if let Err(error) = handle.await {
+                        if !error.is_cancelled() {
+                            return Err(Box::new(error));
+                        }
+                    }
+                    return Err("Shutdown timeout".into());
+                }
+            }
+        }
+
+        // Fallback for older or failed starts where no handle was captured.
+        let start = Instant::now();
         while self.started.load(Ordering::SeqCst) {
             if start.elapsed() >= timeout {
                 warn!("RebalanceService shutdown timeout after {}ms", timeout_ms);
-                // Force abort task
-                if let Some(abort_handle) = &self.task_abort_handle {
-                    abort_handle.abort();
-                } else {
-                    warn!("RebalanceService shutdown timeout but no abort handle is available for the fallback task");
-                }
                 return Err("Shutdown timeout".into());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -546,8 +571,8 @@ mod tests {
 
         assert!(service.is_running());
         assert!(
-            service.task_abort_handle.is_some(),
-            "shared fallback runtime should expose a Tokio abort handle"
+            futures::executor::block_on(async { service.task_handle.lock().await.is_some() }),
+            "rebalance service should retain a join handle"
         );
 
         let tx_shutdown = service
@@ -567,6 +592,28 @@ mod tests {
             !service.is_running(),
             "fallback rebalance task did not observe shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_rebalance_task_join_handle() {
+        let config = RebalanceConfig {
+            wait_interval_ms: 60_000,
+            min_interval_ms: 1,
+            enable_dynamic_interval: true,
+        };
+        let mut service = RebalanceService::with_config(config);
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "rebalance-join-client", None);
+
+        service.start(instance).await.expect("rebalance service should start");
+        assert!(service.task_handle.lock().await.is_some());
+
+        service
+            .shutdown(1_000)
+            .await
+            .expect("rebalance service should shutdown cleanly");
+
+        assert!(!service.is_running());
+        assert!(service.task_handle.lock().await.is_none());
     }
 
     #[test]

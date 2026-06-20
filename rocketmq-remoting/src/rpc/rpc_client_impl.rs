@@ -611,7 +611,7 @@ mod tests {
 
         assert_eq!(
             worker_task_group.lifecycle_state(),
-            rocketmq_runtime::TaskGroupLifecycleState::Closed
+            rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
         );
     }
 }
