@@ -665,7 +665,7 @@ impl BrokerRuntime {
         }
 
         if let Some(broker_stats_manager) = self.inner.broker_stats_manager.as_ref() {
-            broker_stats_manager.shutdown();
+            broker_stats_manager.shutdown().await;
         }
 
         if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {

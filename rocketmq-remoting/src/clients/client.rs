@@ -14,6 +14,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_error::RocketMQResult;
@@ -85,13 +86,7 @@ impl<PR> Drop for Client<PR> {
         }
 
         let _ = self.notify_shutdown.send(());
-        let report = self.task_lifecycle.task_group.shutdown_now();
-        if !report.is_healthy() {
-            tracing::warn!(
-                report = %report.to_json(),
-                "Remoting client connection task shutdown report is unhealthy"
-            );
-        }
+        self.task_lifecycle.task_group.cancel();
     }
 }
 
@@ -145,7 +140,7 @@ where
         if let Err(error) = task_group.spawn_service("remoting.client.connection.recv", async move {
             let _ = client_.run_recv().await;
         }) {
-            let _ = task_group.shutdown_now();
+            let _ = task_group.shutdown(Duration::from_secs(1)).await;
             return Err(remote_error(format!(
                 "failed to spawn remoting client receive task: {error}"
             )));
@@ -154,7 +149,7 @@ where
         if let Err(error) = task_group.spawn_service("remoting.client.connection.send", async move {
             client_.run_send(rx).await;
         }) {
-            let _ = task_group.shutdown_now();
+            let _ = task_group.shutdown(Duration::from_secs(1)).await;
             return Err(remote_error(format!(
                 "failed to spawn remoting client send task: {error}"
             )));
@@ -526,7 +521,7 @@ mod lifecycle_tests {
 
         drop(client);
 
-        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert!(task_group.cancellation_token().is_cancelled());
         server.abort();
     }
 }

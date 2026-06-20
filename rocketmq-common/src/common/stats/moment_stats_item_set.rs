@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use dashmap::DashMap;
-use tokio::task;
-use tokio::time::interval;
+use parking_lot::Mutex;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use tokio::time::Duration;
+use tokio::time::MissedTickBehavior;
+use tracing::warn;
 
 use crate::common::stats::moment_stats_item::MomentStatsItem;
 use crate::TimeUtils::current_millis;
@@ -28,17 +30,17 @@ use crate::UtilAll::compute_next_minutes_time_millis;
 pub struct MomentStatsItemSet {
     stats_item_table: Arc<DashMap<String, MomentStatsItem>>,
     stats_name: String,
-    scheduled_task: Arc<Mutex<Option<task::JoinHandle<()>>>>,
+    task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
 
 impl MomentStatsItemSet {
     pub fn new(stats_name: String) -> Self {
         let stats_item_table = Arc::new(DashMap::new());
-        let scheduled_task = Arc::new(Mutex::new(None));
+        let task_group = Arc::new(Mutex::new(None));
         let set = MomentStatsItemSet {
             stats_item_table,
             stats_name,
-            scheduled_task,
+            task_group,
         };
         set.init();
         set
@@ -53,19 +55,55 @@ impl MomentStatsItemSet {
     }
 
     pub fn init(&self) {
+        if self.task_group.lock().is_some() {
+            return;
+        }
+
         let stats_item_table = Arc::clone(&self.stats_item_table);
         let initial_delay =
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
-        let mut interval = tokio::time::interval(Duration::from_secs(300));
-
-        task::spawn(async move {
-            tokio::time::sleep(initial_delay).await;
-            loop {
-                interval.tick().await;
-                MomentStatsItemSet::print_at_minutes(&stats_item_table);
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    "[{}] failed to initialize MomentStatsItemSet outside Tokio runtime: {}",
+                    self.stats_name, error
+                );
+                return;
             }
-        });
+        };
+        let task_group = TaskGroup::root(format!("rocketmq-common.moment-stats-set.{}", self.stats_name), runtime);
+        let shutdown_token = task_group.cancellation_token();
+
+        if let Err(error) = task_group.spawn_service("common.moment-stats-set.print", async move {
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    return;
+                }
+                _ = tokio::time::sleep(initial_delay) => {}
+            }
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        MomentStatsItemSet::print_at_minutes(&stats_item_table);
+                    }
+                }
+            }
+        }) {
+            warn!(
+                "[{}] failed to spawn MomentStatsItemSet task: {}",
+                self.stats_name, error
+            );
+            return;
+        }
+
+        *self.task_group.lock() = Some(task_group);
     }
 
     fn print_at_minutes(stats_item_table: &DashMap<String, MomentStatsItem>) {
@@ -113,6 +151,29 @@ impl MomentStatsItemSet {
         let new_item = MomentStatsItem::new(self.stats_name.clone(), stats_key.clone());
         self.stats_item_table.insert(stats_key, new_item.clone());
         new_item
+    }
+
+    pub async fn shutdown(&self) {
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "[{}] MomentStatsItemSet shutdown report is unhealthy",
+                    self.stats_name
+                );
+            }
+        }
+
+        let stats_items = self
+            .stats_item_table
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        for stats_item in stats_items {
+            stats_item.shutdown().await;
+        }
     }
 }
 

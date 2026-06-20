@@ -142,13 +142,7 @@ impl TlsServerRuntime {
         #[cfg(feature = "tls")]
         {
             if let Some(task_group) = self.reload_task_group.lock().take() {
-                let report = task_group.shutdown_now();
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "TLS reload task shutdown report is unhealthy"
-                    );
-                }
+                task_group.cancel();
             }
         }
     }
@@ -790,7 +784,7 @@ mod tests {
 
     #[cfg(feature = "tls")]
     #[tokio::test]
-    async fn tls_reload_task_shutdown_closes_task_group() {
+    async fn tls_reload_task_shutdown_requests_cancellation() {
         let config = TlsConfig {
             test_mode_enable: true,
             server: rocketmq_common::common::tls_config::TlsServerConfig {
@@ -815,10 +809,8 @@ mod tests {
 
         runtime.shutdown();
 
-        assert_eq!(
-            task_group.lifecycle_state(),
-            rocketmq_runtime::TaskGroupLifecycleState::Closed
-        );
+        assert!(runtime.reload_task_group.lock().is_none());
+        assert!(task_group.cancellation_token().is_cancelled());
     }
 
     #[cfg(feature = "tls")]

@@ -221,7 +221,7 @@ impl NameServerBootstrap {
             )
             .map_err(|error| RocketMQError::Internal(format!("failed to spawn shutdown relay: {error}")))?;
         let start_result = self.name_server_runtime.start().await;
-        let report = relay_group.shutdown_now();
+        let report = relay_group.shutdown(Duration::from_secs(5)).await;
         if let Err(error) = report.assert_no_task_leak() {
             warn!("NameServer shutdown relay task group stopped with report: {error}");
         }
@@ -602,7 +602,7 @@ impl NameServerRuntime {
         }
 
         info!("Phase 4/5: Shutting down route info manager...");
-        self.inner.route_info_manager_mut().shutdown_unregister_service();
+        self.inner.route_info_manager_mut().shutdown_unregister_service().await;
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
             cluster_test_route_lookup.shutdown().await;
@@ -1583,8 +1583,13 @@ mod tests {
         bootstrap.name_server_runtime.inner.route_info_manager().start();
     }
 
-    fn shutdown_unregister_service(bootstrap: &NameServerBootstrap) {
-        bootstrap.name_server_runtime.inner.route_info_manager().shutdown();
+    async fn shutdown_unregister_service(bootstrap: &NameServerBootstrap) {
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .shutdown()
+            .await;
     }
 
     async fn wait_until<F>(description: &str, mut condition: F)
@@ -2221,7 +2226,7 @@ mod tests {
                 .is_none()
         })
         .await;
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2528,7 +2533,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2572,7 +2577,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2627,7 +2632,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2735,7 +2740,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2825,7 +2830,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2927,7 +2932,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]

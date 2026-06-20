@@ -263,6 +263,18 @@ impl BlockingExecutor {
         }
     }
 
+    pub fn blocking_still_running(&self) -> usize {
+        self.tasks
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.value().state,
+                    BlockingTaskState::Running | BlockingTaskState::TimedOutStillRunning
+                )
+            })
+            .count()
+    }
+
     fn finish_task(&self, task_id: BlockingTaskId, state: BlockingTaskState) {
         if let Some(mut meta) = self.tasks.get_mut(&task_id) {
             meta.state = state;

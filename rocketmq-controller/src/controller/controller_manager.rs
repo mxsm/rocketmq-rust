@@ -839,7 +839,7 @@ impl ControllerManager {
 
         // Shutdown heartbeat manager
         {
-            self.heartbeat_manager.mut_from_ref().shutdown();
+            self.heartbeat_manager.mut_from_ref().shutdown_gracefully().await;
             info!("Heartbeat manager shut down");
         }
 
@@ -1358,13 +1358,7 @@ impl Drop for ControllerManager {
             BrokerHeartbeatManager::shutdown(self.heartbeat_manager.as_mut());
             self.remoting_client.shutdown();
             if let Some(task_group) = self.manager_task_group.lock().take() {
-                let report = task_group.shutdown_now();
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "Controller manager emergency task shutdown report is unhealthy"
-                    );
-                }
+                task_group.cancel();
             }
 
             info!("Emergency shutdown completed");

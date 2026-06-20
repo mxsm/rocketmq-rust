@@ -303,15 +303,9 @@ pub struct ConnectionPoolCleanupTask {
 }
 
 impl ConnectionPoolCleanupTask {
-    /// Stop the cleanup task immediately.
-    ///
-    /// This mirrors the previous `JoinHandle::abort()` usage while routing
-    /// the task through the runtime task accounting model.
+    /// Request the cleanup task to stop without waiting for completion.
     pub fn abort(&self) {
-        let report = self.task_group.shutdown_now();
-        if let Err(error) = report.assert_no_task_leak() {
-            warn!("connection pool cleanup task stopped with report: {error}");
-        }
+        self.task_group.cancel();
     }
 
     /// Stop the cleanup task gracefully and return the shutdown report.

@@ -10,7 +10,9 @@ use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskKind;
+use tokio::sync::oneshot;
 use tokio::sync::Notify;
 
 #[tokio::test]
@@ -162,8 +164,29 @@ async fn scheduled_no_overlap_skips_while_previous_run_is_active() {
     assert!(snapshot.runs >= 1, "{snapshot:?}");
     assert!(snapshot.skips >= 1, "{snapshot:?}");
 
-    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    let report = scheduled.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
     assert!(report.leaked == 0, "{}", report.to_json());
+    assert!(report.completed + report.cancelled > 0, "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn scheduled_spawn_failure_rolls_back_registered_metrics() {
+    let context = RuntimeContext::from_current("scheduled-rollback-test");
+    let scheduled = ScheduledTaskGroup::new(context.root_group().child("scheduled"));
+    let report = scheduled.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+
+    let result = scheduled.schedule_fixed_delay(
+        ScheduledTaskConfig::fixed_delay("late-task", Duration::from_secs(1)),
+        || async {},
+    );
+
+    assert!(result.is_err());
+    assert!(
+        scheduled.snapshot().into_iter().all(|task| task.name != "late-task"),
+        "failed schedule should not leave a metrics snapshot"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -208,6 +231,68 @@ async fn blocking_executor_rejects_long_running_spawn_blocking() {
     let snapshot = context.blocking().snapshot();
     assert_eq!(snapshot.blocking_still_running, 0);
     assert!(snapshot.tasks.is_empty(), "{snapshot:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocking_executor_reports_timeout_until_reaper_cleans_late_exit() {
+    let context = RuntimeContext::from_current("blocking-reaper-test");
+    let policy = BlockingPoolPolicy {
+        name: "blocking-reaper-test".to_string(),
+        max_concurrency: 1,
+        queue_timeout: Duration::from_secs(1),
+        task_timeout: Duration::from_millis(20),
+        ..BlockingPoolPolicy::default()
+    };
+    let executor = BlockingExecutor::new(policy, context.root_group().child("blocking")).unwrap();
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+    let run = {
+        let executor = executor.clone();
+        tokio::spawn(async move {
+            executor
+                .spawn_io("slow-io", move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                })
+                .await
+        })
+    };
+
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("blocking task should start before caller timeout")
+        .expect("blocking task should signal start");
+
+    let error = tokio::time::timeout(Duration::from_secs(1), run)
+        .await
+        .expect("caller should receive task timeout")
+        .expect("spawn task should join")
+        .expect_err("blocking timeout should be reported while closure is still running");
+    assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+
+    let snapshot = executor.snapshot();
+    assert_eq!(snapshot.timed_out_still_running, 1, "{snapshot:?}");
+    assert_eq!(executor.blocking_still_running(), 1);
+
+    let mut report = ShutdownReport::new("blocking-reaper-test", Duration::ZERO);
+    report.merge_blocking(snapshot);
+    assert_eq!(report.blocking_still_running, 1, "{}", report.to_json());
+    assert!(!report.is_healthy(), "{}", report.to_json());
+
+    release_tx
+        .send(())
+        .expect("blocking task release signal should be accepted");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if executor.blocking_still_running() == 0 && executor.snapshot().tasks.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("blocking reaper should remove the late-exiting task");
 }
 
 async fn run_limited_blocking_task(

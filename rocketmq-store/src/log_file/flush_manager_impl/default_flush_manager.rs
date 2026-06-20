@@ -23,6 +23,7 @@ use rocketmq_rust::WeakArcMut;
 use tokio::sync::Notify;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::warn;
 
 use crate::base::flush_manager::FlushManager;
@@ -573,10 +574,8 @@ impl CommitRealTimeService {
 
 fn shutdown_worker_now(service_name: &'static str, worker_group: &mut Option<TaskGroup>) {
     if let Some(worker_group) = worker_group.take() {
-        let report = worker_group.shutdown_now();
-        if let Err(error) = crate::runtime::shutdown_report_result(service_name, report) {
-            warn!("{service_name} task group failed during immediate shutdown: {error}");
-        }
+        worker_group.cancel();
+        debug!("{service_name} task group cancellation requested without waiting");
     }
 }
 

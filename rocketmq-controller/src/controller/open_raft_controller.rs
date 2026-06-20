@@ -138,10 +138,13 @@ impl OpenRaftController {
         Ok(task_group)
     }
 
-    fn start_scan_task_group(&self) -> RocketMQResult<TaskGroup> {
-        let mut guard = self.scan_task_group.lock();
-        if let Some(task_group) = guard.take() {
-            let report = task_group.shutdown_now();
+    async fn start_scan_task_group(&self) -> RocketMQResult<TaskGroup> {
+        let previous_task_group = {
+            let mut guard = self.scan_task_group.lock();
+            guard.take()
+        };
+        if let Some(task_group) = previous_task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
             if !report.is_healthy() {
                 tracing::warn!(
                     report = %report.to_json(),
@@ -153,13 +156,17 @@ impl OpenRaftController {
         let task_group = self
             .ensure_task_group()?
             .child("controller.openraft.scan-not-active-broker");
-        *guard = Some(task_group.clone());
+        {
+            let mut guard = self.scan_task_group.lock();
+            *guard = Some(task_group.clone());
+        }
         Ok(task_group)
     }
 
-    fn stop_scan_task_group(&self) {
-        if let Some(task_group) = self.scan_task_group.lock().take() {
-            let report = task_group.shutdown_now();
+    async fn stop_scan_task_group(&self) {
+        let task_group = { self.scan_task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
             if !report.is_healthy() {
                 tracing::warn!(
                     report = %report.to_json(),
@@ -528,7 +535,7 @@ impl Controller for OpenRaftController {
         info!("Shutting down OpenRaft controller");
 
         self.scheduling.store(false, Ordering::Release);
-        self.stop_scan_task_group();
+        self.stop_scan_task_group().await;
 
         // Take and send shutdown signal to gRPC server
         if let Some(tx) = self.shutdown_tx.take() {
@@ -567,7 +574,7 @@ impl Controller for OpenRaftController {
         let listeners = self.lifecycle_listeners.clone();
         let scheduling = self.scheduling.clone();
         let first_received_heartbeat_time = self.first_received_heartbeat_time.clone();
-        let scan_task_group = self.start_scan_task_group()?;
+        let scan_task_group = self.start_scan_task_group().await?;
         let shutdown_token = scan_task_group.cancellation_token();
         scan_task_group
             .spawn_service("controller.openraft.scan-not-active-broker", async move {
@@ -633,7 +640,7 @@ impl Controller for OpenRaftController {
 
     async fn stop_scheduling(&self) -> RocketMQResult<()> {
         self.scheduling.store(false, Ordering::Release);
-        self.stop_scan_task_group();
+        self.stop_scan_task_group().await;
         Ok(())
     }
 

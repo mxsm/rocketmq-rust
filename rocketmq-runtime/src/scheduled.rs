@@ -20,12 +20,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
@@ -113,9 +115,10 @@ impl ScheduledTaskGroup {
     {
         config.mode = ScheduleMode::FixedDelay;
         let name: Arc<str> = Arc::from(config.name.as_str());
+        let name_for_cleanup = name.clone();
         let metrics = self.register(name.clone(), config.clone())?;
         let token = self.group.cancellation_token();
-        self.group.spawn(
+        let spawn_result = self.group.spawn(
             format!("scheduled-driver:{name}"),
             TaskKind::ScheduledDriver,
             async move {
@@ -146,7 +149,11 @@ impl ScheduledTaskGroup {
                     }
                 }
             },
-        )
+        );
+        if spawn_result.is_err() {
+            self.schedules.remove(&name_for_cleanup);
+        }
+        spawn_result
     }
 
     pub fn schedule_fixed_rate_no_overlap<F, Fut>(
@@ -160,12 +167,13 @@ impl ScheduledTaskGroup {
     {
         config.mode = ScheduleMode::FixedRateNoOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
+        let name_for_cleanup = name.clone();
         let metrics = self.register(name.clone(), config.clone())?;
         let token = self.group.cancellation_token();
         let run_group = self.group.clone();
         let task = Arc::new(task);
 
-        self.group.spawn(
+        let spawn_result = self.group.spawn(
             format!("scheduled-driver:{name}"),
             TaskKind::ScheduledDriver,
             async move {
@@ -205,18 +213,22 @@ impl ScheduledTaskGroup {
                     }
                 }
             },
-        )
+        );
+        if spawn_result.is_err() {
+            self.schedules.remove(&name_for_cleanup);
+        }
+        spawn_result
     }
 
     pub fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
         self.schedules.iter().map(|entry| entry.value().snapshot()).collect()
     }
 
-    fn register(&self, name: Arc<str>, config: ScheduledTaskConfig) -> RuntimeResult<Arc<ScheduledTaskMetrics>> {
-        if self.schedules.contains_key(&name) {
-            return Err(RuntimeError::ScheduledTaskExists { name });
-        }
+    pub async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
+        self.group.shutdown(timeout).await
+    }
 
+    fn register(&self, name: Arc<str>, config: ScheduledTaskConfig) -> RuntimeResult<Arc<ScheduledTaskMetrics>> {
         let metrics = Arc::new(ScheduledTaskMetrics {
             config,
             running: AtomicBool::new(false),
@@ -225,8 +237,14 @@ impl ScheduledTaskGroup {
             failures: AtomicU64::new(0),
             last_elapsed_ms: AtomicU64::new(0),
         });
-        self.schedules.insert(name, metrics.clone());
-        Ok(metrics)
+
+        match self.schedules.entry(name.clone()) {
+            Entry::Occupied(_) => Err(RuntimeError::ScheduledTaskExists { name }),
+            Entry::Vacant(entry) => {
+                entry.insert(metrics.clone());
+                Ok(metrics)
+            }
+        }
     }
 }
 

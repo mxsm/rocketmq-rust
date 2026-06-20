@@ -224,9 +224,9 @@ impl RouteInfoManagerV2 {
     }
 
     /// Shutdown the route manager
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         info!("Shutting down RouteInfoManager v2");
-        self.un_register_service.shutdown();
+        self.un_register_service.shutdown().await;
     }
 }
 

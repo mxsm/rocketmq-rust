@@ -463,10 +463,7 @@ impl ChannelInner {
 
 impl Drop for ChannelInner {
     fn drop(&mut self) {
-        let report = self.send_task_group.shutdown_now();
-        if let Err(error) = report.assert_no_task_leak() {
-            tracing::warn!("channel send task stopped with report: {error}");
-        }
+        self.send_task_group.cancel();
     }
 }
 

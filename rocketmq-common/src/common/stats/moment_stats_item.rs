@@ -28,6 +28,8 @@ use tracing::warn;
 use crate::TimeUtils::current_millis;
 use crate::UtilAll::compute_next_minutes_time_millis;
 
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone)]
 pub struct MomentStatsItem {
     value: Arc<AtomicI64>,
@@ -102,9 +104,10 @@ impl MomentStatsItem {
         *self.task_group.lock() = Some(task_group);
     }
 
-    pub fn shutdown(&self) {
-        if let Some(task_group) = self.task_group.lock().take() {
-            let report = task_group.shutdown_now();
+    pub async fn shutdown(&self) {
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),

@@ -943,7 +943,7 @@ impl BrokerStatsManager {
         }
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         info!("Shutting down BrokerStatsManager...");
 
         if let Some(scheduler) = &self.scheduler {
@@ -951,6 +951,13 @@ impl BrokerStatsManager {
                 scheduler.cancel_task(task_id);
                 info!("Cancelled task {}", task_id);
             }
+        }
+
+        if let Some(fall_size_set) = &self.moment_stats_item_set_fall_size {
+            fall_size_set.shutdown().await;
+        }
+        if let Some(fall_time_set) = &self.moment_stats_item_set_fall_time {
+            fall_time_set.shutdown().await;
         }
 
         info!("BrokerStatsManager shutdown complete");
@@ -1439,7 +1446,7 @@ mod tests {
         let task_count_before = manager.task_ids.lock().len();
         assert_eq!(task_count_before, 4);
 
-        manager.shutdown();
+        manager.shutdown().await;
         let task_count_after = manager.task_ids.lock().len();
         assert_eq!(task_count_after, 0);
     }

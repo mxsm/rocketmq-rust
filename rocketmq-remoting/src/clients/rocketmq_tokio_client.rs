@@ -916,22 +916,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     fn shutdown(&mut self) {
         self.shutdown_token.cancel();
         if let Some(task_group) = self.background_task_group.lock().take() {
-            let report = task_group.shutdown_now();
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "RemotingClient background task shutdown report is unhealthy"
-                );
-            }
+            task_group.cancel();
         }
         if let Some(task_group) = self.worker_task_group.lock().take() {
-            let report = task_group.shutdown_now();
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "RemotingClient worker task shutdown report is unhealthy"
-                );
-            }
+            task_group.cancel();
         }
         self.connection_tables.clear();
         self.namesrv_addr_list.clear();

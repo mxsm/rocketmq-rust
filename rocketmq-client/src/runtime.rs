@@ -288,6 +288,30 @@ impl ClientSharedFallbackRegistry {
             .transpose()
     }
 
+    #[cfg(test)]
+    fn reset_for_test(&'static self, timeout: Duration) -> io::Result<Option<ShutdownReport>> {
+        if self.active_leases.load(Ordering::Acquire) != 0 {
+            return Err(io::Error::other(
+                "cannot reset client fallback runtime while leases are active",
+            ));
+        }
+
+        let runtime = {
+            let mut state = self.state.lock();
+            state.explicit_shutdown = false;
+            state.runtime.take()
+        };
+
+        let (lock, condvar) = &*self.idle_signal;
+        let mut idle = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        idle.requested_generation = None;
+        idle.deadline = None;
+        condvar.notify_one();
+        drop(idle);
+
+        runtime.map(|runtime| shutdown_runtime(runtime, timeout)).transpose()
+    }
+
     fn schedule_idle_shutdown(&'static self, generation: usize) {
         self.ensure_idle_reaper_started();
 
@@ -670,5 +694,37 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn fallback_registry_reset_for_test_drops_runtime_and_allows_new_generation() {
+        let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
+        let lease = registry.acquire().expect("fallback runtime should be created");
+        let first_generation = registry.snapshot().runtime_generation;
+        assert!(registry.snapshot().runtime_available);
+
+        drop(lease);
+
+        let report = registry
+            .reset_for_test(Duration::from_secs(1))
+            .expect("test reset should shut down existing fallback runtime")
+            .expect("test reset should return a report for the existing runtime");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(!registry.snapshot().runtime_available);
+
+        let next = registry
+            .acquire()
+            .expect("test reset should allow fallback runtime to be acquired again");
+        let snapshot = registry.snapshot();
+        assert!(snapshot.runtime_available);
+        assert!(
+            snapshot.runtime_generation > first_generation,
+            "reset should force a new fallback runtime generation"
+        );
+
+        drop(next);
+        registry
+            .reset_for_test(Duration::from_secs(1))
+            .expect("cleanup reset should complete");
     }
 }

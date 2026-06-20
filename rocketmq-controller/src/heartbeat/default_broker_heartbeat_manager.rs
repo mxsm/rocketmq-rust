@@ -35,6 +35,8 @@ use crate::heartbeat::broker_live_info::BrokerLiveInfo;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::helper::broker_valid_predicate::BrokerValidPredicate;
 
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Default implementation of BrokerHeartbeatManager
 ///
 /// This implementation uses:
@@ -91,6 +93,19 @@ impl DefaultBrokerHeartbeatManager {
             lifecycle_listeners: Vec::new(),
             scan_task_group: None,
             scan_interval_ms,
+        }
+    }
+
+    pub(crate) async fn shutdown_gracefully(&mut self) {
+        if let Some(task_group) = self.scan_task_group.take() {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "DefaultBrokerHeartbeatManager shutdown report is unhealthy"
+                );
+            }
+            info!("DefaultBrokerHeartbeatManager background scan stopped");
         }
     }
 
@@ -287,13 +302,7 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
 
     fn shutdown(&mut self) {
         if let Some(task_group) = self.scan_task_group.take() {
-            let report = task_group.shutdown_now();
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "DefaultBrokerHeartbeatManager shutdown report is unhealthy"
-                );
-            }
+            task_group.cancel();
             info!("DefaultBrokerHeartbeatManager background scan stopped");
         }
     }
