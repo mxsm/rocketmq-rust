@@ -36,11 +36,9 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock as StdRwLock;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -95,7 +93,6 @@ use rocketmq_tieredstore::TieredMessageFetcher;
 use rocketmq_tieredstore::TieredStore;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -344,7 +341,7 @@ pub struct LocalFileMessageStore {
     flush_consume_queue_service: FlushConsumeQueueService,
     scheduled_task_shutdown: CancellationToken,
     scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
-    ha_update_master_handles: Arc<StdMutex<Vec<JoinHandle<()>>>>,
+    ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
 }
@@ -577,7 +574,7 @@ impl LocalFileMessageStore {
             ),
             scheduled_task_shutdown: CancellationToken::new(),
             scheduled_task_group: None,
-            ha_update_master_handles: Arc::new(StdMutex::new(Vec::new())),
+            ha_update_master_group: Arc::new(StdMutex::new(None)),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
         })
@@ -1446,24 +1443,18 @@ impl LocalFileMessageStore {
     }
 
     async fn shutdown_ha_update_master_tasks(&self) {
-        let handles = match self.ha_update_master_handles.lock() {
-            Ok(mut handles) => handles.drain(..).collect::<Vec<_>>(),
+        let task_group = match self.ha_update_master_group.lock() {
+            Ok(mut task_group) => task_group.take(),
             Err(error) => {
-                error!("failed to drain HA master address update tasks during shutdown: {error}");
+                error!("failed to take HA master address update task group during shutdown: {error}");
                 return;
             }
         };
 
-        for handle in handles {
-            match tokio::time::timeout(Duration::from_secs(3), handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if error.is_cancelled() => {}
-                Ok(Err(error)) => {
-                    error!("HA master address update task failed during shutdown: {error}");
-                }
-                Err(_) => {
-                    warn!("Timed out waiting for HA master address update task to stop");
-                }
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(3)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("HA master address update tasks", report) {
+                error!("HA master address update task failed during shutdown: {error}");
             }
         }
     }
@@ -1878,7 +1869,7 @@ impl MessageStore for LocalFileMessageStore {
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 timer_message_store.shutdown_gracefully().await;
             }
-            self.flush_consume_queue_service.shutdown();
+            self.flush_consume_queue_service.shutdown().await;
             self.allocate_mapped_file_service.shutdown().await;
             if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
                 let _ = store_checkpoint.shutdown();
@@ -2759,22 +2750,29 @@ impl MessageStore for LocalFileMessageStore {
     fn update_master_address(&self, new_addr: &CheetahString) {
         if let Some(ha_service) = self.ha_service.as_ref().cloned() {
             let new_addr = new_addr.clone();
-            let Ok(runtime_handle) = tokio::runtime::Handle::try_current() else {
-                error!("failed to update HA master address: no Tokio runtime is available");
-                return;
-            };
-            let handle = runtime_handle.spawn(async move {
-                ha_service.update_master_address(new_addr.as_str()).await;
-            });
-            match self.ha_update_master_handles.lock() {
-                Ok(mut handles) => {
-                    handles.retain(|handle| !handle.is_finished());
-                    handles.push(handle);
+            let task_group = match self.ha_update_master_group.lock() {
+                Ok(mut task_group) => {
+                    if task_group.is_none() {
+                        match crate::runtime::task_group("rocketmq-store.local-file.ha-master-update") {
+                            Ok(group) => *task_group = Some(group),
+                            Err(error) => {
+                                error!("failed to create HA master address update task group: {error}");
+                                return;
+                            }
+                        }
+                    }
+                    task_group.as_ref().expect("task group must exist").clone()
                 }
                 Err(error) => {
-                    error!("failed to track HA master address update task: {error}");
-                    handle.abort();
+                    error!("failed to lock HA master address update task group: {error}");
+                    return;
                 }
+            };
+
+            if let Err(error) = task_group.spawn_service("ha-master-address-update", async move {
+                ha_service.update_master_address(new_addr.as_str()).await;
+            }) {
+                error!("failed to spawn HA master address update task: {error}");
             }
         }
     }
@@ -4269,8 +4267,9 @@ struct FlushConsumeQueueService {
     message_store_config: Arc<MessageStoreConfig>,
     consume_queue_store: ConsumeQueueStore,
     store_checkpoint: Arc<StoreCheckpoint>,
-    worker_handle: parking_lot::Mutex<Option<thread::JoinHandle<()>>>,
-    shutdown_tx: parking_lot::Mutex<Option<mpsc::Sender<()>>>,
+    worker_group: parking_lot::Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    shutdown_token: parking_lot::Mutex<CancellationToken>,
+    wakeup: Arc<Notify>,
 }
 
 impl FlushConsumeQueueService {
@@ -4283,12 +4282,17 @@ impl FlushConsumeQueueService {
             message_store_config,
             consume_queue_store,
             store_checkpoint,
-            worker_handle: parking_lot::Mutex::new(None),
-            shutdown_tx: parking_lot::Mutex::new(None),
+            worker_group: parking_lot::Mutex::new(None),
+            shutdown_token: parking_lot::Mutex::new(CancellationToken::new()),
+            wakeup: Arc::new(Notify::new()),
         }
     }
 
-    fn flush_once(consume_queue_store: &ConsumeQueueStore, store_checkpoint: &StoreCheckpoint, flush_least_pages: i32) {
+    fn flush_once_blocking(
+        consume_queue_store: &ConsumeQueueStore,
+        store_checkpoint: &StoreCheckpoint,
+        flush_least_pages: i32,
+    ) {
         let consume_queue_table = consume_queue_store.get_consume_queue_table().lock().clone();
         for consume_queue_table in consume_queue_table.values() {
             for consume_queue in consume_queue_table.values() {
@@ -4301,65 +4305,86 @@ impl FlushConsumeQueueService {
         }
     }
 
+    async fn flush_once(
+        consume_queue_store: ConsumeQueueStore,
+        store_checkpoint: Arc<StoreCheckpoint>,
+        flush_least_pages: i32,
+    ) {
+        if let Err(error) = crate::runtime::spawn_io("flush-consume-queue", move || {
+            Self::flush_once_blocking(&consume_queue_store, &store_checkpoint, flush_least_pages);
+        })
+        .await
+        {
+            error!("flush consume queue service task failed: {error}");
+        }
+    }
+
     fn start(&self) {
-        let mut worker_handle = self.worker_handle.lock();
-        if worker_handle.is_some() {
+        let mut worker_group = self.worker_group.lock();
+        if worker_group.is_some() {
             return;
         }
 
-        let (shutdown_tx, shutdown_rx) = mpsc::channel();
-        *self.shutdown_tx.lock() = Some(shutdown_tx);
+        let group = match crate::runtime::task_group("rocketmq-store.flush-consume-queue") {
+            Ok(group) => group,
+            Err(error) => {
+                error!("failed to start flush consume queue service: {error}");
+                return;
+            }
+        };
 
         let message_store_config = self.message_store_config.clone();
         let consume_queue_store = self.consume_queue_store.clone();
         let store_checkpoint = self.store_checkpoint.clone();
+        let shutdown_token = CancellationToken::new();
+        *self.shutdown_token.lock() = shutdown_token.clone();
+        let wakeup = self.wakeup.clone();
 
-        match thread::Builder::new()
-            .name("flush-consume-queue".to_string())
-            .spawn(move || {
-                let interval = message_store_config.flush_interval_consume_queue.max(1) as u64;
-                let thorough_interval = message_store_config.flush_consume_queue_thorough_interval as u64;
-                let default_least_pages = message_store_config.flush_consume_queue_least_pages as i32;
-                let mut last_thorough_flush_timestamp = current_millis();
+        match group.spawn_service("flush-consume-queue", async move {
+            let interval = message_store_config.flush_interval_consume_queue.max(1) as u64;
+            let thorough_interval = message_store_config.flush_consume_queue_thorough_interval as u64;
+            let default_least_pages = message_store_config.flush_consume_queue_least_pages as i32;
+            let mut last_thorough_flush_timestamp = current_millis();
 
-                loop {
-                    let now = current_millis();
-                    let flush_least_pages =
-                        if thorough_interval == 0 || now >= last_thorough_flush_timestamp + thorough_interval {
-                            last_thorough_flush_timestamp = now;
-                            0
-                        } else {
-                            default_least_pages
-                        };
+            loop {
+                let now = current_millis();
+                let flush_least_pages =
+                    if thorough_interval == 0 || now >= last_thorough_flush_timestamp + thorough_interval {
+                        last_thorough_flush_timestamp = now;
+                        0
+                    } else {
+                        default_least_pages
+                    };
 
-                    Self::flush_once(&consume_queue_store, &store_checkpoint, flush_least_pages);
+                Self::flush_once(consume_queue_store.clone(), store_checkpoint.clone(), flush_least_pages).await;
 
-                    match shutdown_rx.recv_timeout(Duration::from_millis(interval)) {
-                        Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    }
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    _ = wakeup.notified() => {}
+                    _ = tokio::time::sleep(Duration::from_millis(interval)) => {}
                 }
+            }
 
-                Self::flush_once(&consume_queue_store, &store_checkpoint, 0);
-            }) {
-            Ok(handle) => {
-                *worker_handle = Some(handle);
+            Self::flush_once(consume_queue_store, store_checkpoint, 0).await;
+        }) {
+            Ok(_) => {
+                *worker_group = Some(group);
             }
             Err(error) => {
-                error!("failed to start flush consume queue service thread: {error}");
-                let _ = self.shutdown_tx.lock().take();
+                error!("failed to start flush consume queue service task: {error}");
             }
         }
     }
 
-    fn shutdown(&self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.lock().take() {
-            let _ = shutdown_tx.send(());
-        }
+    async fn shutdown(&self) {
+        self.shutdown_token.lock().cancel();
+        self.wakeup.notify_waiters();
 
-        if let Some(worker_handle) = self.worker_handle.lock().take() {
-            if worker_handle.join().is_err() {
-                error!("flush consume queue service thread panicked during shutdown");
+        let worker_group = self.worker_group.lock().take();
+        if let Some(worker_group) = worker_group {
+            let report = worker_group.shutdown(Duration::from_secs(5)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("FlushConsumeQueueService", report) {
+                error!("flush consume queue service task failed during shutdown: {error}");
             }
         }
     }
@@ -5717,8 +5742,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk() {
+    #[tokio::test]
+    async fn flush_consume_queue_service_start_persists_logic_checkpoint_to_disk() {
         let temp_dir = tempdir().unwrap();
         let mut store = ArcMut::new(LocalFileMessageStore::new(
             Arc::new(MessageStoreConfig {
@@ -5768,10 +5793,10 @@ mod tests {
                 Instant::now() < deadline,
                 "flush consume queue service did not persist checkpoint in time"
             );
-            thread::sleep(Duration::from_millis(20));
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        store.flush_consume_queue_service.shutdown();
+        store.flush_consume_queue_service.shutdown().await;
     }
 
     #[tokio::test]

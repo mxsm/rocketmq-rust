@@ -18,6 +18,7 @@
 //! flexible control, and lock-free concurrent writes via channel
 
 use std::io::IoSlice;
+use std::time::Duration;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -26,6 +27,8 @@ use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -33,7 +36,6 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 use tokio_util::codec::FramedRead;
 use tokio_util::codec::FramedWrite;
 use uuid::Uuid;
@@ -197,8 +199,8 @@ pub struct ConcurrentConnection {
     /// Connection state receiver
     state_rx: watch::Receiver<ConnectionState>,
 
-    /// Writer task handle (for graceful shutdown)
-    writer_handle: JoinHandle<()>,
+    /// Writer task group (for graceful shutdown)
+    writer_group: TaskGroup,
 
     /// Connection ID
     connection_id: CheetahString,
@@ -581,15 +583,26 @@ impl ConcurrentConnection {
         let (write_tx, write_rx) = mpsc::channel(channel_capacity);
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
-        // Spawn dedicated writer task
-        let writer_handle = tokio::spawn(Self::writer_task(framed_writer, write_rx, state_tx));
+        let connection_id = CheetahString::from_string(format!("concurrent-{}", uuid::Uuid::new_v4()));
+        let runtime_handle =
+            tokio::runtime::Handle::try_current().expect("ConcurrentConnection writer task requires a Tokio runtime");
+        let writer_group = TaskGroup::root(
+            format!("rocketmq-remoting.connection.{connection_id}"),
+            RuntimeHandle::new(runtime_handle),
+        );
+        writer_group
+            .spawn_service(
+                "remoting.connection.writer",
+                Self::writer_task(framed_writer, write_rx, state_tx),
+            )
+            .expect("ConcurrentConnection writer task must spawn");
 
         Self {
             framed_reader,
             write_tx,
             state_rx,
-            writer_handle,
-            connection_id: CheetahString::from_string(format!("concurrent-{}", uuid::Uuid::new_v4())),
+            writer_group,
+            connection_id,
         }
     }
 
@@ -949,12 +962,13 @@ impl ConcurrentConnection {
                 "Response channel closed",
             ))
         })??;
-        self.writer_handle.await.map_err(|e| {
-            RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
+        let report = self.writer_group.shutdown(Duration::from_secs(3)).await;
+        if let Err(error) = report.assert_no_task_leak() {
+            return Err(RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
                 "connection",
-                format!("{}", e),
-            ))
-        })?;
+                format!("writer task shutdown report is unhealthy: {error}"),
+            )));
+        }
         Ok(())
     }
 }

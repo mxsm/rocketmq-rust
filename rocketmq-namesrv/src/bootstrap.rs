@@ -22,6 +22,7 @@ use std::net::IpAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -40,6 +41,8 @@ use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
@@ -166,8 +169,8 @@ struct NameServerRuntime {
     shutdown_tx: Option<broadcast::Sender<()>>,
     shutdown_rx: Option<broadcast::Receiver<()>>,
     server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
-    /// Server task handle for graceful shutdown
-    server_task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Server task group for graceful shutdown
+    server_task_group: Option<TaskGroup>,
     /// Runtime state machine for lifecycle management
     state: Arc<AtomicU8>,
 }
@@ -205,12 +208,23 @@ impl NameServerBootstrap {
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
 
-        let relay_handle = tokio::spawn(relay_shutdown_signal(shutdown_tx, shutdown_signal));
+        let relay_group = self
+            .name_server_runtime
+            .inner
+            .task_group()
+            .map(|task_group| task_group.child("namesrv.shutdown-relay"))
+            .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+        relay_group
+            .spawn_service(
+                "namesrv.shutdown-relay",
+                relay_shutdown_signal(shutdown_tx, shutdown_signal),
+            )
+            .map_err(|error| RocketMQError::Internal(format!("failed to spawn shutdown relay: {error}")))?;
         let start_result = self.name_server_runtime.start().await;
-        if !relay_handle.is_finished() {
-            relay_handle.abort();
+        let report = relay_group.shutdown_now();
+        if let Err(error) = report.assert_no_task_leak() {
+            warn!("NameServer shutdown relay task group stopped with report: {error}");
         }
-        let _ = relay_handle.await;
         start_result?;
 
         info!("NameServer shutdown completed");
@@ -468,16 +482,23 @@ impl NameServerRuntime {
             .as_ref()
             .expect("Shutdown channel not initialized")
             .subscribe();
-        let server_handle = tokio::spawn(async move {
-            debug!("Server task started");
-            server
-                .run_with_shutdown(request_processor, channel_event_listener, async move {
-                    let _ = server_shutdown_rx.recv().await;
-                })
-                .await;
-            debug!("Server task completed");
-        });
-        self.server_task_handle = Some(server_handle);
+        let server_task_group = self
+            .inner
+            .task_group()
+            .map(|task_group| task_group.child("namesrv.server"))
+            .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+        server_task_group
+            .spawn_service("namesrv.server", async move {
+                debug!("Server task started");
+                server
+                    .run_with_shutdown(request_processor, channel_event_listener, async move {
+                        let _ = server_shutdown_rx.recv().await;
+                    })
+                    .await;
+                debug!("Server task completed");
+            })
+            .map_err(|error| RocketMQError::Internal(format!("failed to spawn namesrv server task: {error}")))?;
+        self.server_task_group = Some(server_task_group);
 
         // Setup remoting client with name server address
         let local_address = NetworkUtil::get_local_address().unwrap_or_else(|| {
@@ -589,6 +610,13 @@ impl NameServerRuntime {
             warn!("Task join timeout or error: {}", e);
         }
 
+        if let Some(task_group) = self.inner.task_group.get().cloned() {
+            let report = task_group.shutdown(TASK_JOIN_TIMEOUT).await;
+            if let Err(error) = report.assert_no_task_leak() {
+                warn!("NameServer task group shutdown report is unhealthy: {error}");
+            }
+        }
+
         // Transition to Stopped state
         if let Err(e) = self.transition_to(RuntimeState::Stopped) {
             error!("Failed to transition to Stopped state: {}", e);
@@ -621,33 +649,22 @@ impl NameServerRuntime {
 
     /// Wait for server task to complete
     ///
-    /// Attempts graceful join with timeout. If timeout is exceeded,
-    /// task is aborted.
+    /// Attempts graceful task-group shutdown with timeout. If timeout is exceeded,
+    /// tracked server tasks are aborted and reported.
     #[instrument(skip(self), name = "wait_server_task")]
     async fn wait_for_server_task(&mut self, timeout: Duration) -> RocketMQResult<()> {
-        if let Some(handle) = self.server_task_handle.take() {
-            match tokio::time::timeout(timeout, handle).await {
-                Ok(Ok(())) => {
-                    debug!("Server task completed successfully");
-                    Ok(())
-                }
-                Ok(Err(e)) => {
-                    error!("Server task panicked: {}", e);
-                    Err(RocketMQError::Internal(format!("Server task panicked: {}", e)))
-                }
-                Err(_) => {
-                    warn!(
-                        "Server task join timeout ({}s), task may still be running",
-                        timeout.as_secs()
-                    );
-                    Err(RocketMQError::Timeout {
-                        operation: "server_task_join",
-                        timeout_ms: timeout.as_millis() as u64,
-                    })
-                }
+        if let Some(task_group) = self.server_task_group.take() {
+            let report = task_group.shutdown(timeout).await;
+            if let Err(error) = report.assert_no_task_leak() {
+                warn!("Server task group shutdown report is unhealthy: {error}");
+                return Err(RocketMQError::Internal(format!(
+                    "Server task group shutdown report is unhealthy: {error}"
+                )));
             }
+            debug!("Server task completed successfully");
+            Ok(())
         } else {
-            debug!("No server task handle to wait for");
+            debug!("No server task group to wait for");
             Ok(())
         }
     }
@@ -807,6 +824,7 @@ impl Builder {
             controller_config,
             controller_manager: None,
             cluster_test_route_lookup,
+            task_group: OnceLock::new(),
         });
 
         // Check configuration flag for RouteInfoManager version
@@ -838,7 +856,7 @@ impl Builder {
                 shutdown_rx: None,
                 shutdown_tx: None,
                 server_inner: None,
-                server_task_handle: None,
+                server_task_group: None,
                 state: Arc::new(AtomicU8::new(RuntimeState::Created as u8)),
             },
         }
@@ -863,6 +881,7 @@ pub(crate) struct NameServerRuntimeInner {
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
     controller_manager: Option<ArcMut<ControllerManager>>,
     cluster_test_route_lookup: Option<Arc<ClusterTestRouteLookup>>,
+    task_group: OnceLock<TaskGroup>,
 }
 
 impl NameServerRuntimeInner {
@@ -871,6 +890,23 @@ impl NameServerRuntimeInner {
     #[inline]
     pub fn name_server_config(&self) -> &NamesrvConfig {
         &self.name_server_config
+    }
+
+    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
+        if let Some(task_group) = self.task_group.get() {
+            return Some(task_group.clone());
+        }
+
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle,
+            Err(error) => {
+                warn!("NameServer task group is unavailable outside Tokio runtime: {error}");
+                return None;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-namesrv", RuntimeHandle::new(handle));
+        let _ = self.task_group.set(task_group);
+        self.task_group.get().cloned()
     }
 
     #[inline]

@@ -4324,9 +4324,11 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-remoting",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

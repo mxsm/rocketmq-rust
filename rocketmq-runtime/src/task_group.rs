@@ -117,7 +117,7 @@ struct TaskGroupInner {
     cancellation_token: CancellationToken,
     tracker: TaskTracker,
     tasks: DashMap<TaskId, TaskMeta>,
-    children: DashMap<TaskGroupId, TaskGroup>,
+    children: Mutex<Vec<TaskGroup>>,
     next_task_id: AtomicU64,
     next_child_id: AtomicU64,
     completed: AtomicUsize,
@@ -193,7 +193,7 @@ impl TaskGroup {
                 self.inner.cancellation_token.child_token(),
             )),
         };
-        self.inner.children.insert(child_id, child.clone());
+        self.inner.children.lock().push(child.clone());
         child
     }
 
@@ -231,6 +231,16 @@ impl TaskGroup {
                 .clone()
         }
         .boxed()
+    }
+
+    pub fn shutdown_now(&self) -> ShutdownReport {
+        if let Some(report) = self.inner.shutdown_report.get() {
+            return report.clone();
+        }
+
+        let report = self.shutdown_now_inner();
+        let _ = self.inner.shutdown_report.set(report.clone());
+        report
     }
 
     fn spawn_inner<F>(&self, name: Arc<str>, kind: TaskKind, detached: bool, future: F) -> RuntimeResult<TaskId>
@@ -294,12 +304,7 @@ impl TaskGroup {
 
     async fn shutdown_inner(&self, timeout: Duration) -> ShutdownReport {
         let started_at = Instant::now();
-        let children = self
-            .inner
-            .children
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect::<Vec<_>>();
+        let children = self.inner.children.lock().clone();
 
         {
             let _spawn_guard = self.inner.spawn_gate.lock();
@@ -342,6 +347,54 @@ impl TaskGroup {
         if timed_out {
             report.timed_out = aborted + report.leaked;
         }
+
+        if report.detached_still_running > 0 {
+            report.annotations.push(ShutdownAnnotation::new(format!(
+                "{} detached tasks are still running",
+                report.detached_still_running
+            )));
+        }
+
+        self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+        report
+    }
+
+    fn shutdown_now_inner(&self) -> ShutdownReport {
+        let started_at = Instant::now();
+        let children = self.inner.children.lock().clone();
+
+        {
+            let _spawn_guard = self.inner.spawn_gate.lock();
+            self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
+            self.inner.tracker.close();
+            self.inner.cancellation_token.cancel();
+        }
+
+        let mut child_reports = Vec::with_capacity(children.len());
+        for child in children {
+            child_reports.push(child.shutdown_now());
+        }
+
+        self.abort_tracked_tasks();
+
+        let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
+        report.completed = self.inner.completed.load(Ordering::Relaxed);
+        report.cancelled = self.inner.cancelled.load(Ordering::Relaxed);
+        report.panicked = self.inner.panicked.load(Ordering::Relaxed);
+        report.children = child_reports;
+
+        let aborted = self.remove_aborted_tasks();
+        report.aborted = aborted;
+        if aborted > 0 {
+            report.annotations.push(ShutdownAnnotation::new(format!(
+                "aborted {aborted} tracked tasks during immediate shutdown"
+            )));
+        }
+
+        let remaining = self.remaining_snapshots(TaskState::Leaked);
+        report.detached_still_running = remaining.iter().filter(|task| task.detached).count();
+        report.leaked = remaining.iter().filter(|task| !task.detached).count();
+        report.remaining_tasks = remaining;
 
         if report.detached_still_running > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
@@ -406,7 +459,7 @@ impl TaskGroupInner {
             cancellation_token,
             tracker: TaskTracker::new(),
             tasks: DashMap::new(),
-            children: DashMap::new(),
+            children: Mutex::new(Vec::new()),
             next_task_id: AtomicU64::new(1),
             next_child_id: AtomicU64::new(id.as_u64() * 1_000_000 + 1),
             completed: AtomicUsize::new(0),

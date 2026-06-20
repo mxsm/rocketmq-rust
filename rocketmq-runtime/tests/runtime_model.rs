@@ -68,6 +68,30 @@ async fn task_group_shutdown_aborts_after_timeout_without_leak() {
 }
 
 #[tokio::test]
+async fn task_group_shutdown_now_aborts_without_async_wait() {
+    let context = RuntimeContext::from_current("task-group-shutdown-now-test");
+    let group = context.root_group().child("service");
+
+    group
+        .spawn_service("pending-task", async move {
+            std::future::pending::<()>().await;
+        })
+        .unwrap();
+
+    let report = group.shutdown_now();
+    assert_eq!(report.aborted, 1, "{}", report.to_json());
+    assert_eq!(report.leaked, 0, "{}", report.to_json());
+    assert_eq!(
+        group.lifecycle_state(),
+        rocketmq_runtime::TaskGroupLifecycleState::Closed
+    );
+    assert!(group.spawn_service("late-task", async {}).is_err());
+
+    let second_report = group.shutdown(Duration::from_secs(1)).await;
+    assert_eq!(second_report.aborted, 1, "{}", second_report.to_json());
+}
+
+#[tokio::test]
 async fn scheduled_no_overlap_skips_while_previous_run_is_active() {
     let context = RuntimeContext::from_current("scheduled-test");
     let service = context.service_context("service");

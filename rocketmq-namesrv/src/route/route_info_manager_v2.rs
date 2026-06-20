@@ -819,17 +819,23 @@ impl RouteInfoManagerV2 {
         let request = RemotingCommand::create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
 
         // Send notification to each broker asynchronously
+        let Some(task_group) = self.name_server_runtime_inner.task_group() else {
+            warn!("skip min broker id notification because NameServer task group is unavailable");
+            return;
+        };
         for broker_addr in broker_addrs_notify {
             let remoting_client = self.name_server_runtime_inner.clone();
             let request = request.clone();
             let broker_addr = broker_addr.clone();
 
-            tokio::spawn(async move {
+            if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
                 let _ = remoting_client
                     .remoting_client()
                     .invoke_request_oneway(&broker_addr, request, 3000)
                     .await;
-            });
+            }) {
+                warn!("failed to spawn min broker id notification task: {error}");
+            }
         }
     }
 

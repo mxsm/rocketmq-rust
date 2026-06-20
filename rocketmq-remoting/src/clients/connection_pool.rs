@@ -86,6 +86,9 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskGroup;
 use tokio::time;
 use tracing::debug;
 use tracing::info;
@@ -291,6 +294,30 @@ pub struct ConnectionPool<PR = DefaultRemotingRequestProcessor> {
 
     /// Maximum duration a connection can be idle
     max_idle_duration: Duration,
+}
+
+/// Handle for a background connection-pool cleanup task.
+#[derive(Clone)]
+pub struct ConnectionPoolCleanupTask {
+    task_group: TaskGroup,
+}
+
+impl ConnectionPoolCleanupTask {
+    /// Stop the cleanup task immediately.
+    ///
+    /// This mirrors the previous `JoinHandle::abort()` usage while routing
+    /// the task through the runtime task accounting model.
+    pub fn abort(&self) {
+        let report = self.task_group.shutdown_now();
+        if let Err(error) = report.assert_no_task_leak() {
+            warn!("connection pool cleanup task stopped with report: {error}");
+        }
+    }
+
+    /// Stop the cleanup task gracefully and return the shutdown report.
+    pub async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
+        self.task_group.shutdown(timeout).await
+    }
 }
 
 impl<PR> ConnectionPool<PR> {
@@ -513,7 +540,7 @@ impl<PR> ConnectionPool<PR> {
     ///
     /// # Returns
     ///
-    /// Task handle that can be awaited or aborted
+    /// Cleanup task handle that can be shut down or aborted
     ///
     /// # Example
     ///
@@ -529,17 +556,38 @@ impl<PR> ConnectionPool<PR> {
     /// cleanup_task.abort(); // Stop cleanup task
     /// # }
     /// ```
-    pub fn start_cleanup_task(&self, interval: Duration) -> tokio::task::JoinHandle<()>
+    pub fn start_cleanup_task(&self, interval: Duration) -> ConnectionPoolCleanupTask
+    where
+        PR: Send + Sync + 'static,
+    {
+        let handle =
+            tokio::runtime::Handle::try_current().expect("connection pool cleanup task requires a Tokio runtime");
+        let task_group = TaskGroup::root("rocketmq-remoting.connection-pool", RuntimeHandle::new(handle));
+        self.start_cleanup_task_with_group(interval, task_group)
+            .expect("connection pool cleanup task must spawn")
+    }
+
+    /// Start background cleanup task under the provided task group.
+    pub fn start_cleanup_task_with_group(
+        &self,
+        interval: Duration,
+        task_group: TaskGroup,
+    ) -> rocketmq_runtime::RuntimeResult<ConnectionPoolCleanupTask>
     where
         PR: Send + Sync + 'static,
     {
         let connections = self.connections.clone();
         let max_idle = self.max_idle_duration;
+        let cleanup_group = task_group.child("remoting.connection-pool.cleanup");
+        let cancellation_token = cleanup_group.cancellation_token();
 
-        tokio::spawn(async move {
+        cleanup_group.spawn_service("remoting.connection-pool.cleanup", async move {
             let mut ticker = time::interval(interval);
             loop {
-                ticker.tick().await;
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => break,
+                    _ = ticker.tick() => {}
+                }
 
                 // Evict idle connections
                 let mut idle_count = 0;
@@ -570,6 +618,10 @@ impl<PR> ConnectionPool<PR> {
 
                 debug!("Connection pool size: {} (after cleanup)", connections.len());
             }
+        })?;
+
+        Ok(ConnectionPoolCleanupTask {
+            task_group: cleanup_group,
         })
     }
 }
@@ -671,5 +723,15 @@ mod tests {
         assert_eq!(stats.utilization(), 0.5);
         assert_eq!(stats.error_rate(), 0.01);
         assert_eq!(stats.active(), 40);
+    }
+
+    #[tokio::test]
+    async fn cleanup_task_shutdown_reports_healthy() {
+        let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
+        let cleanup_task = pool.start_cleanup_task(Duration::from_millis(5));
+
+        let report = cleanup_task.shutdown(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

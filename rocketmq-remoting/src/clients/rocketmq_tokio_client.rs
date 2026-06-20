@@ -30,6 +30,7 @@ use tracing::warn;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::clients::connection_pool::ConnectionPool;
+use crate::clients::connection_pool::ConnectionPoolCleanupTask;
 use crate::clients::nameserver_selector::LatencyTracker;
 use crate::clients::reconnect::CircuitBreaker;
 use crate::clients::Client;
@@ -252,7 +253,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     ///
     /// # Returns
     ///
-    /// Task handle for the cleanup background task (can be aborted)
+    /// Cleanup task handle for the background task (can be aborted)
     ///
     /// # Example
     ///
@@ -283,7 +284,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         max_connections: usize,
         max_idle_duration: Duration,
         cleanup_interval: Duration,
-    ) -> tokio::task::JoinHandle<()> {
+    ) -> ConnectionPoolCleanupTask {
         let pool = ConnectionPool::new(max_connections, max_idle_duration);
         let cleanup_task = pool.start_cleanup_task(cleanup_interval);
         self.connection_pool = Some(pool);

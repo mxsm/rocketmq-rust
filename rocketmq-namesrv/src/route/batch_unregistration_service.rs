@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
-use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
@@ -26,7 +25,7 @@ pub(crate) struct BatchUnregistrationService {
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     tx: tokio::sync::mpsc::Sender<UnRegisterBrokerRequestHeader>,
     rx: Option<tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>>,
-    shutdown_notify: Arc<Notify>,
+    task_group: parking_lot::Mutex<Option<TaskGroup>>,
 }
 
 impl BatchUnregistrationService {
@@ -40,7 +39,7 @@ impl BatchUnregistrationService {
             name_server_runtime_inner,
             tx,
             rx: Some(rx),
-            shutdown_notify: Default::default(),
+            task_group: parking_lot::Mutex::new(None),
         }
     }
 
@@ -53,48 +52,40 @@ impl BatchUnregistrationService {
     }
 
     pub fn start(&mut self) {
+        if self.task_group.lock().is_some() {
+            return;
+        }
+
+        let Some(task_group) = self
+            .name_server_runtime_inner
+            .task_group()
+            .map(|task_group| task_group.child("namesrv.batch-unregistration"))
+        else {
+            warn!("BatchUnregistrationService cannot start because NameServer task group is unavailable");
+            return;
+        };
+
         let mut name_server_runtime_inner = self.name_server_runtime_inner.clone();
         let mut rx = self.rx.take().expect("rx is None");
-        let shutdown_notify = self.shutdown_notify.clone();
-        tokio::spawn(async move {
+        let shutdown_token = task_group.cancellation_token();
+        if let Err(error) = task_group.spawn_service("namesrv.batch-unregistration", async move {
             info!("BatchUnregistrationService started");
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown_notify.notified() => {
-                        info!("BatchUnregistrationService shutdown");
-                        break;
-                    }
-                    // Wait for at least one request
-                    first_request = rx.recv() => {
-                        match first_request {
-                            Some(request) => {
-                                let mut unregistration_requests = Vec::new();
-                                unregistration_requests.push(request);
+            run_batch_unregistration_service(&mut name_server_runtime_inner, &mut rx, shutdown_token).await;
+        }) {
+            warn!("BatchUnregistrationService cannot start because task spawn failed: {error}");
+            return;
+        }
 
-                                // Drain all available requests from the channel
-                                while let Ok(req) = rx.try_recv() {
-                                    unregistration_requests.push(req);
-                                }
-
-                                name_server_runtime_inner
-                                    .route_info_manager_mut()
-                                    .un_register_broker(unregistration_requests);
-                            }
-                            None => {
-                                // Channel closed, exit the loop
-                                info!("BatchUnregistrationService channel closed");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        *self.task_group.lock() = Some(task_group);
     }
 
     pub fn shutdown(&self) {
-        self.shutdown_notify.notify_one();
+        if let Some(task_group) = self.task_group.lock().take() {
+            let report = task_group.shutdown_now();
+            if let Err(error) = report.assert_no_task_leak() {
+                warn!("BatchUnregistrationService shutdown report is unhealthy: {error}");
+            }
+        }
     }
 
     /// Returns the number of pending unregister requests in the queue.
@@ -102,5 +93,40 @@ impl BatchUnregistrationService {
     #[allow(dead_code)]
     pub fn queue_length(&self) -> usize {
         self.tx.max_capacity() - self.tx.capacity()
+    }
+}
+
+async fn run_batch_unregistration_service(
+    name_server_runtime_inner: &mut ArcMut<NameServerRuntimeInner>,
+    rx: &mut tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>,
+    shutdown_token: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {
+                info!("BatchUnregistrationService shutdown");
+                break;
+            }
+            first_request = rx.recv() => {
+                match first_request {
+                    Some(request) => {
+                        let mut unregistration_requests = vec![request];
+
+                        while let Ok(req) = rx.try_recv() {
+                            unregistration_requests.push(req);
+                        }
+
+                        name_server_runtime_inner
+                            .route_info_manager_mut()
+                            .un_register_broker(unregistration_requests);
+                    }
+                    None => {
+                        info!("BatchUnregistrationService channel closed");
+                        break;
+                    }
+                }
+            }
+        }
     }
 }

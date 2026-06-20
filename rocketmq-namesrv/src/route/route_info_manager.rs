@@ -619,11 +619,16 @@ impl RouteInfoManager {
         );
 
         if let Some(broker_addrs_notify) = Self::choose_broker_addrs_to_notify(broker_addr_map, offline_broker_addr) {
+            let Some(task_group) = self.name_server_runtime_inner.task_group() else {
+                warn!("skip min broker id notification because NameServer task group is unavailable");
+                return;
+            };
             for broker_addr in broker_addrs_notify {
                 let remoting_client = self.name_server_runtime_inner.clone();
                 let requst_header = request_header.clone();
                 let broker_addr = broker_addr.clone();
-                tokio::spawn(async move {
+
+                if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
                     let _ = remoting_client
                         .remoting_client()
                         .invoke_request_oneway(
@@ -635,7 +640,9 @@ impl RouteInfoManager {
                             3000,
                         )
                         .await;
-                });
+                }) {
+                    warn!("failed to spawn min broker id notification task: {error}");
+                }
             }
         }
     }
@@ -1115,16 +1122,7 @@ impl RouteInfoManager {
 impl RouteInfoManager {
     //! start client connection disconnected listener
     pub fn start(&self) {
-        /* let mut inner = self.name_server_runtime_inner.clone(); */
         self.un_register_service.mut_from_ref().start();
-        /*let mut receiver = receiver;
-        tokio::spawn(async move {
-            while let Ok(socket_addr) = receiver.recv().await {
-                inner
-                    .route_info_manager_mut()
-                    .connection_disconnected(socket_addr);
-            }
-        });*/
     }
 
     pub fn shutdown(&self) {

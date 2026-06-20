@@ -39,11 +39,13 @@ rocketmq-error         = { workspace = true }
 rocketmq-client        = { version = "1.0.0", path = "../rocketmq-client", package = "rocketmq-client-rust" }
 rocketmq-controller    = { workspace = true }
 rocketmq-observability = { workspace = true }
+rocketmq-runtime       = { workspace = true }
 
 
 anyhow.workspace = true
 
 tokio.workspace = true
+tokio-util.workspace = true
 
 tracing.workspace = true
 
