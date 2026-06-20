@@ -77,6 +77,8 @@ use crate::hook::consume_message_hook::ConsumeMessageHook;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
+use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_detached_client_task;
 
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 
@@ -143,18 +145,8 @@ fn spawn_lite_pull_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Ok(LitePullTaskHandle::Tokio {
-            handle: handle.spawn(task),
-            cancelled,
-        });
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    let handle = thread::Builder::new()
-        .name(thread_name.to_string())
-        .spawn(move || runtime.block_on(task))?;
-    Ok(LitePullTaskHandle::Thread { handle, cancelled })
+    let handle = spawn_client_task(thread_name, task)?;
+    Ok(LitePullTaskHandle::Tokio { handle, cancelled })
 }
 
 async fn sleep_or_cancel(shutdown_signal: &Arc<AtomicBool>, cancelled: &Arc<AtomicBool>, delay: Duration) -> bool {
@@ -191,40 +183,33 @@ impl MessageQueueListener for LitePullRebalanceListener {
         let mq_assigned = mq_assigned.clone();
         let user_listener = self.user_listener.clone();
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let join_handle = handle.spawn(async move {
-                    if let Err(error) = consumer_impl
-                        .update_assign_queue_and_start_pull_task(topic.as_str(), &mq_all, &mq_assigned)
-                        .await
-                    {
-                        warn!(
-                            "LitePull rebalance assignment update failed. topic={}, error={}",
-                            topic, error
-                        );
-                    }
-
-                    let listener = user_listener.read().ok().and_then(|listener| listener.clone());
-                    if let Some(listener) = listener {
-                        if let Err(error) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            listener.message_queue_changed(topic.as_str(), &mq_all, &mq_assigned);
-                        })) {
-                            warn!(
-                                "LitePull user message queue listener panicked. topic={}, error={:?}",
-                                topic, error
-                            );
-                        }
-                    }
-                });
-                drop(join_handle);
-            }
-            Err(error) => {
+        if let Err(error) = spawn_detached_client_task("rocketmq-client-lite-pull-rebalance-listener", async move {
+            if let Err(error) = consumer_impl
+                .update_assign_queue_and_start_pull_task(topic.as_str(), &mq_all, &mq_assigned)
+                .await
+            {
                 warn!(
-                    "LitePull rebalance listener ignored async assignment update because no Tokio runtime is \
-                     available. error={}",
-                    error
+                    "LitePull rebalance assignment update failed. topic={}, error={}",
+                    topic, error
                 );
             }
+
+            let listener = user_listener.read().ok().and_then(|listener| listener.clone());
+            if let Some(listener) = listener {
+                if let Err(error) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    listener.message_queue_changed(topic.as_str(), &mq_all, &mq_assigned);
+                })) {
+                    warn!(
+                        "LitePull user message queue listener panicked. topic={}, error={:?}",
+                        topic, error
+                    );
+                }
+            }
+        }) {
+            warn!(
+                "LitePull rebalance listener ignored async assignment update because task spawn failed. error={}",
+                error
+            );
         }
     }
 }
@@ -2956,7 +2941,7 @@ mod tests {
         let thread_name = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("fallback lite pull task should complete");
-        assert_eq!(thread_name, "rocketmq-client-lite-pull-test");
+        assert_eq!(thread_name, "rocketmq-client-fallback");
         handle.abort();
     }
 

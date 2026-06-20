@@ -55,6 +55,7 @@ use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrder
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::spawn_client_task;
 
 static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.maxTimeConsumeContinuously")
@@ -100,19 +101,10 @@ fn spawn_orderly_task<F>(thread_name: &'static str, task: F) -> Option<OrderlyTa
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Some(OrderlyTaskHandle::Tokio(handle.spawn(task)));
-    }
-
-    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => runtime.block_on(task),
-            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
-        }
-    }) {
-        Ok(handle) => Some(OrderlyTaskHandle::Thread(handle)),
+    match spawn_client_task(thread_name, task) {
+        Ok(handle) => Some(OrderlyTaskHandle::Tokio(handle)),
         Err(error) => {
-            warn!("Failed to spawn {} background thread: {}", thread_name, error);
+            warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
         }
     }

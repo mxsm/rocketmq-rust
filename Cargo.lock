@@ -4094,6 +4094,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-remoting",
+ "rocketmq-runtime",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4207,6 +4208,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rocketmq-error",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "serde_json",
@@ -4417,6 +4419,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-macros",
  "rocketmq-observability",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "rustls-native-certs",
  "rustls-pemfile",
@@ -4437,7 +4440,15 @@ dependencies = [
 name = "rocketmq-runtime"
 version = "1.0.0"
 dependencies = [
+ "dashmap",
+ "futures",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

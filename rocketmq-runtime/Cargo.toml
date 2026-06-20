@@ -28,5 +28,12 @@ description.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-#once_cell = { workspace = true }
+dashmap.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true

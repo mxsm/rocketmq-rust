@@ -483,9 +483,9 @@ dependencies = [
 
 [[package]]
 name = "cron"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "089df96cf6a25253b4b6b6744d86f91150a3d4df546f31a95def47976b8cba97"
+checksum = "a5dcd6f69605c2956916ce24e8af637b754964c9a83f4662d3a2361654cdba09"
 dependencies = [
  "chrono",
  "once_cell",
@@ -2348,6 +2348,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-observability",
  "rocketmq-remoting",
+ "rocketmq-runtime",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2413,6 +2414,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rocketmq-error",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "serde_json",
@@ -2520,6 +2522,7 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-macros",
+ "rocketmq-runtime",
  "rocketmq-rust",
  "rustls-native-certs",
  "rustls-pemfile",
@@ -2538,7 +2541,15 @@ dependencies = [
 name = "rocketmq-runtime"
 version = "1.0.0"
 dependencies = [
+ "dashmap",
+ "futures",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror",
  "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

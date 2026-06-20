@@ -36,6 +36,7 @@ rocketmq-common   = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-observability = { workspace = true }
+rocketmq-runtime  = { workspace = true }
 
 cheetah-string = { workspace = true }
 serde          = { workspace = true }

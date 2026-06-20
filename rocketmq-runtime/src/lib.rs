@@ -12,112 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+pub mod blocking;
+pub mod config;
+pub mod context;
+pub mod diagnostics;
+pub mod error;
+pub mod handle;
+pub mod legacy;
+pub mod owner;
+pub mod scheduled;
+pub mod service_context;
+pub mod shutdown_report;
+pub mod task_group;
 
-pub enum RocketMQRuntime {
-    Multi(tokio::runtime::Runtime),
-}
-
-impl RocketMQRuntime {
-    #[inline]
-    pub fn new_multi(threads: usize, name: &str) -> Self {
-        Self::Multi(
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(threads)
-                .thread_name(name)
-                .enable_all()
-                .build()
-                .unwrap(),
-        )
-    }
-}
-
-impl RocketMQRuntime {
-    #[inline]
-    pub fn get_handle(&self) -> &tokio::runtime::Handle {
-        match self {
-            Self::Multi(runtime) => runtime.handle(),
-        }
-    }
-
-    #[inline]
-    pub fn get_runtime(&self) -> &tokio::runtime::Runtime {
-        match self {
-            Self::Multi(runtime) => runtime,
-        }
-    }
-
-    #[inline]
-    pub fn shutdown(self) {
-        match self {
-            Self::Multi(runtime) => runtime.shutdown_background(),
-        }
-    }
-
-    #[inline]
-    pub fn shutdown_timeout(self, timeout: Duration) {
-        match self {
-            Self::Multi(runtime) => runtime.shutdown_timeout(timeout),
-        }
-    }
-
-    #[inline]
-    pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
-    where
-        F: Fn() + Send + 'static,
-    {
-        match self {
-            RocketMQRuntime::Multi(runtime) => {
-                runtime.handle().spawn(async move {
-                    // initial delay
-                    if let Some(initial_delay_inner) = initial_delay {
-                        tokio::time::sleep(initial_delay_inner).await;
-                    }
-
-                    loop {
-                        // record current execution time
-                        let current_execution_time = tokio::time::Instant::now();
-                        // execute task
-                        task();
-                        // Calculate the time of the next execution
-                        let next_execution_time = current_execution_time + period;
-
-                        // Wait until the next execution
-                        let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                        tokio::time::sleep(delay).await;
-                    }
-                });
-            }
-        }
-    }
-
-    #[inline]
-    pub fn schedule_at_fixed_rate_mut<F>(&self, mut task: F, initial_delay: Option<Duration>, period: Duration)
-    where
-        F: FnMut() + Send + 'static,
-    {
-        match self {
-            RocketMQRuntime::Multi(runtime) => {
-                runtime.handle().spawn(async move {
-                    // initial delay
-                    if let Some(initial_delay_inner) = initial_delay {
-                        tokio::time::sleep(initial_delay_inner).await;
-                    }
-
-                    loop {
-                        // record current execution time
-                        let current_execution_time = tokio::time::Instant::now();
-                        // execute task
-                        task();
-                        // Calculate the time of the next execution
-                        let next_execution_time = current_execution_time + period;
-
-                        // Wait until the next execution
-                        let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                        tokio::time::sleep(delay).await;
-                    }
-                });
-            }
-        }
-    }
-}
+pub use blocking::BlockingExecutor;
+pub use blocking::BlockingExecutorSnapshot;
+pub use blocking::BlockingKind;
+pub use blocking::BlockingPoolPolicy;
+pub use blocking::BlockingTaskSnapshot;
+pub use config::RuntimeConfig;
+pub use context::RuntimeContext;
+pub use diagnostics::RuntimeDiagnostics;
+pub use error::RuntimeError;
+pub use error::RuntimeResult;
+pub use handle::RuntimeHandle;
+pub use legacy::RocketMQRuntime;
+pub use owner::RuntimeOwner;
+pub use scheduled::ScheduleMode;
+pub use scheduled::ScheduledTaskConfig;
+pub use scheduled::ScheduledTaskGroup;
+pub use scheduled::ScheduledTaskSnapshot;
+pub use service_context::ServiceContext;
+pub use shutdown_report::ShutdownAnnotation;
+pub use shutdown_report::ShutdownReport;
+pub use shutdown_report::TaskSnapshot;
+pub use task_group::DetachedTaskPolicy;
+pub use task_group::TaskGroup;
+pub use task_group::TaskGroupId;
+pub use task_group::TaskGroupLifecycleState;
+pub use task_group::TaskId;
+pub use task_group::TaskKind;
+pub use task_group::TaskResult;

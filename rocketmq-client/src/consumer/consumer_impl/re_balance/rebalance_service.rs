@@ -17,7 +17,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use rocketmq_common::TimeUtils::current_millis;
@@ -31,21 +30,14 @@ use tracing::info;
 use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::runtime::spawn_client_task;
 
 fn spawn_rebalance_task<F>(task: F) -> std::io::Result<Option<tokio::task::AbortHandle>>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        let task = handle.spawn(task);
-        return Ok(Some(task.abort_handle()));
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    thread::Builder::new()
-        .name("rocketmq-client-rebalance-service".to_string())
-        .spawn(move || runtime.block_on(task))?;
-    Ok(None)
+    let task = spawn_client_task("rocketmq-client-rebalance-service", task)?;
+    Ok(Some(task.abort_handle()))
 }
 
 /// Configuration for RebalanceService.
@@ -554,8 +546,8 @@ mod tests {
 
         assert!(service.is_running());
         assert!(
-            service.task_abort_handle.is_none(),
-            "fallback thread path does not expose a Tokio abort handle"
+            service.task_abort_handle.is_some(),
+            "shared fallback runtime should expose a Tokio abort handle"
         );
 
         let tx_shutdown = service

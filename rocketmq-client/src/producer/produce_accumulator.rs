@@ -38,6 +38,7 @@ use tokio::sync::Mutex;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
+use crate::runtime::spawn_client_task;
 
 #[derive(Default)]
 pub struct ProduceAccumulator {
@@ -891,19 +892,10 @@ fn spawn_guard_task<F>(thread_name: &'static str, task: F) -> Option<GuardTaskHa
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Some(GuardTaskHandle::Tokio(handle.spawn(task)));
-    }
-
-    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => runtime.block_on(task),
-            Err(error) => tracing::error!("Failed to build {} runtime: {}", thread_name, error),
-        }
-    }) {
-        Ok(handle) => Some(GuardTaskHandle::Thread(handle)),
+    match spawn_client_task(thread_name, task) {
+        Ok(handle) => Some(GuardTaskHandle::Tokio(handle)),
         Err(error) => {
-            tracing::error!("Failed to spawn {} background thread: {}", thread_name, error);
+            tracing::error!("Failed to spawn {} background task: {}", thread_name, error);
             None
         }
     }

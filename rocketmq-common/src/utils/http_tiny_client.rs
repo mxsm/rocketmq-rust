@@ -26,6 +26,8 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::Client;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 
 use crate::common::mq_version::RocketMqVersion;
 use crate::common::mq_version::CURRENT_VERSION;
@@ -34,6 +36,7 @@ use crate::TimeUtils::current_millis;
 /// Global HTTP client with connection pool
 /// Reuses connections across requests for better performance
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+static HTTP_SYNC_RUNTIME: OnceLock<Result<RuntimeOwner, String>> = OnceLock::new();
 
 fn build_http_client() -> RocketMQResult<Client> {
     Client::builder()
@@ -55,6 +58,26 @@ fn get_http_client() -> RocketMQResult<&'static Client> {
     HTTP_CLIENT.get().ok_or_else(|| {
         RocketMQError::network_request_failed("http-client", "HTTP client initialization did not complete")
     })
+}
+
+fn get_http_sync_runtime() -> io::Result<&'static RuntimeOwner> {
+    match HTTP_SYNC_RUNTIME.get_or_init(|| {
+        let parallelism = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(2);
+        let worker_threads = parallelism.clamp(2, 4);
+        RuntimeOwner::new(RuntimeConfig {
+            worker_threads,
+            max_blocking_threads: worker_threads * 2,
+            thread_name: "rocketmq-http-sync".to_string(),
+            shutdown_timeout: Duration::from_secs(10),
+            ..RuntimeConfig::default()
+        })
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(io::Error::other(error.clone())),
+    }
 }
 
 pub struct HttpTinyClient;
@@ -329,14 +352,11 @@ impl HttpTinyClient {
         read_timeout_ms: u64,
     ) -> Result<HttpResult, io::Error> {
         Self::ensure_not_in_tokio_runtime("http_get")?;
-        // Use tokio::runtime to bridge to async world
-        tokio::runtime::Runtime::new()
-            .map_err(io::Error::other)?
-            .block_on(async {
-                Self::http_get_async(url, headers, param_values, encoding, read_timeout_ms)
-                    .await
-                    .map_err(|e| io::Error::other(e.to_string()))
-            })
+        get_http_sync_runtime()?.block_on(async {
+            Self::http_get_async(url, headers, param_values, encoding, read_timeout_ms)
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))
+        })
     }
 
     /// Perform HTTP POST request (blocking version - DEPRECATED)
@@ -365,14 +385,11 @@ impl HttpTinyClient {
         read_timeout_ms: u64,
     ) -> Result<HttpResult, io::Error> {
         Self::ensure_not_in_tokio_runtime("http_post")?;
-        // Use tokio::runtime to bridge to async world
-        tokio::runtime::Runtime::new()
-            .map_err(io::Error::other)?
-            .block_on(async {
-                Self::http_post_async(url, headers, param_values, encoding, read_timeout_ms)
-                    .await
-                    .map_err(|e| io::Error::other(e.to_string()))
-            })
+        get_http_sync_runtime()?.block_on(async {
+            Self::http_post_async(url, headers, param_values, encoding, read_timeout_ms)
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))
+        })
     }
 
     /// Encode parameters for URL or form data using form_urlencoded
@@ -432,6 +449,7 @@ impl HttpTinyClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
@@ -595,6 +613,29 @@ mod tests {
             .expect_err("blocking http_post should reject async runtime contexts");
 
         assert!(error.to_string().contains("use the async API instead"));
+    }
+
+    #[test]
+    fn blocking_http_get_outside_tokio_runtime_uses_shared_bridge() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0; 1024];
+            let _ = stream.read(&mut buffer).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nok",
+                )
+                .unwrap();
+        });
+
+        #[allow(deprecated)]
+        let response = HttpTinyClient::http_get(&format!("http://{addr}"), None, None, "UTF-8", 1000).unwrap();
+
+        assert_eq!(response.code, 200);
+        assert_eq!(response.content, "ok");
+        server.join().unwrap();
     }
 
     #[tokio::test]

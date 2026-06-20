@@ -21,6 +21,7 @@ pub mod config;
 pub mod migration;
 pub mod permission;
 pub mod runtime;
+pub(crate) mod runtime_bridge;
 
 // Re-export commonly used authentication types
 pub use authentication::acl_signer::SignatureAlgorithm;

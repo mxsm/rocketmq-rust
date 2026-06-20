@@ -43,7 +43,6 @@ use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -85,7 +84,6 @@ use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 /// - PULL consumers are either suspended or limited to 1 message
 pub struct PullMessageProcessor<MS: MessageStore> {
     pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
-    write_message_runtime: Arc<RocketMQRuntime>,
     /// Lock to serialize writes to channels when waking up suspended requests.
     ///
     /// This is a global lock which may become a bottleneck under high concurrency.
@@ -151,10 +149,8 @@ where
         pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
         broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Self {
-        let cpus = num_cpus::get();
         Self {
             pull_message_result_handler,
-            write_message_runtime: Arc::new(RocketMQRuntime::new_multi(cpus, "write_consumer_message_runtime")),
             write_message_lock: Arc::new(Default::default()),
             broker_runtime_inner,
         }
@@ -990,7 +986,7 @@ where
         mut request: RemotingCommand,
     ) {
         let lock = Arc::clone(&self.write_message_lock);
-        self.write_message_runtime.get_handle().spawn(async move {
+        let task = async move {
             let broker_allow_flow_ctr_suspend =
                 !(request.ext_fields().is_some() && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
@@ -1012,7 +1008,15 @@ where
                 ctx.write_response(command).await;
                 drop(guard);
             }
-        });
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                drop(handle.spawn(task));
+            }
+            Err(error) => {
+                warn!("Cannot execute wakeup pull request without Tokio runtime: {}", error);
+            }
+        }
     }
 }
 pub(crate) fn is_broadcast(proxy_pull_broadcast: bool, consumer_group_info: Option<&ConsumerGroupInfo>) -> bool {

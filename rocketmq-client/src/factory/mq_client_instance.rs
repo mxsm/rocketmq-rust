@@ -83,6 +83,8 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::runtime::spawn_delayed_client_action;
+use crate::runtime::spawn_detached_client_task;
 use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
@@ -136,34 +138,14 @@ fn spawn_connection_net_event_listener(
     rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
     weak_instance: WeakArcMut<MQClientInstance>,
 ) {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            let task = handle.spawn(run_connection_net_event_listener(rx, weak_instance));
-            drop(task);
-        }
-        Err(error) => {
-            warn!(
-                "No Tokio runtime available while creating MQClientInstance; starting dedicated connection event \
-                 listener thread. error={}",
-                error
-            );
-            let thread = std::thread::Builder::new().name("rocketmq-client-connection-events".to_string());
-            if let Err(error) = thread.spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                    Ok(runtime) => runtime,
-                    Err(error) => {
-                        error!("Failed to create MQClientInstance connection event runtime: {}", error);
-                        return;
-                    }
-                };
-                runtime.block_on(run_connection_net_event_listener(rx, weak_instance));
-            }) {
-                error!(
-                    "Failed to spawn MQClientInstance connection event listener thread: {}",
-                    error
-                );
-            }
-        }
+    if let Err(error) = spawn_detached_client_task(
+        "rocketmq-client-connection-events",
+        run_connection_net_event_listener(rx, weak_instance),
+    ) {
+        error!(
+            "Failed to spawn MQClientInstance connection event listener task: {}",
+            error
+        );
     }
 }
 
@@ -173,28 +155,7 @@ fn schedule_rebalance_wakeup(service: RebalanceService, delay: Duration) {
         return;
     }
 
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            let task = handle.spawn(async move {
-                tokio::time::sleep(delay).await;
-                service.wakeup();
-            });
-            drop(task);
-        }
-        Err(error) => {
-            warn!(
-                "No Tokio runtime available for delayed rebalance wakeup; using a dedicated sleeper thread. error={}",
-                error
-            );
-            let thread = std::thread::Builder::new().name("rocketmq-client-rebalance-delay".to_string());
-            if let Err(error) = thread.spawn(move || {
-                std::thread::sleep(delay);
-                service.wakeup();
-            }) {
-                error!("Failed to spawn delayed rebalance wakeup thread: {}", error);
-            }
-        }
-    }
+    spawn_delayed_client_action("rocketmq-client-rebalance-delay", delay, move || service.wakeup());
 }
 
 pub struct MQClientInstance {

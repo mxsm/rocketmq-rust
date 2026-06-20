@@ -33,6 +33,7 @@ rocketmq-common = { workspace = true }
 rocketmq-macros = { workspace = true }
 rocketmq-rust   = { workspace = true }
 rocketmq-error  = { workspace = true }
+rocketmq-runtime = { workspace = true }
 rocketmq-observability = { workspace = true, optional = true }
 
 anyhow.workspace = true
