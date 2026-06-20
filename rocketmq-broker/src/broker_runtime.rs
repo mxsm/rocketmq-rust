@@ -57,6 +57,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
@@ -72,6 +73,7 @@ use rocketmq_store::message_store::GenericMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -395,7 +397,35 @@ pub(crate) struct BrokerRuntime {
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     scheduled_task_manager: ScheduledTaskManager,
     remoting_server_task_group: Option<TaskGroup>,
+    remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
     request_processor_task_group: Option<TaskGroup>,
+}
+
+struct BrokerRemotingServerReportReceiver {
+    name: &'static str,
+    receiver: oneshot::Receiver<Option<ShutdownReport>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BrokerRemotingServerReport {
+    pub(crate) name: &'static str,
+    pub(crate) report: Option<ShutdownReport>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BrokerRemotingServerShutdownReport {
+    pub(crate) task_group: ShutdownReport,
+    pub(crate) server_reports: Vec<BrokerRemotingServerReport>,
+}
+
+impl BrokerRemotingServerShutdownReport {
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.task_group.is_healthy()
+            && self
+                .server_reports
+                .iter()
+                .all(|server| server.report.as_ref().is_some_and(ShutdownReport::is_healthy))
+    }
 }
 
 impl Drop for BrokerRuntime {
@@ -578,6 +608,7 @@ impl BrokerRuntime {
             consumer_ids_change_listener,
             scheduled_task_manager,
             remoting_server_task_group: None,
+            remoting_server_report_receivers: Vec::new(),
             request_processor_task_group: None,
         }
     }
@@ -652,7 +683,7 @@ impl BrokerRuntime {
             hook.before_shutdown();
         }
 
-        self.shutdown_remoting_servers().await;
+        let _ = self.shutdown_remoting_servers().await;
         self.shutdown_request_processor_tasks().await;
 
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
@@ -801,18 +832,92 @@ impl BrokerRuntime {
         report
     }
 
-    async fn shutdown_remoting_servers(&mut self) {
-        let Some(task_group) = self.remoting_server_task_group.take() else {
-            return;
-        };
+    pub(crate) async fn shutdown_remoting_servers(&mut self) -> Option<BrokerRemotingServerShutdownReport> {
+        let task_group = self.remoting_server_task_group.take()?;
 
         let report = task_group.shutdown(Duration::from_secs(35)).await;
-        if !report.is_healthy() {
+        let server_reports = Self::collect_remoting_server_reports(
+            std::mem::take(&mut self.remoting_server_report_receivers),
+            Duration::from_secs(1),
+        )
+        .await;
+        let shutdown_report = BrokerRemotingServerShutdownReport {
+            task_group: report,
+            server_reports,
+        };
+        if !shutdown_report.is_healthy() {
             warn!(
-                report = %report.to_json(),
+                task_group = %shutdown_report.task_group.to_json(),
                 "Broker remoting server shutdown report is unhealthy"
             );
         }
+        Some(shutdown_report)
+    }
+
+    async fn collect_remoting_server_reports(
+        receivers: Vec<BrokerRemotingServerReportReceiver>,
+        timeout: Duration,
+    ) -> Vec<BrokerRemotingServerReport> {
+        let mut reports = Vec::with_capacity(receivers.len());
+        for receiver in receivers {
+            let report = match tokio::time::timeout(timeout, receiver.receiver).await {
+                Ok(Ok(report)) => report,
+                Ok(Err(_closed)) => {
+                    warn!(
+                        server = receiver.name,
+                        "Broker remoting server report channel closed before report was sent"
+                    );
+                    None
+                }
+                Err(_elapsed) => {
+                    warn!(
+                        server = receiver.name,
+                        "Timed out waiting for broker remoting server shutdown report"
+                    );
+                    None
+                }
+            };
+            reports.push(BrokerRemotingServerReport {
+                name: receiver.name,
+                report,
+            });
+        }
+        reports
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn install_remoting_server_report_probe(&mut self) -> bool {
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "failed to install broker remoting server report probe outside Tokio runtime"
+                );
+                return false;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.remoting-server.probe", runtime);
+        let shutdown_token = task_group.cancellation_token();
+        let (report_tx, report_rx) = oneshot::channel();
+        if let Err(error) = task_group.spawn_service("broker.remoting-server.probe", async move {
+            shutdown_token.cancelled().await;
+            let _ = report_tx.send(Some(ShutdownReport::new(
+                "rocketmq.remoting.server.probe",
+                Duration::ZERO,
+            )));
+        }) {
+            warn!(?error, "failed to spawn broker remoting server report probe");
+            return false;
+        }
+
+        self.remoting_server_task_group = Some(task_group);
+        self.remoting_server_report_receivers
+            .push(BrokerRemotingServerReportReceiver {
+                name: "broker.remoting-server.probe",
+                receiver: report_rx,
+            });
+        true
     }
 
     async fn shutdown_request_processor_tasks(&mut self) {
@@ -1834,28 +1939,50 @@ impl BrokerRuntime {
             .map(|item| item as Arc<dyn ChannelEventListener>);
         let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
         let shutdown_token = remoting_server_task_group.cancellation_token();
+        let (normal_report_tx, normal_report_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.normal", async move {
-            server
-                .run_with_shutdown(request_processor, client_housekeeping_service_main, async move {
+            let report = server
+                .run_with_shutdown_report(request_processor, client_housekeeping_service_main, async move {
                     shutdown_token.cancelled().await;
                 })
-                .await
+                .await;
+            if let Some(report) = report.as_ref() {
+                report.log_if_unhealthy();
+            }
+            let _ = normal_report_tx.send(report);
         }) {
             warn!(?error, "failed to spawn broker normal remoting server task");
+        } else {
+            self.remoting_server_report_receivers
+                .push(BrokerRemotingServerReportReceiver {
+                    name: "broker.remoting-server.normal",
+                    receiver: normal_report_rx,
+                });
         }
         //start fast broker remoting_server
         let mut fast_server_config = self.inner.broker_config.broker_server_config.clone();
         fast_server_config.listen_port = self.inner.broker_config.broker_server_config.listen_port - 2;
         let mut fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         let shutdown_token = remoting_server_task_group.cancellation_token();
+        let (fast_report_tx, fast_report_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.fast", async move {
-            fast_server
-                .run_with_shutdown(fast_request_processor, client_housekeeping_service_fast, async move {
+            let report = fast_server
+                .run_with_shutdown_report(fast_request_processor, client_housekeeping_service_fast, async move {
                     shutdown_token.cancelled().await;
                 })
-                .await
+                .await;
+            if let Some(report) = report.as_ref() {
+                report.log_if_unhealthy();
+            }
+            let _ = fast_report_tx.send(report);
         }) {
             warn!(?error, "failed to spawn broker fast remoting server task");
+        } else {
+            self.remoting_server_report_receivers
+                .push(BrokerRemotingServerReportReceiver {
+                    name: "broker.remoting-server.fast",
+                    receiver: fast_report_rx,
+                });
         }
         self.remoting_server_task_group = Some(remoting_server_task_group);
 

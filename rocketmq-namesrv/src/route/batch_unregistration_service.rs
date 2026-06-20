@@ -15,6 +15,7 @@
 use std::time::Duration;
 
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tokio_util::sync::CancellationToken;
@@ -83,13 +84,16 @@ impl BatchUnregistrationService {
         *self.task_group.lock() = Some(task_group);
     }
 
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Option<ShutdownReport> {
         let task_group = { self.task_group.lock().take() };
         if let Some(task_group) = task_group {
             let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if let Err(error) = report.assert_no_task_leak() {
                 warn!("BatchUnregistrationService shutdown report is unhealthy: {error}");
             }
+            Some(report)
+        } else {
+            None
         }
     }
 

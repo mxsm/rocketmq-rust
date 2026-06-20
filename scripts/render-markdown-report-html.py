@@ -412,14 +412,14 @@ def build_html(title: str, body: str, headings: list[Heading]) -> str:
 
     pre code {{
       display: block;
-      min-width: max-content;
+      min-width: 0;
       padding: 0;
       border-radius: 0;
       background: transparent;
       color: inherit;
-      white-space: pre;
-      word-break: normal;
-      overflow-wrap: normal;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }}
 
     .table-wrap {{

@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -130,13 +131,69 @@ pub struct ServiceManager<T: ServiceTask + 'static> {
     wait_point: Arc<Notify>,
 
     /// Task handle for the running service
-    task_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    task_handle: Arc<RwLock<Option<ServiceTaskHandle>>>,
 
     /// Whether this is a daemon service
     is_daemon: AtomicBool,
 }
 
-fn spawn_service_task<F>(operation: &'static str, future: F) -> RocketMQResult<JoinHandle<()>>
+struct ServiceTaskHandle {
+    handle: JoinHandle<()>,
+}
+
+impl ServiceTaskHandle {
+    fn new(handle: JoinHandle<()>) -> Self {
+        Self { handle }
+    }
+
+    async fn shutdown(mut self, timeout_duration: Duration, interrupt: bool, service_name: &str) -> bool {
+        if interrupt {
+            self.handle.abort();
+            return Self::wait_aborted(self.handle, service_name).await;
+        }
+
+        match timeout(timeout_duration, &mut self.handle).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                if !error.is_cancelled() {
+                    warn!("Service thread {} join failed: {}", service_name, error);
+                }
+                true
+            }
+            Err(_) => {
+                warn!("Service thread {} shutdown timeout", service_name);
+                self.handle.abort();
+                Self::wait_aborted(self.handle, service_name).await;
+                false
+            }
+        }
+    }
+
+    async fn wait_aborted(handle: JoinHandle<()>, service_name: &str) -> bool {
+        match handle.await {
+            Ok(()) => true,
+            Err(error) if error.is_cancelled() => true,
+            Err(error) => {
+                warn!("Service thread {} abort join failed: {}", service_name, error);
+                false
+            }
+        }
+    }
+
+    fn task_count(&self) -> usize {
+        usize::from(!self.handle.is_finished())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceManagerLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
+}
+
+fn spawn_service_task<F>(operation: &'static str, future: F) -> RocketMQResult<ServiceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -146,7 +203,7 @@ where
             format!("{operation} requires a Tokio runtime: {error}"),
         )
     })?;
-    Ok(handle.spawn(future))
+    Ok(ServiceTaskHandle::new(handle.spawn(future)))
 }
 
 impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
@@ -353,36 +410,9 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
                 let mut handle_guard = self.task_handle.write().await;
                 handle_guard.take()
             };
-            if let Some(mut handle) = handle {
-                if interrupt {
-                    handle.abort();
-                    if let Err(error) = handle.await {
-                        if !error.is_cancelled() {
-                            warn!("Service thread {} abort join failed: {}", service_name, error);
-                        }
-                    }
-                    Ok(())
-                } else {
-                    match timeout(join_time, &mut handle).await {
-                        Ok(Ok(())) => Ok(()),
-                        Ok(Err(error)) => {
-                            if !error.is_cancelled() {
-                                warn!("Service thread {} join failed: {}", service_name, error);
-                            }
-                            Ok(())
-                        }
-                        Err(_) => {
-                            warn!("Service thread {} shutdown timeout", service_name);
-                            handle.abort();
-                            if let Err(error) = handle.await {
-                                if !error.is_cancelled() {
-                                    warn!("Service thread {} abort after timeout failed: {}", service_name, error);
-                                }
-                            }
-                            Ok(())
-                        }
-                    }
-                }
+            if let Some(handle) = handle {
+                handle.shutdown(join_time, interrupt, &service_name).await;
+                Ok(())
             } else {
                 Ok(())
             }
@@ -477,6 +507,55 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
     /// Check if service is started
     pub fn is_started(&self) -> bool {
         self.started.load(Ordering::Acquire)
+    }
+
+    pub async fn task_count(&self) -> usize {
+        self.task_handle
+            .read()
+            .await
+            .as_ref()
+            .map(ServiceTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+}
+
+struct LifecycleProbeService;
+
+impl ServiceTask for LifecycleProbeService {
+    fn get_service_name(&self) -> String {
+        "service-manager-lifecycle-probe".to_string()
+    }
+
+    async fn run(&self, context: &ServiceContext) {
+        while !context.is_stopped() {
+            context.wait_for_running(Duration::from_millis(1)).await;
+        }
+    }
+
+    fn get_join_time(&self) -> Duration {
+        Duration::from_secs(1)
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_service_manager_lifecycle_probe() -> ServiceManagerLifecycleProbe {
+    let manager = ServiceManager::new(LifecycleProbeService);
+    let start_result = manager.start().await;
+    let task_count_before_shutdown = manager.task_count().await;
+
+    let shutdown_started = Instant::now();
+    let shutdown_result = manager.shutdown().await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = manager.task_count().await;
+
+    ServiceManagerLifecycleProbe {
+        healthy: start_result.is_ok()
+            && shutdown_result.is_ok()
+            && task_count_before_shutdown == 1
+            && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
     }
 }
 
@@ -722,6 +801,15 @@ mod tests {
         assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Stopped);
         assert!(!service_thread.is_started());
         assert!(service_thread.is_stopped());
+    }
+
+    #[tokio::test]
+    async fn service_manager_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_service_manager_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[tokio::test]

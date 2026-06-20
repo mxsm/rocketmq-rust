@@ -63,6 +63,8 @@ pub mod bench_support {
         pub scheduled_task_drop_count: usize,
         pub scheduled_shutdown_elapsed_us: u128,
         pub scheduled_shutdown_report: BrokerScheduledShutdownProbe,
+        pub remoting_shutdown_elapsed_us: u128,
+        pub remoting_shutdown_report: Option<BrokerRemotingShutdownProbe>,
         pub basic_shutdown_elapsed_us: u128,
         pub healthy: bool,
     }
@@ -131,6 +133,18 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
+    #[derive(Debug, Clone, Serialize)]
+    pub struct BrokerRemotingShutdownProbe {
+        pub task_group_healthy: bool,
+        pub task_group_completed: usize,
+        pub task_group_cancelled: usize,
+        pub task_group_aborted: usize,
+        pub task_group_timed_out: usize,
+        pub server_report_count: usize,
+        pub server_reports_healthy: bool,
+        pub healthy: bool,
+    }
+
     impl From<ScheduledShutdownReport> for BrokerScheduledShutdownProbe {
         fn from(report: ScheduledShutdownReport) -> Self {
             Self {
@@ -140,6 +154,28 @@ pub mod bench_support {
                 panicked: report.panicked,
                 timed_out: report.timed_out,
                 elapsed_us: report.elapsed.as_micros(),
+                healthy: report.is_healthy(),
+            }
+        }
+    }
+
+    impl From<crate::broker_runtime::BrokerRemotingServerShutdownReport> for BrokerRemotingShutdownProbe {
+        fn from(report: crate::broker_runtime::BrokerRemotingServerShutdownReport) -> Self {
+            let server_report_count = report.server_reports.len();
+            let server_reports_healthy = report.server_reports.iter().all(|server| {
+                server
+                    .report
+                    .as_ref()
+                    .is_some_and(rocketmq_runtime::ShutdownReport::is_healthy)
+            });
+            Self {
+                task_group_healthy: report.task_group.is_healthy(),
+                task_group_completed: report.task_group.completed,
+                task_group_cancelled: report.task_group.cancelled,
+                task_group_aborted: report.task_group.aborted,
+                task_group_timed_out: report.task_group.timed_out,
+                server_report_count,
+                server_reports_healthy,
                 healthy: report.is_healthy(),
             }
         }
@@ -248,7 +284,21 @@ pub mod bench_support {
         let basic_shutdown_elapsed_us = basic_started_at.elapsed().as_micros();
 
         let scheduled_shutdown_report = BrokerScheduledShutdownProbe::from(scheduled_shutdown_report);
+        let remoting_probe_installed = runtime.install_remoting_server_report_probe();
+        let remoting_started_at = Instant::now();
+        let remoting_shutdown_report = if remoting_probe_installed {
+            runtime
+                .shutdown_remoting_servers()
+                .await
+                .map(BrokerRemotingShutdownProbe::from)
+        } else {
+            None
+        };
+        let remoting_shutdown_elapsed_us = remoting_started_at.elapsed().as_micros();
         let healthy = scheduled_shutdown_report.healthy
+            && remoting_shutdown_report
+                .as_ref()
+                .is_some_and(|report| report.healthy && report.server_report_count == 1)
             && scheduled_task_count_before_shutdown == pending_task_count
             && scheduled_task_count_after_shutdown == 0
             && scheduled_task_drop_count == pending_task_count;
@@ -261,6 +311,8 @@ pub mod bench_support {
             scheduled_task_drop_count,
             scheduled_shutdown_elapsed_us,
             scheduled_shutdown_report,
+            remoting_shutdown_elapsed_us,
+            remoting_shutdown_report,
             basic_shutdown_elapsed_us,
             healthy,
         }
@@ -560,6 +612,24 @@ mod bench_support_tests {
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
         assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
         assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_runtime_lifecycle_probe_reports_remoting_shutdown() {
+        let root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-runtime-probe-{}",
+            rocketmq_common::TimeUtils::current_millis()
+        ));
+        let probe = super::bench_support::run_broker_runtime_lifecycle_probe(root, 1).await;
+
+        assert!(probe.healthy, "{probe:?}");
+        let remoting_report = probe
+            .remoting_shutdown_report
+            .as_ref()
+            .expect("broker runtime lifecycle probe should include remoting shutdown report");
+        assert!(remoting_report.healthy, "{probe:?}");
+        assert_eq!(remoting_report.server_report_count, 1, "{probe:?}");
+        assert!(remoting_report.server_reports_healthy, "{probe:?}");
     }
 }
 

@@ -90,7 +90,6 @@ pub(crate) struct ClientTrackedTaskHandle {
     task_group: TaskGroup,
     completion_rx: Mutex<Option<std_mpsc::Receiver<()>>>,
     join_handle: JoinHandle<()>,
-    _fallback_lease: Option<ClientSharedFallbackLease>,
 }
 
 impl ClientTrackedTaskHandle {
@@ -134,6 +133,7 @@ where
     let (completion_tx, completion_rx) = std_mpsc::channel();
     let (_, join_handle) = task_group
         .spawn_service_with_handle(task_name, async move {
+            let _fallback_lease = fallback_lease;
             let _completion = ClientTrackedTaskCompletion::new(completion_tx);
             task.await;
         })
@@ -143,7 +143,6 @@ where
         task_group,
         completion_rx: Mutex::new(Some(completion_rx)),
         join_handle,
-        _fallback_lease: fallback_lease,
     })
 }
 
@@ -872,6 +871,40 @@ mod tests {
         assert_eq!(registry.snapshot().active_leases, 0);
         assert!(!registry.snapshot().runtime_available);
         drop(handle);
+    }
+
+    #[test]
+    fn dropped_tracked_fallback_handle_keeps_runtime_alive_until_task_finishes() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+
+        let handle = spawn_client_tracked_task("tracked-fallback-drop-test", async move {
+            started_tx.send(()).expect("started receiver should be alive");
+            let _ = finish_rx.await;
+            done_tx.send(()).expect("done receiver should be alive");
+        })
+        .expect("tracked fallback task should spawn without ambient runtime");
+
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("tracked fallback task should start");
+        drop(handle);
+
+        std::thread::sleep(fallback_idle_timeout() + Duration::from_millis(50));
+        assert!(
+            shared_fallback_snapshot()
+                .expect("fallback runtime should still exist")
+                .runtime_available,
+            "tracked task should hold the fallback runtime lease after its handle is dropped"
+        );
+
+        finish_tx.send(()).expect("tracked task should still be waiting");
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("tracked task should finish after release signal");
+
+        let _ = reset_client_runtime_fallback_for_diagnostics(Duration::from_secs(1));
     }
 
     #[test]

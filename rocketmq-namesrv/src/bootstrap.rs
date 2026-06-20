@@ -51,6 +51,7 @@ use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::broadcast;
+use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -161,7 +162,9 @@ pub struct NameServerBootstrap {
 pub struct NameServerShutdownReport {
     pub elapsed_ms: u64,
     pub scheduled: Option<ShutdownReport>,
+    pub route_unregistration: Option<ShutdownReport>,
     pub server: Option<ShutdownReport>,
+    pub remoting_server: Option<ShutdownReport>,
     pub root: Option<ShutdownReport>,
 }
 
@@ -169,7 +172,12 @@ impl NameServerShutdownReport {
     #[doc(hidden)]
     pub fn is_healthy(&self) -> bool {
         self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self
+                .route_unregistration
+                .as_ref()
+                .is_none_or(ShutdownReport::is_healthy)
             && self.server.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.remoting_server.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
     }
 }
@@ -193,6 +201,7 @@ struct NameServerRuntime {
     server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
     /// Server task group for graceful shutdown
     server_task_group: Option<TaskGroup>,
+    server_report_rx: Option<oneshot::Receiver<Option<ShutdownReport>>>,
     /// Runtime state machine for lifecycle management
     state: Arc<AtomicU8>,
 }
@@ -538,18 +547,24 @@ impl NameServerRuntime {
             .task_group()
             .map(|task_group| task_group.child("namesrv.server"))
             .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+        let (server_report_tx, server_report_rx) = oneshot::channel();
         server_task_group
             .spawn_service("namesrv.server", async move {
                 debug!("Server task started");
-                server
-                    .run_with_shutdown(request_processor, channel_event_listener, async move {
+                let report = server
+                    .run_with_shutdown_report(request_processor, channel_event_listener, async move {
                         let _ = server_shutdown_rx.recv().await;
                     })
                     .await;
+                if let Some(report) = report.as_ref() {
+                    report.log_if_unhealthy();
+                }
+                let _ = server_report_tx.send(report);
                 debug!("Server task completed");
             })
             .map_err(|error| RocketMQError::Internal(format!("failed to spawn namesrv server task: {error}")))?;
         self.server_task_group = Some(server_task_group);
+        self.server_report_rx = Some(server_report_rx);
 
         // Setup remoting client with name server address
         let local_address = NetworkUtil::get_local_address().unwrap_or_else(|| {
@@ -655,7 +670,7 @@ impl NameServerRuntime {
         }
 
         info!("Phase 4/5: Shutting down route info manager...");
-        self.inner.route_info_manager_mut().shutdown_unregister_service().await;
+        shutdown_report.route_unregistration = self.inner.route_info_manager_mut().shutdown_unregister_service().await;
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
             cluster_test_route_lookup.shutdown().await;
@@ -666,6 +681,7 @@ impl NameServerRuntime {
             TASK_JOIN_TIMEOUT.as_secs()
         );
         shutdown_report.server = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await;
+        shutdown_report.remoting_server = self.wait_for_remoting_server_report(TASK_JOIN_TIMEOUT).await;
 
         if let Some(task_group) = self.inner.task_group.get().cloned() {
             let report = task_group.shutdown(TASK_JOIN_TIMEOUT).await;
@@ -721,6 +737,34 @@ impl NameServerRuntime {
         } else {
             debug!("No server task group to wait for");
             None
+        }
+    }
+
+    async fn wait_for_remoting_server_report(&mut self, timeout: Duration) -> Option<ShutdownReport> {
+        let Some(server_report_rx) = self.server_report_rx.take() else {
+            debug!("No remoting server shutdown report receiver to wait for");
+            return None;
+        };
+
+        match tokio::time::timeout(timeout, server_report_rx).await {
+            Ok(Ok(Some(report))) => {
+                if let Err(error) = report.assert_no_task_leak() {
+                    warn!("Remoting server shutdown report is unhealthy: {error}");
+                }
+                Some(report)
+            }
+            Ok(Ok(None)) => {
+                warn!("Remoting server exited without a shutdown report");
+                None
+            }
+            Ok(Err(_closed)) => {
+                warn!("Remoting server shutdown report channel closed before report was sent");
+                None
+            }
+            Err(_elapsed) => {
+                warn!("Timed out waiting for remoting server shutdown report");
+                None
+            }
         }
     }
 
@@ -912,6 +956,7 @@ impl Builder {
                 shutdown_tx: None,
                 server_inner: None,
                 server_task_group: None,
+                server_report_rx: None,
                 state: Arc::new(AtomicU8::new(RuntimeState::Created as u8)),
             },
         }
@@ -3017,6 +3062,31 @@ mod tests {
             .boot_with_shutdown(async {})
             .await
             .expect("controller-in-namesrv mode should boot and shut down cleanly once implemented");
+    }
+
+    #[tokio::test]
+    async fn boot_shutdown_report_includes_remoting_server_report() {
+        let bootstrap = Builder::new().set_server_config(namesrv_server_config()).build();
+
+        let report = bootstrap
+            .boot_with_shutdown_report(async {})
+            .await
+            .expect("namesrv should boot and return shutdown report");
+
+        assert!(report.is_healthy(), "{report:?}");
+        let route_report = report
+            .route_unregistration
+            .as_ref()
+            .expect("namesrv report should include route unregistration report");
+        assert!(route_report.is_healthy(), "{}", route_report.to_json());
+        assert_eq!(route_report.leaked, 0, "{}", route_report.to_json());
+        assert!(report.server.is_some(), "{report:?}");
+        let remoting_report = report
+            .remoting_server
+            .as_ref()
+            .expect("namesrv report should include remoting server report");
+        assert!(remoting_report.is_healthy(), "{}", remoting_report.to_json());
+        assert_eq!(remoting_report.leaked, 0, "{}", remoting_report.to_json());
     }
 
     #[tokio::test]

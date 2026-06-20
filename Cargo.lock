@@ -4464,10 +4464,12 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "criterion",
  "cron",
  "parking_lot",
  "rocketmq-error",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

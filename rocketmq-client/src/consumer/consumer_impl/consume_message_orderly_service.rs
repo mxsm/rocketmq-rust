@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -89,74 +88,36 @@ pub struct ConsumeMessageOrderlyService {
     submitted_tasks: Arc<AtomicU64>,
 }
 
-pub(crate) enum OrderlyTaskHandle {
-    Tokio(JoinHandle<()>),
-    Scheduled(ClientScheduledTaskHandle),
-}
+pub(crate) struct OrderlyTaskHandle(ClientScheduledTaskHandle);
 
 impl OrderlyTaskHandle {
     async fn shutdown(self, timeout: Duration) -> bool {
-        match self {
-            Self::Tokio(handle) => {
-                let mut handle = handle;
-                match tokio::time::timeout(timeout, &mut handle).await {
-                    Ok(Ok(())) => true,
-                    Ok(Err(error)) if error.is_cancelled() => true,
-                    Ok(Err(error)) => {
-                        warn!(%error, "orderly lock periodic task exited with join error");
-                        true
-                    }
-                    Err(_) => {
-                        handle.abort();
-                        match handle.await {
-                            Ok(()) => {}
-                            Err(error) if error.is_cancelled() => {}
-                            Err(error) => warn!(%error, "orderly lock periodic task aborted with join error"),
-                        }
-                        false
-                    }
-                }
-            }
-            Self::Scheduled(handle) => {
-                let report = handle.shutdown(timeout).await;
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "orderly lock periodic task shutdown report is unhealthy"
-                    );
-                }
-                report.is_healthy()
-            }
+        let report = self.0.shutdown(timeout).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "orderly lock periodic task shutdown report is unhealthy"
+            );
         }
+        report.is_healthy()
     }
 
     fn abort(self) {
-        match self {
-            Self::Tokio(handle) => handle.abort(),
-            Self::Scheduled(handle) => {
-                let report = handle.shutdown_now();
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "orderly lock periodic task shutdown_now report is unhealthy"
-                    );
-                }
-            }
+        let report = self.0.shutdown_now();
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "orderly lock periodic task shutdown_now report is unhealthy"
+            );
         }
     }
 
     fn task_count(&self) -> usize {
-        match self {
-            Self::Tokio(handle) => usize::from(!handle.is_finished()),
-            Self::Scheduled(handle) => handle.task_count(),
-        }
+        self.0.task_count()
     }
 
     fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
-        match self {
-            Self::Tokio(_) => Vec::new(),
-            Self::Scheduled(handle) => handle.schedule_snapshot(),
-        }
+        self.0.schedule_snapshot()
     }
 }
 
@@ -170,19 +131,6 @@ pub struct OrderlyLockPeriodicLifecycleProbe {
     pub scheduled_failures: u64,
     pub shutdown_elapsed_us: u128,
     pub healthy: bool,
-}
-
-fn spawn_orderly_task<F>(thread_name: &'static str, task: F) -> Option<OrderlyTaskHandle>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    match spawn_client_task(thread_name, task) {
-        Ok(handle) => Some(OrderlyTaskHandle::Tokio(handle)),
-        Err(error) => {
-            warn!("Failed to spawn {} background task: {}", thread_name, error);
-            None
-        }
-    }
 }
 
 fn spawn_tracked_orderly_task<F>(
@@ -205,7 +153,8 @@ fn spawn_tracked_orderly_task<F>(
         }
     });
 
-    if spawn_orderly_task(thread_name, tracked_task).is_none() {
+    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+        warn!("Failed to spawn {} background task: {}", thread_name, error);
         warn!("Failed to track {} background task", thread_name);
     }
 }
@@ -296,7 +245,7 @@ impl ConsumeMessageOrderlyService {
                 }
             },
         )
-        .map(OrderlyTaskHandle::Scheduled)
+        .map(OrderlyTaskHandle)
         .map_err(|error| {
             warn!("Failed to spawn rocketmq-client-orderly-lock-periodic background task: {error}");
         })
@@ -1361,33 +1310,6 @@ mod tests {
         service.shutdown(100).await;
 
         assert!(service.concurrency_limiter.is_closed());
-    }
-
-    #[tokio::test]
-    async fn orderly_task_shutdown_waits_for_worker_completion() {
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_in_task = completed.clone();
-        let handle = spawn_orderly_task("rocketmq-client-orderly-task-test", async move {
-            completed_in_task.store(true, Ordering::Release);
-        })
-        .expect("test task should spawn");
-
-        assert!(handle.shutdown(Duration::from_secs(1)).await);
-        assert!(completed.load(Ordering::Acquire));
-    }
-
-    #[tokio::test]
-    async fn orderly_task_shutdown_aborts_after_timeout() {
-        let dropped = Arc::new(AtomicBool::new(false));
-        let dropped_in_task = dropped.clone();
-        let handle = spawn_orderly_task("rocketmq-client-orderly-task-test", async move {
-            let _drop_flag = DropFlag(dropped_in_task);
-            pending::<()>().await;
-        })
-        .expect("test task should spawn");
-
-        assert!(!handle.shutdown(Duration::from_millis(20)).await);
-        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[tokio::test]

@@ -44,6 +44,12 @@ cron   = "0.17"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
+criterion          = { version = "0.8.2", features = ["async_tokio"] }
+serde_json         = { workspace = true }
+
+[[bench]]
+name    = "service_manager_lifecycle_bench"
+harness = false
 
 [[example]]
 name = "basic_usage"

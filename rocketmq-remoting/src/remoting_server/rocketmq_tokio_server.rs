@@ -538,19 +538,34 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
     ) where
         S: Future,
     {
+        let _ = self
+            .run_with_shutdown_report(request_processor, channel_event_listener, shutdown)
+            .await;
+    }
+
+    #[doc(hidden)]
+    pub async fn run_with_shutdown_report<S>(
+        &mut self,
+        request_processor: RP,
+        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+        shutdown: S,
+    ) -> Option<ShutdownReport>
+    where
+        S: Future,
+    {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(listener) => listener,
             Err(err) => {
                 error!(addr = %addr, error = %err, "failed to bind remoting_server");
-                return;
+                return None;
             }
         };
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
         let tls_runtime = TlsServerRuntime::new(self.config.tls_config.clone());
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
-        run_with_tls_config(
+        run_with_tls_config_report(
             listener,
             shutdown,
             request_processor,
@@ -559,7 +574,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             channel_event_listener,
             tls_runtime,
         )
-        .await;
+        .await
     }
 }
 
@@ -792,6 +807,22 @@ mod tests {
         server
             .run_with_shutdown(DefaultRemotingRequestProcessor, None, future::pending::<()>())
             .await;
+    }
+
+    #[tokio::test]
+    async fn run_with_shutdown_report_bind_error_returns_none() {
+        let config = Arc::new(ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 70000,
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config);
+
+        let report = server
+            .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, future::pending::<()>())
+            .await;
+
+        assert!(report.is_none());
     }
 
     #[tokio::test]

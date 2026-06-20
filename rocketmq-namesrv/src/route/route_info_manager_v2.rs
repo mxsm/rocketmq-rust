@@ -224,9 +224,9 @@ impl RouteInfoManagerV2 {
     }
 
     /// Shutdown the route manager
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Option<rocketmq_runtime::ShutdownReport> {
         info!("Shutting down RouteInfoManager v2");
-        self.un_register_service.shutdown().await;
+        self.un_register_service.shutdown().await
     }
 }
 

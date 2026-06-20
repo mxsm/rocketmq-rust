@@ -35,7 +35,6 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
-use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -47,8 +46,9 @@ use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::runtime::schedule_client_fixed_delay_task;
-use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
 use crate::runtime::ClientScheduledTaskHandle;
+use crate::runtime::ClientTrackedTaskHandle;
 
 const PERSIST_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const PERIODIC_PERSIST_INTERVAL: Duration = Duration::from_secs(5);
@@ -88,7 +88,7 @@ pub struct LocalFileOffsetStore {
 
 enum PersistTaskHandle {
     Tokio {
-        command_handle: JoinHandle<()>,
+        command_handle: ClientTrackedTaskHandle,
         scheduled_handle: Option<ClientScheduledTaskHandle>,
     },
     NotStarted,
@@ -151,24 +151,15 @@ impl PersistTaskHandle {
         }
     }
 
-    async fn shutdown_command_task(mut handle: JoinHandle<()>, timeout: Duration) -> bool {
-        match tokio::time::timeout(timeout, &mut handle).await {
-            Ok(Ok(())) => true,
-            Ok(Err(error)) if error.is_cancelled() => true,
-            Ok(Err(error)) => {
-                warn!(%error, "local offset store persist task exited with join error");
-                true
-            }
-            Err(_) => {
-                handle.abort();
-                match handle.await {
-                    Ok(()) => {}
-                    Err(error) if error.is_cancelled() => {}
-                    Err(error) => warn!(%error, "local offset store persist task aborted with join error"),
-                }
-                false
-            }
+    async fn shutdown_command_task(handle: ClientTrackedTaskHandle, timeout: Duration) -> bool {
+        let report = handle.shutdown(timeout).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "local offset store persist task shutdown report is unhealthy"
+            );
         }
+        report.is_healthy()
     }
 
     fn task_count(&self) -> usize {
@@ -177,7 +168,7 @@ impl PersistTaskHandle {
                 command_handle,
                 scheduled_handle,
             } => {
-                usize::from(!command_handle.is_finished())
+                command_handle.task_count()
                     + scheduled_handle
                         .as_ref()
                         .map(ClientScheduledTaskHandle::task_count)
@@ -287,7 +278,7 @@ impl LocalFileOffsetStore {
             .await;
         };
 
-        let command_handle = match spawn_client_task("rocketmq-client-local-offset-store", task) {
+        let command_handle = match spawn_client_tracked_task("rocketmq-client-local-offset-store", task) {
             Ok(handle) => handle,
             Err(error) => {
                 error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
@@ -782,6 +773,7 @@ mod tests {
     use crate::consumer::store::offset_store::OffsetStoreTrait;
     use crate::consumer::store::read_offset_type::ReadOffsetType;
     use crate::factory::mq_client_instance::MQClientInstance;
+    use crate::runtime::spawn_client_tracked_task;
 
     struct DropFlag(Arc<AtomicBool>);
 
@@ -907,10 +899,11 @@ mod tests {
     async fn persist_task_shutdown_aborts_after_timeout() {
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
-        let handle = tokio::spawn(async move {
+        let handle = spawn_client_tracked_task("rocketmq-client-local-offset-store-timeout-test", async move {
             let _drop_flag = DropFlag(dropped_in_task);
             pending::<()>().await;
-        });
+        })
+        .expect("timeout test command task should spawn");
         let handle = PersistTaskHandle::Tokio {
             command_handle: handle,
             scheduled_handle: None,

@@ -1125,7 +1125,7 @@ impl RouteInfoManager {
         self.un_register_service.mut_from_ref().start();
     }
 
-    pub async fn shutdown(&self) {
-        self.un_register_service.shutdown().await;
+    pub async fn shutdown(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.un_register_service.shutdown().await
     }
 }
