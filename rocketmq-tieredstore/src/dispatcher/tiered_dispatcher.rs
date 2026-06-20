@@ -17,7 +17,6 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -25,6 +24,7 @@ use crate::dispatcher::TieredDispatchRequest;
 use crate::file::ConsumeQueueUnit;
 use crate::file::TieredFlatFileStore;
 use crate::provider::TieredStoreProvider;
+use crate::runtime;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 #[allow(async_fn_in_trait)]
@@ -46,7 +46,8 @@ where
     receiver: tokio::sync::Mutex<Option<mpsc::Receiver<TieredDispatchRequest>>>,
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
-    handle: tokio::sync::Mutex<Option<JoinHandle<Result<(), RocketMQError>>>>,
+    task_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    task_error: Arc<tokio::sync::Mutex<Option<String>>>,
     metrics: Arc<TieredStoreMetrics>,
 }
 
@@ -82,7 +83,8 @@ where
             receiver: tokio::sync::Mutex::new(Some(receiver)),
             permits,
             shutdown,
-            handle: tokio::sync::Mutex::new(None),
+            task_group: tokio::sync::Mutex::new(None),
+            task_error: Arc::new(tokio::sync::Mutex::new(None)),
             metrics,
         }
     }
@@ -213,21 +215,31 @@ where
         let Some(receiver) = receiver_guard.take() else {
             return Ok(());
         };
-        let handle = tokio::spawn(Self::run(
-            self.flat_file_store.clone(),
-            receiver,
-            self.permits.clone(),
-            self.shutdown.clone(),
-            self.metrics.clone(),
-        ));
-        *self.handle.lock().await = Some(handle);
+        let task_group = runtime::task_group("rocketmq-tieredstore.dispatcher")?;
+        let task_error = self.task_error.clone();
+        let flat_file_store = self.flat_file_store.clone();
+        let permits = self.permits.clone();
+        let shutdown = self.shutdown.clone();
+        let metrics = self.metrics.clone();
+        task_group
+            .spawn_service("tiered-dispatcher", async move {
+                if let Err(error) = Self::run(flat_file_store, receiver, permits, shutdown, metrics).await {
+                    *task_error.lock().await = Some(error.to_string());
+                }
+            })
+            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        *self.task_group.lock().await = Some(task_group);
         Ok(())
     }
 
     async fn shutdown(&self) -> Result<(), RocketMQError> {
         self.shutdown.cancel();
-        if let Some(handle) = self.handle.lock().await.take() {
-            handle.await.map_err(|err| RocketMQError::Internal(err.to_string()))??;
+        if let Some(task_group) = self.task_group.lock().await.take() {
+            let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
+            runtime::shutdown_report_result("tieredstore dispatcher", report)?;
+        }
+        if let Some(error) = self.task_error.lock().await.take() {
+            return Err(RocketMQError::Internal(error));
         }
         Ok(())
     }

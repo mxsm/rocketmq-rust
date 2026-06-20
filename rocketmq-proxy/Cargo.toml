@@ -47,6 +47,7 @@ rocketmq-client-rust = { workspace = true }
 rocketmq-auth        = { workspace = true, features = ["grpc"] }
 rocketmq-rust        = { workspace = true }
 rocketmq-observability = { workspace = true }
+rocketmq-runtime     = { workspace = true }
 
 tokio        = { workspace = true }
 tokio-stream = { workspace = true }

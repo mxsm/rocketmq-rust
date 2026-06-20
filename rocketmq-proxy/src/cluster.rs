@@ -16,7 +16,6 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -67,6 +66,7 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_runtime::ActorRuntime;
 use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -566,10 +566,10 @@ impl ClusterTaskExecutor {
             "rocketmq-proxy-cluster-{}",
             sanitize_group_component(config.instance_name.as_str())
         );
-        thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || run_cluster_worker(config, rpc_hook, receiver))
-            .expect("failed to spawn proxy cluster worker thread");
+        ActorRuntime::spawn_current_thread(thread_name, async move {
+            run_cluster_worker(config, rpc_hook, receiver).await;
+        })
+        .expect("failed to spawn proxy cluster worker thread");
         Self { sender }
     }
 
@@ -779,24 +779,18 @@ impl ClusterTaskExecutor {
     }
 }
 
-fn run_cluster_worker(
+async fn run_cluster_worker(
     config: ClusterConfig,
     rpc_hook: Option<Arc<dyn RPCHook>>,
     mut receiver: mpsc::UnboundedReceiver<ClusterCommand>,
 ) {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build proxy cluster worker runtime");
-    runtime.block_on(async move {
-        let mut state = ClusterWorkerState::with_rpc_hook(rpc_hook);
-        while let Some(command) = receiver.recv().await {
-            handle_cluster_command(&config, &mut state, command).await;
-        }
-        for producer in state.send_producers.values_mut() {
-            producer.shutdown().await;
-        }
-    });
+    let mut state = ClusterWorkerState::with_rpc_hook(rpc_hook);
+    while let Some(command) = receiver.recv().await {
+        handle_cluster_command(&config, &mut state, command).await;
+    }
+    for producer in state.send_producers.values_mut() {
+        producer.shutdown().await;
+    }
 }
 
 async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorkerState, command: ClusterCommand) {

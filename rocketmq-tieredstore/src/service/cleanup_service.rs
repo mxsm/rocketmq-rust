@@ -48,6 +48,10 @@ where
         }
     }
 
+    pub fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown.clone()
+    }
+
     pub async fn run(self) -> Result<(), RocketMQError> {
         let mut ticker = interval(self.config.delete_file_interval);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -134,7 +138,16 @@ mod tests {
 
         let shutdown = CancellationToken::new();
         let service = CleanupService::new(config, flat_file_store, shutdown.clone());
-        let handle = tokio::spawn(service.run());
+        let task_group = crate::runtime::task_group("rocketmq-tieredstore.cleanup-test")?;
+        let task_error = Arc::new(tokio::sync::Mutex::new(None));
+        let task_error_clone = task_error.clone();
+        task_group
+            .spawn_service("cleanup-service-test", async move {
+                if let Err(error) = service.run().await {
+                    *task_error_clone.lock().await = Some(error.to_string());
+                }
+            })
+            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
 
         for _ in 0..50 {
             if provider.segment_size(first_commit_log_path.clone()).await? == 0 {
@@ -144,7 +157,11 @@ mod tests {
         }
 
         shutdown.cancel();
-        handle.await.map_err(|err| RocketMQError::Internal(err.to_string()))??;
+        let report = task_group.shutdown(Duration::from_secs(2)).await;
+        crate::runtime::shutdown_report_result("cleanup service test", report)?;
+        if let Some(error) = task_error.lock().await.take() {
+            return Err(RocketMQError::Internal(error));
+        }
 
         assert_eq!(provider.segment_size(first_commit_log_path).await?, 0);
         Ok(())

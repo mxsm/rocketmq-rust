@@ -25,6 +25,7 @@ pub mod key;
 pub mod maintenance;
 pub mod message;
 pub mod options;
+pub(crate) mod runtime;
 pub mod snapshot;
 pub mod store;
 pub mod timer;

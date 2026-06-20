@@ -138,11 +138,7 @@ impl RocksDbTimerBuildService {
     }
 
     pub async fn flush_pending_blocking(self: Arc<Self>) -> Result<usize, RocketMQError> {
-        tokio::task::spawn_blocking(move || self.flush_pending())
-            .await
-            .map_err(|error| {
-                RocketMQError::storage_write_failed("rocksdb", format!("timer flush task failed: {error}"))
-            })?
+        crate::rocksdb::runtime::spawn_io("rocksdb.timer.flush_pending", move || self.flush_pending()).await?
     }
 
     pub fn get_dispatch_from_queue_offset(&self) -> Result<Option<i64>, RocketMQError> {

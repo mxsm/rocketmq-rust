@@ -14,8 +14,9 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -410,21 +411,17 @@ impl AuthRuntime {
 #[derive(Clone)]
 struct AclFileWatchHandle {
     shutdown_tx: watch::Sender<bool>,
-    join_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+    task_group: TaskGroup,
+    shutdown_timeout: Duration,
 }
 
 impl AclFileWatchHandle {
     async fn shutdown(&self) -> RocketMQResult<()> {
         let _ = self.shutdown_tx.send(true);
-        let join_handle = {
-            let mut guard = self.join_handle.lock().await;
-            guard.take()
-        };
-        if let Some(join_handle) = join_handle {
-            join_handle
-                .await
-                .map_err(|error| RocketMQError::auth_hot_reload_failed("aclFile", error.to_string()))?;
-        }
+        let report = self.task_group.shutdown(self.shutdown_timeout).await;
+        report
+            .assert_no_task_leak()
+            .map_err(|error| RocketMQError::auth_hot_reload_failed("aclFile", error))?;
         Ok(())
     }
 }
@@ -603,7 +600,15 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
     let watch_config = config.clone();
     let interval = Duration::from_millis(config.acl_file_watch_interval_millis.max(1));
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-    let join_handle = tokio::spawn(async move {
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle,
+        Err(error) => {
+            warn!("ACL file watcher requires a Tokio runtime: {error}");
+            return None;
+        }
+    };
+    let task_group = TaskGroup::root("rocketmq-auth.acl-file-watcher", RuntimeHandle::new(handle));
+    if let Err(error) = task_group.spawn_service("acl-file-watcher", async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -626,11 +631,15 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
                 }
             }
         }
-    });
+    }) {
+        warn!("Failed to spawn ACL file watcher: {error}");
+        return None;
+    }
 
     Some(AclFileWatchHandle {
         shutdown_tx,
-        join_handle: Arc::new(tokio::sync::Mutex::new(Some(join_handle))),
+        task_group,
+        shutdown_timeout: Duration::from_secs(5),
     })
 }
 

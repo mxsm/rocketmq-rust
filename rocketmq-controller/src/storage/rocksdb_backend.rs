@@ -16,6 +16,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocksdb::Options;
 use rocksdb::WriteBatch;
 use rocksdb::DB;
@@ -37,6 +41,9 @@ pub struct RocksDBBackend {
 
     /// Database path
     path: PathBuf,
+
+    /// Bounded executor for short RocksDB blocking I/O.
+    blocking: BlockingExecutor,
 }
 
 impl RocksDBBackend {
@@ -68,19 +75,61 @@ impl RocksDBBackend {
         opts.set_max_write_buffer_number(3);
         opts.set_min_write_buffer_number_to_merge(2);
 
+        let blocking = Self::new_blocking_executor()?;
+
         // Open the database
-        let db = DB::open(&opts, &path)
-            .map_err(|e| ControllerError::StorageError(format!("Failed to open RocksDB: {}", e)))?;
+        let db = blocking
+            .spawn_io("controller.rocksdb.open", {
+                let path = path.clone();
+                move || {
+                    DB::open(&opts, &path)
+                        .map_err(|e| ControllerError::StorageError(format!("Failed to open RocksDB: {}", e)))
+                }
+            })
+            .await
+            .map_err(map_blocking_error)??;
 
         info!("RocksDB opened successfully");
 
-        Ok(Self { db: Arc::new(db), path })
+        Ok(Self {
+            db: Arc::new(db),
+            path,
+            blocking,
+        })
     }
 
     /// Get the database path
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
+
+    async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> Result<R>
+    where
+        F: FnOnce() -> Result<R> + Send + 'static,
+        R: Send + 'static,
+    {
+        self.blocking
+            .spawn_io(name, operation)
+            .await
+            .map_err(map_blocking_error)?
+    }
+
+    fn new_blocking_executor() -> Result<BlockingExecutor> {
+        let runtime = RuntimeHandle::new(tokio::runtime::Handle::current());
+        let group = TaskGroup::root("controller.rocksdb", runtime);
+        BlockingExecutor::new(
+            BlockingPoolPolicy {
+                name: "controller.rocksdb".to_string(),
+                ..BlockingPoolPolicy::default()
+            },
+            group.child("controller.rocksdb.blocking-reaper"),
+        )
+        .map_err(map_blocking_error)
+    }
+}
+
+fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> ControllerError {
+    ControllerError::StorageError(format!("RocksDB blocking task failed: {error}"))
 }
 
 #[async_trait]
@@ -92,12 +141,11 @@ impl StorageBackend for RocksDBBackend {
         let key = key.to_string();
         let value = value.to_vec();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.put", move || {
             db.put(key.as_bytes(), value)
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB put failed: {}", e)))
         })
-        .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
+        .await?;
 
         Ok(())
     }
@@ -108,12 +156,11 @@ impl StorageBackend for RocksDBBackend {
         let db = self.db.clone();
         let key = key.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.get", move || {
             db.get(key.as_bytes())
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB get failed: {}", e)))
         })
         .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))?
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
@@ -122,12 +169,11 @@ impl StorageBackend for RocksDBBackend {
         let db = self.db.clone();
         let key = key.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.delete", move || {
             db.delete(key.as_bytes())
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB delete failed: {}", e)))
         })
-        .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
+        .await?;
 
         Ok(())
     }
@@ -138,7 +184,7 @@ impl StorageBackend for RocksDBBackend {
         let db = self.db.clone();
         let prefix = prefix.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.list_keys", move || {
             let mut keys = Vec::new();
             let iter = db.iterator(rocksdb::IteratorMode::Start);
 
@@ -163,7 +209,6 @@ impl StorageBackend for RocksDBBackend {
             Ok(keys)
         })
         .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))?
     }
 
     async fn batch_put(&self, items: Vec<(String, Vec<u8>)>) -> Result<()> {
@@ -171,7 +216,7 @@ impl StorageBackend for RocksDBBackend {
 
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.batch_put", move || {
             let mut batch = WriteBatch::default();
 
             for (key, value) in items {
@@ -181,8 +226,7 @@ impl StorageBackend for RocksDBBackend {
             db.write(batch)
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB batch write failed: {}", e)))
         })
-        .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
+        .await?;
 
         Ok(())
     }
@@ -192,7 +236,7 @@ impl StorageBackend for RocksDBBackend {
 
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.batch_delete", move || {
             let mut batch = WriteBatch::default();
 
             for key in keys {
@@ -202,8 +246,7 @@ impl StorageBackend for RocksDBBackend {
             db.write(batch)
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB batch delete failed: {}", e)))
         })
-        .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
+        .await?;
 
         Ok(())
     }
@@ -214,13 +257,12 @@ impl StorageBackend for RocksDBBackend {
         let db = self.db.clone();
         let key = key.to_string();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.exists", move || {
             db.get(key.as_bytes())
                 .map(|opt| opt.is_some())
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB exists check failed: {}", e)))
         })
         .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))?
     }
 
     async fn clear(&self) -> Result<()> {
@@ -228,7 +270,7 @@ impl StorageBackend for RocksDBBackend {
 
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.clear", move || {
             let mut batch = WriteBatch::default();
             let iter = db.iterator(rocksdb::IteratorMode::Start);
 
@@ -249,8 +291,7 @@ impl StorageBackend for RocksDBBackend {
             db.write(batch)
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB clear failed: {}", e)))
         })
-        .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
+        .await?;
 
         Ok(())
     }
@@ -260,12 +301,11 @@ impl StorageBackend for RocksDBBackend {
 
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.sync", move || {
             db.flush()
                 .map_err(|e| ControllerError::StorageError(format!("RocksDB sync failed: {}", e)))
         })
-        .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
+        .await?;
 
         Ok(())
     }
@@ -275,7 +315,7 @@ impl StorageBackend for RocksDBBackend {
 
         let db = self.db.clone();
 
-        tokio::task::spawn_blocking(move || {
+        self.spawn_io("controller.rocksdb.stats", move || {
             let mut key_count = 0;
             let mut total_size = 0u64;
 
@@ -308,7 +348,6 @@ impl StorageBackend for RocksDBBackend {
             })
         })
         .await
-        .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))?
     }
 }
 

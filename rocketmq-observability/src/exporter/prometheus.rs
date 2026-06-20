@@ -14,9 +14,19 @@
 
 #[cfg(feature = "prometheus")]
 use std::net::SocketAddr;
+#[cfg(feature = "prometheus")]
+use std::time::Duration;
 
 #[cfg(feature = "prometheus")]
 use opentelemetry_sdk::metrics::SdkMeterProvider;
+#[cfg(feature = "prometheus")]
+use rocketmq_runtime::RuntimeHandle;
+#[cfg(feature = "prometheus")]
+use rocketmq_runtime::ShutdownReport;
+#[cfg(feature = "prometheus")]
+use rocketmq_runtime::TaskGroup;
+#[cfg(feature = "prometheus")]
+use rocketmq_runtime::TaskKind;
 
 #[cfg(feature = "prometheus")]
 use crate::config::ObservabilityConfig;
@@ -53,7 +63,7 @@ impl PrometheusMetrics {
 pub struct PrometheusHttpHandle {
     local_addr: SocketAddr,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    join_handle: tokio::task::JoinHandle<()>,
+    task_group: TaskGroup,
 }
 
 #[cfg(feature = "prometheus")]
@@ -63,10 +73,19 @@ impl PrometheusHttpHandle {
     }
 
     pub fn shutdown(mut self) {
+        self.signal_shutdown();
+        self.task_group.cancel();
+    }
+
+    pub async fn shutdown_gracefully(mut self, timeout: Duration) -> ShutdownReport {
+        self.signal_shutdown();
+        self.task_group.shutdown(timeout).await
+    }
+
+    fn signal_shutdown(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
-        self.join_handle.abort();
     }
 }
 
@@ -122,12 +141,19 @@ pub fn spawn_prometheus_http_endpoint(
         ObservabilityError::metrics_init(format!("Prometheus metrics endpoint requires a Tokio runtime: {error}"))
     })?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let join_handle = runtime.spawn(run_prometheus_http_endpoint(listener, registry, path, shutdown_rx));
+    let task_group = TaskGroup::root("rocketmq.observability.prometheus", RuntimeHandle::new(runtime.clone()));
+    let connection_group = task_group.child("prometheus.connection");
+    task_group
+        .spawn_service(
+            "prometheus.accept",
+            run_prometheus_http_endpoint(listener, registry, path, shutdown_rx, connection_group),
+        )
+        .map_err(|error| ObservabilityError::metrics_init(format!("spawn Prometheus endpoint: {error}")))?;
 
     Ok(PrometheusHttpHandle {
         local_addr,
         shutdown: Some(shutdown_tx),
-        join_handle,
+        task_group,
     })
 }
 
@@ -169,6 +195,7 @@ async fn run_prometheus_http_endpoint(
     registry: prometheus::Registry,
     path: String,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
+    connection_group: TaskGroup,
 ) {
     loop {
         tokio::select! {
@@ -178,11 +205,13 @@ async fn run_prometheus_http_endpoint(
                     Ok((stream, _peer_addr)) => {
                         let registry = registry.clone();
                         let path = path.clone();
-                        tokio::spawn(async move {
-                            if let Err(error) = handle_prometheus_connection(stream, registry, path).await {
-                                tracing::debug!(%error, "failed to serve Prometheus metrics scrape");
-                            }
-                        });
+                        if let Err(error) = connection_group.spawn("prometheus.connection", TaskKind::Worker, async move {
+                                if let Err(error) = handle_prometheus_connection(stream, registry, path).await {
+                                    tracing::debug!(%error, "failed to serve Prometheus metrics scrape");
+                                }
+                            }) {
+                            tracing::debug!(%error, "failed to track Prometheus metrics scrape task");
+                        }
                     }
                     Err(error) => {
                         tracing::debug!(%error, "failed to accept Prometheus metrics scrape");

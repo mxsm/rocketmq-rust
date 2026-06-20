@@ -49,6 +49,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
 
 pub struct ConsumeMessageConcurrentlyService {
@@ -409,7 +410,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let listener = self.message_listener.clone();
         let group_for_span = self.consumer_group.clone();
-        let status = tokio::task::spawn_blocking(move || {
+        let status = spawn_client_blocking_io("client.concurrent.consume_direct", move || {
             let context = ConsumeConcurrentlyContext::new(mq);
             let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|m| m.as_ref()).collect();
             let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
@@ -647,36 +648,37 @@ impl ConsumeRequest {
             let group_for_err = self.consumer_group.clone();
             let process_span_for_blocking = process_span.clone();
 
-            let (blocking_status, blocking_has_exception, returned_context) = tokio::task::spawn_blocking(move || {
-                let _entered = process_span_for_blocking.enter();
-                let msgs_refs: Vec<&MessageExt> = msgs_for_blocking.iter().map(|m| m.as_ref()).collect();
-                match listener.consume_message(&msgs_refs, &context) {
-                    Ok(s) => (Some(s), false, context),
-                    Err(e) => {
-                        error!(
-                            "consumeMessage exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
-                            e,
-                            group_for_err,
-                            msgs_refs.len(),
-                            context.message_queue
-                        );
-                        (None, true, context)
+            let (blocking_status, blocking_has_exception, returned_context) =
+                spawn_client_blocking_io("client.concurrent.consume", move || {
+                    let _entered = process_span_for_blocking.enter();
+                    let msgs_refs: Vec<&MessageExt> = msgs_for_blocking.iter().map(|m| m.as_ref()).collect();
+                    match listener.consume_message(&msgs_refs, &context) {
+                        Ok(s) => (Some(s), false, context),
+                        Err(e) => {
+                            error!(
+                                "consumeMessage exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
+                                e,
+                                group_for_err,
+                                msgs_refs.len(),
+                                context.message_queue
+                            );
+                            (None, true, context)
+                        }
                     }
-                }
-            })
-            .await
-            .unwrap_or_else(|join_err| {
-                error!(
-                    "consume_message task panicked: {:?}, Group: {}, MQ: {}",
-                    join_err, self.consumer_group, self.message_queue
-                );
-                let fallback = ConsumeConcurrentlyContext {
-                    message_queue: self.message_queue.clone(),
-                    delay_level_when_next_consume: 0,
-                    ack_index: i32::MAX,
-                };
-                (None, true, fallback)
-            });
+                })
+                .await
+                .unwrap_or_else(|join_err| {
+                    error!(
+                        "consume_message task panicked: {:?}, Group: {}, MQ: {}",
+                        join_err, self.consumer_group, self.message_queue
+                    );
+                    let fallback = ConsumeConcurrentlyContext {
+                        message_queue: self.message_queue.clone(),
+                        delay_level_when_next_consume: 0,
+                        ack_index: i32::MAX,
+                    };
+                    (None, true, fallback)
+                });
             context = returned_context;
             status = blocking_status;
             has_exception = blocking_has_exception;

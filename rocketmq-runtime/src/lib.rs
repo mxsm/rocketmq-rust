@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod actor;
 pub mod blocking;
 pub mod config;
 pub mod context;
@@ -25,6 +26,7 @@ pub mod service_context;
 pub mod shutdown_report;
 pub mod task_group;
 
+pub use actor::ActorRuntime;
 pub use blocking::BlockingExecutor;
 pub use blocking::BlockingExecutorSnapshot;
 pub use blocking::BlockingKind;

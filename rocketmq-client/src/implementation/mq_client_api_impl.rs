@@ -46,6 +46,7 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
+use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task_on;
 use crate::runtime::spawn_detached_client_task;
 use cheetah_string::CheetahString;
@@ -2108,7 +2109,7 @@ impl MQClientAPIImpl {
 
     pub async fn fetch_name_server_addr(&mut self) -> Option<String> {
         let top_addressing = self.top_addressing.clone();
-        let addrs = tokio::task::spawn_blocking(move || top_addressing.fetch_ns_addr())
+        let addrs = spawn_client_blocking_io("client.fetch_name_server_addr", move || top_addressing.fetch_ns_addr())
             .await
             .unwrap_or_default();
 

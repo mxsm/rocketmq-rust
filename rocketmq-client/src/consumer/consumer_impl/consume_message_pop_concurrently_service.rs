@@ -51,6 +51,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_detached_client_task;
 
 fn spawn_detached_pop_concurrent_task<F>(thread_name: &'static str, task: F)
@@ -193,7 +194,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
-        let status_result = tokio::task::spawn_blocking(move || {
+        let status_result = spawn_client_blocking_io("client.pop_concurrent.consume_direct", move || {
             let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
                 msgs_refs.first().copied(),
@@ -691,7 +692,7 @@ impl ConsumeRequest {
             ack_index: i32::MAX,
         };
         let process_span_for_blocking = process_span.clone();
-        let blocking_result = tokio::task::spawn_blocking(move || {
+        let blocking_result = spawn_client_blocking_io("client.pop_concurrent.consume", move || {
             let _entered = process_span_for_blocking.enter();
             let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let result = listener.consume_message(&msgs_refs, &context);

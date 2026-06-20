@@ -13,13 +13,60 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::RuntimeResult;
+use rocketmq_runtime::TaskGroup;
 
 static AUTH_SYNC_RUNTIME: OnceLock<Result<RuntimeOwner, String>> = OnceLock::new();
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AuthBlockingExecutor {
+    inner: Arc<OnceLock<BlockingExecutor>>,
+}
+
+impl AuthBlockingExecutor {
+    pub(crate) async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.executor()?.spawn_io(name, operation).await
+    }
+
+    fn executor(&self) -> RuntimeResult<BlockingExecutor> {
+        if let Some(executor) = self.inner.get() {
+            return Ok(executor.clone());
+        }
+
+        let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
+        let group = TaskGroup::root("rocketmq-auth.blocking", RuntimeHandle::new(handle));
+        let executor = BlockingExecutor::new(
+            BlockingPoolPolicy {
+                name: "rocketmq-auth.blocking".to_string(),
+                ..BlockingPoolPolicy::default()
+            },
+            group.child("rocketmq-auth.blocking-reaper"),
+        )?;
+
+        if self.inner.set(executor.clone()).is_err() {
+            return Ok(self
+                .inner
+                .get()
+                .expect("auth blocking executor must be initialized")
+                .clone());
+        }
+        Ok(executor)
+    }
+}
 
 pub(crate) fn block_on_sync_bridge<F, Fut, T, E, BuildError, ThreadPanic>(
     future: F,

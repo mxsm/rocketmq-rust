@@ -50,6 +50,7 @@ use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
+use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
 
 pub struct ConsumeMessagePopOrderlyService {
@@ -585,7 +586,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
-        let blocking_result = tokio::task::spawn_blocking(move || {
+        let blocking_result = spawn_client_blocking_io("client.pop_orderly.consume_direct", move || {
             let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let mut ctx = ConsumeOrderlyContext::new(mq);
             let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
@@ -751,7 +752,7 @@ impl ConsumeRequest {
         let mq = self.message_queue.clone();
         let mq_for_fallback = self.message_queue.clone();
         let process_span_for_blocking = process_span.clone();
-        let blocking_result = tokio::task::spawn_blocking(move || {
+        let blocking_result = spawn_client_blocking_io("client.pop_orderly.consume", move || {
             let _entered = process_span_for_blocking.enter();
             let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
             let mut ctx = ConsumeOrderlyContext::new(mq);

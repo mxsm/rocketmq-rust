@@ -94,6 +94,7 @@ use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
+use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task_on;
 use tokio::task::JoinHandle;
 
@@ -2784,9 +2785,14 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 (msg, unique_key, transaction_state)
             };
             let check_result = if let Some(executor) = task_executor {
-                executor.spawn_blocking(check_task).await
+                executor
+                    .spawn_blocking(check_task)
+                    .await
+                    .map_err(|error| error.to_string())
             } else {
-                tokio::task::spawn_blocking(check_task).await
+                spawn_client_blocking_io("client.transaction.check", check_task)
+                    .await
+                    .map_err(|error| error.to_string())
             };
 
             let Ok((msg, unique_key, transaction_state)) = check_result else {

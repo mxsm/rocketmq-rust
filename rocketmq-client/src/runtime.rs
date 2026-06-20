@@ -22,12 +22,17 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::TaskGroup;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 static SHARED_FALLBACK: OnceLock<ClientSharedFallbackRegistry> = OnceLock::new();
+static CLIENT_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
 
 pub(crate) fn spawn_client_task<F>(task_name: &'static str, task: F) -> io::Result<JoinHandle<()>>
 where
@@ -63,6 +68,17 @@ where
     Ok(())
 }
 
+pub(crate) async fn spawn_client_blocking_io<F, R>(task_name: &'static str, task: F) -> io::Result<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    client_blocking_executor()?
+        .spawn_io(task_name, task)
+        .await
+        .map_err(io::Error::other)
+}
+
 pub(crate) fn spawn_delayed_client_action<F>(task_name: &'static str, delay: std::time::Duration, action: F)
 where
     F: FnOnce() + Send + 'static,
@@ -91,6 +107,31 @@ fn shared_fallback() -> io::Result<ClientSharedFallbackLease> {
 
 fn shared_fallback_registry() -> &'static ClientSharedFallbackRegistry {
     SHARED_FALLBACK.get_or_init(ClientSharedFallbackRegistry::new)
+}
+
+fn client_blocking_executor() -> io::Result<BlockingExecutor> {
+    if let Some(executor) = CLIENT_BLOCKING.get() {
+        return Ok(executor.clone());
+    }
+
+    let handle = Handle::try_current().map_err(io::Error::other)?;
+    let group = TaskGroup::root("rocketmq-client.blocking", RuntimeHandle::new(handle));
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            name: "rocketmq-client.blocking".to_string(),
+            ..BlockingPoolPolicy::default()
+        },
+        group.child("rocketmq-client.blocking-reaper"),
+    )
+    .map_err(io::Error::other)?;
+
+    if CLIENT_BLOCKING.set(executor.clone()).is_err() {
+        return Ok(CLIENT_BLOCKING
+            .get()
+            .expect("client blocking executor must be initialized")
+            .clone());
+    }
+    Ok(executor)
 }
 
 struct ClientSharedFallbackRegistry {
