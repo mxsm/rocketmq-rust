@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
@@ -56,6 +59,7 @@ pub struct Client<PR> {
     inner: ArcMut<ClientInner<PR>>,
     notify_shutdown: broadcast::Sender<()>,
     tx: tokio::sync::mpsc::Sender<SendMessage>,
+    task_lifecycle: Arc<ClientTaskLifecycle>,
 }
 
 type SendMessage = (
@@ -70,6 +74,27 @@ struct ClientInner<PR> {
     shutdown: Shutdown,
 }
 
+struct ClientTaskLifecycle {
+    task_group: TaskGroup,
+}
+
+impl<PR> Drop for Client<PR> {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.task_lifecycle) != 1 {
+            return;
+        }
+
+        let _ = self.notify_shutdown.send(());
+        let report = self.task_lifecycle.task_group.shutdown_now();
+        if !report.is_healthy() {
+            tracing::warn!(
+                report = %report.to_json(),
+                "Remoting client connection task shutdown report is unhealthy"
+            );
+        }
+    }
+}
+
 impl<PR> ClientInner<PR>
 where
     PR: RequestProcessor + Sync + 'static,
@@ -80,6 +105,7 @@ where
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         notify: broadcast::Receiver<()>,
         tls_config: TlsConfig,
+        task_group: TaskGroup,
     ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner<PR>>)> {
         let stream = TcpStream::connect(addr.as_str()).await.map_err(io_error)?;
         let local_addr = stream.local_addr()?;
@@ -116,13 +142,23 @@ where
         };
         let client_inner = ArcMut::new(client);
         let mut client_ = client_inner.clone();
-        tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("remoting.client.connection.recv", async move {
             let _ = client_.run_recv().await;
-        });
+        }) {
+            let _ = task_group.shutdown_now();
+            return Err(remote_error(format!(
+                "failed to spawn remoting client receive task: {error}"
+            )));
+        }
         let mut client_ = client_inner.clone();
-        tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("remoting.client.connection.send", async move {
             client_.run_send(rx).await;
-        });
+        }) {
+            let _ = task_group.shutdown_now();
+            return Err(remote_error(format!(
+                "failed to spawn remoting client send task: {error}"
+            )));
+        }
 
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(client_inner.ctx.channel.remote_address()));
@@ -211,11 +247,19 @@ where
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
-        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver, tls_config).await?;
+        let task_group = TaskGroup::root(
+            format!("rocketmq-remoting.client.connection[{addr}]"),
+            RuntimeHandle::new(tokio::runtime::Handle::current()),
+        );
+        let task_lifecycle = Arc::new(ClientTaskLifecycle {
+            task_group: task_group.clone(),
+        });
+        let (tx, inner) = ClientInner::connect(addr, cmd_handler, tx, receiver, tls_config, task_group).await?;
         Ok(Client {
             inner,
             notify_shutdown,
             tx,
+            task_lifecycle,
         })
     }
 
@@ -443,5 +487,46 @@ mod tls_tests {
         assert_eq!(server_name_from_addr("127.0.0.1:10911"), "127.0.0.1");
         assert_eq!(server_name_from_addr("[::1]:10911"), "::1");
         assert_eq!(server_name_from_addr("::1"), "::1");
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use rocketmq_runtime::TaskGroupLifecycleState;
+    use tokio::net::TcpListener;
+    use tokio::time;
+
+    use super::*;
+    use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+
+    #[tokio::test]
+    async fn drop_last_client_closes_connection_task_group() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.expect("accept client");
+            time::sleep(Duration::from_secs(5)).await;
+        });
+        let cmd_handler = ArcMut::new(RemotingGeneralHandler {
+            request_processor: DefaultRemotingRequestProcessor,
+            rpc_hooks: vec![],
+            response_table: ArcMut::new(HashMap::new()),
+        });
+
+        let client = Client::connect(addr.to_string(), cmd_handler, None, TlsConfig::default())
+            .await
+            .expect("connect client");
+        let task_group = client.task_lifecycle.task_group.clone();
+
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
+        assert_eq!(task_group.task_count(), 2);
+
+        drop(client);
+
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        server.abort();
     }
 }

@@ -504,19 +504,22 @@ impl RpcClientImpl {
     {
         let client_metadata = self.client_metadata.clone();
         let remoting_client = self.remoting_client.clone();
+        let remoting_client_for_task = remoting_client.clone();
         let hooks = self.client_hook_list.clone();
 
-        tokio::spawn(async move {
-            // Create a temporary client instance for the async task
-            let temp_client = RpcClientImpl {
-                client_metadata,
-                remoting_client,
-                client_hook_list: hooks,
-            };
+        remoting_client
+            .spawn_worker_task_with_handle("remoting.rpc.callback", async move {
+                // Create a temporary client instance for the async task
+                let temp_client = RpcClientImpl {
+                    client_metadata,
+                    remoting_client: remoting_client_for_task,
+                    client_hook_list: hooks,
+                };
 
-            let result = temp_client.invoke(request, timeout_millis).await;
-            callback(result);
-        })
+                let result = temp_client.invoke(request, timeout_millis).await;
+                callback(result);
+            })
+            .expect("RPC callback task should be spawned on the remoting worker task group")
     }
 }
 
@@ -526,6 +529,7 @@ mod tests {
 
     use super::*;
     use crate::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+    use crate::remoting::RemotingService;
     use crate::runtime::config::client_config::TokioClientConfig;
 
     #[test]
@@ -568,5 +572,46 @@ mod tests {
             error,
             rocketmq_error::RocketMQError::Rpc(RpcClientError::BrokerNotFound { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn invoke_with_callback_uses_remoting_worker_task_group() {
+        let client_metadata = Arc::new(ClientMetadata::new());
+        let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
+            Arc::new(TokioClientConfig::default()),
+            DefaultRemotingRequestProcessor,
+        ));
+        let rpc_client = RpcClientImpl::new(client_metadata, remoting_client.clone());
+        let request = RpcRequest::new(
+            RequestCode::GetMinOffset.into(),
+            GetMinOffsetRequestHeader {
+                topic: CheetahString::from_static_str("TopicA"),
+                queue_id: 0,
+                topic_request_header: None,
+            },
+            None,
+        );
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let handle = rpc_client.invoke_with_callback(request, 3000, move |result| {
+            let _ = tx.send(result.is_err());
+        });
+
+        handle.await.expect("callback task should join");
+        assert!(rx.await.expect("callback result should be sent"));
+
+        let worker_task_group = remoting_client.worker_task_group().expect("worker task group");
+        assert_eq!(
+            worker_task_group.lifecycle_state(),
+            rocketmq_runtime::TaskGroupLifecycleState::Open
+        );
+        assert_eq!(worker_task_group.task_count(), 0);
+
+        remoting_client.mut_from_ref().shutdown();
+
+        assert_eq!(
+            worker_task_group.lifecycle_state(),
+            rocketmq_runtime::TaskGroupLifecycleState::Closed
+        );
     }
 }

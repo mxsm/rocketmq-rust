@@ -36,11 +36,8 @@ impl LocalRequestHarness {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let server_addr = listener.local_addr()?;
 
-        let client_task = tokio::spawn(async move { tokio::net::TcpStream::connect(server_addr).await });
-        let (server_stream, _) = listener.accept().await?;
-        let client_stream = client_task.await.map_err(|error| {
-            rocketmq_error::RocketMQError::Internal(format!("failed to join local remoting client task: {error}"))
-        })??;
+        let (client_stream, (server_stream, _)) =
+            tokio::try_join!(tokio::net::TcpStream::connect(server_addr), listener.accept())?;
 
         let local_address = server_stream.local_addr()?;
         let remote_address = server_stream.peer_addr()?;

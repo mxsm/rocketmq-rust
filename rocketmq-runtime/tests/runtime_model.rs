@@ -51,6 +51,20 @@ async fn task_group_shutdown_reports_panics() {
 }
 
 #[tokio::test]
+async fn task_group_spawn_service_with_handle_remains_tracked() {
+    let context = RuntimeContext::from_current("task-group-handle-test");
+    let group = context.root_group().child("service");
+
+    let (_task_id, handle) = group.spawn_service_with_handle("handled-task", async move {}).unwrap();
+
+    handle.await.expect("tracked task should join");
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.completed, 1);
+}
+
+#[tokio::test]
 async fn task_group_shutdown_aborts_after_timeout_without_leak() {
     let context = RuntimeContext::from_current("task-group-abort-test");
     let group = context.root_group().child("service");

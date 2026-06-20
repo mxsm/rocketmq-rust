@@ -14,11 +14,16 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::time;
@@ -170,6 +175,12 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// scan loops spawned in [`start()`].
     shutdown_token: CancellationToken,
 
+    /// Task group that owns long-lived background maintenance tasks.
+    background_task_group: Arc<Mutex<Option<TaskGroup>>>,
+
+    /// Task group that owns short-lived client worker tasks.
+    worker_task_group: Arc<Mutex<Option<TaskGroup>>>,
+
     /// Shared command handler (processor + response table)
     ///
     /// Arc-wrapped to share across all `Client` instances
@@ -193,6 +204,8 @@ impl<PR> Clone for RocketmqDefaultClient<PR> {
             circuit_breakers: self.circuit_breakers.clone(),
             connection_pool: self.connection_pool.clone(),
             shutdown_token: self.shutdown_token.clone(),
+            background_task_group: self.background_task_group.clone(),
+            worker_task_group: self.worker_task_group.clone(),
             cmd_handler: self.cmd_handler.clone(),
             tx: self.tx.clone(),
         }
@@ -224,6 +237,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             circuit_breakers: Arc::new(DashMap::with_capacity(64)),
             connection_pool: None,
             shutdown_token: CancellationToken::new(),
+            background_task_group: Arc::new(Mutex::new(None)),
+            worker_task_group: Arc::new(Mutex::new(None)),
             cmd_handler: ArcMut::new(handler),
             tx,
         }
@@ -239,6 +254,60 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     #[inline]
     pub fn tls_config(&self) -> &TlsConfig {
         &self.tokio_client_config.tls_config
+    }
+
+    fn get_or_create_worker_task_group(&self) -> Option<TaskGroup> {
+        if self.shutdown_token.is_cancelled() {
+            return None;
+        }
+
+        let mut task_group_guard = self.worker_task_group.lock();
+        if let Some(task_group) = task_group_guard.as_ref() {
+            if task_group.lifecycle_state() == TaskGroupLifecycleState::Open {
+                return Some(task_group.clone());
+            }
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                error!(
+                    ?error,
+                    "failed to create RemotingClient worker task group outside Tokio runtime"
+                );
+                return None;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-remoting.client.workers", runtime);
+        *task_group_guard = Some(task_group.clone());
+        Some(task_group)
+    }
+
+    pub(crate) fn worker_task_group(&self) -> Option<TaskGroup> {
+        self.worker_task_group.lock().as_ref().cloned()
+    }
+
+    pub(crate) fn spawn_worker_task_with_handle<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        future: F,
+    ) -> Option<tokio::task::JoinHandle<()>>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let name = name.into();
+        let task_group = self.get_or_create_worker_task_group()?;
+        match task_group.spawn_service_with_handle(name.clone(), future) {
+            Ok((_task_id, join_handle)) => Some(join_handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    task = %name,
+                    "failed to spawn RemotingClient worker task"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -782,12 +851,36 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
     async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    error!(
+                        ?error,
+                        "failed to start RemotingClient background tasks outside Tokio runtime"
+                    );
+                    return;
+                }
+            };
+            let task_group = {
+                let mut task_group_guard = self.background_task_group.lock();
+                if let Some(task_group) = task_group_guard.as_ref() {
+                    if task_group.lifecycle_state() == TaskGroupLifecycleState::Open {
+                        debug!("RemotingClient background tasks are already running");
+                        return;
+                    }
+                }
+
+                let task_group = TaskGroup::root("rocketmq-remoting.client", runtime);
+                *task_group_guard = Some(task_group.clone());
+                task_group
+            };
+
             let connect_timeout_millis = self.tokio_client_config.connect_timeout_millis as u64;
             let token = self.shutdown_token.clone();
 
             let client_for_scan = client.clone();
             let scan_token = token.clone();
-            tokio::spawn(async move {
+            if let Err(error) = task_group.spawn_service("remoting.client.namesrv-scan", async move {
                 loop {
                     tokio::select! {
                         () = scan_token.cancelled() => break,
@@ -797,12 +890,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                         } => {}
                     }
                 }
-            });
+            }) {
+                error!(?error, "failed to spawn RemotingClient nameserver scan task");
+            }
 
             let channel_not_active_interval = self.tokio_client_config.channel_not_active_interval as u64;
             if channel_not_active_interval > 0 {
                 let idle_token = token.clone();
-                tokio::spawn(async move {
+                if let Err(error) = task_group.spawn_service("remoting.client.idle-scan", async move {
                     loop {
                         tokio::select! {
                             () = idle_token.cancelled() => break,
@@ -811,13 +906,33 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                             }
                         }
                     }
-                });
+                }) {
+                    error!(?error, "failed to spawn RemotingClient idle connection scan task");
+                }
             }
         }
     }
 
     fn shutdown(&mut self) {
         self.shutdown_token.cancel();
+        if let Some(task_group) = self.background_task_group.lock().take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "RemotingClient background task shutdown report is unhealthy"
+                );
+            }
+        }
+        if let Some(task_group) = self.worker_task_group.lock().take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "RemotingClient worker task shutdown report is unhealthy"
+                );
+            }
+        }
         self.connection_tables.clear();
         self.namesrv_addr_list.clear();
         self.available_namesrv_addr_set.clear();
@@ -1058,7 +1173,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     }
                 }
                 let addr_clone = addr.clone();
-                tokio::spawn(async move {
+                let Some(task_group) = self.get_or_create_worker_task_group() else {
+                    warn!("invokeOneway: client is shut down, skipping send to {}", addr);
+                    return;
+                };
+                if let Err(error) = task_group.spawn_service("remoting.client.oneway-send", async move {
                     match time::timeout(Duration::from_millis(timeout_millis), async move {
                         let mut request = request;
                         request.mark_oneway_rpc_ref();
@@ -1077,15 +1196,25 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                             );
                         }
                     }
-                });
+                }) {
+                    warn!("invokeOneway: failed to spawn send task for {}: {:?}", addr, error);
+                }
             }
         }
     }
 
     fn invoke_oneway_unbounded(&self, addr: CheetahString, request: RemotingCommand) {
         let client_owner = self.clone();
+        let addr_for_spawn_error = addr.clone();
+        let Some(task_group) = self.get_or_create_worker_task_group() else {
+            tracing::debug!(
+                "invoke_oneway_unbounded: client is shut down, skipping send to {}",
+                addr
+            );
+            return;
+        };
 
-        tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("remoting.client.oneway-unbounded", async move {
             if client_owner.shutdown_token.is_cancelled() {
                 tracing::debug!(
                     "invoke_oneway_unbounded: client is shut down, skipping send to {}",
@@ -1120,7 +1249,13 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             if let Err(error) = client.send(request).await {
                 tracing::warn!("invoke_oneway_unbounded: send request to {} failed: {:?}", addr, error);
             }
-        });
+        }) {
+            tracing::warn!(
+                "invoke_oneway_unbounded: failed to spawn send task for {}: {:?}",
+                addr_for_spawn_error,
+                error
+            );
+        }
     }
 
     fn is_address_reachable(&mut self, addr: &CheetahString) {
@@ -1213,6 +1348,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_tracks_background_tasks_with_task_group() {
+        let config = TokioClientConfig {
+            connect_timeout_millis: 10,
+            channel_not_active_interval: 10,
+            ..Default::default()
+        };
+        let client = ArcMut::new(RocketmqDefaultClient::new(
+            Arc::new(config),
+            DefaultRemotingRequestProcessor,
+        ));
+        let weak_client = ArcMut::downgrade(&client);
+
+        client.start(weak_client).await;
+
+        let task_group = client
+            .background_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("background task group");
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
+        assert_eq!(task_group.task_count(), 2);
+
+        client.mut_from_ref().shutdown();
+
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+    }
+
+    #[tokio::test]
     async fn invoke_request_runs_outbound_rpc_hooks() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
@@ -1293,6 +1457,13 @@ mod tests {
         let target = CheetahString::from_string(addr.to_string());
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
         client.invoke_oneway_unbounded(target, request);
+        let worker_task_group = client
+            .worker_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("worker task group");
+        assert_eq!(worker_task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
 
         let (code, is_oneway, hooked) = time::timeout(Duration::from_secs(3), received_rx)
             .await
@@ -1307,5 +1478,6 @@ mod tests {
 
         server.await.expect("server task");
         client.shutdown();
+        assert_eq!(worker_task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
     }
 }

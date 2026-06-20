@@ -211,6 +211,29 @@ impl TaskGroup {
         self.spawn(name, TaskKind::Service, future)
     }
 
+    pub fn spawn_with_handle<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: TaskKind,
+        future: F,
+    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn_inner_with_handle(name.into(), kind, false, true, future)
+    }
+
+    pub fn spawn_service_with_handle<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        future: F,
+    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn_with_handle(name, TaskKind::Service, future)
+    }
+
     pub fn spawn_detached<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -247,6 +270,22 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached, false, future)?;
+        drop(join_handle);
+        Ok(task_id)
+    }
+
+    fn spawn_inner_with_handle<F>(
+        &self,
+        name: Arc<str>,
+        kind: TaskKind,
+        detached: bool,
+        propagate_panic: bool,
+        future: F,
+    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         let _spawn_guard = self.inner.spawn_gate.lock();
         if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
             return Err(RuntimeError::TaskGroupClosing {
@@ -275,15 +314,21 @@ impl TaskGroup {
         let token = inner.cancellation_token.clone();
         let wrapped = async move {
             let result = AssertUnwindSafe(future).catch_unwind().await;
-            let task_result = match result {
-                Ok(()) if token.is_cancelled() => TaskResult::Cancelled,
-                Ok(()) => TaskResult::Completed,
+            match result {
+                Ok(()) if token.is_cancelled() => {
+                    inner.finish_task(task_id, TaskResult::Cancelled);
+                }
+                Ok(()) => {
+                    inner.finish_task(task_id, TaskResult::Completed);
+                }
                 Err(error) => {
                     tracing::error!(task_id = task_id.as_u64(), ?error, "task panicked");
-                    TaskResult::Panicked
+                    inner.finish_task(task_id, TaskResult::Panicked);
+                    if propagate_panic {
+                        std::panic::resume_unwind(error);
+                    }
                 }
-            };
-            inner.finish_task(task_id, task_result);
+            }
         };
 
         let join_handle = if detached {
@@ -292,14 +337,13 @@ impl TaskGroup {
             self.inner.tracker.spawn_on(wrapped, self.inner.runtime.inner())
         };
         let abort_handle = join_handle.abort_handle();
-        drop(join_handle);
 
         if let Some(mut meta) = self.inner.tasks.get_mut(&task_id) {
             meta.abort_handle = Some(abort_handle);
             meta.state = TaskState::Running;
         }
 
-        Ok(task_id)
+        Ok((task_id, join_handle))
     }
 
     async fn shutdown_inner(&self, timeout: Duration) -> ShutdownReport {
