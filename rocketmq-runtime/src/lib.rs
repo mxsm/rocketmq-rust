@@ -42,6 +42,7 @@ pub use legacy::RocketMQRuntime;
 pub use owner::RuntimeOwner;
 pub use scheduled::ScheduleMode;
 pub use scheduled::ScheduledTaskConfig;
+pub use scheduled::ScheduledTaskControl;
 pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ServiceContext;

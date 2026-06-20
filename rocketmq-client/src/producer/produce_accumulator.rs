@@ -20,13 +20,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use parking_lot::Mutex as ParkingMutex;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -34,16 +33,25 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use tokio::sync::watch;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
-use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
 const GUARD_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProduceAccumulatorGuardLifecycleProbe {
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
+    pub healthy: bool,
+}
 
 #[derive(Default)]
 pub struct ProduceAccumulator {
@@ -142,6 +150,10 @@ impl ProduceAccumulator {
     pub async fn shutdown_async(&mut self) {
         self.guard_thread_for_sync_send.shutdown_async().await;
         self.guard_thread_for_async_send.shutdown_async().await;
+    }
+
+    fn guard_task_count(&self) -> usize {
+        self.guard_thread_for_sync_send.task_count() + self.guard_thread_for_async_send.task_count()
     }
 
     pub(crate) fn try_add_message<T: MessageTrait>(&self, message: &T) -> bool {
@@ -509,6 +521,34 @@ fn build_message_batch(
     Ok(batch)
 }
 
+#[doc(hidden)]
+pub async fn run_produce_accumulator_guard_lifecycle_probe() -> ProduceAccumulatorGuardLifecycleProbe {
+    let mut accumulator = ProduceAccumulator::new("produce_accumulator_guard_probe");
+    accumulator.start();
+
+    let mut task_count_before_shutdown = accumulator.guard_task_count();
+    for _ in 0..100 {
+        if task_count_before_shutdown == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        task_count_before_shutdown = accumulator.guard_task_count();
+    }
+
+    let shutdown_started_at = Instant::now();
+    accumulator.shutdown_async().await;
+    let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+    let task_count_after_shutdown = accumulator.guard_task_count();
+    let healthy = task_count_before_shutdown == 2 && task_count_after_shutdown == 0;
+
+    ProduceAccumulatorGuardLifecycleProbe {
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
+        healthy,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::pending;
@@ -658,6 +698,15 @@ mod tests {
 
         assert!(accumulator.guard_thread_for_sync_send.task_handle.is_none());
         assert!(accumulator.guard_thread_for_async_send.task_handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn produce_accumulator_guard_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_produce_accumulator_guard_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 2, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
     }
 
     #[tokio::test]
@@ -939,75 +988,52 @@ struct GuardForSyncSendService {
 }
 
 enum GuardTaskHandle {
-    Tokio {
+    Tracked {
         shutdown_tx: watch::Sender<bool>,
-        handle: JoinHandle<()>,
-        completion_rx: ParkingMutex<Option<std_mpsc::Receiver<()>>>,
+        handle: ClientTrackedTaskHandle,
     },
 }
 
 impl GuardTaskHandle {
     fn is_finished(&self) -> bool {
         match self {
-            Self::Tokio { handle, .. } => handle.is_finished(),
+            Self::Tracked { handle, .. } => handle.task_count() == 0,
         }
     }
 
     async fn shutdown_async(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio {
-                shutdown_tx, handle, ..
-            } => {
+            Self::Tracked { shutdown_tx, handle } => {
                 let _ = shutdown_tx.send(true);
-                let mut handle = handle;
-                match tokio::time::timeout(timeout, &mut handle).await {
-                    Ok(Ok(())) => true,
-                    Ok(Err(error)) if error.is_cancelled() => true,
-                    Ok(Err(error)) => {
-                        tracing::warn!(%error, "batch guard task exited with join error");
-                        true
-                    }
-                    Err(_) => {
-                        handle.abort();
-                        match handle.await {
-                            Ok(()) => {}
-                            Err(error) if error.is_cancelled() => {}
-                            Err(error) => tracing::warn!(%error, "batch guard task aborted with join error"),
-                        }
-                        false
-                    }
+                let report = handle.shutdown(timeout).await;
+                if !report.is_healthy() {
+                    tracing::warn!(report = %report.to_json(), "batch guard task shutdown report is unhealthy");
                 }
+                report.is_healthy()
             }
         }
     }
 
     fn shutdown_blocking(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio {
-                shutdown_tx,
-                handle,
-                completion_rx,
-            } => {
+            Self::Tracked { shutdown_tx, handle } => {
                 let _ = shutdown_tx.send(true);
-                let completion_rx = completion_rx
-                    .into_inner()
-                    .expect("batch guard completion receiver should be present");
-                match completion_rx.recv_timeout(timeout) {
-                    Ok(()) => true,
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                        handle.abort();
-                        false
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                        if handle.is_finished() {
-                            true
-                        } else {
-                            handle.abort();
-                            false
-                        }
-                    }
+                let (report, completed) = handle.shutdown_blocking(timeout);
+                if !completed || !report.is_healthy() {
+                    tracing::warn!(
+                        completed_before_timeout = completed,
+                        report = %report.to_json(),
+                        "batch guard task blocking shutdown report is unhealthy"
+                    );
                 }
+                completed && report.is_healthy()
             }
+        }
+    }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tracked { handle, .. } => handle.task_count(),
         }
     }
 }
@@ -1016,39 +1042,11 @@ fn spawn_guard_task<F>(thread_name: &'static str, shutdown_tx: watch::Sender<boo
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let (completion_tx, completion_rx) = std_mpsc::channel();
-    match spawn_client_task(thread_name, async move {
-        let _completion_guard = CompletionSignal::new(completion_tx);
-        task.await;
-    }) {
-        Ok(handle) => Some(GuardTaskHandle::Tokio {
-            shutdown_tx,
-            handle,
-            completion_rx: ParkingMutex::new(Some(completion_rx)),
-        }),
+    match spawn_client_tracked_task(thread_name, task) {
+        Ok(handle) => Some(GuardTaskHandle::Tracked { shutdown_tx, handle }),
         Err(error) => {
             tracing::error!("Failed to spawn {} background task: {}", thread_name, error);
             None
-        }
-    }
-}
-
-struct CompletionSignal {
-    completion_tx: Option<std_mpsc::Sender<()>>,
-}
-
-impl CompletionSignal {
-    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
-        Self {
-            completion_tx: Some(completion_tx),
-        }
-    }
-}
-
-impl Drop for CompletionSignal {
-    fn drop(&mut self) {
-        if let Some(completion_tx) = self.completion_tx.take() {
-            let _ = completion_tx.send(());
         }
     }
 }
@@ -1146,6 +1144,13 @@ impl GuardForSyncSendService {
                 );
             }
         }
+    }
+
+    fn task_count(&self) -> usize {
+        self.task_handle
+            .as_ref()
+            .map(GuardTaskHandle::task_count)
+            .unwrap_or_default()
     }
 }
 
@@ -1338,5 +1343,12 @@ impl GuardForAsyncSendService {
                 );
             }
         }
+    }
+
+    fn task_count(&self) -> usize {
+        self.task_handle
+            .as_ref()
+            .map(GuardTaskHandle::task_count)
+            .unwrap_or_default()
     }
 }

@@ -12,6 +12,7 @@ use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -393,6 +394,52 @@ async fn scheduled_fixed_rate_allows_overlap_and_reports_overlap_metrics() {
     assert!(snapshot.overlaps >= 1, "{snapshot:?}");
     assert!(snapshot.active_runs >= 1, "{snapshot:?}");
     assert!(snapshot.max_elapsed_ms >= 40, "{snapshot:?}");
+
+    let report = scheduled.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn scheduled_fixed_delay_controlled_stops_when_task_requests_stop() {
+    let context = RuntimeContext::from_current("scheduled-controlled-stop-test");
+    let service = context.service_context("service");
+    let scheduled = ScheduledTaskGroup::new(service.task_group().child("scheduled"));
+    let runs = Arc::new(AtomicUsize::new(0));
+    let runs_in_task = runs.clone();
+
+    scheduled
+        .schedule_fixed_delay_controlled(
+            ScheduledTaskConfig::fixed_delay("self-stopping-task", Duration::from_millis(5)),
+            move || {
+                let runs = runs_in_task.clone();
+                async move {
+                    if runs.fetch_add(1, Ordering::AcqRel) == 0 {
+                        ScheduledTaskControl::Continue
+                    } else {
+                        ScheduledTaskControl::Stop
+                    }
+                }
+            },
+        )
+        .unwrap();
+
+    for _ in 0..100 {
+        if runs.load(Ordering::Acquire) >= 2 && scheduled.group().task_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+
+    let snapshot = scheduled
+        .snapshot()
+        .into_iter()
+        .find(|task| task.name == "self-stopping-task")
+        .expect("scheduled task snapshot should exist");
+
+    assert_eq!(runs.load(Ordering::Acquire), 2, "{snapshot:?}");
+    assert_eq!(snapshot.runs, 2, "{snapshot:?}");
+    assert_eq!(snapshot.failures, 0, "{snapshot:?}");
+    assert_eq!(scheduled.group().task_count(), 0, "{snapshot:?}");
 
     let report = scheduled.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());

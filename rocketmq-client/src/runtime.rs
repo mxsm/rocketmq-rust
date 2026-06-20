@@ -17,6 +17,7 @@ use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex as StdMutex;
@@ -31,6 +32,7 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
@@ -84,6 +86,87 @@ where
     Ok(())
 }
 
+pub(crate) struct ClientTrackedTaskHandle {
+    task_group: TaskGroup,
+    completion_rx: Mutex<Option<std_mpsc::Receiver<()>>>,
+    join_handle: JoinHandle<()>,
+    _fallback_lease: Option<ClientSharedFallbackLease>,
+}
+
+impl ClientTrackedTaskHandle {
+    pub(crate) fn task_count(&self) -> usize {
+        self.task_group.task_count()
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.join_handle.is_finished()
+    }
+
+    pub(crate) async fn shutdown(self, timeout: Duration) -> ShutdownReport {
+        self.task_group.shutdown(timeout).await
+    }
+
+    pub(crate) fn shutdown_blocking(self, timeout: Duration) -> (ShutdownReport, bool) {
+        let completion_rx = self
+            .completion_rx
+            .into_inner()
+            .expect("client tracked task completion receiver should be present");
+        let completed = match completion_rx.recv_timeout(timeout) {
+            Ok(()) => true,
+            Err(std_mpsc::RecvTimeoutError::Timeout) => false,
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => self.join_handle.is_finished(),
+        };
+
+        let report = self.task_group.shutdown_now();
+        (report, completed)
+    }
+
+    pub(crate) fn shutdown_now(self) -> ShutdownReport {
+        self.task_group.shutdown_now()
+    }
+}
+
+pub(crate) fn spawn_client_tracked_task<F>(task_name: &'static str, task: F) -> io::Result<ClientTrackedTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (task_group, fallback_lease) = client_task_group(task_name)?;
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    let (_, join_handle) = task_group
+        .spawn_service_with_handle(task_name, async move {
+            let _completion = ClientTrackedTaskCompletion::new(completion_tx);
+            task.await;
+        })
+        .map_err(io::Error::other)?;
+
+    Ok(ClientTrackedTaskHandle {
+        task_group,
+        completion_rx: Mutex::new(Some(completion_rx)),
+        join_handle,
+        _fallback_lease: fallback_lease,
+    })
+}
+
+struct ClientTrackedTaskCompletion {
+    completion_tx: Option<std_mpsc::Sender<()>>,
+}
+
+impl ClientTrackedTaskCompletion {
+    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
+        Self {
+            completion_tx: Some(completion_tx),
+        }
+    }
+}
+
+impl Drop for ClientTrackedTaskCompletion {
+    fn drop(&mut self) {
+        if let Some(completion_tx) = self.completion_tx.take() {
+            let _ = completion_tx.send(());
+        }
+    }
+}
+
 pub(crate) struct ClientScheduledTaskHandle {
     task_group: TaskGroup,
     scheduled_tasks: ScheduledTaskGroup,
@@ -130,6 +213,33 @@ where
     config.shutdown_timeout = shutdown_timeout;
     scheduled_tasks
         .schedule_fixed_delay(config, task)
+        .map_err(io::Error::other)?;
+
+    Ok(ClientScheduledTaskHandle {
+        task_group,
+        scheduled_tasks,
+        _fallback_lease: fallback_lease,
+    })
+}
+
+pub(crate) fn schedule_client_fixed_delay_controlled_task<F, Fut>(
+    task_name: &'static str,
+    initial_delay: Duration,
+    period: Duration,
+    shutdown_timeout: Duration,
+    task: F,
+) -> io::Result<ClientScheduledTaskHandle>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+{
+    let (task_group, fallback_lease) = client_task_group(task_name)?;
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
+    config.initial_delay = initial_delay;
+    config.shutdown_timeout = shutdown_timeout;
+    scheduled_tasks
+        .schedule_fixed_delay_controlled(config, task)
         .map_err(io::Error::other)?;
 
     Ok(ClientScheduledTaskHandle {

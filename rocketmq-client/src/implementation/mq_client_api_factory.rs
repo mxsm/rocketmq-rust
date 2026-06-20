@@ -15,22 +15,21 @@
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
-use std::thread;
 
 use cheetah_string::CheetahString;
 use rand::RngExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
-use tokio::task::JoinHandle;
+use serde::Serialize;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
 use crate::common::nameserver_access_config::NameserverAccessConfig;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
 pub struct MQClientAPIFactory {
     nameserver_access_config: NameserverAccessConfig,
@@ -40,55 +39,48 @@ pub struct MQClientAPIFactory {
 }
 
 enum NamesrvRefreshTaskHandle {
-    Tokio {
+    Tracked {
         stop_signal: Arc<AtomicBool>,
-        handle: JoinHandle<()>,
-        completion_rx: std_mpsc::Receiver<()>,
-    },
-    Thread {
-        stop_signal: Arc<AtomicBool>,
-        handle: thread::JoinHandle<()>,
+        handle: ClientTrackedTaskHandle,
     },
 }
 
 impl NamesrvRefreshTaskHandle {
     fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio {
-                stop_signal,
-                handle,
-                completion_rx,
-            } => {
+            Self::Tracked { stop_signal, handle } => {
                 stop_signal.store(true, Ordering::Release);
-                match completion_rx.recv_timeout(timeout) {
-                    Ok(()) => true,
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                        handle.abort();
-                        false
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                        if handle.is_finished() {
-                            true
-                        } else {
-                            handle.abort();
-                            false
-                        }
-                    }
+                let (report, completed) = handle.shutdown_blocking(timeout);
+                if !report.is_healthy() {
+                    tracing::warn!(
+                        report = %report.to_json(),
+                        "nameserver domain refresh task shutdown report is unhealthy"
+                    );
                 }
-            }
-            Self::Thread { stop_signal, handle } => {
-                stop_signal.store(true, Ordering::Release);
-                handle.join().is_ok()
+                completed && report.is_healthy()
             }
         }
     }
 
     fn is_finished(&self) -> bool {
         match self {
-            Self::Tokio { handle, .. } => handle.is_finished(),
-            Self::Thread { handle, .. } => handle.is_finished(),
+            Self::Tracked { handle, .. } => handle.is_finished(),
         }
     }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tracked { handle, .. } => handle.task_count(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NamesrvRefreshLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 impl MQClientAPIFactory {
@@ -232,6 +224,13 @@ impl MQClientAPIFactory {
             }
         }
     }
+
+    fn namesrv_refresh_task_count(&self) -> usize {
+        self.namesrv_refresh_task
+            .as_ref()
+            .map(NamesrvRefreshTaskHandle::task_count)
+            .unwrap_or_default()
+    }
 }
 
 fn validate_nameserver_access_config(config: &NameserverAccessConfig) -> RocketMQResult<()> {
@@ -251,39 +250,11 @@ fn spawn_namesrv_refresh_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let (completion_tx, completion_rx) = std_mpsc::channel();
-    match spawn_client_task(thread_name, async move {
-        let _completion_guard = CompletionSignal::new(completion_tx);
-        task.await;
-    }) {
-        Ok(handle) => Some(NamesrvRefreshTaskHandle::Tokio {
-            stop_signal,
-            handle,
-            completion_rx,
-        }),
+    match spawn_client_tracked_task(thread_name, task) {
+        Ok(handle) => Some(NamesrvRefreshTaskHandle::Tracked { stop_signal, handle }),
         Err(error) => {
             tracing::warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
-        }
-    }
-}
-
-struct CompletionSignal {
-    completion_tx: Option<std_mpsc::Sender<()>>,
-}
-
-impl CompletionSignal {
-    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
-        Self {
-            completion_tx: Some(completion_tx),
-        }
-    }
-}
-
-impl Drop for CompletionSignal {
-    fn drop(&mut self) {
-        if let Some(completion_tx) = self.completion_tx.take() {
-            let _ = completion_tx.send(());
         }
     }
 }
@@ -302,6 +273,31 @@ async fn sleep_or_stop(stop_signal: &Arc<AtomicBool>, delay: Duration) -> bool {
         }
 
         tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_namesrv_refresh_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
+    let mut factory = MQClientAPIFactory {
+        nameserver_access_config: NameserverAccessConfig::new("", "example.com", "default"),
+        name_prefix: CheetahString::from_static_str("factory-lifecycle-probe"),
+        clients: Vec::new(),
+        namesrv_refresh_task: None,
+    };
+
+    factory.start_nameserver_domain_refresh();
+    let task_count_before_shutdown = factory.namesrv_refresh_task_count();
+
+    let shutdown_started = Instant::now();
+    factory.stop_nameserver_domain_refresh();
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = factory.namesrv_refresh_task_count();
+
+    NamesrvRefreshLifecycleProbe {
+        healthy: task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
     }
 }
 
@@ -431,6 +427,15 @@ mod tests {
         })
         .await
         .expect("aborted task should be dropped");
+    }
+
+    #[tokio::test]
+    async fn namesrv_refresh_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_namesrv_refresh_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[test]

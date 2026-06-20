@@ -32,8 +32,12 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::ScheduledTaskControl;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -52,8 +56,10 @@ use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
+use crate::runtime::schedule_client_fixed_delay_controlled_task;
 use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
+use crate::runtime::ClientScheduledTaskHandle;
 
 pub struct ConsumeMessagePopOrderlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -75,6 +81,7 @@ pub struct ConsumeMessagePopOrderlyService {
 
 pub(crate) enum PopOrderlyTaskHandle {
     Tokio(tokio::task::JoinHandle<()>),
+    Scheduled(ClientScheduledTaskHandle),
 }
 
 impl PopOrderlyTaskHandle {
@@ -100,14 +107,60 @@ impl PopOrderlyTaskHandle {
                     }
                 }
             }
+            Self::Scheduled(handle) => {
+                let report = handle.shutdown(timeout).await;
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "pop orderly lock refresh task shutdown report is unhealthy"
+                    );
+                }
+                report.is_healthy()
+            }
         }
     }
 
     fn abort(self) {
         match self {
             Self::Tokio(handle) => handle.abort(),
+            Self::Scheduled(handle) => {
+                let report = handle.shutdown_now();
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "pop orderly lock refresh task shutdown_now report is unhealthy"
+                    );
+                }
+            }
         }
     }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tokio(handle) => usize::from(!handle.is_finished()),
+            Self::Scheduled(handle) => handle.task_count(),
+        }
+    }
+
+    fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        match self {
+            Self::Tokio(_) => Vec::new(),
+            Self::Scheduled(handle) => handle.schedule_snapshot(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PopOrderlyLockRefreshLifecycleProbe {
+    pub task_count_before_self_stop: usize,
+    pub task_count_after_self_stop: usize,
+    pub task_count_after_shutdown: usize,
+    pub scheduled_runs: u64,
+    pub scheduled_skips: u64,
+    pub scheduled_overlaps: u64,
+    pub scheduled_failures: u64,
+    pub shutdown_elapsed_us: u128,
+    pub healthy: bool,
 }
 
 fn spawn_pop_orderly_task<F>(thread_name: &'static str, task: F) -> Option<PopOrderlyTaskHandle>
@@ -243,6 +296,59 @@ impl ConsumeMessagePopOrderlyService {
             .mut_from_ref()
             .lock_all()
             .await;
+    }
+
+    fn start_lock_refresh_with_schedule(&mut self, initial_delay: Duration, period: Duration) {
+        let stopped = self.stopped.clone();
+        let default_mqpush_consumer_impl = match &self.default_mqpush_consumer_impl {
+            Some(impl_) => ArcMut::downgrade(impl_),
+            None => return,
+        };
+
+        let handle = schedule_client_fixed_delay_controlled_task(
+            "rocketmq-client-pop-orderly-lock-refresh",
+            initial_delay,
+            period,
+            Duration::from_secs(5),
+            move || {
+                let stopped = stopped.clone();
+                let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
+                async move {
+                    if stopped.load(Ordering::Acquire) {
+                        return ScheduledTaskControl::Stop;
+                    }
+
+                    let Some(mut impl_) = default_mqpush_consumer_impl.upgrade() else {
+                        return ScheduledTaskControl::Stop;
+                    };
+
+                    use crate::consumer::consumer_impl::re_balance::Rebalance;
+                    impl_.rebalance_impl.lock_all().await;
+                    ScheduledTaskControl::Continue
+                }
+            },
+        )
+        .map(PopOrderlyTaskHandle::Scheduled)
+        .map_err(|error| {
+            warn!("Failed to spawn rocketmq-client-pop-orderly-lock-refresh background task: {error}");
+        })
+        .ok();
+
+        self.lock_refresh_task = handle;
+    }
+
+    fn lock_refresh_task_count(&self) -> usize {
+        self.lock_refresh_task
+            .as_ref()
+            .map(PopOrderlyTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
+    fn lock_refresh_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.lock_refresh_task
+            .as_ref()
+            .map(PopOrderlyTaskHandle::schedule_snapshot)
+            .unwrap_or_default()
     }
 
     pub fn reset_namespace(&mut self, msgs: &mut [ArcMut<MessageExt>]) {
@@ -524,46 +630,15 @@ impl ConsumeMessagePopOrderlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
-    fn start(&mut self, this: ArcMut<Self>) {
-        use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-
+    fn start(&mut self, _this: ArcMut<Self>) {
         if self.consumer_config.message_model != MessageModel::Clustering {
             return;
         }
 
-        let stopped = self.stopped.clone();
-        let default_mqpush_consumer_impl = match &self.default_mqpush_consumer_impl {
-            Some(impl_) => ArcMut::downgrade(impl_),
-            None => return,
-        };
-
-        let handle = spawn_pop_orderly_task("rocketmq-client-pop-orderly-lock-refresh", async move {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-
-            let mut interval = tokio::time::interval(Duration::from_millis(20_000));
-
-            loop {
-                interval.tick().await;
-
-                if stopped.load(Ordering::Acquire) {
-                    break;
-                }
-
-                if let Some(mut impl_) = default_mqpush_consumer_impl.upgrade() {
-                    use crate::consumer::consumer_impl::re_balance::Rebalance;
-                    impl_.rebalance_impl.lock_all().await;
-                } else {
-                    break;
-                }
-            }
-        });
-
-        self.lock_refresh_task = handle;
+        self.start_lock_refresh_with_schedule(Duration::from_secs(1), Duration::from_millis(20_000));
     }
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
-        use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-
         info!(
             "{} ConsumeMessagePopOrderlyService shutdown started",
             self.consumer_group
@@ -915,6 +990,83 @@ impl Hash for ConsumeRequest {
     }
 }
 
+#[doc(hidden)]
+pub async fn run_pop_orderly_lock_refresh_lifecycle_probe() -> PopOrderlyLockRefreshLifecycleProbe {
+    let default_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+        ClientConfig::default(),
+        ArcMut::new(ConsumerConfig {
+            message_model: MessageModel::Clustering,
+            ..Default::default()
+        }),
+        None,
+    ));
+    let listener: ArcMessageListenerOrderly =
+        Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
+    let mut service = ArcMut::new(ConsumeMessagePopOrderlyService::new(
+        ArcMut::new(ClientConfig::default()),
+        ArcMut::new(ConsumerConfig {
+            message_model: MessageModel::Clustering,
+            ..Default::default()
+        }),
+        CheetahString::from_static_str("pop_orderly_lock_refresh_probe_group"),
+        listener,
+        Some(default_impl),
+    ));
+
+    service.start_lock_refresh_with_schedule(Duration::ZERO, Duration::from_millis(1));
+
+    let mut snapshots = service.lock_refresh_snapshot();
+    for _ in 0..100 {
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        snapshots = service.lock_refresh_snapshot();
+    }
+
+    let task_count_before_self_stop = service.lock_refresh_task_count();
+    service.default_mqpush_consumer_impl = None;
+
+    for _ in 0..100 {
+        if service.lock_refresh_task_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+
+    snapshots = service.lock_refresh_snapshot();
+    let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+    let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+    let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+    let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+    let task_count_after_self_stop = service.lock_refresh_task_count();
+    let shutdown_started_at = Instant::now();
+    service.shutdown(1_000).await;
+    let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+    let task_count_after_shutdown = service.lock_refresh_task_count();
+    let healthy = scheduled_runs >= 2
+        && scheduled_overlaps == 0
+        && scheduled_failures == 0
+        && task_count_before_self_stop > 0
+        && task_count_after_self_stop == 0
+        && task_count_after_shutdown == 0;
+
+    PopOrderlyLockRefreshLifecycleProbe {
+        task_count_before_self_stop,
+        task_count_after_self_stop,
+        task_count_after_shutdown,
+        scheduled_runs,
+        scheduled_skips,
+        scheduled_overlaps,
+        scheduled_failures,
+        shutdown_elapsed_us,
+        healthy,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1083,6 +1235,17 @@ mod tests {
 
         assert!(dropped.load(Ordering::Acquire));
         assert_eq!(submitted.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn pop_orderly_lock_refresh_lifecycle_probe_reports_self_stop() {
+        let probe = run_pop_orderly_lock_refresh_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_self_stop, 0, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 
     #[test]

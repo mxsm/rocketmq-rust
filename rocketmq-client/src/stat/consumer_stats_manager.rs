@@ -15,16 +15,16 @@
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 use parking_lot::Mutex;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_remoting::protocol::body::consume_status::ConsumeStatus;
-use tokio::task::JoinHandle;
+use serde::Serialize;
 use tracing::warn;
 
 const TOPIC_AND_GROUP_CONSUME_OK_TPS: &str = "CONSUME_OK_TPS";
@@ -50,68 +50,53 @@ pub struct ConsumerStatsManager {
 }
 
 struct ConsumerStatsTask {
-    handle: JoinHandle<()>,
-    completion_rx: std_mpsc::Receiver<()>,
+    handle: ClientTrackedTaskHandle,
 }
 
 impl ConsumerStatsTask {
     async fn shutdown_async(self, timeout: Duration) -> bool {
-        let mut handle = self.handle;
-        match tokio::time::timeout(timeout, &mut handle).await {
-            Ok(Ok(())) => true,
-            Ok(Err(error)) if error.is_cancelled() => true,
-            Ok(Err(error)) => {
-                warn!(%error, "consumer stats task exited with join error");
-                true
-            }
-            Err(_) => {
-                abort_consumer_stats_task(handle).await;
-                false
-            }
+        let report = self.handle.shutdown(timeout).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "consumer stats task shutdown report is unhealthy"
+            );
         }
+        report.is_healthy()
     }
 
     fn shutdown_blocking(self, timeout: Duration) -> bool {
-        match self.completion_rx.recv_timeout(timeout) {
-            Ok(()) => true,
-            Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                self.handle.abort();
-                false
-            }
-            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                if self.handle.is_finished() {
-                    true
-                } else {
-                    self.handle.abort();
-                    false
-                }
-            }
+        let (report, completed) = self.handle.shutdown_blocking(timeout);
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "consumer stats task blocking shutdown report is unhealthy"
+            );
         }
+        completed && report.is_healthy()
     }
 
     fn abort(self) {
-        self.handle.abort();
-    }
-}
-
-struct CompletionSignal {
-    completion_tx: Option<std_mpsc::Sender<()>>,
-}
-
-impl CompletionSignal {
-    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
-        Self {
-            completion_tx: Some(completion_tx),
+        let report = self.handle.shutdown_now();
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "consumer stats task immediate shutdown report is unhealthy"
+            );
         }
     }
+
+    fn task_count(&self) -> usize {
+        self.handle.task_count()
+    }
 }
 
-impl Drop for CompletionSignal {
-    fn drop(&mut self) {
-        if let Some(completion_tx) = self.completion_tx.take() {
-            let _ = completion_tx.send(());
-        }
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct ConsumerStatsManagerLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 impl Default for ConsumerStatsManager {
@@ -251,6 +236,10 @@ impl ConsumerStatsManager {
         std::mem::take(&mut *self.task_handles.lock())
     }
 
+    fn task_count(&self) -> usize {
+        self.task_handles.lock().iter().map(ConsumerStatsTask::task_count).sum()
+    }
+
     /// Records a single pull response-time observation in milliseconds.
     pub fn inc_pull_rt(&self, group: &str, topic: &str, rt: u64) {
         self.topic_and_group_pull_rt
@@ -345,12 +334,8 @@ fn spawn_stats_task<F>(thread_name: &'static str, task: F) -> Option<ConsumerSta
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let (completion_tx, completion_rx) = std_mpsc::channel();
-    match spawn_client_task(thread_name, async move {
-        let _completion_guard = CompletionSignal::new(completion_tx);
-        task.await;
-    }) {
-        Ok(handle) => Some(ConsumerStatsTask { handle, completion_rx }),
+    match spawn_client_tracked_task(thread_name, task) {
+        Ok(handle) => Some(ConsumerStatsTask { handle }),
         Err(error) => {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
@@ -398,15 +383,6 @@ fn shutdown_consumer_stats_tasks_blocking(tasks: Vec<ConsumerStatsTask>, timeout
     timed_out
 }
 
-async fn abort_consumer_stats_task(handle: JoinHandle<()>) {
-    handle.abort();
-    match handle.await {
-        Ok(()) => {}
-        Err(error) if error.is_cancelled() => {}
-        Err(error) => warn!(%error, "consumer stats task aborted with join error"),
-    }
-}
-
 async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, delay: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + delay;
 
@@ -421,6 +397,25 @@ async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, delay: Duration) -
         }
 
         tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_consumer_stats_manager_lifecycle_probe() -> ConsumerStatsManagerLifecycleProbe {
+    let manager = ConsumerStatsManager::new();
+    manager.start();
+    let task_count_before_shutdown = manager.task_count();
+
+    let shutdown_started = Instant::now();
+    manager.shutdown_async().await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = manager.task_count();
+
+    ConsumerStatsManagerLifecycleProbe {
+        healthy: task_count_before_shutdown == 3 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
     }
 }
 
@@ -537,6 +532,15 @@ mod tests {
 
         assert!(!task.shutdown_async(Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn consumer_stats_manager_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_consumer_stats_manager_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 3);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[test]

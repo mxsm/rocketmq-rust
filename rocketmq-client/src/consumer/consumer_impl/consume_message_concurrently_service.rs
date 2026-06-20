@@ -32,6 +32,7 @@ use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -52,6 +53,8 @@ use crate::consumer::listener::message_listener_concurrently::ArcMessageListener
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
 pub struct ConsumeMessageConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -76,48 +79,60 @@ pub struct ConsumeMessageConcurrentlyService {
 }
 
 enum ConcurrentTaskHandle {
-    Tokio(tokio::task::JoinHandle<()>),
+    Tracked(ClientTrackedTaskHandle),
 }
 
 impl ConcurrentTaskHandle {
     async fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => {
-                let mut handle = handle;
-                match tokio::time::timeout(timeout, &mut handle).await {
-                    Ok(Ok(())) => true,
-                    Ok(Err(error)) if error.is_cancelled() => true,
-                    Ok(Err(error)) => {
-                        warn!(%error, "concurrent clean-expire task exited with join error");
-                        true
-                    }
-                    Err(_) => {
-                        handle.abort();
-                        match handle.await {
-                            Ok(()) => {}
-                            Err(error) if error.is_cancelled() => {}
-                            Err(error) => warn!(%error, "concurrent clean-expire task aborted with join error"),
-                        }
-                        false
-                    }
+            Self::Tracked(handle) => {
+                let report = handle.shutdown(timeout).await;
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "concurrent clean-expire task shutdown report is unhealthy"
+                    );
                 }
+                report.is_healthy()
             }
         }
     }
 
     fn abort(self) {
         match self {
-            Self::Tokio(handle) => handle.abort(),
+            Self::Tracked(handle) => {
+                let report = handle.shutdown_now();
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "concurrent clean-expire task immediate shutdown report is unhealthy"
+                    );
+                }
+            }
+        }
+    }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tracked(handle) => handle.task_count(),
         }
     }
 }
 
-fn spawn_concurrent_task<F>(thread_name: &'static str, task: F) -> Option<ConcurrentTaskHandle>
+#[derive(Debug, Clone, Serialize)]
+pub struct ConcurrentCleanExpireLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
+}
+
+fn spawn_concurrent_lifecycle_task<F>(thread_name: &'static str, task: F) -> Option<ConcurrentTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_task(thread_name, task) {
-        Ok(handle) => Some(ConcurrentTaskHandle::Tokio(handle)),
+    match spawn_client_tracked_task(thread_name, task) {
+        Ok(handle) => Some(ConcurrentTaskHandle::Tracked(handle)),
         Err(error) => {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
@@ -145,7 +160,8 @@ fn spawn_tracked_concurrent_task<F>(
         }
     });
 
-    if spawn_concurrent_task(thread_name, tracked_task).is_none() {
+    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+        warn!("Failed to spawn {} background task: {}", thread_name, error);
         warn!("Failed to track {} background task", thread_name);
     }
 }
@@ -177,6 +193,14 @@ impl ConsumeMessageConcurrentlyService {
 
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown_token.is_cancelled()
+    }
+
+    fn clean_expire_task_count(&self) -> usize {
+        self.clean_expire_task_handle
+            .lock()
+            .as_ref()
+            .map(ConcurrentTaskHandle::task_count)
+            .unwrap_or_default()
     }
 
     fn resize_available_permits(semaphore: &Semaphore, old_total: usize, new_total: usize) {
@@ -375,7 +399,7 @@ impl ConsumeMessageConcurrentlyService {
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     fn start(&mut self, mut this: ArcMut<Self>) {
         let shutdown_token = self.shutdown_token.clone();
-        let handle = spawn_concurrent_task("rocketmq-client-concurrent-clean-expire", async move {
+        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-clean-expire", async move {
             let timeout = this.consumer_config.consume_timeout;
             let interval = Duration::from_secs(timeout.saturating_mul(60));
             loop {
@@ -884,6 +908,43 @@ fn classify_concurrent_consume_return_type(
     }
 }
 
+#[doc(hidden)]
+pub async fn run_concurrent_clean_expire_lifecycle_probe() -> ConcurrentCleanExpireLifecycleProbe {
+    let listener: ArcMessageListenerConcurrently =
+        Arc::new(|_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
+            Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+        });
+    let mut service = ConsumeMessageConcurrentlyService::new(
+        ArcMut::new(ClientConfig::default()),
+        ArcMut::new(ConsumerConfig::default()),
+        CheetahString::from_static_str("concurrent-clean-expire-probe"),
+        listener.clone(),
+        None,
+    );
+    let this = ArcMut::new(ConsumeMessageConcurrentlyService::new(
+        ArcMut::new(ClientConfig::default()),
+        ArcMut::new(ConsumerConfig::default()),
+        CheetahString::from_static_str("concurrent-clean-expire-probe"),
+        listener,
+        None,
+    ));
+
+    service.start(this);
+    let task_count_before_shutdown = service.clean_expire_task_count();
+
+    let shutdown_started = Instant::now();
+    service.shutdown(1_000).await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = service.clean_expire_task_count();
+
+    ConcurrentCleanExpireLifecycleProbe {
+        healthy: task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::pending;
@@ -1077,7 +1138,7 @@ mod tests {
     async fn concurrent_task_shutdown_waits_for_worker_completion() {
         let completed = Arc::new(AtomicBool::new(false));
         let completed_in_task = completed.clone();
-        let handle = spawn_concurrent_task("rocketmq-client-concurrent-task-test", async move {
+        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-task-test", async move {
             completed_in_task.store(true, Ordering::Release);
         })
         .expect("test task should spawn");
@@ -1090,7 +1151,7 @@ mod tests {
     async fn concurrent_task_shutdown_aborts_after_timeout() {
         let dropped = Arc::new(AtomicBool::new(false));
         let dropped_in_task = dropped.clone();
-        let handle = spawn_concurrent_task("rocketmq-client-concurrent-task-test", async move {
+        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-task-test", async move {
             let _drop_flag = DropFlag(dropped_in_task);
             pending::<()>().await;
         })
@@ -1098,6 +1159,15 @@ mod tests {
 
         assert!(!handle.shutdown(Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn concurrent_clean_expire_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_concurrent_clean_expire_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[tokio::test]

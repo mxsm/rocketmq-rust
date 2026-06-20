@@ -21,8 +21,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
-use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -45,6 +45,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -80,6 +81,8 @@ use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
 use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 const OFFSET_STORE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -97,64 +100,57 @@ pub enum SubscriptionType {
 }
 
 enum LitePullTaskHandle {
-    Tokio {
-        handle: tokio::task::JoinHandle<()>,
-        cancelled: Arc<AtomicBool>,
-    },
-    Thread {
-        handle: thread::JoinHandle<()>,
+    Tracked {
+        handle: ClientTrackedTaskHandle,
         cancelled: Arc<AtomicBool>,
     },
 }
 
 impl LitePullTaskHandle {
-    fn abort(&self) {
+    fn abort(self) {
         match self {
-            Self::Tokio { handle, cancelled } => {
+            Self::Tracked { handle, cancelled } => {
                 cancelled.store(true, Ordering::Release);
-                handle.abort();
-            }
-            Self::Thread { cancelled, .. } => {
-                cancelled.store(true, Ordering::Release);
+                let report = handle.shutdown_now();
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "lite pull task immediate shutdown report is unhealthy"
+                    );
+                }
             }
         }
     }
 
     async fn wait(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio { mut handle, .. } => match tokio::time::timeout(timeout, &mut handle).await {
-                Ok(Ok(())) => true,
-                Ok(Err(error)) if error.is_cancelled() => true,
-                Ok(Err(error)) => {
-                    warn!(%error, "lite pull task exited with join error");
-                    true
+            Self::Tracked { handle, cancelled } => {
+                cancelled.store(true, Ordering::Release);
+                let report = handle.shutdown(timeout).await;
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "lite pull task shutdown report is unhealthy"
+                    );
                 }
-                Err(_) => {
-                    handle.abort();
-                    match handle.await {
-                        Ok(()) => {}
-                        Err(error) if error.is_cancelled() => {}
-                        Err(error) => warn!(%error, "lite pull task aborted with join error"),
-                    }
-                    false
-                }
-            },
-            Self::Thread { handle, cancelled } => {
-                let deadline = tokio::time::Instant::now() + timeout;
-                loop {
-                    if handle.is_finished() {
-                        let _ = handle.join();
-                        return true;
-                    }
-                    if tokio::time::Instant::now() >= deadline {
-                        cancelled.store(true, Ordering::Release);
-                        return false;
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+                report.is_healthy()
             }
         }
     }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tracked { handle, .. } => handle.task_count(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LitePullTaskLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 fn spawn_lite_pull_task<F>(
@@ -165,8 +161,8 @@ fn spawn_lite_pull_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let handle = spawn_client_task(thread_name, task)?;
-    Ok(LitePullTaskHandle::Tokio { handle, cancelled })
+    let handle = spawn_client_tracked_task(thread_name, task)?;
+    Ok(LitePullTaskHandle::Tracked { handle, cancelled })
 }
 
 async fn sleep_or_cancel(shutdown_signal: &Arc<AtomicBool>, cancelled: &Arc<AtomicBool>, delay: Duration) -> bool {
@@ -1199,7 +1195,6 @@ impl DefaultLitePullConsumerImpl {
                 }
 
                 if let Some(handle) = self.topic_metadata_check_task_handle.take() {
-                    handle.abort();
                     if !handle.wait(Duration::from_secs(1)).await {
                         warn!("Topic metadata check task did not finish in time");
                     }
@@ -2203,16 +2198,22 @@ impl DefaultLitePullConsumerImpl {
         self.rebalance_impl.get_subscription_inner().remove(&topic);
 
         // Stop and remove pull tasks for this topic
-        let mut task_handles = self.task_handles.write().await;
-        task_handles.retain(|mq, handle| {
-            if mq.topic() == topic.as_str() {
-                handle.abort();
-                false
-            } else {
-                true
+        let to_remove = {
+            let task_handles = self.task_handles.read().await;
+            task_handles
+                .keys()
+                .filter(|mq| mq.topic() == topic.as_str())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        if !to_remove.is_empty() {
+            let mut task_handles = self.task_handles.write().await;
+            for mq in to_remove {
+                if let Some(handle) = task_handles.remove(&mq) {
+                    handle.abort();
+                }
             }
-        });
-        drop(task_handles);
+        }
 
         // Remove from assigned_message_queue
         self.assigned_message_queue
@@ -2940,6 +2941,31 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     }
 }
 
+#[doc(hidden)]
+pub async fn run_lite_pull_task_lifecycle_probe() -> LitePullTaskLifecycleProbe {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let task_cancelled = cancelled.clone();
+    let handle = spawn_lite_pull_task("rocketmq-client-lite-pull-task-probe", cancelled, async move {
+        while !task_cancelled.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .expect("lite pull lifecycle probe task should spawn");
+    let task_count_before_shutdown = handle.task_count();
+
+    let shutdown_started = Instant::now();
+    let shutdown_healthy = handle.wait(Duration::from_secs(1)).await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = 0;
+
+    LitePullTaskLifecycleProbe {
+        healthy: shutdown_healthy && task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -3013,7 +3039,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lite_pull_task_wait_aborts_tokio_task_after_timeout() {
+    async fn lite_pull_task_wait_aborts_tracked_task_after_timeout() {
         struct DropFlag(Arc<AtomicBool>);
 
         impl Drop for DropFlag {
@@ -3027,15 +3053,13 @@ mod tests {
         let task_started_inner = task_started.clone();
         let task_aborted_inner = task_aborted.clone();
 
-        let handle = tokio::spawn(async move {
+        let task_cancelled = Arc::new(AtomicBool::new(false));
+        let task_handle = spawn_lite_pull_task("rocketmq-client-lite-pull-timeout-test", task_cancelled, async move {
             let _drop_flag = DropFlag(task_aborted_inner);
             task_started_inner.store(true, AtomicOrdering::SeqCst);
             std::future::pending::<()>().await;
-        });
-        let task_handle = LitePullTaskHandle::Tokio {
-            handle,
-            cancelled: Arc::new(AtomicBool::new(false)),
-        };
+        })
+        .expect("lite pull timeout test task should spawn");
 
         for _ in 0..20 {
             if task_started.load(AtomicOrdering::SeqCst) {
@@ -3050,6 +3074,15 @@ mod tests {
             task_aborted.load(AtomicOrdering::SeqCst),
             "timed-out lite pull task should be aborted before wait returns"
         );
+    }
+
+    #[tokio::test]
+    async fn lite_pull_task_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_lite_pull_task_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     struct SlowAfterConsumeHook {
@@ -3394,18 +3427,17 @@ mod tests {
         let task_started_inner = Arc::clone(&task_started);
         let task_aborted_inner = Arc::clone(&task_aborted);
         let task_cancelled = Arc::new(AtomicBool::new(false));
-        let handle = tokio::spawn(async move {
-            let _drop_flag = DropFlag(task_aborted_inner);
-            task_started_inner.store(true, AtomicOrdering::SeqCst);
-            std::future::pending::<()>().await;
-        });
-        impl_.task_handles.write().await.insert(
-            removed_mq.clone(),
-            LitePullTaskHandle::Tokio {
-                handle,
-                cancelled: task_cancelled,
+        let handle = spawn_lite_pull_task(
+            "rocketmq-client-lite-pull-assign-abort-test",
+            task_cancelled,
+            async move {
+                let _drop_flag = DropFlag(task_aborted_inner);
+                task_started_inner.store(true, AtomicOrdering::SeqCst);
+                std::future::pending::<()>().await;
             },
-        );
+        )
+        .expect("lite pull assign abort test task should spawn");
+        impl_.task_handles.write().await.insert(removed_mq.clone(), handle);
         for _ in 0..20 {
             if task_started.load(AtomicOrdering::SeqCst) {
                 break;

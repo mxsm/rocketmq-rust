@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -59,7 +60,7 @@ use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use rocketmq_rust::WeakArcMut;
-use tokio::task::JoinHandle;
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::error;
@@ -87,6 +88,8 @@ use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
@@ -154,8 +157,8 @@ fn spawn_connection_net_event_listener(
     rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
     weak_instance: WeakArcMut<MQClientInstance>,
     shutdown_token: CancellationToken,
-) -> Option<JoinHandle<()>> {
-    match spawn_client_task(
+) -> Option<ClientTrackedTaskHandle> {
+    match spawn_client_tracked_task(
         "rocketmq-client-connection-events",
         run_connection_net_event_listener(rx, weak_instance, shutdown_token),
     ) {
@@ -243,9 +246,17 @@ pub struct MQClientInstance {
     broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
     consumer_stats_manager: ConsumerStatsManager,
     connection_event_shutdown: CancellationToken,
-    connection_event_task_handle: Option<JoinHandle<()>>,
+    connection_event_task_handle: Option<ClientTrackedTaskHandle>,
     rebalance_delay_tasks: TaskTracker,
     rebalance_delay_shutdown: CancellationToken,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectionEventListenerLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 impl MQClientInstance {
@@ -556,33 +567,25 @@ impl MQClientInstance {
 
     async fn shutdown_connection_event_listener(&mut self, timeout: Duration) {
         self.connection_event_shutdown.cancel();
-        let Some(mut handle) = self.connection_event_task_handle.take() else {
+        let Some(handle) = self.connection_event_task_handle.take() else {
             return;
         };
 
-        match tokio::time::timeout(timeout, &mut handle).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) if error.is_cancelled() => {}
-            Ok(Err(error)) => warn!(
-                "MQClientInstance[{}] connection event listener exited with error: {:?}",
-                self.client_id, error
-            ),
-            Err(_) => {
-                warn!(
-                    "MQClientInstance[{}] connection event listener shutdown timeout, aborting task",
-                    self.client_id
-                );
-                handle.abort();
-                if let Err(error) = handle.await {
-                    if !error.is_cancelled() {
-                        warn!(
-                            "MQClientInstance[{}] connection event listener abort returned error: {:?}",
-                            self.client_id, error
-                        );
-                    }
-                }
-            }
+        let report = handle.shutdown(timeout).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "MQClientInstance[{}] connection event listener shutdown report is unhealthy",
+                self.client_id
+            );
         }
+    }
+
+    fn connection_event_task_count(&self) -> usize {
+        self.connection_event_task_handle
+            .as_ref()
+            .map(ClientTrackedTaskHandle::task_count)
+            .unwrap_or_default()
     }
 
     async fn shutdown_rebalance_delay_tasks(&self, timeout: Duration) {
@@ -2249,6 +2252,30 @@ pub fn topic_route_data2_topic_subscribe_info(topic: &str, route: &TopicRouteDat
     topic_route_data2topic_subscribe_info(topic, route)
 }
 
+#[doc(hidden)]
+pub async fn run_connection_event_listener_lifecycle_probe() -> ConnectionEventListenerLifecycleProbe {
+    let client_config = ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    };
+    let mut instance = MQClientInstance::new_arc(client_config, 0, "connection-event-listener-probe", None);
+    let task_count_before_shutdown = instance.connection_event_task_count();
+
+    let shutdown_started = Instant::now();
+    instance
+        .shutdown_connection_event_listener(Duration::from_secs(1))
+        .await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = instance.connection_event_task_count();
+
+    ConnectionEventListenerLifecycleProbe {
+        healthy: task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
@@ -2386,6 +2413,15 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), instance.rebalance_delay_tasks.wait())
             .await
             .expect("shutdown should cancel delayed rebalance tasks");
+    }
+
+    #[tokio::test]
+    async fn connection_event_listener_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_connection_event_listener_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[tokio::test]

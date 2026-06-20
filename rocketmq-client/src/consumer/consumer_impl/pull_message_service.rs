@@ -17,23 +17,27 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
-use tokio::task::JoinHandle;
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
 /// Default queue capacity for message requests
 const DEFAULT_QUEUE_CAPACITY: usize = 4096;
@@ -71,13 +75,21 @@ pub struct PullMessageService {
     queue_capacity: usize,
 
     /// Main service loop task handle
-    main_task_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+    main_task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
 
     /// Tracks delayed one-shot tasks submitted by execute_*_later APIs.
     scheduled_task_tracker: TaskTracker,
 
     /// Cancels delayed one-shot tasks during shutdown.
     scheduled_task_shutdown: CancellationToken,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PullMessageServiceLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 impl PullMessageService {
@@ -127,7 +139,7 @@ impl PullMessageService {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(self.queue_capacity);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
 
-        let handle = spawn_client_task("rocketmq-client-pull-message-service", async move {
+        let handle = spawn_client_tracked_task("rocketmq-client-pull-message-service", async move {
             info!("{} service started", "PullMessageService");
 
             loop {
@@ -155,6 +167,15 @@ impl PullMessageService {
         *self.main_task_handle.lock().await = Some(handle);
 
         Ok(())
+    }
+
+    async fn main_task_count(&self) -> usize {
+        self.main_task_handle
+            .lock()
+            .await
+            .as_ref()
+            .map(ClientTrackedTaskHandle::task_count)
+            .unwrap_or_default()
     }
 
     /// Processes a message request (Pull or Pop)
@@ -398,28 +419,14 @@ impl PullMessageService {
         // 3. Wait for main loop to exit (with timeout)
         let timeout = Duration::from_millis(timeout_ms);
         let main_task = self.main_task_handle.lock().await.take();
-        if let Some(mut handle) = main_task {
-            match tokio::time::timeout(timeout, &mut handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if error.is_cancelled() => {}
-                Ok(Err(error)) => warn!("{} main loop exited with error: {:?}", self.get_service_name(), error),
-                Err(_) => {
-                    warn!(
-                        "{} shutdown timeout after {}ms, aborting main loop",
-                        self.get_service_name(),
-                        timeout_ms
-                    );
-                    handle.abort();
-                    if let Err(error) = handle.await {
-                        if !error.is_cancelled() {
-                            warn!(
-                                "{} main loop abort returned error: {:?}",
-                                self.get_service_name(),
-                                error
-                            );
-                        }
-                    }
-                }
+        if let Some(handle) = main_task {
+            let report = handle.shutdown(timeout).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "{} main loop shutdown report is unhealthy",
+                    self.get_service_name()
+                );
             }
         }
 
@@ -448,6 +455,32 @@ impl PullMessageService {
 impl Default for PullMessageService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_pull_message_service_lifecycle_probe() -> PullMessageServiceLifecycleProbe {
+    let mut service = PullMessageService::new();
+    let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "pull-message-service-probe", None);
+
+    let start_result = service.start(instance.clone()).await;
+    let task_count_before_shutdown = service.main_task_count().await;
+
+    let shutdown_started = Instant::now();
+    let shutdown_result = service.shutdown(1_000).await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = service.main_task_count().await;
+
+    instance.shutdown().await;
+
+    PullMessageServiceLifecycleProbe {
+        healthy: start_result.is_ok()
+            && shutdown_result.is_ok()
+            && task_count_before_shutdown == 1
+            && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
     }
 }
 
@@ -537,5 +570,14 @@ mod tests {
             .expect("shutdown should release delayed task tracker");
 
         assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn pull_message_service_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_pull_message_service_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 }

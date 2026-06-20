@@ -39,6 +39,12 @@ pub enum ScheduleMode {
     FixedRateAllowOverlap,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ScheduledTaskControl {
+    Continue,
+    Stop,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScheduledTaskConfig {
     pub name: String,
@@ -123,10 +129,28 @@ impl ScheduledTaskGroup {
         &self.group
     }
 
-    pub fn schedule_fixed_delay<F, Fut>(&self, mut config: ScheduledTaskConfig, mut task: F) -> RuntimeResult<TaskId>
+    pub fn schedule_fixed_delay<F, Fut>(&self, config: ScheduledTaskConfig, mut task: F) -> RuntimeResult<TaskId>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.schedule_fixed_delay_controlled(config, move || {
+            let future = task();
+            async move {
+                future.await;
+                ScheduledTaskControl::Continue
+            }
+        })
+    }
+
+    pub fn schedule_fixed_delay_controlled<F, Fut>(
+        &self,
+        mut config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
     {
         config.mode = ScheduleMode::FixedDelay;
         let name: Arc<str> = Arc::from(config.name.as_str());
@@ -148,8 +172,11 @@ impl ScheduledTaskGroup {
 
                     let started_at = Instant::now();
                     metrics.begin_serial_run(started_at);
-                    let timed_out = run_with_optional_timeout(task(), config.max_run_time).await;
+                    let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
                     metrics.finish_run(started_at, timed_out);
+                    if control == ScheduledTaskControl::Stop {
+                        return;
+                    }
 
                     if !sleep_or_cancel(&token, config.period).await {
                         return;
@@ -408,6 +435,23 @@ where
     } else {
         future.await;
         false
+    }
+}
+
+async fn run_controlled_with_optional_timeout<Fut>(
+    future: Fut,
+    max_run_time: Option<Duration>,
+) -> (ScheduledTaskControl, bool)
+where
+    Fut: Future<Output = ScheduledTaskControl> + Send,
+{
+    if let Some(timeout) = max_run_time {
+        match tokio::time::timeout(timeout, future).await {
+            Ok(control) => (control, false),
+            Err(_) => (ScheduledTaskControl::Continue, true),
+        }
+    } else {
+        (future.await, false)
     }
 }
 

@@ -22,22 +22,23 @@ use std::time::Duration;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
+use serde::Serialize;
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
-fn spawn_rebalance_task<F>(task: F) -> std::io::Result<JoinHandle<()>>
+fn spawn_rebalance_task<F>(task: F) -> std::io::Result<ClientTrackedTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    spawn_client_task("rocketmq-client-rebalance-service", task)
+    spawn_client_tracked_task("rocketmq-client-rebalance-service", task)
 }
 
 /// Configuration for RebalanceService.
@@ -166,12 +167,20 @@ pub struct RebalanceService {
     notify: Arc<Notify>,
     tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
     started: Arc<AtomicBool>,
-    task_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+    task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
     // Health check and metrics
     last_success_timestamp: Arc<AtomicU64>,
     total_rebalance_count: Arc<AtomicU64>,
     success_count: Arc<AtomicU64>,
     fail_count: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RebalanceServiceLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 impl RebalanceService {
@@ -317,6 +326,15 @@ impl RebalanceService {
         Ok(())
     }
 
+    async fn task_count(&self) -> usize {
+        self.task_handle
+            .lock()
+            .await
+            .as_ref()
+            .map(ClientTrackedTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
     pub fn wakeup(&self) {
         self.notify.notify_waiters();
     }
@@ -340,34 +358,18 @@ impl RebalanceService {
 
         let timeout = Duration::from_millis(timeout_ms);
         let task_handle = self.task_handle.lock().await.take();
-        if let Some(mut handle) = task_handle {
-            match tokio::time::timeout(timeout, &mut handle).await {
-                Ok(Ok(())) => {
-                    self.started.store(false, Ordering::SeqCst);
-                    info!("RebalanceService shutdown successfully");
-                    return Ok(());
-                }
-                Ok(Err(error)) if error.is_cancelled() => {
-                    self.started.store(false, Ordering::SeqCst);
-                    info!("RebalanceService shutdown successfully");
-                    return Ok(());
-                }
-                Ok(Err(error)) => {
-                    self.started.store(false, Ordering::SeqCst);
-                    return Err(Box::new(error));
-                }
-                Err(_) => {
-                    warn!("RebalanceService shutdown timeout after {}ms", timeout_ms);
-                    handle.abort();
-                    self.started.store(false, Ordering::SeqCst);
-                    if let Err(error) = handle.await {
-                        if !error.is_cancelled() {
-                            return Err(Box::new(error));
-                        }
-                    }
-                    return Err("Shutdown timeout".into());
-                }
+        if let Some(handle) = task_handle {
+            let report = handle.shutdown(timeout).await;
+            self.started.store(false, Ordering::SeqCst);
+            if report.is_healthy() {
+                info!("RebalanceService shutdown successfully");
+                return Ok(());
             }
+            warn!(
+                report = %report.to_json(),
+                "RebalanceService shutdown report is unhealthy"
+            );
+            return Err("Shutdown timeout".into());
         }
 
         // Fallback for older or failed starts where no handle was captured.
@@ -443,6 +445,42 @@ impl RebalanceService {
     /// `true` if the service is currently running, `false` otherwise
     pub fn is_running(&self) -> bool {
         self.started.load(Ordering::SeqCst)
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_rebalance_service_lifecycle_probe() -> RebalanceServiceLifecycleProbe {
+    let config = RebalanceConfig {
+        wait_interval_ms: 60_000,
+        min_interval_ms: 1,
+        enable_dynamic_interval: true,
+    };
+    let mut service = RebalanceService::with_config(config);
+    let mut instance = MQClientInstance::new_arc(
+        crate::base::client_config::ClientConfig::default(),
+        0,
+        "rebalance-service-probe",
+        None,
+    );
+
+    let start_result = service.start(instance.clone()).await;
+    let task_count_before_shutdown = service.task_count().await;
+
+    let shutdown_started = Instant::now();
+    let shutdown_result = service.shutdown(1_000).await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = service.task_count().await;
+
+    instance.shutdown().await;
+
+    RebalanceServiceLifecycleProbe {
+        healthy: start_result.is_ok()
+            && shutdown_result.is_ok()
+            && task_count_before_shutdown == 1
+            && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
     }
 }
 
@@ -614,6 +652,15 @@ mod tests {
 
         assert!(!service.is_running());
         assert!(service.task_handle.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn rebalance_service_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_rebalance_service_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[test]
