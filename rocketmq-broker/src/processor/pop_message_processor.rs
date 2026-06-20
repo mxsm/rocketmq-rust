@@ -21,10 +21,12 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 use rand::RngExt;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
@@ -54,6 +56,8 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -1436,8 +1440,16 @@ where
         Some(bytes_mut.freeze())
     }
 
-    pub fn shutdown(&mut self) {
-        self.pop_long_polling_service.shutdown();
+    pub async fn shutdown(&mut self) {
+        self.pop_long_polling_service.shutdown().await;
+        self.pop_buffer_merge_service.shutdown();
+        if let Err(error) = self
+            .pop_buffer_merge_service
+            .wait_for_shutdown(Duration::from_secs(5))
+            .await
+        {
+            warn!(?error, "failed to gracefully shutdown PopBufferMergeService");
+        }
         self.queue_lock_manager.shutdown();
     }
 }
@@ -1573,6 +1585,8 @@ impl TimedLock {
 pub struct QueueLockManager {
     expired_local_cache: Arc<RwLock<HashMap<CheetahString, TimedLock>>>,
     shutdown: Arc<Notify>,
+    running: Arc<AtomicBool>,
+    task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
 
 impl QueueLockManager {
@@ -1580,6 +1594,8 @@ impl QueueLockManager {
         QueueLockManager {
             expired_local_cache: Arc::new(RwLock::new(HashMap::with_capacity(4096))),
             shutdown: Arc::new(Notify::new()),
+            running: Arc::new(AtomicBool::new(false)),
+            task_group: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1631,11 +1647,36 @@ impl QueueLockManager {
     }
 
     pub fn start(&self) {
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                self.running.store(false, Ordering::Release);
+                warn!(?error, "failed to start QueueLockManager outside Tokio runtime");
+                return;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.pop.queue-lock", runtime);
+        let cancellation_token = task_group.cancellation_token();
         let this = self.clone();
-        tokio::spawn(async move {
+        let mut lifecycle = self.task_group.lock();
+
+        if let Err(error) = task_group.spawn_service("broker.pop.queue-lock.clean-unused", async move {
             loop {
                 select! {
+                    _ = cancellation_token.cancelled() => {
+                        this.running.store(false, Ordering::Release);
+                        break;
+                    }
                     _ = this.shutdown.notified() => {
+                        this.running.store(false, Ordering::Release);
                         break;
                     }
                     _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {}
@@ -1643,11 +1684,31 @@ impl QueueLockManager {
                 let count = this.clean_unused_locks(60000).await;
                 info!("QueueLockSize={}", count);
             }
-        });
+        }) {
+            self.running.store(false, Ordering::Release);
+            warn!(?error, "failed to spawn QueueLockManager cleanup task");
+            return;
+        }
+
+        *lifecycle = Some(task_group);
     }
 
     pub fn shutdown(&self) {
+        self.running.store(false, Ordering::Release);
         self.shutdown.notify_waiters();
+        if let Some(task_group) = self.task_group.lock().take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "QueueLockManager shutdown report is unhealthy"
+                );
+            }
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
     }
 }
 
@@ -1843,6 +1904,18 @@ mod tests {
         let manager = QueueLockManager::new();
         let cache = manager.expired_local_cache.read().await;
         assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn queue_lock_manager_start_is_idempotent_and_shutdown_stops_task() {
+        let manager = QueueLockManager::new();
+
+        manager.start();
+        manager.start();
+        assert!(manager.is_running());
+
+        manager.shutdown();
+        assert!(!manager.is_running());
     }
 
     #[tokio::test]

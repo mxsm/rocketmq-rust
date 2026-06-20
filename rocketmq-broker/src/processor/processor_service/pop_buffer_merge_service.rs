@@ -21,11 +21,13 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::message_decoder;
@@ -40,6 +42,8 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
@@ -79,6 +83,9 @@ pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     batch_ack_index_list: Vec<u8>,
     master: AtomicBool,
     shutdown: Arc<Notify>,
+    shutdown_requested: AtomicBool,
+    running: AtomicBool,
+    task_group: Mutex<Option<TaskGroup>>,
     start_time: Instant,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     #[cfg(feature = "rocksdb_store")]
@@ -109,6 +116,9 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             batch_ack_index_list: Vec::with_capacity(32),
             master: AtomicBool::new(false),
             shutdown: Arc::new(Notify::new()),
+            shutdown_requested: AtomicBool::new(false),
+            running: AtomicBool::new(false),
+            task_group: Mutex::new(None),
             start_time: Instant::now(),
             broker_runtime_inner,
             #[cfg(feature = "rocksdb_store")]
@@ -639,51 +649,100 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     pub fn start(this: ArcMut<Self>) {
-        tokio::spawn(async move {
-            let interval = this.interval * 200 * 5;
+        if this
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        this.shutdown_requested.store(false, Ordering::Release);
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                this.running.store(false, Ordering::Release);
+                warn!(?error, "failed to start PopBufferMergeService outside Tokio runtime");
+                return;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.pop-buffer-merge", runtime);
+        let cancellation_token = task_group.cancellation_token();
+        let service = this.clone();
+
+        if let Err(error) = task_group.spawn_service("broker.pop-buffer-merge.scan", async move {
+            service.serving.store(true, Ordering::Release);
+            let interval = service.interval * 200 * 5;
 
             loop {
+                if service.shutdown_requested.load(Ordering::Acquire) {
+                    info!("[PopBuffer]Shutdown requested, processing remaining data");
+                    Self::drain_remaining_for_shutdown(&service, true).await;
+                    info!("[PopBuffer]All data processed, shutting down");
+                    break;
+                }
+
                 select! {
-                    _ = this.shutdown.notified() => {
+                    _ = cancellation_token.cancelled() => {
+                        info!("[PopBuffer]Cancellation signal received, processing remaining data");
+                        Self::drain_remaining_for_shutdown(&service, true).await;
+                        info!("[PopBuffer]All data processed, shutting down");
+                        break;
+                    }
+                    _ = service.shutdown.notified() => {
                         info!("[PopBuffer]Shutdown signal received, processing remaining data");
-
-                        while !this.buffer.is_empty() || this.get_offset_total_size().await > 0 {
-                            this.mut_from_ref().scan().await;
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                        }
-
+                        Self::drain_remaining_for_shutdown(&service, true).await;
                         info!("[PopBuffer]All data processed, shutting down");
                         break;
                     }
                     _ = async {
-                        if !this.is_should_running() {
+                        if !service.is_should_running() {
                             //slave
                             tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
-                            this.buffer.clear();
-                            this.commit_offsets.clear();
+                            service.buffer.clear();
+                            service.commit_offsets.clear();
                             return;
                         }
-                        this.mut_from_ref().scan().await;
-                        if this.scan_times % this.count_of_second30 == 0 {
-                            this.mut_from_ref().scan_garbage();
+                        service.mut_from_ref().scan().await;
+                        if service.scan_times % service.count_of_second30 == 0 {
+                            service.mut_from_ref().scan_garbage();
                         }
-                        tokio::time::sleep(tokio::time::Duration::from_millis(this.interval)).await;
-                        if !this.serving.load(Ordering::Acquire) && this.buffer.is_empty()  && this.get_offset_total_size().await == 0 {
-                            this.serving.store(true,Ordering::Release);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(service.interval)).await;
+                        if !service.shutdown_requested.load(Ordering::Acquire)
+                            && !service.serving.load(Ordering::Acquire)
+                            && service.buffer.is_empty()
+                            && service.get_offset_total_size().await == 0 {
+                            service.serving.store(true,Ordering::Release);
                         }
                     } =>{}
 
                 }
             }
-            this.serving.store(false, Ordering::Release);
-            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
-            if !this.is_should_running() {
-                return;
+            service.serving.store(false, Ordering::Release);
+            select! {
+                _ = cancellation_token.cancelled() => {}
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(2000)) => {}
             }
-            while !this.buffer.is_empty() || this.get_offset_total_size().await > 0 {
-                this.mut_from_ref().scan().await;
+            if service.is_should_running() {
+                Self::drain_remaining_for_shutdown(&service, false).await;
             }
-        });
+            service.running.store(false, Ordering::Release);
+        }) {
+            this.running.store(false, Ordering::Release);
+            warn!(?error, "failed to spawn PopBufferMergeService scan task");
+            return;
+        }
+
+        *this.task_group.lock() = Some(task_group);
+    }
+
+    async fn drain_remaining_for_shutdown(this: &ArcMut<Self>, pause_between_scans: bool) {
+        while !this.buffer.is_empty() || this.get_offset_total_size().await > 0 {
+            this.mut_from_ref().scan().await;
+            if pause_between_scans {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        }
     }
 
     async fn scan_commit_offset(&self) -> usize {
@@ -863,12 +922,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
     pub fn shutdown(&self) {
         info!("[PopBuffer]Initiating graceful shutdown");
+        self.shutdown_requested.store(true, Ordering::Release);
+        self.serving.store(false, Ordering::Release);
         self.shutdown.notify_waiters();
     }
 
-    pub async fn wait_for_shutdown(&self, timeout: std::time::Duration) -> RocketMQResult<()> {
-        use std::time::Instant;
-
+    pub async fn wait_for_shutdown(&self, timeout: Duration) -> RocketMQResult<()> {
         let start = Instant::now();
 
         info!(
@@ -894,6 +953,25 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let remaining = timeout
+                .checked_sub(start.elapsed())
+                .unwrap_or_else(|| Duration::from_millis(1));
+            let report = task_group.shutdown(remaining).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "[PopBuffer]Shutdown task group report is unhealthy"
+                );
+                return Err(RocketMQError::Internal(format!(
+                    "PopBufferMergeService shutdown report is unhealthy: {}",
+                    report.to_json()
+                )));
+            }
+        }
+
+        self.running.store(false, Ordering::Release);
         info!("[PopBuffer]Shutdown completed, all buffers cleared");
         Ok(())
     }

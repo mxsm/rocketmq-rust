@@ -18,6 +18,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
@@ -27,6 +28,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex as ParkingMutex;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -42,6 +44,8 @@ use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -130,8 +134,8 @@ pub struct ScheduleMessageService<MS: MessageStore> {
     deliver_pending_table: DeliverPendingTable<MS>,
     broker_controller: ArcMut<BrokerRuntimeInner<MS>>,
     version_change_counter: AtomicI64,
-    /// Handles for all spawned tasks to support graceful shutdown
-    task_handles: Option<Vec<tokio::task::JoinHandle<()>>>,
+    /// Tracks all scheduled delivery and persistence tasks for graceful shutdown.
+    task_group: ParkingMutex<Option<TaskGroup>>,
 }
 
 impl<MS: MessageStore> ScheduleMessageService<MS> {
@@ -149,7 +153,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             deliver_pending_table: Arc::new(DashMap::new()),
             broker_controller,
             version_change_counter: AtomicI64::new(0),
-            task_handles: None,
+            task_group: ParkingMutex::new(None),
         }
     }
 
@@ -229,7 +233,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     /// # Returns
     ///
     /// `Ok(())` on successful start, error otherwise
-    pub fn start(mut this: ArcMut<Self>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn start(this: ArcMut<Self>) -> Result<(), Box<dyn std::error::Error>> {
         if this
             .started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -238,8 +242,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             info!("Starting ScheduleMessageService...");
             this.load();
 
-            // Pre-allocate task_handles vector for all delay levels + persist task
-            let mut task_handles = Vec::with_capacity(this.delay_level_table.len() * 2 + 1);
+            let runtime = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => RuntimeHandle::new(handle),
+                Err(error) => {
+                    this.started.store(false, Ordering::SeqCst);
+                    return Err(Box::new(error));
+                }
+            };
+            *this.task_group.lock() = Some(TaskGroup::root("rocketmq-broker.schedule", runtime));
 
             for level in this.delay_level_table.keys() {
                 let offset = { this.offset_table.get(level).map_or(0, |key_value| *key_value.value()) };
@@ -250,12 +260,11 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                     let service = this.clone();
                     let shutdown_flag = Arc::clone(&this.shutdown_requested);
 
-                    let handle = tokio::spawn(async move {
+                    this.spawn_schedule_task("broker.schedule.handle-put-result", async move {
                         tokio::time::sleep(Duration::from_millis(FIRST_DELAY_TIME)).await;
                         let task = HandlePutResultTask::new(level_copy, service, shutdown_flag);
                         task.run().await;
                     });
-                    task_handles.push(handle);
                 }
 
                 // Spawn delivery timer task
@@ -264,19 +273,18 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 let service = this.clone();
                 let shutdown_flag = Arc::clone(&this.shutdown_requested);
 
-                let handle = tokio::spawn(async move {
+                this.spawn_schedule_task("broker.schedule.deliver-delayed-message", async move {
                     let task = DeliverDelayedMessageTimerTask::new(level_copy, offset_copy, service, shutdown_flag);
                     tokio::time::sleep(Duration::from_millis(FIRST_DELAY_TIME)).await;
                     task.run().await;
                 });
-                task_handles.push(handle);
             }
 
             // Spawn periodic persist task
             let service = this.clone();
             let shutdown_flag = Arc::clone(&this.shutdown_requested);
 
-            let persist_handle = tokio::spawn(async move {
+            this.spawn_schedule_task("broker.schedule.persist-delay-offset", async move {
                 let mut interval = tokio::time::interval(Duration::from_millis(
                     service
                         .broker_controller
@@ -318,10 +326,6 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                     }
                 }
             });
-            task_handles.push(persist_handle);
-
-            // Store all task handles (one-time assignment at startup)
-            this.task_handles = Some(task_handles);
 
             info!(
                 "ScheduleMessageService started successfully with {} delay levels",
@@ -342,36 +346,18 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         self.shutdown_requested.store(true, Ordering::SeqCst);
         self.stop();
 
-        // Take out all task handles (one-time consumption at shutdown)
-        let Some(mut handles) = self.task_handles.take() else {
-            warn!("No task handles found during shutdown");
+        let task_group = self.task_group.lock().take();
+        let Some(task_group) = task_group else {
+            warn!("No schedule task group found during shutdown");
             return;
         };
 
-        let task_count = handles.len();
-
-        info!("Waiting for {} tasks to complete...", task_count);
-
-        for (idx, handle) in handles.drain(..).enumerate() {
-            let mut handle = handle;
-            match tokio::time::timeout(Duration::from_millis(WAIT_FOR_SHUTDOWN), &mut handle).await {
-                Ok(Ok(())) => {
-                    info!("Task {}/{} completed successfully", idx + 1, task_count);
-                }
-                Ok(Err(e)) => {
-                    warn!("Task {}/{} panicked: {:?}", idx + 1, task_count, e);
-                }
-                Err(_) => {
-                    warn!(
-                        "Task {}/{} timed out after {}ms",
-                        idx + 1,
-                        task_count,
-                        WAIT_FOR_SHUTDOWN
-                    );
-                    handle.abort();
-                    let _ = handle.await;
-                }
-            }
+        let report = task_group.shutdown(Duration::from_millis(WAIT_FOR_SHUTDOWN)).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "ScheduleMessageService shutdown report is unhealthy"
+            );
         }
 
         info!("ScheduleMessageService shutdown complete");
@@ -393,6 +379,21 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 
     pub fn is_started(&self) -> bool {
         self.started.load(Ordering::Relaxed)
+    }
+
+    fn spawn_schedule_task<F>(&self, task_name: &'static str, future: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let task_group = self.task_group.lock().as_ref().cloned();
+        let Some(task_group) = task_group else {
+            warn!(task = task_name, "ScheduleMessageService task group is not initialized");
+            return;
+        };
+
+        if let Err(error) = task_group.spawn_service(task_name, future) {
+            warn!(?error, task = task_name, "failed to spawn ScheduleMessageService task");
+        }
     }
 
     pub fn get_max_delay_level(&self) -> i32 {
@@ -987,12 +988,17 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
     /// Schedule the next timer task
     fn schedule_next_timer_task(&self, offset: i64, delay: u64) {
+        if self.shutdown_flag.load(Ordering::Relaxed) || !self.schedule_service.is_started() {
+            return;
+        }
+
         let schedule_service = self.schedule_service.clone();
         let delay_level = self.delay_level;
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
+        let spawner = self.schedule_service.clone();
 
         // Schedule the next task after the specified delay
-        tokio::spawn(async move {
+        spawner.spawn_schedule_task("broker.schedule.deliver-delayed-message", async move {
             tokio::time::sleep(Duration::from_millis(delay)).await;
             let task = DeliverDelayedMessageTimerTask::new(delay_level, offset, schedule_service, shutdown_flag);
             task.run().await;
@@ -1617,9 +1623,10 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
             let delay_level = self.delay_level;
             let schedule_service = ArcMut::clone(&self.schedule_service);
             let shutdown_flag = Arc::clone(&self.shutdown_flag);
+            let spawner = ArcMut::clone(&self.schedule_service);
 
             // Schedule after a short delay
-            tokio::spawn(async move {
+            spawner.spawn_schedule_task("broker.schedule.handle-put-result", async move {
                 tokio::time::sleep(Duration::from_millis(DELAY_FOR_A_SLEEP)).await;
                 let task = HandlePutResultTask::new(delay_level, schedule_service, shutdown_flag);
                 task.run().await;
