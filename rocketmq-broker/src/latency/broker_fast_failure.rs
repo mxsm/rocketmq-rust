@@ -43,6 +43,7 @@ const TASK_STATE_CANCELED: u8 = 3;
 
 const INITIAL_DELAY: Duration = Duration::from_millis(1_000);
 const SCAN_INTERVAL: Duration = Duration::from_millis(10);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_SCAN_BATCH_LIMIT: usize = 256;
 const JSTACK_LOG_INTERVAL_MILLIS: i64 = 15_000;
 
@@ -461,11 +462,14 @@ impl BrokerFastFailure {
         info!("BrokerFastFailure started");
     }
 
-    pub(crate) fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self) {
         self.inner.running.store(false, Ordering::Release);
-        let mut lifecycle = self.inner.lifecycle.lock();
-        if let Some(task_group) = lifecycle.task_group.take() {
-            let report = task_group.shutdown_now();
+        let task_group = {
+            let mut lifecycle = self.inner.lifecycle.lock();
+            lifecycle.task_group.take()
+        };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
@@ -711,7 +715,7 @@ mod tests {
         fast_failure.start();
         assert!(fast_failure.is_running());
 
-        fast_failure.shutdown();
+        fast_failure.shutdown().await;
         assert!(!fast_failure.is_running());
     }
 
@@ -730,7 +734,7 @@ mod tests {
         fast_failure.clean_expired_request();
 
         assert!(matches!(response_rx.try_recv(), Err(TryRecvError::Empty)));
-        fast_failure.shutdown();
+        fast_failure.shutdown().await;
 
         assert!(!fast_failure.is_running());
     }

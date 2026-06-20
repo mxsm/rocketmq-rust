@@ -45,6 +45,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 const INITIAL_DELAY: Duration = Duration::from_secs(5 * 60);
 const CLEAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TOPIC_SCAN_YIELD_DELAY: Duration = Duration::from_millis(10);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct CleanServiceLifecycle {
@@ -143,11 +144,14 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
         info!("TopicQueueMappingCleanService started");
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.inner.running.store(false, Ordering::Release);
-        let mut lifecycle = self.inner.lifecycle.lock();
-        if let Some(task_group) = lifecycle.task_group.take() {
-            let report = task_group.shutdown_now();
+        let task_group = {
+            let mut lifecycle = self.inner.lifecycle.lock();
+            lifecycle.task_group.take()
+        };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
@@ -566,7 +570,7 @@ mod tests {
         service.start();
         assert!(service.is_running());
 
-        service.shutdown();
+        service.shutdown().await;
         assert!(!service.is_running());
     }
 }

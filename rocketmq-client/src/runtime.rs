@@ -30,6 +30,7 @@ use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
@@ -102,6 +103,13 @@ where
 #[cfg(test)]
 pub(crate) fn shared_fallback_snapshot() -> Option<ClientSharedFallbackSnapshot> {
     SHARED_FALLBACK.get().map(ClientSharedFallbackRegistry::snapshot)
+}
+
+pub(crate) fn shutdown_shared_fallback(timeout: Duration) -> io::Result<Option<ShutdownReport>> {
+    match SHARED_FALLBACK.get() {
+        Some(registry) => registry.shutdown_explicit(timeout),
+        None => Ok(None),
+    }
 }
 
 fn shared_fallback() -> io::Result<ClientSharedFallbackLease> {
@@ -265,17 +273,19 @@ impl ClientSharedFallbackRegistry {
         }
     }
 
-    fn shutdown_explicit(&'static self) {
+    fn shutdown_explicit(&'static self, timeout: Duration) -> io::Result<Option<ShutdownReport>> {
         let runtime = {
             let mut state = self.state.lock();
             state.explicit_shutdown = true;
             state.runtime.take()
         };
 
-        if let Some(runtime) = runtime {
-            self.explicit_shutdowns.fetch_add(1, Ordering::Relaxed);
-            shutdown_runtime(runtime);
-        }
+        runtime
+            .map(|runtime| {
+                self.explicit_shutdowns.fetch_add(1, Ordering::Relaxed);
+                shutdown_runtime(runtime, timeout)
+            })
+            .transpose()
     }
 
     fn schedule_idle_shutdown(&'static self, generation: usize) {
@@ -363,7 +373,9 @@ impl ClientSharedFallbackRegistry {
 
         if let Some(runtime) = runtime {
             self.idle_shutdowns.fetch_add(1, Ordering::Relaxed);
-            shutdown_runtime(runtime);
+            if let Err(error) = shutdown_runtime(runtime, fallback_shutdown_timeout()) {
+                tracing::warn!(%error, "failed to shut down idle client fallback runtime");
+            }
         }
     }
 }
@@ -390,17 +402,30 @@ impl ClientSharedFallbackLease {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.registry.submitted_tasks.fetch_add(1, Ordering::Relaxed);
-        self.registry.active_tasks.fetch_add(1, Ordering::Relaxed);
+        let registry = self.registry;
+        registry.submitted_tasks.fetch_add(1, Ordering::Relaxed);
+        registry.active_tasks.fetch_add(1, Ordering::Relaxed);
         let runtime = self.runtime.clone();
-        Ok(runtime.owner.context().runtime().spawn(async move {
-            let _guard = ActiveTaskGuard {
-                registry: self.registry,
-                task_name,
-                _lease: self,
-            };
-            task.await;
-        }))
+        let result = runtime
+            .owner
+            .context()
+            .root_group()
+            .spawn_service_with_handle(task_name, async move {
+                let _guard = ActiveTaskGuard {
+                    registry,
+                    task_name,
+                    _lease: self,
+                };
+                task.await;
+            });
+
+        match result {
+            Ok((_task_id, handle)) => Ok(handle),
+            Err(error) => {
+                registry.active_tasks.fetch_sub(1, Ordering::Relaxed);
+                Err(io::Error::other(error))
+            }
+        }
     }
 }
 
@@ -426,12 +451,35 @@ impl Drop for ActiveTaskGuard {
     }
 }
 
-fn shutdown_runtime(runtime: Arc<ClientSharedFallbackRuntime>) {
-    if let Ok(runtime) = Arc::try_unwrap(runtime) {
-        if let Err(error) = runtime.owner.shutdown_runtime_blocking() {
-            tracing::warn!(%error, "failed to shut down client fallback runtime");
+fn shutdown_runtime(runtime: Arc<ClientSharedFallbackRuntime>, timeout: Duration) -> io::Result<ShutdownReport> {
+    match Arc::try_unwrap(runtime) {
+        Ok(runtime) => runtime
+            .owner
+            .shutdown_runtime_blocking_with_timeout(timeout)
+            .map_err(io::Error::other),
+        Err(runtime) => {
+            let report = runtime.owner.block_on(runtime.owner.context().shutdown_tasks(timeout));
+            report.log_if_unhealthy();
+            match Arc::try_unwrap(runtime) {
+                Ok(runtime) => {
+                    runtime
+                        .owner
+                        .shutdown_runtime_blocking_with_timeout(timeout)
+                        .map_err(io::Error::other)?;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "client fallback tasks were shut down but outstanding leases still hold the runtime owner"
+                    );
+                }
+            }
+            Ok(report)
         }
     }
+}
+
+fn fallback_shutdown_timeout() -> Duration {
+    Duration::from_secs(5)
 }
 
 fn fallback_idle_timeout() -> Duration {
@@ -447,6 +495,7 @@ fn fallback_idle_timeout() -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use std::future;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -494,7 +543,10 @@ mod tests {
         drop(lease);
         assert_eq!(registry.snapshot().active_leases, 0);
 
-        registry.shutdown_explicit();
+        let report = registry
+            .shutdown_explicit(Duration::from_secs(1))
+            .expect("explicit shutdown should complete");
+        assert!(report.expect("runtime should be shut down").is_healthy());
         let error = match registry.acquire() {
             Ok(_) => panic!("explicit shutdown must reject new fallback leases"),
             Err(error) => error,
@@ -502,6 +554,64 @@ mod tests {
 
         assert!(error.to_string().contains("explicitly shut down"));
         assert_eq!(registry.snapshot().explicit_shutdowns, 1);
+    }
+
+    #[test]
+    fn fallback_spawned_task_is_tracked_by_runtime_context_shutdown() {
+        let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
+        let lease = registry.acquire().expect("fallback runtime should be created");
+        let runtime = lease.runtime.clone();
+        let (tx, rx) = mpsc::channel();
+
+        let handle = lease
+            .spawn("tracked-fallback-task", async move {
+                tx.send(()).expect("test receiver should be alive");
+                future::pending::<()>().await;
+            })
+            .expect("fallback task should spawn");
+
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("fallback task should start");
+
+        let report = runtime
+            .owner
+            .block_on(runtime.owner.context().shutdown_tasks(Duration::from_millis(20)));
+
+        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(report.leaked, 0, "{}", report.to_json());
+        assert_eq!(registry.snapshot().active_tasks, 0);
+        assert_eq!(registry.snapshot().active_leases, 0);
+        drop(handle);
+    }
+
+    #[test]
+    fn fallback_registry_explicit_shutdown_aborts_tracked_task() {
+        let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
+        let lease = registry.acquire().expect("fallback runtime should be created");
+        let (tx, rx) = mpsc::channel();
+
+        let handle = lease
+            .spawn("explicit-shutdown-task", async move {
+                tx.send(()).expect("test receiver should be alive");
+                future::pending::<()>().await;
+            })
+            .expect("fallback task should spawn");
+
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("fallback task should start");
+
+        let report = registry
+            .shutdown_explicit(Duration::from_millis(20))
+            .expect("explicit shutdown should return a report")
+            .expect("fallback runtime should exist");
+
+        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(report.leaked, 0, "{}", report.to_json());
+        assert_eq!(report.timed_out, 1, "{}", report.to_json());
+        assert_eq!(registry.snapshot().active_tasks, 0);
+        assert_eq!(registry.snapshot().active_leases, 0);
+        assert!(!registry.snapshot().runtime_available);
+        drop(handle);
     }
 
     #[test]

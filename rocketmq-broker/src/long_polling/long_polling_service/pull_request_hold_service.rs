@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
@@ -132,11 +133,12 @@ where
         *self.task_group.lock() = Some(task_group);
     }
 
-    pub fn shutdown(&mut self) {
+    pub async fn shutdown(&mut self) {
         self.running.store(false, Ordering::Release);
         self.shutdown.notify_waiters();
-        if let Some(task_group) = self.task_group.lock().take() {
-            let report = task_group.shutdown_now();
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
@@ -315,7 +317,7 @@ mod tests {
         service.start(inner);
         assert!(service.is_running());
 
-        service.shutdown();
+        service.shutdown().await;
         assert!(!service.is_running());
     }
 }

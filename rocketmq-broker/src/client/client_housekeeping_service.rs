@@ -15,6 +15,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
@@ -30,6 +31,8 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ClientHousekeepingService<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -100,11 +103,12 @@ where
         }
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.shutdown_requested.store(true, Ordering::Release);
         self.shutdown.notify_waiters();
-        if let Some(task_group) = self.task_group.lock().take() {
-            let report = task_group.shutdown_now();
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
@@ -187,5 +191,34 @@ where
 
     fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {
         //nothing to do
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+    use crate::broker_runtime::BrokerRuntime;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn start_is_idempotent_and_shutdown_stops_background_task() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let service = ClientHousekeepingService::new(broker_runtime.inner_for_test().clone());
+
+        service.start();
+        service.start();
+        assert_eq!(service.task_group.lock().as_ref().map(TaskGroup::task_count), Some(1));
+
+        service.shutdown().await;
+
+        assert!(service.shutdown_requested.load(Ordering::Acquire));
+        assert!(service.task_group.lock().is_none());
     }
 }

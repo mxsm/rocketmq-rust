@@ -41,6 +41,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 
 const GET_TOPIC_ROUTE_TIMEOUT: u64 = 3000;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct TopicRouteInfoManager<MS: MessageStore> {
     pub(crate) lock: Arc<RocketMQTokioMutex<()>>,
@@ -139,10 +140,11 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         *task_group = Some(group);
     }
 
-    pub fn shutdown(&mut self) {
+    pub async fn shutdown(&mut self) {
         self.running.store(false, Ordering::Release);
-        if let Some(task_group) = self.task_group.lock().take() {
-            let report = task_group.shutdown_now();
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
@@ -387,7 +389,7 @@ mod tests {
         manager.start();
         assert!(manager.is_running());
 
-        manager.shutdown();
+        manager.shutdown().await;
         assert!(!manager.is_running());
     }
 }

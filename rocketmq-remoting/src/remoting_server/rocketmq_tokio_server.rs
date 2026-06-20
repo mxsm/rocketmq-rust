@@ -628,7 +628,9 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
         tls_runtime,
         ..
     } = listener;
-    tls_runtime.shutdown();
+    if let Some(report) = tls_runtime.shutdown_gracefully(Duration::from_secs(3)).await {
+        report.log_if_unhealthy();
+    }
     drop(notify_shutdown);
     drop(shutdown_complete_tx);
 

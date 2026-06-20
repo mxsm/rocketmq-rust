@@ -623,7 +623,7 @@ impl BrokerRuntime {
         self.scheduled_task_manager.abort_all();
 
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
-            client_housekeeping_service.shutdown();
+            client_housekeeping_service.shutdown().await;
         }
     }
 
@@ -669,7 +669,7 @@ impl BrokerRuntime {
         }
 
         if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
-            pull_request_hold_service.shutdown();
+            pull_request_hold_service.shutdown().await;
         }
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
@@ -693,7 +693,7 @@ impl BrokerRuntime {
         }
         self.consumer_ids_change_listener.shutdown();
         if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_ref() {
-            topic_queue_mapping_clean_service.shutdown();
+            topic_queue_mapping_clean_service.shutdown().await;
         }
 
         self.inner.broadcast_offset_manager.shutdown();
@@ -702,7 +702,7 @@ impl BrokerRuntime {
             replicas_manager.shutdown();
         }
 
-        self.inner.broker_fast_failure.shutdown();
+        self.inner.broker_fast_failure.shutdown().await;
 
         if let Some(consumer_filter_manager) = self.inner.consumer_filter_manager.as_ref() {
             consumer_filter_manager.persist();
@@ -728,11 +728,7 @@ impl BrokerRuntime {
             escape_bridge.shutdown();
         }
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
-            topic_route_info_manager.shutdown();
-        }
-
-        if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
-            topic_route_info_manager.shutdown();
+            topic_route_info_manager.shutdown().await;
         }
 
         if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {

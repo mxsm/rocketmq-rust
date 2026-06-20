@@ -75,15 +75,23 @@ impl RuntimeOwner {
         self.context.shutdown_tasks(self.config.shutdown_timeout).await
     }
 
-    pub fn shutdown_runtime_blocking(mut self) -> RuntimeResult<ShutdownReport> {
+    pub fn shutdown_runtime_blocking(self) -> RuntimeResult<ShutdownReport> {
+        let timeout = self.config.shutdown_timeout;
+        self.shutdown_runtime_blocking_with_timeout(timeout)
+    }
+
+    pub fn shutdown_runtime_blocking_with_timeout(
+        mut self,
+        timeout: std::time::Duration,
+    ) -> RuntimeResult<ShutdownReport> {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(RuntimeError::InsideTokioRuntime("shutdown_runtime_blocking"));
         }
 
         let runtime = self.runtime.take().expect("runtime owner must still own the runtime");
-        let report = runtime.block_on(self.context.shutdown_tasks(self.config.shutdown_timeout));
+        let report = runtime.block_on(self.context.shutdown_tasks(timeout));
         report.log_if_unhealthy();
-        runtime.shutdown_timeout(self.config.shutdown_timeout);
+        runtime.shutdown_timeout(timeout);
         Ok(report)
     }
 }

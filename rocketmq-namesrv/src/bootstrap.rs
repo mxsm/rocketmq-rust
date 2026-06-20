@@ -578,15 +578,21 @@ impl NameServerRuntime {
         const TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
 
         info!(
-            "Phase 1/4: Waiting for in-flight requests (timeout: {}s)...",
+            "Phase 1/5: Waiting for in-flight requests (timeout: {}s)...",
             SHUTDOWN_TIMEOUT.as_secs()
         );
         if let Err(e) = self.wait_for_inflight_requests(SHUTDOWN_TIMEOUT).await {
             warn!("In-flight request wait timeout or error: {}", e);
         }
 
-        info!("Phase 2/4: Stopping scheduled tasks...");
-        self.scheduled_task_manager.cancel_all();
+        info!("Phase 2/5: Stopping scheduled tasks...");
+        let scheduled_report = self.scheduled_task_manager.shutdown_all(TASK_JOIN_TIMEOUT).await;
+        if !scheduled_report.is_healthy() {
+            warn!(
+                ?scheduled_report,
+                "NameServer scheduled task shutdown report is unhealthy"
+            );
+        }
 
         info!("Phase 3/5: Shutting down embedded controller...");
         if let Some(controller_manager) = self.inner.controller_manager() {
