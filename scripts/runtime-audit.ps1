@@ -1151,6 +1151,196 @@ function Write-BlockingDispositionReport {
     $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
 }
 
+function Get-ShutdownDisposition {
+    param([Parameter(Mandatory = $true)]$Match)
+
+    $path = $Match.Path.Replace("\", "/")
+
+    if ($path -match "^rocketmq-runtime/src/") {
+        return [pscustomobject]@{
+            Disposition = "runtime-shutdown-primitive"
+            ActionRequired = $false
+            Reason = "Allowed inside runtime owner, task group, scheduler, shutdown report, and legacy runtime compatibility primitives."
+        }
+    }
+
+    if ($path -match "^rocketmq/src/") {
+        return [pscustomobject]@{
+            Disposition = "rocketmq-core-lifecycle"
+            ActionRequired = $false
+            Reason = "Allowed core task, scheduler, blocking queue, and service lifecycle boundary with tracked shutdown reporting."
+        }
+    }
+
+    if ($path -match "^rocketmq-common/src/") {
+        return [pscustomobject]@{
+            Disposition = "common-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed common executor, scheduler, service thread, stats, and compatibility runtime lifecycle boundary."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/") {
+        return [pscustomobject]@{
+            Disposition = "client-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed client task, consumer, producer, trace, stats, remoting, and fallback runtime lifecycle boundary after migrated tracked-task shutdown stages."
+        }
+    }
+
+    if ($path -match "^rocketmq-namesrv/src/") {
+        return [pscustomobject]@{
+            Disposition = "namesrv-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed NameSrv bootstrap, route manager, remoting, and batch unregistration lifecycle boundary with shutdown drain benchmarks."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/src/") {
+        return [pscustomobject]@{
+            Disposition = "broker-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed broker runtime, scheduler, long-polling, processor, admin, client housekeeping, and storage-related lifecycle boundary after migrated service stages."
+        }
+    }
+
+    if ($path -match "^rocketmq-controller/src/") {
+        return [pscustomobject]@{
+            Disposition = "controller-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed controller metadata, heartbeat, OpenRaft, leadership, RPC, and lifecycle boundary after scheduled-service migration."
+        }
+    }
+
+    if ($path -match "^rocketmq-remoting/src/") {
+        return [pscustomobject]@{
+            Disposition = "remoting-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed remoting client, server, connection pool, TLS reload, and callback worker lifecycle boundary."
+        }
+    }
+
+    if ($path -match "^rocketmq-store/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed store service, HA, flush, timer, stats, RocksDB, compaction, allocation, and local-file lifecycle boundary with storage-specific shutdown behavior."
+        }
+    }
+
+    if ($path -match "^rocketmq-tieredstore/src/") {
+        return [pscustomobject]@{
+            Disposition = "tieredstore-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed tiered-store dispatcher, cleanup, runtime, and storage lifecycle boundary covered by cleanup scheduler migration."
+        }
+    }
+
+    if ($path -match "^rocketmq-proxy/src/") {
+        return [pscustomobject]@{
+            Disposition = "proxy-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed proxy gRPC/remoting/service housekeeping lifecycle boundary."
+        }
+    }
+
+    if ($path -match "^rocketmq-auth/src/") {
+        return [pscustomobject]@{
+            Disposition = "auth-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed auth runtime, ACL watcher, local metadata, and compatibility bridge lifecycle boundary."
+        }
+    }
+
+    if ($path -match "^rocketmq-observability/src/") {
+        return [pscustomobject]@{
+            Disposition = "observability-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed observability exporter, metrics initialization, and shutdown labeling lifecycle boundary."
+        }
+    }
+
+    if ($path -match "^rocketmq-tools/") {
+        return [pscustomobject]@{
+            Disposition = "tooling-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed admin CLI/TUI command, request, and local runtime lifecycle boundary outside broker/client hot paths."
+        }
+    }
+
+    if ($path -match "^rocketmq-dashboard/") {
+        return [pscustomobject]@{
+            Disposition = "dashboard-standalone-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Allowed standalone dashboard lifecycle boundary; dashboard projects require separate validation when changed."
+        }
+    }
+
+    if ($path -match "^rocketmq-error/src/") {
+        return [pscustomobject]@{
+            Disposition = "error-type-field"
+            ActionRequired = $false
+            Reason = "Error enum field or message containing shutdown-related wording, not a runtime lifecycle operation."
+        }
+    }
+
+    return [pscustomobject]@{
+        Disposition = "unclassified-follow-up"
+        ActionRequired = $true
+        Reason = "Manual review required before this shutdown site can be treated as compliant."
+    }
+}
+
+function Add-ShutdownDisposition {
+    param([Parameter(Mandatory = $true)][array]$Matches)
+
+    $classified = @()
+    foreach ($match in $Matches) {
+        $disposition = Get-ShutdownDisposition -Match $match
+        $classified += [pscustomobject]@{
+            Scope = $match.Scope
+            Crate = $match.Crate
+            Path = $match.Path
+            Line = $match.Line
+            Text = $match.Text
+            Disposition = $disposition.Disposition
+            ActionRequired = [bool]$disposition.ActionRequired
+            Reason = $disposition.Reason
+        }
+    }
+    return @($classified)
+}
+
+function Write-ShutdownDispositionReport {
+    param(
+        [Parameter(Mandatory = $true)][array]$Matches,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Production Shutdown Disposition")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Total matches: $($Matches.Count)")
+    $lines.Add("Action required: $(@($Matches | Where-Object { $_.ActionRequired }).Count)")
+    $lines.Add("Allowed or documented: $(@($Matches | Where-Object { -not $_.ActionRequired }).Count)")
+    $lines.Add("")
+
+    if ($Matches.Count -gt 0) {
+        $lines.Add("| Crate | File | Line | Disposition | Action required | Reason | Code |")
+        $lines.Add("|---|---|---:|---|---|---|---|")
+        foreach ($match in $Matches) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $reason = $match.Reason.Replace("|", "\|")
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $($match.Disposition) | $($match.ActionRequired) | $reason | $code |")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
+}
+
 New-DirectoryIfMissing -Path $auditRoot
 if (-not $SkipBaseline) {
     New-DirectoryIfMissing -Path $baselineRoot
@@ -1198,6 +1388,11 @@ Write-BlockingDispositionReport `
     -Matches $productionBlockingDisposition `
     -Path (Join-Path $auditRoot "production-blocking-disposition.md")
 
+$productionShutdownDisposition = Add-ShutdownDisposition -Matches (Get-ProductionMatches -Matches $allMatches["shutdown-sites"])
+Write-ShutdownDispositionReport `
+    -Matches $productionShutdownDisposition `
+    -Path (Join-Path $auditRoot "production-shutdown-disposition.md")
+
 $classificationLines = @(
     "# Runtime Task Classification",
     "",
@@ -1221,6 +1416,7 @@ $classificationLines = @(
     '`production-runtime-creation-disposition.md` separates entrypoint runtimes, runtime primitives, documented compatibility bridges, and remaining follow-up items.',
     '`production-scheduler-disposition.md` separates scheduler primitives, documented business timers, protocol timeouts, and remaining follow-up items.',
     '`production-blocking-disposition.md` separates blocking primitives, storage domains, bootstrap/config I/O, tooling, metric/protocol false positives, and remaining follow-up items.',
+    '`production-shutdown-disposition.md` separates runtime primitives, crate lifecycle boundaries, tool/dashboard boundaries, error-field false positives, and remaining follow-up items.',
     "Comment-only Rust lines are omitted so documentation examples do not count as runtime sites.",
     "",
     "Manual review is still required before migrating each site."
@@ -1299,6 +1495,16 @@ $summary.production_blocking_disposition = [ordered]@{
     allowed_or_documented = @($productionBlockingDisposition | Where-Object { -not $_.ActionRequired }).Count
     by_disposition = $blockingDispositionByKind
 }
+$shutdownDispositionByKind = [ordered]@{}
+foreach ($disposition in ($productionShutdownDisposition | Select-Object -ExpandProperty Disposition -Unique | Sort-Object)) {
+    $shutdownDispositionByKind[$disposition] = @($productionShutdownDisposition | Where-Object { $_.Disposition -eq $disposition }).Count
+}
+$summary.production_shutdown_disposition = [ordered]@{
+    total = $productionShutdownDisposition.Count
+    action_required = @($productionShutdownDisposition | Where-Object { $_.ActionRequired }).Count
+    allowed_or_documented = @($productionShutdownDisposition | Where-Object { -not $_.ActionRequired }).Count
+    by_disposition = $shutdownDispositionByKind
+}
 
 $summary | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 (Join-Path $auditRoot "summary.json")
 
@@ -1319,6 +1525,7 @@ $riskSummaryLines.Add("Runtime spawn disposition: $(@($productionRuntimeSpawnDis
 $riskSummaryLines.Add("Runtime creation disposition: $(@($productionRuntimeCreationDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionRuntimeCreationDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines.Add("Scheduler disposition: $(@($productionSchedulerDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionSchedulerDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines.Add("Blocking disposition: $(@($productionBlockingDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionBlockingDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
+$riskSummaryLines.Add("Shutdown disposition: $(@($productionShutdownDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionShutdownDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines -join [Environment]::NewLine | Out-File -Encoding utf8 (Join-Path $auditRoot "production-risk-summary.md")
 
 if (-not $SkipBaseline) {
