@@ -95,4 +95,10 @@ impl RuntimeContext {
         report.merge_blocking(self.blocking.snapshot());
         report
     }
+
+    pub fn shutdown_tasks_now(&self) -> ShutdownReport {
+        let mut report = self.root_group.shutdown_now();
+        report.merge_blocking(self.blocking.snapshot());
+        report
+    }
 }

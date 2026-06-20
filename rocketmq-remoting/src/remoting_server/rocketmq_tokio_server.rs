@@ -593,10 +593,13 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
-    let task_group = TaskGroup::root(
-        "rocketmq.remoting.server",
-        RuntimeHandle::new(tokio::runtime::Handle::current()),
-    );
+    let task_group = match new_remoting_server_task_group() {
+        Ok(task_group) => task_group,
+        Err(error) => {
+            error!(%error, "failed to start remoting server task group");
+            return;
+        }
+    };
     // Initialize the connection listener state
     let handler = RemotingGeneralHandler {
         request_processor,
@@ -650,6 +653,16 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
     report.log_if_unhealthy();
 }
 
+fn new_remoting_server_task_group() -> rocketmq_error::RocketMQResult<TaskGroup> {
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        rocketmq_error::RocketMQError::network_connection_failed(
+            "remoting-server",
+            format!("remoting server task group requires a Tokio runtime: {error}"),
+        )
+    })?;
+    Ok(TaskGroup::root("rocketmq.remoting.server", RuntimeHandle::new(runtime)))
+}
+
 #[derive(Debug)]
 pub(crate) struct Shutdown {
     /// `true` if the shutdown signal has been received
@@ -700,6 +713,16 @@ mod tests {
 
     use super::*;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+
+    #[test]
+    fn remoting_server_task_group_without_tokio_runtime_returns_error() {
+        let error = new_remoting_server_task_group()
+            .expect_err("remoting server task group should require an ambient Tokio runtime");
+
+        assert!(error
+            .to_string()
+            .contains("remoting server task group requires a Tokio runtime"));
+    }
 
     #[tokio::test]
     async fn acquire_connection_permit_closed_semaphore_returns_error_without_panicking() {

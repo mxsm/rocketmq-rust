@@ -184,7 +184,16 @@ struct ClientSharedFallbackLease {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientSharedFallbackLifecycleState {
+    Uninitialized,
+    Idle,
+    Active,
+    ExplicitShutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClientSharedFallbackSnapshot {
+    pub state: ClientSharedFallbackLifecycleState,
     pub acquire_count: usize,
     pub runtime_created: usize,
     pub runtime_reused: usize,
@@ -252,19 +261,31 @@ impl ClientSharedFallbackRegistry {
 
     fn snapshot(&self) -> ClientSharedFallbackSnapshot {
         let state = self.state.lock();
+        let active_leases = self.active_leases.load(Ordering::Relaxed);
+        let active_tasks = self.active_tasks.load(Ordering::Relaxed);
         let runtime_generation = state
             .runtime
             .as_ref()
             .map(|runtime| runtime.generation)
             .unwrap_or_default();
+        let lifecycle_state = if state.explicit_shutdown {
+            ClientSharedFallbackLifecycleState::ExplicitShutdown
+        } else if state.runtime.is_none() {
+            ClientSharedFallbackLifecycleState::Uninitialized
+        } else if active_leases > 0 || active_tasks > 0 {
+            ClientSharedFallbackLifecycleState::Active
+        } else {
+            ClientSharedFallbackLifecycleState::Idle
+        };
 
         ClientSharedFallbackSnapshot {
+            state: lifecycle_state,
             acquire_count: self.acquire_count.load(Ordering::Relaxed),
             runtime_created: self.runtime_created.load(Ordering::Relaxed),
             runtime_reused: self.runtime_reused.load(Ordering::Relaxed),
             submitted_tasks: self.submitted_tasks.load(Ordering::Relaxed),
-            active_tasks: self.active_tasks.load(Ordering::Relaxed),
-            active_leases: self.active_leases.load(Ordering::Relaxed),
+            active_tasks,
+            active_leases,
             runtime_generation,
             runtime_available: state.runtime.is_some(),
             idle_shutdowns: self.idle_shutdowns.load(Ordering::Relaxed),
@@ -554,9 +575,15 @@ mod tests {
     #[test]
     fn fallback_registry_tracks_leases_and_rejects_after_explicit_shutdown() {
         let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
+        assert_eq!(
+            registry.snapshot().state,
+            ClientSharedFallbackLifecycleState::Uninitialized
+        );
+
         let lease = registry.acquire().expect("fallback runtime should be created");
 
         let snapshot = registry.snapshot();
+        assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Active);
         assert_eq!(snapshot.acquire_count, 1);
         assert_eq!(snapshot.runtime_created, 1);
         assert_eq!(snapshot.runtime_reused, 0);
@@ -565,12 +592,18 @@ mod tests {
         assert_eq!(snapshot.runtime_generation, 1);
 
         drop(lease);
-        assert_eq!(registry.snapshot().active_leases, 0);
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Idle);
+        assert_eq!(snapshot.active_leases, 0);
 
         let report = registry
             .shutdown_explicit(Duration::from_secs(1))
             .expect("explicit shutdown should complete");
         assert!(report.expect("runtime should be shut down").is_healthy());
+        assert_eq!(
+            registry.snapshot().state,
+            ClientSharedFallbackLifecycleState::ExplicitShutdown
+        );
         let error = match registry.acquire() {
             Ok(_) => panic!("explicit shutdown must reject new fallback leases"),
             Err(error) => error,
@@ -642,14 +675,17 @@ mod tests {
     fn fallback_registry_idle_reaper_shuts_down_runtime_after_idle_timeout() {
         let registry = Box::leak(Box::new(ClientSharedFallbackRegistry::new()));
         let lease = registry.acquire().expect("fallback runtime should be created");
+        assert_eq!(registry.snapshot().state, ClientSharedFallbackLifecycleState::Active);
         assert!(registry.snapshot().runtime_available);
 
         drop(lease);
+        assert_eq!(registry.snapshot().state, ClientSharedFallbackLifecycleState::Idle);
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let snapshot = registry.snapshot();
             if !snapshot.runtime_available {
+                assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Uninitialized);
                 assert_eq!(snapshot.idle_shutdowns, 1);
                 assert_eq!(snapshot.idle_reaper_starts, 1);
                 break;
@@ -673,6 +709,7 @@ mod tests {
 
         let second = registry.acquire().expect("fallback runtime should be reused");
         let snapshot = registry.snapshot();
+        assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Active);
         assert_eq!(snapshot.runtime_created, 1);
         assert_eq!(snapshot.runtime_reused, 1);
         assert_eq!(snapshot.idle_reaper_starts, 1);
@@ -683,6 +720,7 @@ mod tests {
         loop {
             let snapshot = registry.snapshot();
             if !snapshot.runtime_available {
+                assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Uninitialized);
                 assert_eq!(snapshot.idle_shutdowns, 1);
                 assert_eq!(snapshot.idle_reaper_starts, 1);
                 break;
@@ -710,12 +748,15 @@ mod tests {
             .expect("test reset should shut down existing fallback runtime")
             .expect("test reset should return a report for the existing runtime");
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(!registry.snapshot().runtime_available);
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Uninitialized);
+        assert!(!snapshot.runtime_available);
 
         let next = registry
             .acquire()
             .expect("test reset should allow fallback runtime to be acquired again");
         let snapshot = registry.snapshot();
+        assert_eq!(snapshot.state, ClientSharedFallbackLifecycleState::Active);
         assert!(snapshot.runtime_available);
         assert!(
             snapshot.runtime_generation > first_generation,

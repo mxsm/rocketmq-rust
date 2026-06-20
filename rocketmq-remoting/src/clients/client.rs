@@ -79,6 +79,18 @@ struct ClientTaskLifecycle {
     task_group: TaskGroup,
 }
 
+fn new_client_connection_task_group(addr: &str) -> RocketMQResult<TaskGroup> {
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        remote_error(format!(
+            "failed to create remoting client connection task group outside Tokio runtime: {error}"
+        ))
+    })?;
+    Ok(TaskGroup::root(
+        format!("rocketmq-remoting.client.connection[{addr}]"),
+        RuntimeHandle::new(runtime),
+    ))
+}
+
 impl<PR> Drop for Client<PR> {
     fn drop(&mut self) {
         if Arc::strong_count(&self.task_lifecycle) != 1 {
@@ -242,10 +254,7 @@ where
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
-        let task_group = TaskGroup::root(
-            format!("rocketmq-remoting.client.connection[{addr}]"),
-            RuntimeHandle::new(tokio::runtime::Handle::current()),
-        );
+        let task_group = new_client_connection_task_group(&addr)?;
         let task_lifecycle = Arc::new(ClientTaskLifecycle {
             task_group: task_group.clone(),
         });
@@ -496,6 +505,16 @@ mod lifecycle_tests {
 
     use super::*;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+
+    #[test]
+    fn connection_task_group_without_tokio_runtime_returns_error() {
+        let error = new_client_connection_task_group("127.0.0.1:10911")
+            .expect_err("client connection task group should require an ambient Tokio runtime");
+
+        assert!(error
+            .to_string()
+            .contains("failed to create remoting client connection task group outside Tokio runtime"));
+    }
 
     #[tokio::test]
     async fn drop_last_client_closes_connection_task_group() {

@@ -20,6 +20,7 @@ use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::shutdown_report::ShutdownReport;
+use crate::task_group::TaskGroupLifecycleState;
 
 pub struct RuntimeOwner {
     config: RuntimeConfig,
@@ -103,6 +104,13 @@ impl RuntimeOwner {
 impl Drop for RuntimeOwner {
     fn drop(&mut self) {
         if let Some(runtime) = self.runtime.take() {
+            if self.context.root_group().lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
+                let report = self.context.shutdown_tasks_now();
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "RuntimeOwner dropped before root TaskGroup shutdown completed"
+                );
+            }
             runtime.shutdown_background();
         }
     }

@@ -43,6 +43,7 @@ const STATE_OPEN: u8 = 0;
 const STATE_CLOSING: u8 = 1;
 const STATE_CLOSED: u8 = 2;
 const STATE_SHUTDOWN_COMPLETED: u8 = 3;
+const STATE_POISONED: u8 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TaskId(u64);
@@ -104,6 +105,7 @@ pub enum TaskGroupLifecycleState {
     Closing,
     Closed,
     ShutdownCompleted,
+    Poisoned,
 }
 
 #[derive(Debug, Clone)]
@@ -596,8 +598,15 @@ impl TaskGroupInner {
             STATE_OPEN => TaskGroupLifecycleState::Open,
             STATE_CLOSING => TaskGroupLifecycleState::Closing,
             STATE_CLOSED => TaskGroupLifecycleState::Closed,
-            _ => TaskGroupLifecycleState::ShutdownCompleted,
+            STATE_SHUTDOWN_COMPLETED => TaskGroupLifecycleState::ShutdownCompleted,
+            _ => TaskGroupLifecycleState::Poisoned,
         }
+    }
+
+    fn mark_poisoned_if_open(&self) {
+        let _ = self
+            .lifecycle
+            .compare_exchange(STATE_OPEN, STATE_POISONED, Ordering::AcqRel, Ordering::Acquire);
     }
 
     fn finish_task(&self, task_id: TaskId, result: TaskResult) {
@@ -610,6 +619,7 @@ impl TaskGroupInner {
             }
             TaskResult::Panicked => {
                 self.panicked.fetch_add(1, Ordering::Relaxed);
+                self.mark_poisoned_if_open();
             }
             TaskResult::Aborted => {}
         }
