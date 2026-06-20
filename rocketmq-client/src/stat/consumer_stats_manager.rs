@@ -25,6 +25,7 @@ use parking_lot::Mutex;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_remoting::protocol::body::consume_status::ConsumeStatus;
 use serde::Serialize;
+use tokio::sync::Notify;
 use tracing::warn;
 
 const TOPIC_AND_GROUP_CONSUME_OK_TPS: &str = "CONSUME_OK_TPS";
@@ -46,6 +47,7 @@ pub struct ConsumerStatsManager {
     topic_and_group_pull_tps: StatsItemSet,
     topic_and_group_pull_rt: StatsItemSet,
     shutdown_signal: Arc<AtomicBool>,
+    shutdown_notify: Arc<Notify>,
     task_handles: Mutex<Vec<ConsumerStatsTask>>,
 }
 
@@ -115,6 +117,7 @@ impl ConsumerStatsManager {
             topic_and_group_pull_tps: StatsItemSet::new(TOPIC_AND_GROUP_PULL_TPS.to_string()),
             topic_and_group_pull_rt: StatsItemSet::new(TOPIC_AND_GROUP_PULL_RT.to_string()),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
+            shutdown_notify: Arc::new(Notify::new()),
             task_handles: Mutex::new(Vec::new()),
         }
     }
@@ -145,6 +148,7 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_rt.clone(),
         ];
         let shutdown_signal = self.shutdown_signal.clone();
+        let shutdown_notify = self.shutdown_notify.clone();
         if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-seconds", async move {
             loop {
                 if shutdown_signal.load(Ordering::Acquire) {
@@ -153,7 +157,7 @@ impl ConsumerStatsManager {
                 for set in &sets_sec {
                     set.sampling_in_seconds();
                 }
-                if !sleep_or_shutdown(&shutdown_signal, Duration::from_secs(10)).await {
+                if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(10)).await {
                     break;
                 }
             }
@@ -170,6 +174,7 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_rt.clone(),
         ];
         let shutdown_signal = self.shutdown_signal.clone();
+        let shutdown_notify = self.shutdown_notify.clone();
         if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-minutes", async move {
             loop {
                 if shutdown_signal.load(Ordering::Acquire) {
@@ -178,7 +183,7 @@ impl ConsumerStatsManager {
                 for set in &sets_min {
                     set.sampling_in_minutes();
                 }
-                if !sleep_or_shutdown(&shutdown_signal, Duration::from_secs(10 * 60)).await {
+                if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(10 * 60)).await {
                     break;
                 }
             }
@@ -195,6 +200,7 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_rt.clone(),
         ];
         let shutdown_signal = self.shutdown_signal.clone();
+        let shutdown_notify = self.shutdown_notify.clone();
         if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-hours", async move {
             loop {
                 if shutdown_signal.load(Ordering::Acquire) {
@@ -203,7 +209,7 @@ impl ConsumerStatsManager {
                 for set in &sets_hour {
                     set.sampling_in_hours();
                 }
-                if !sleep_or_shutdown(&shutdown_signal, Duration::from_secs(3600)).await {
+                if !sleep_or_shutdown(&shutdown_signal, &shutdown_notify, Duration::from_secs(3600)).await {
                     break;
                 }
             }
@@ -215,6 +221,7 @@ impl ConsumerStatsManager {
     /// Shuts down the stats manager.
     pub fn shutdown(&self) {
         self.shutdown_signal.store(true, Ordering::Release);
+        self.shutdown_notify.notify_waiters();
         let tasks = self.drain_task_handles();
         let timed_out = shutdown_consumer_stats_tasks_blocking(tasks, CONSUMER_STATS_TASK_SHUTDOWN_TIMEOUT);
         if timed_out > 0 {
@@ -225,6 +232,7 @@ impl ConsumerStatsManager {
     /// Shuts down the stats manager without blocking the Tokio runtime worker.
     pub async fn shutdown_async(&self) {
         self.shutdown_signal.store(true, Ordering::Release);
+        self.shutdown_notify.notify_waiters();
         let tasks = self.drain_task_handles();
         let timed_out = shutdown_consumer_stats_tasks_async(tasks, CONSUMER_STATS_TASK_SHUTDOWN_TIMEOUT).await;
         if timed_out > 0 {
@@ -383,21 +391,12 @@ fn shutdown_consumer_stats_tasks_blocking(tasks: Vec<ConsumerStatsTask>, timeout
     timed_out
 }
 
-async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, delay: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + delay;
-
-    loop {
-        if shutdown_signal.load(Ordering::Acquire) {
-            return false;
-        }
-
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            return true;
-        }
-
-        tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
+async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, shutdown_notify: &Arc<Notify>, delay: Duration) -> bool {
+    if shutdown_signal.load(Ordering::Acquire) {
+        return false;
     }
+
+    tokio::time::timeout(delay, shutdown_notify.notified()).await.is_err() && !shutdown_signal.load(Ordering::Acquire)
 }
 
 #[doc(hidden)]
@@ -422,7 +421,6 @@ pub async fn run_consumer_stats_manager_lifecycle_probe() -> ConsumerStatsManage
 #[cfg(test)]
 mod tests {
     use std::future::pending;
-    use std::thread;
 
     use super::*;
 
@@ -535,6 +533,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sleep_or_shutdown_wakes_on_notify() {
+        let shutdown_signal = Arc::new(AtomicBool::new(false));
+        let shutdown_notify = Arc::new(Notify::new());
+        let signal = shutdown_signal.clone();
+        let notify = shutdown_notify.clone();
+
+        let wait = tokio::spawn(async move { sleep_or_shutdown(&signal, &notify, Duration::from_secs(60)).await });
+
+        shutdown_signal.store(true, Ordering::Release);
+        shutdown_notify.notify_waiters();
+
+        assert!(!tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("sleep_or_shutdown should wake promptly")
+            .expect("sleep task should complete"));
+    }
+
+    #[tokio::test]
     async fn consumer_stats_manager_lifecycle_probe_reports_clean_shutdown() {
         let probe = run_consumer_stats_manager_lifecycle_probe().await;
 
@@ -552,7 +568,6 @@ mod tests {
         mgr.shutdown();
 
         assert!(mgr.task_handles.lock().is_empty());
-        thread::sleep(Duration::from_millis(20));
     }
 
     #[test]

@@ -59,6 +59,7 @@ use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use tokio::sync::watch;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -271,7 +272,8 @@ pub struct DefaultMQProducerImpl {
     producer_config: Arc<ProducerConfig>,
 
     // ===== Atomic state machine =====
-    state: AtomicU8,             // ProducerState
+    state: AtomicU8, // ProducerState
+    state_changes: watch::Sender<ProducerState>,
     service_state: ServiceState, // Keep for compatibility
 
     // ===== Read-only hot data (immutable after init, zero-cost sharing) =====
@@ -320,10 +322,12 @@ impl DefaultMQProducerImpl {
                 .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize,
         );
         let topic_publish_info_table = Arc::new(DashMap::new());
+        let (state_changes, _) = watch::channel(ProducerState::Created);
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
             producer_config: Arc::new(producer_config),
             state: AtomicU8::new(ProducerState::Created as u8),
+            state_changes,
             service_state: ServiceState::CreateJust,
             topic_publish_info_table,
             send_message_hook_list: Arc::new([]),
@@ -343,6 +347,43 @@ impl DefaultMQProducerImpl {
             transaction_check_env: None,
             producer_task_tracker: TaskTracker::new(),
             producer_task_shutdown: CancellationToken::new(),
+        }
+    }
+
+    #[inline]
+    fn load_state(&self, ordering: Ordering) -> ProducerState {
+        ProducerState::from_u8(self.state.load(ordering))
+    }
+
+    #[inline]
+    fn store_state(&self, state: ProducerState, ordering: Ordering) {
+        self.state.store(state as u8, ordering);
+        let _ = self.state_changes.send(state);
+    }
+
+    #[inline]
+    fn compare_exchange_state(
+        &self,
+        current: ProducerState,
+        next: ProducerState,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<ProducerState, ProducerState> {
+        match self.state.compare_exchange(current as u8, next as u8, success, failure) {
+            Ok(previous) => {
+                let _ = self.state_changes.send(next);
+                Ok(ProducerState::from_u8(previous))
+            }
+            Err(previous) => Err(ProducerState::from_u8(previous)),
+        }
+    }
+
+    async fn wait_until_state_changes_from(&self, pending: ProducerState) {
+        let mut state_changes = self.state_changes.subscribe();
+        while self.load_state(Ordering::SeqCst) == pending {
+            if state_changes.changed().await.is_err() {
+                break;
+            }
         }
     }
 
@@ -2875,9 +2916,9 @@ impl DefaultMQProducerImpl {
     #[inline]
     pub async fn start_with_factory(&mut self, start_factory: bool) -> rocketmq_error::RocketMQResult<()> {
         // Atomic CAS state transition
-        match self.state.compare_exchange(
-            ProducerState::Created as u8,
-            ProducerState::Starting as u8,
+        match self.compare_exchange_state(
+            ProducerState::Created,
+            ProducerState::Starting,
             Ordering::SeqCst,
             Ordering::SeqCst,
         ) {
@@ -2889,7 +2930,7 @@ impl DefaultMQProducerImpl {
                 self.freeze_hook_lists();
 
                 if let Err(error) = self.check_config() {
-                    self.state.store(ProducerState::StartFailed as u8, Ordering::SeqCst);
+                    self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
                     return Err(error);
                 }
 
@@ -2922,7 +2963,7 @@ impl DefaultMQProducerImpl {
                 let self_clone = match self_clone {
                     Ok(self_clone) => self_clone,
                     Err(error) => {
-                        self.state.store(ProducerState::StartFailed as u8, Ordering::SeqCst);
+                        self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
                         return Err(error);
                     }
                 };
@@ -2937,7 +2978,7 @@ impl DefaultMQProducerImpl {
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
-                    self.state.store(ProducerState::Created as u8, Ordering::SeqCst);
+                    self.store_state(ProducerState::Created, Ordering::SeqCst);
                     return Err(mq_client_err!(format!(
                         "The producer group[{}] has been created before, specify another name please. {}",
                         self.producer_config.producer_group(),
@@ -2946,7 +2987,7 @@ impl DefaultMQProducerImpl {
                 }
                 if start_factory {
                     if let Err(error) = Box::pin(client_instance.mut_from_ref().start(client_instance.clone())).await {
-                        self.state.store(ProducerState::StartFailed as u8, Ordering::SeqCst);
+                        self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
                         return Err(error);
                     }
                 }
@@ -2956,7 +2997,7 @@ impl DefaultMQProducerImpl {
 
                 // Update both states
                 self.service_state = ServiceState::Running;
-                self.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+                self.store_state(ProducerState::Running, Ordering::SeqCst);
                 REQUEST_FUTURE_HOLDER
                     .start_scheduled_task(self.producer_config.producer_group().to_string())
                     .await;
@@ -2967,8 +3008,7 @@ impl DefaultMQProducerImpl {
                 );
                 Ok(())
             }
-            Err(current) => {
-                let state = ProducerState::from_u8(current);
+            Err(state) => {
                 match state {
                     ProducerState::Running => {
                         // Already running, idempotent
@@ -2976,9 +3016,7 @@ impl DefaultMQProducerImpl {
                     }
                     ProducerState::Starting => {
                         // Another thread is starting, wait for completion
-                        while self.state.load(Ordering::SeqCst) == ProducerState::Starting as u8 {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
+                        self.wait_until_state_changes_from(ProducerState::Starting).await;
                         self.ensure_running()
                     }
                     ProducerState::Stopped => Err(mq_client_err!("The producer service state is ShutdownAlready")),
@@ -3027,9 +3065,9 @@ impl DefaultMQProducerImpl {
     /// Shutdown the producer with option to shutdown factory
     pub async fn shutdown_with_factory(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
         // Atomic CAS state transition
-        match self.state.compare_exchange(
-            ProducerState::Running as u8,
-            ProducerState::Stopping as u8,
+        match self.compare_exchange_state(
+            ProducerState::Running,
+            ProducerState::Stopping,
             Ordering::SeqCst,
             Ordering::SeqCst,
         ) {
@@ -3041,13 +3079,12 @@ impl DefaultMQProducerImpl {
 
                 // Update states
                 self.service_state = ServiceState::ShutdownAlready;
-                self.state.store(ProducerState::Stopped as u8, Ordering::SeqCst);
+                self.store_state(ProducerState::Stopped, Ordering::SeqCst);
 
                 tracing::info!("Producer [{}] shutdown OK", self.producer_config.producer_group());
                 Ok(())
             }
-            Err(current) => {
-                let state = ProducerState::from_u8(current);
+            Err(state) => {
                 match state {
                     ProducerState::Stopped => {
                         // Already stopped, idempotent
@@ -3063,9 +3100,7 @@ impl DefaultMQProducerImpl {
                     }
                     ProducerState::Stopping => {
                         // Another thread is stopping, wait for completion
-                        while self.state.load(Ordering::SeqCst) == ProducerState::Stopping as u8 {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
+                        self.wait_until_state_changes_from(ProducerState::Stopping).await;
                         Ok(())
                     }
                     _ => Err(mq_client_err!(format!("Cannot shutdown producer in state {:?}", state))),
@@ -3507,7 +3542,7 @@ mod tests {
 
     fn running_producer_without_client() -> DefaultMQProducerImpl {
         let mut producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
-        producer.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+        producer.store_state(ProducerState::Running, Ordering::SeqCst);
         producer.service_state = ServiceState::Running;
         producer
     }
@@ -3696,6 +3731,28 @@ mod tests {
             ProducerState::StartFailed
         );
         assert_eq!(producer.service_state, ServiceState::StartFailed);
+    }
+
+    #[tokio::test]
+    async fn producer_state_wait_uses_state_change_notification() {
+        let producer = DefaultMQProducerImpl::new(ClientConfig::default(), ProducerConfig::default(), None);
+        producer.store_state(ProducerState::Starting, Ordering::SeqCst);
+
+        let wait_for_running = async {
+            producer.wait_until_state_changes_from(ProducerState::Starting).await;
+            producer.load_state(Ordering::SeqCst)
+        };
+        let complete_start = async {
+            tokio::task::yield_now().await;
+            producer.store_state(ProducerState::Running, Ordering::SeqCst);
+        };
+
+        let (state, _) = tokio::time::timeout(Duration::from_millis(100), async {
+            tokio::join!(wait_for_running, complete_start)
+        })
+        .await
+        .expect("state waiter should be notified without polling");
+        assert_eq!(state, ProducerState::Running);
     }
 
     #[tokio::test]
@@ -3947,7 +4004,7 @@ mod tests {
         client_config.set_namespace(CheetahString::from_static_str("ns-a"));
         let client_instance = MQClientInstance::new_arc(client_config.clone(), 0, "selector-namespace-client", None);
         let mut producer = DefaultMQProducerImpl::new(client_config.clone(), ProducerConfig::default(), None);
-        producer.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+        producer.store_state(ProducerState::Running, Ordering::SeqCst);
         producer.service_state = ServiceState::Running;
         producer.client_instance = Some(client_instance);
         producer.topic_publish_info_table.insert(

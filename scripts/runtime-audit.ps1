@@ -212,7 +212,8 @@ function Get-SourceBenchmarkScopeRanges {
             continue
         }
 
-        if ($line -match "\b(pub(\([^)]*\))?\s+)?mod\s+bench_support\b" -and $line -notmatch ";\s*$") {
+        if (($line -match "\b(pub(\([^)]*\))?\s+)?mod\s+bench_support\b" -and $line -notmatch ";\s*$") -or
+            $line -match "\b(pub(\([^)]*\))?\s+)?(async\s+)?fn\s+run_\w*_lifecycle_probe\b") {
             $activeStart = $lineNumber
             $activeDepth = 0
             $activeSawBrace = $false
@@ -657,6 +658,14 @@ function Get-RuntimeCreationDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs" -and $text -match "Handle::try_current") {
+        return [pscustomobject]@{
+            Disposition = "broker-blocking-executor-boundary"
+            ActionRequired = $false
+            Reason = "Topic queue mapping persistence lazily binds a bounded BlockingExecutor to the current broker Tokio runtime."
+        }
+    }
+
     if ($path -match "^rocketmq-broker/") {
         return [pscustomobject]@{
             Disposition = "broker-runtime-boundary"
@@ -778,6 +787,370 @@ function Write-RuntimeCreationDispositionReport {
     $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
 }
 
+function Get-SchedulerDisposition {
+    param([Parameter(Mandatory = $true)]$Match)
+
+    $path = $Match.Path.Replace("\", "/")
+
+    if ($path -match "^rocketmq-runtime/src/") {
+        return [pscustomobject]@{
+            Disposition = "runtime-scheduler-primitive"
+            ActionRequired = $false
+            Reason = "Allowed inside rocketmq-runtime scheduler primitives; these sites implement cancellable sleeps, fixed-delay, fixed-rate, and no-overlap semantics."
+        }
+    }
+
+    if ($path -match "^rocketmq/src/schedule") {
+        return [pscustomobject]@{
+            Disposition = "rocketmq-scheduler-facade"
+            ActionRequired = $false
+            Reason = "Allowed inside the RocketMQ scheduler facade; driver and run tasks are tracked by TaskGroup and provide bounded shutdown reports."
+        }
+    }
+
+    if ($path -eq "rocketmq-common/src/thread_pool.rs") {
+        return [pscustomobject]@{
+            Disposition = "common-scheduler-facade"
+            ActionRequired = $false
+            Reason = "Allowed compatibility facade backed by RuntimeOwner and tracked task groups."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/factory/mq_client_instance\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "client-scheduler-boundary"
+            ActionRequired = $false
+            Reason = "Documented client scheduling boundary using ScheduledTaskManager and cancellable delayed runtime actions."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/producer/produce_accumulator\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "client-producer-batch-drain"
+            ActionRequired = $false
+            Reason = "Allowed production periodic batch-drain timer; it is business scheduling rather than runtime ownership."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/trace/async_trace_dispatcher\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "client-trace-batch-flush"
+            ActionRequired = $false
+            Reason = "Allowed trace batch flush cadence; shutdown flush no longer depends on a fixed blocking delay."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/runtime\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "client-delayed-runtime-action"
+            ActionRequired = $false
+            Reason = "Allowed client runtime helper delay for scheduled actions; runtime ownership remains centralized in client runtime wrappers."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/consumer/") {
+        return [pscustomobject]@{
+            Disposition = "client-consumer-protocol-delay"
+            ActionRequired = $false
+            Reason = "Allowed consumer protocol retry, suspend, and pull delay semantics; these are bounded business waits rather than ad hoc runtime management."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/src/broker_runtime\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "broker-scheduler-boundary"
+            ActionRequired = $false
+            Reason = "Documented broker runtime scheduling boundary; migrated background tasks are rooted in broker lifecycle ownership."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/src/(schedule|transaction|long_polling|processor|topic)/") {
+        return [pscustomobject]@{
+            Disposition = "broker-protocol-timer"
+            ActionRequired = $false
+            Reason = "Allowed broker protocol timer, long-poll timeout, retry, yield, or delayed-message semantics; these waits are not runtime creation or detached task ownership."
+        }
+    }
+
+    if ($path -match "^rocketmq-controller/src/") {
+        return [pscustomobject]@{
+            Disposition = "controller-retry-backoff"
+            ActionRequired = $false
+            Reason = "Allowed controller startup or RPC retry/backoff timing; scheduled lifecycle jobs use ScheduledTaskGroup where they are long-running services."
+        }
+    }
+
+    if ($path -match "^rocketmq-remoting/src/remoting_server/") {
+        return [pscustomobject]@{
+            Disposition = "remoting-idle-timeout"
+            ActionRequired = $false
+            Reason = "Allowed per-connection idle timeout inside the remoting server task lifecycle."
+        }
+    }
+
+    if ($path -match "^rocketmq-store/src/stats/") {
+        return [pscustomobject]@{
+            Disposition = "store-stats-scheduler-boundary"
+            ActionRequired = $false
+            Reason = "Documented store stats scheduling boundary backed by ScheduledTaskManager."
+        }
+    }
+
+    if ($path -match "^rocketmq-store/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-storage-timer"
+            ActionRequired = $false
+            Reason = "Allowed storage protocol, HA, flush, and checkpoint timing semantics; long-running scheduled services have migration benchmarks and shutdown artifacts."
+        }
+    }
+
+    if ($path -match "^rocketmq-tools/") {
+        return [pscustomobject]@{
+            Disposition = "tooling-user-driven-polling"
+            ActionRequired = $false
+            Reason = "Allowed admin tooling polling or refresh interval outside broker/client hot runtime paths."
+        }
+    }
+
+    if ($path -match "^rocketmq-dashboard/") {
+        return [pscustomobject]@{
+            Disposition = "dashboard-standalone-refresh-loop"
+            ActionRequired = $false
+            Reason = "Allowed standalone dashboard refresh loop; dashboard projects require separate validation from the root workspace."
+        }
+    }
+
+    return [pscustomobject]@{
+        Disposition = "unclassified-follow-up"
+        ActionRequired = $true
+        Reason = "Manual review required before this scheduler site can be treated as compliant."
+    }
+}
+
+function Add-SchedulerDisposition {
+    param([Parameter(Mandatory = $true)][array]$Matches)
+
+    $classified = @()
+    foreach ($match in $Matches) {
+        $disposition = Get-SchedulerDisposition -Match $match
+        $classified += [pscustomobject]@{
+            Scope = $match.Scope
+            Crate = $match.Crate
+            Path = $match.Path
+            Line = $match.Line
+            Text = $match.Text
+            Disposition = $disposition.Disposition
+            ActionRequired = [bool]$disposition.ActionRequired
+            Reason = $disposition.Reason
+        }
+    }
+    return @($classified)
+}
+
+function Write-SchedulerDispositionReport {
+    param(
+        [Parameter(Mandatory = $true)][array]$Matches,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Production Scheduler Disposition")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Total matches: $($Matches.Count)")
+    $lines.Add("Action required: $(@($Matches | Where-Object { $_.ActionRequired }).Count)")
+    $lines.Add("Allowed or documented: $(@($Matches | Where-Object { -not $_.ActionRequired }).Count)")
+    $lines.Add("")
+
+    if ($Matches.Count -gt 0) {
+        $lines.Add("| Crate | File | Line | Disposition | Action required | Reason | Code |")
+        $lines.Add("|---|---|---:|---|---|---|---|")
+        foreach ($match in $Matches) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $reason = $match.Reason.Replace("|", "\|")
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $($match.Disposition) | $($match.ActionRequired) | $reason | $code |")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
+}
+
+function Get-BlockingDisposition {
+    param([Parameter(Mandatory = $true)]$Match)
+
+    $path = $Match.Path.Replace("\", "/")
+
+    if ($path -eq "rocketmq-runtime/src/blocking.rs") {
+        return [pscustomobject]@{
+            Disposition = "runtime-blocking-primitive"
+            ActionRequired = $false
+            Reason = "Allowed only inside BlockingExecutor; it bounds concurrency, observes queue/task timeouts, and tracks still-running tasks."
+        }
+    }
+
+    if ($path -eq "rocketmq-runtime/src/shutdown_report.rs") {
+        return [pscustomobject]@{
+            Disposition = "runtime-blocking-report-field"
+            ActionRequired = $false
+            Reason = "Report text and fields for BlockingExecutor shutdown evidence, not a blocking operation."
+        }
+    }
+
+    if ($path -match "^rocketmq-store/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-storage-blocking-domain"
+            ActionRequired = $false
+            Reason = "Allowed store local-file, mmap, RocksDB, HA, index, timer, and checkpoint blocking domain; long loops use dedicated services and store benchmarks cover shutdown behavior."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/src/bin/") {
+        return [pscustomobject]@{
+            Disposition = "broker-entrypoint-config-io"
+            ActionRequired = $false
+            Reason = "Allowed process bootstrap configuration file read before broker services enter hot async paths."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/src/(broker_runtime\.rs|config\.rs|config/|offset/|pop|processor/|subscription/|topic/)") {
+        return [pscustomobject]@{
+            Disposition = "broker-persistent-state-domain"
+            ActionRequired = $false
+            Reason = "Allowed broker persistent state, RocksDB metadata, admin persistence, or storage-backed processor path; direct async blocking offload sites are separately migrated to BlockingExecutor."
+        }
+    }
+
+    if ($path -match "^rocketmq-controller/src/(storage|openraft/storage)") {
+        return [pscustomobject]@{
+            Disposition = "controller-storage-domain"
+            ActionRequired = $false
+            Reason = "Allowed controller storage/RocksDB domain outside Tokio runtime ownership; controller scheduling lifecycle is covered by separate scheduler disposition."
+        }
+    }
+
+    if ($path -match "^rocketmq-client/src/(admin|implementation|producer|consumer)/") {
+        return [pscustomobject]@{
+            Disposition = "client-admin-or-callback-blocking-boundary"
+            ActionRequired = $false
+            Reason = "Allowed client admin metadata, protocol naming, or callback offload boundary; real user callback blocking paths use the client BlockingExecutor wrapper."
+        }
+    }
+
+    if ($path -match "^rocketmq-common/src/") {
+        return [pscustomobject]@{
+            Disposition = "common-sync-file-or-config-boundary"
+            ActionRequired = $false
+            Reason = "Allowed shared synchronous file/config utility boundary; async callers should wrap hot-path file I/O with a BlockingExecutor."
+        }
+    }
+
+    if ($path -match "^rocketmq-auth/src/") {
+        return [pscustomobject]@{
+            Disposition = "auth-local-metadata-file-io"
+            ActionRequired = $false
+            Reason = "Allowed local ACL/auth metadata file I/O compatibility path; auth sync bridges are separately classified in runtime creation disposition."
+        }
+    }
+
+    if ($path -match "^rocketmq-remoting/src/protocol/") {
+        return [pscustomobject]@{
+            Disposition = "remoting-protocol-field-false-positive"
+            ActionRequired = $false
+            Reason = "Protocol field or header text containing blocking-related words, not a runtime blocking operation."
+        }
+    }
+
+    if ($path -match "^rocketmq-namesrv/src/bin/") {
+        return [pscustomobject]@{
+            Disposition = "namesrv-entrypoint-config-io"
+            ActionRequired = $false
+            Reason = "Allowed process bootstrap configuration file read before NameSrv services enter hot async paths."
+        }
+    }
+
+    if ($path -match "^rocketmq-tools/") {
+        return [pscustomobject]@{
+            Disposition = "tooling-blocking-io"
+            ActionRequired = $false
+            Reason = "Allowed admin tooling export, catalog, RocksDB inspection, or command polling outside broker/client hot runtime paths."
+        }
+    }
+
+    if ($path -match "^rocketmq-observability/src/") {
+        return [pscustomobject]@{
+            Disposition = "observability-metric-name-false-positive"
+            ActionRequired = $false
+            Reason = "Metric names and semantic labels for RocksDB/storage reporting, not Tokio runtime blocking."
+        }
+    }
+
+    if ($path -match "^rocketmq-dashboard/") {
+        return [pscustomobject]@{
+            Disposition = "dashboard-standalone-blocking-boundary"
+            ActionRequired = $false
+            Reason = "Standalone dashboard blocking bridge outside the root workspace runtime model; validate in the dashboard project when it is changed."
+        }
+    }
+
+    return [pscustomobject]@{
+        Disposition = "unclassified-follow-up"
+        ActionRequired = $true
+        Reason = "Manual review required before this blocking site can be treated as compliant."
+    }
+}
+
+function Add-BlockingDisposition {
+    param([Parameter(Mandatory = $true)][array]$Matches)
+
+    $classified = @()
+    foreach ($match in $Matches) {
+        $disposition = Get-BlockingDisposition -Match $match
+        $classified += [pscustomobject]@{
+            Scope = $match.Scope
+            Crate = $match.Crate
+            Path = $match.Path
+            Line = $match.Line
+            Text = $match.Text
+            Disposition = $disposition.Disposition
+            ActionRequired = [bool]$disposition.ActionRequired
+            Reason = $disposition.Reason
+        }
+    }
+    return @($classified)
+}
+
+function Write-BlockingDispositionReport {
+    param(
+        [Parameter(Mandatory = $true)][array]$Matches,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Production Blocking Disposition")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Total matches: $($Matches.Count)")
+    $lines.Add("Action required: $(@($Matches | Where-Object { $_.ActionRequired }).Count)")
+    $lines.Add("Allowed or documented: $(@($Matches | Where-Object { -not $_.ActionRequired }).Count)")
+    $lines.Add("")
+
+    if ($Matches.Count -gt 0) {
+        $lines.Add("| Crate | File | Line | Disposition | Action required | Reason | Code |")
+        $lines.Add("|---|---|---:|---|---|---|---|")
+        foreach ($match in $Matches) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $reason = $match.Reason.Replace("|", "\|")
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $($match.Disposition) | $($match.ActionRequired) | $reason | $code |")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
+}
+
 New-DirectoryIfMissing -Path $auditRoot
 if (-not $SkipBaseline) {
     New-DirectoryIfMissing -Path $baselineRoot
@@ -815,6 +1188,16 @@ Write-RuntimeCreationDispositionReport `
     -Matches $productionRuntimeCreationDisposition `
     -Path (Join-Path $auditRoot "production-runtime-creation-disposition.md")
 
+$productionSchedulerDisposition = Add-SchedulerDisposition -Matches (Get-ProductionMatches -Matches $allMatches["scheduler-sites"])
+Write-SchedulerDispositionReport `
+    -Matches $productionSchedulerDisposition `
+    -Path (Join-Path $auditRoot "production-scheduler-disposition.md")
+
+$productionBlockingDisposition = Add-BlockingDisposition -Matches (Get-ProductionMatches -Matches $allMatches["blocking-sites"])
+Write-BlockingDispositionReport `
+    -Matches $productionBlockingDisposition `
+    -Path (Join-Path $auditRoot "production-blocking-disposition.md")
+
 $classificationLines = @(
     "# Runtime Task Classification",
     "",
@@ -831,11 +1214,13 @@ $classificationLines = @(
     "| detached task | DetachedTaskPolicy or eliminate | runtime-spawn-sites.md |",
     "",
     "Each audit row includes a Scope column. Scope is production, test, benchmark, or example.",
-    "Benchmark scope includes benches/ paths and inline modules named bench_support.",
+    "Benchmark scope includes benches/ paths, inline modules named bench_support, and diagnostic functions named run_*_lifecycle_probe.",
     "Test scope includes tests/ paths and best-effort source ranges under #[cfg(test)] or #[tokio::test].",
     "Production-only reports are emitted as production-*.md so migration planning can ignore test harness noise.",
     '`production-runtime-spawn-disposition.md` separates allowed runtime primitives and dedicated OS threads from remaining follow-up items.',
     '`production-runtime-creation-disposition.md` separates entrypoint runtimes, runtime primitives, documented compatibility bridges, and remaining follow-up items.',
+    '`production-scheduler-disposition.md` separates scheduler primitives, documented business timers, protocol timeouts, and remaining follow-up items.',
+    '`production-blocking-disposition.md` separates blocking primitives, storage domains, bootstrap/config I/O, tooling, metric/protocol false positives, and remaining follow-up items.',
     "Comment-only Rust lines are omitted so documentation examples do not count as runtime sites.",
     "",
     "Manual review is still required before migrating each site."
@@ -894,6 +1279,26 @@ $summary.production_runtime_creation_disposition = [ordered]@{
     allowed_or_documented = @($productionRuntimeCreationDisposition | Where-Object { -not $_.ActionRequired }).Count
     by_disposition = $creationDispositionByKind
 }
+$schedulerDispositionByKind = [ordered]@{}
+foreach ($disposition in ($productionSchedulerDisposition | Select-Object -ExpandProperty Disposition -Unique | Sort-Object)) {
+    $schedulerDispositionByKind[$disposition] = @($productionSchedulerDisposition | Where-Object { $_.Disposition -eq $disposition }).Count
+}
+$summary.production_scheduler_disposition = [ordered]@{
+    total = $productionSchedulerDisposition.Count
+    action_required = @($productionSchedulerDisposition | Where-Object { $_.ActionRequired }).Count
+    allowed_or_documented = @($productionSchedulerDisposition | Where-Object { -not $_.ActionRequired }).Count
+    by_disposition = $schedulerDispositionByKind
+}
+$blockingDispositionByKind = [ordered]@{}
+foreach ($disposition in ($productionBlockingDisposition | Select-Object -ExpandProperty Disposition -Unique | Sort-Object)) {
+    $blockingDispositionByKind[$disposition] = @($productionBlockingDisposition | Where-Object { $_.Disposition -eq $disposition }).Count
+}
+$summary.production_blocking_disposition = [ordered]@{
+    total = $productionBlockingDisposition.Count
+    action_required = @($productionBlockingDisposition | Where-Object { $_.ActionRequired }).Count
+    allowed_or_documented = @($productionBlockingDisposition | Where-Object { -not $_.ActionRequired }).Count
+    by_disposition = $blockingDispositionByKind
+}
 
 $summary | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 (Join-Path $auditRoot "summary.json")
 
@@ -912,6 +1317,8 @@ foreach ($key in $patterns.Keys) {
 $riskSummaryLines.Add("")
 $riskSummaryLines.Add("Runtime spawn disposition: $(@($productionRuntimeSpawnDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionRuntimeSpawnDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines.Add("Runtime creation disposition: $(@($productionRuntimeCreationDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionRuntimeCreationDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
+$riskSummaryLines.Add("Scheduler disposition: $(@($productionSchedulerDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionSchedulerDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
+$riskSummaryLines.Add("Blocking disposition: $(@($productionBlockingDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionBlockingDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines -join [Environment]::NewLine | Out-File -Encoding utf8 (Join-Path $auditRoot "production-risk-summary.md")
 
 if (-not $SkipBaseline) {

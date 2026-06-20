@@ -164,10 +164,7 @@ impl ServiceThreadTokio {
     }
 
     pub async fn wait_for_running(&self, interval: u64) {
-        tokio::select! {
-            _ = self.notified.notified() => {}
-            _ = tokio::time::sleep(std::time::Duration::from_millis(interval)) => {}
-        }
+        let _ = timeout(Duration::from_millis(interval), self.notified.notified()).await;
     }
 }
 
@@ -334,6 +331,22 @@ mod tests {
         service_thread.start();
         service_thread.wait_for_running(100).await;
         assert!(service_thread.started.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn wait_for_running_returns_on_wakeup_before_timeout() {
+        let mock_runnable = MockTestRunnable::new();
+        let service_thread =
+            ServiceThreadTokio::new("TestServiceThread".to_string(), Arc::new(Mutex::new(mock_runnable)));
+
+        timeout(Duration::from_millis(20), async {
+            tokio::join!(service_thread.wait_for_running(1_000), async {
+                tokio::task::yield_now().await;
+                service_thread.wakeup();
+            })
+        })
+        .await
+        .expect("wait_for_running should return when wakeup arrives before timeout");
     }
 
     #[tokio::test]

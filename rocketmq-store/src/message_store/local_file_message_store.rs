@@ -96,7 +96,6 @@ use rocketmq_tieredstore::TieredMessageFetcher;
 use rocketmq_tieredstore::TieredStore;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -540,6 +539,7 @@ impl LocalFileMessageStore {
             reput_message_service: ReputMessageService {
                 shutdown_token: CancellationToken::new(),
                 new_message_notify: Arc::new(Notify::new()),
+                dispatch_progress_notify: Arc::new(Notify::new()),
                 pending_messages: Arc::new(AtomicI64::new(0)),
                 reput_from_offset: None,
                 dispatch_tx: None,
@@ -3438,6 +3438,7 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
 struct ReputMessageService {
     shutdown_token: CancellationToken,
     new_message_notify: Arc<Notify>,
+    dispatch_progress_notify: Arc<Notify>,
     pending_messages: Arc<AtomicI64>,
     reput_from_offset: Option<Arc<AtomicI64>>,
     dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
@@ -3504,13 +3505,12 @@ impl ReputMessageService {
 
         let shutdown = self.shutdown_token.clone();
         let new_message_notify = self.new_message_notify.clone();
+        let dispatch_progress_notify = self.dispatch_progress_notify.clone();
         let pending_messages = self.pending_messages.clone();
 
         // Task 1: Read messages from CommitLog and send to channel
         let shutdown_reader = shutdown.clone();
         if let Err(error) = task_group.spawn_service("reput-reader", async move {
-            let mut fallback_interval = tokio::time::interval(Duration::from_millis(1));
-            fallback_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = new_message_notify.notified() => {
@@ -3532,14 +3532,16 @@ impl ReputMessageService {
 
                                     // Decrement pending counter after successful send
                                     // Use saturating_sub to prevent underflow
-                                    pending_messages.fetch_update(
-                                        Ordering::Relaxed,
-                                        Ordering::Relaxed,
-                                        |x| if x > 0 { Some(x - 1) } else { Some(0) }
-                                    ).ok();
+                                    pending_messages
+                                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
+                                            if x > 0 { Some(x - 1) } else { Some(0) }
+                                        })
+                                        .ok();
+                                    dispatch_progress_notify.notify_waiters();
                                 }
                                 None => {
                                     // No more messages available at this offset
+                                    dispatch_progress_notify.notify_waiters();
                                     break;
                                 }
                             }
@@ -3549,20 +3551,6 @@ impl ReputMessageService {
                             if pending_messages.load(Ordering::Relaxed) == 0
                                 && !inner.is_commit_log_available() {
                                 break;
-                            }
-                        }
-                    }
-                    _ = fallback_interval.tick() => {
-                        // Fallback: periodic check
-                        if pending_messages.load(Ordering::Relaxed) > 0 || inner.is_commit_log_available() {
-                            if let Some(batch) = inner.read_and_parse_batch().await {
-                                if dispatch_tx.send(batch).await.is_ok() {
-                                    pending_messages.fetch_update(
-                                        Ordering::Relaxed,
-                                        Ordering::Relaxed,
-                                        |x| if x > 0 { Some(x - 1) } else { Some(0) }
-                                    ).ok();
-                                }
                             }
                         }
                     }
@@ -3618,6 +3606,20 @@ impl ReputMessageService {
         }
 
         self.task_group = Some(task_group);
+        self.new_message_notify.notify_one();
+    }
+
+    async fn wait_until_commit_log_dispatched(&self, inner: &ReputMessageServiceInner, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let progress = self.dispatch_progress_notify.notified();
+            if !inner.is_commit_log_available() {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, progress).await.is_err() {
+                return !inner.is_commit_log_available();
+            }
+        }
     }
 
     pub async fn run_once(
@@ -3651,14 +3653,10 @@ impl ReputMessageService {
     }
 
     pub async fn shutdown(&mut self) {
-        // Step 1: Wait for pending messages to be dispatched (max 5 seconds, 50 * 100ms)
+        // Step 1: Wait for pending messages to be dispatched (max 5 seconds)
         if let Some(inner) = self.inner.as_ref() {
-            for i in 0..50 {
-                if !inner.is_commit_log_available() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
+            self.wait_until_commit_log_dispatched(inner, Duration::from_secs(5))
+                .await;
 
             // Warn if there are still undispatched messages
             if inner.is_commit_log_available() {
@@ -4525,11 +4523,13 @@ mod tests {
     #[cfg(feature = "tieredstore")]
     use rocketmq_tieredstore::TieredStoreConfig;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     use super::run_blocking_scheduled_task;
     use super::CleanCommitLogService;
     use super::DiskCleanDecision;
     use super::LocalFileMessageStore;
+    use super::ReputMessageService;
     use super::ReputMessageServiceInner;
     use super::StoreLifecycleState;
     use crate::base::dispatch_request::DispatchRequest;
@@ -4683,6 +4683,85 @@ mod tests {
             notify_message_arrive_in_batch: false,
             message_store: store,
         }
+    }
+
+    #[tokio::test]
+    async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+        let mut inner = reput_inner_for_store(store);
+        inner.set_reput_from_offset(-1);
+
+        let service = ReputMessageService {
+            shutdown_token: CancellationToken::new(),
+            new_message_notify: Arc::new(tokio::sync::Notify::new()),
+            dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
+            pending_messages: Arc::new(AtomicI64::new(0)),
+            reput_from_offset: None,
+            dispatch_tx: None,
+            inner: None,
+            task_group: None,
+        };
+        let reput_from_offset = inner.reput_from_offset.clone();
+        let dispatch_progress_notify = service.dispatch_progress_notify.clone();
+
+        let (dispatched, _) = tokio::time::timeout(Duration::from_millis(100), async {
+            tokio::join!(
+                service.wait_until_commit_log_dispatched(&inner, Duration::from_secs(5)),
+                async move {
+                    tokio::task::yield_now().await;
+                    reput_from_offset.store(0, Ordering::Release);
+                    dispatch_progress_notify.notify_waiters();
+                }
+            )
+        })
+        .await
+        .expect("dispatch progress notification should wake shutdown wait");
+
+        assert!(dispatched);
+    }
+
+    #[tokio::test]
+    async fn reput_service_start_wakes_existing_commitlog_backlog() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                read_uncommitted: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("reput-start-backlog-topic");
+        let msg_size =
+            append_encoded_test_message(&mut store, &topic, 0, 1_000, Bytes::from_static(b"backlog-body")).await;
+
+        store.reput_message_service.set_reput_from_offset(0);
+        let commit_log = store.commit_log.clone();
+        let message_store_config = store.message_store_config.clone();
+        let dispatcher = store.dispatcher.clone();
+        let message_store = store.clone();
+        store
+            .reput_message_service
+            .start(commit_log, message_store_config, dispatcher, false, message_store);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let offset = store
+                    .reput_message_service
+                    .reput_from_offset
+                    .as_ref()
+                    .expect("reput offset should exist")
+                    .load(Ordering::Acquire);
+                if offset >= i64::from(msg_size) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial reput wakeup should process existing backlog");
+
+        store.reput_message_service.shutdown().await;
     }
 
     fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {

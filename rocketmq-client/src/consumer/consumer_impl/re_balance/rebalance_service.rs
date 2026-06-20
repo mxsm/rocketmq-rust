@@ -165,6 +165,7 @@ impl RebalanceConfig {
 pub struct RebalanceService {
     config: RebalanceConfig,
     notify: Arc<Notify>,
+    stopped_notify: Arc<Notify>,
     tx_shutdown: Option<tokio::sync::broadcast::Sender<()>>,
     started: Arc<AtomicBool>,
     task_handle: Arc<tokio::sync::Mutex<Option<ClientTrackedTaskHandle>>>,
@@ -203,6 +204,7 @@ impl RebalanceService {
         RebalanceService {
             config,
             notify: Arc::new(Notify::new()),
+            stopped_notify: Arc::new(Notify::new()),
             tx_shutdown: None,
             started: Arc::new(AtomicBool::new(false)),
             task_handle: Arc::new(tokio::sync::Mutex::new(None)),
@@ -229,6 +231,7 @@ impl RebalanceService {
         }
 
         let notify = self.notify.clone();
+        let stopped_notify = self.stopped_notify.clone();
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         self.tx_shutdown = Some(tx_shutdown);
 
@@ -254,12 +257,14 @@ impl RebalanceService {
                     _ = shutdown.recv() => {
                         info!("RebalanceService shutdown signal received, timestamp={}", current_millis());
                         started_clone.store(false, Ordering::SeqCst);
+                        stopped_notify.notify_waiters();
                         return;
                     }
                     _ = tokio::time::sleep(real_wait_interval) => {}
                 }
                 if shutdown.is_shutdown() {
                     started_clone.store(false, Ordering::SeqCst);
+                    stopped_notify.notify_waiters();
                     return;
                 }
                 let now = tokio::time::Instant::now();
@@ -373,15 +378,19 @@ impl RebalanceService {
         }
 
         // Fallback for older or failed starts where no handle was captured.
-        let start = Instant::now();
-        while self.started.load(Ordering::SeqCst) {
-            if start.elapsed() >= timeout {
-                warn!("RebalanceService shutdown timeout after {}ms", timeout_ms);
-                return Err("Shutdown timeout".into());
+        let stopped = self.stopped_notify.notified();
+        tokio::pin!(stopped);
+        if self.started.load(Ordering::SeqCst) {
+            match tokio::time::timeout(timeout, &mut stopped).await {
+                Ok(()) => {}
+                Err(_) => {
+                    warn!("RebalanceService shutdown timeout after {}ms", timeout_ms);
+                    return Err("Shutdown timeout".into());
+                }
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
+        self.started.store(false, Ordering::SeqCst);
         info!("RebalanceService shutdown successfully");
         Ok(())
     }
@@ -613,23 +622,42 @@ mod tests {
             "rebalance service should retain a join handle"
         );
 
+        let stopped = service.stopped_notify.notified();
         let tx_shutdown = service
             .tx_shutdown
             .as_ref()
             .expect("start should install shutdown sender");
         let _ = tx_shutdown.send(());
 
-        for _ in 0..50 {
-            if !service.is_running() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        futures::executor::block_on(stopped);
 
         assert!(
             !service.is_running(),
             "fallback rebalance task did not observe shutdown"
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_without_task_handle_waits_for_stop_notification() {
+        let mut service = RebalanceService::new();
+        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
+        service.tx_shutdown = Some(tx_shutdown);
+        service.started.store(true, Ordering::SeqCst);
+
+        let started = service.started.clone();
+        let stopped_notify = service.stopped_notify.clone();
+        tokio::spawn(async move {
+            shutdown.recv().await;
+            started.store(false, Ordering::SeqCst);
+            stopped_notify.notify_waiters();
+        });
+
+        service
+            .shutdown(1_000)
+            .await
+            .expect("shutdown fallback should wait for stop notification");
+
+        assert!(!service.is_running());
     }
 
     #[tokio::test]
