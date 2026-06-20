@@ -67,13 +67,19 @@ use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+static TRANSACTION_MESSAGE_RUNTIME: OnceLock<StdMutex<RuntimeOwner>> = OnceLock::new();
 
 #[derive(Clone)]
 pub(crate) struct TopicManager {
@@ -1117,10 +1123,10 @@ async fn send_transaction_message_with_runtime(
     normalized_message_body: String,
 ) -> TopicResult<TopicSendMessageResult> {
     tokio::task::spawn_blocking(move || -> TopicResult<TopicSendMessageResult> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+        let runtime = transaction_message_runtime()?;
+        let runtime = runtime
+            .lock()
+            .map_err(|error| TopicError::RocketMQ(format!("transaction message runtime lock poisoned: {error}")))?;
 
         runtime.block_on(async move {
             let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
@@ -1158,6 +1164,25 @@ async fn send_transaction_message_with_runtime(
     })
     .await
     .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+}
+
+fn transaction_message_runtime() -> TopicResult<&'static StdMutex<RuntimeOwner>> {
+    if let Some(runtime) = TRANSACTION_MESSAGE_RUNTIME.get() {
+        return Ok(runtime);
+    }
+
+    let runtime = RuntimeOwner::new(RuntimeConfig {
+        worker_threads: 1,
+        max_blocking_threads: 2,
+        thread_name: "rocketmq-dashboard-topic-tx".to_string(),
+        ..RuntimeConfig::default()
+    })
+    .map_err(|error| TopicError::RocketMQ(format!("failed to start transaction message runtime: {error}")))?;
+
+    let _ = TRANSACTION_MESSAGE_RUNTIME.set(StdMutex::new(runtime));
+    Ok(TRANSACTION_MESSAGE_RUNTIME
+        .get()
+        .expect("transaction message runtime should be initialized"))
 }
 
 fn build_send_message(request: &SendTopicMessageRequest, normalized_message_body: &str) -> Message {
@@ -1834,6 +1859,7 @@ mod tests {
     use super::normalize_message_type;
     use super::normalize_topic_message_body;
     use super::quote_numeric_object_keys;
+    use super::transaction_message_runtime;
     use cheetah_string::CheetahString;
     use rocketmq_admin_core::core::stats::StatsAllRow;
     use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
@@ -1848,6 +1874,14 @@ mod tests {
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use std::collections::HashMap;
     use std::collections::HashSet;
+
+    #[test]
+    fn transaction_message_runtime_is_shared() {
+        let first = transaction_message_runtime().expect("transaction runtime should start") as *const _;
+        let second = transaction_message_runtime().expect("transaction runtime should be reused") as *const _;
+
+        assert_eq!(first, second);
+    }
 
     #[test]
     fn classify_special_topics_matches_dashboard_rules() {

@@ -35,7 +35,6 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::warn;
 
@@ -53,7 +52,6 @@ pub(crate) struct PopLiteLongPollingService<MS: MessageStore, RP> {
     wakeup_rx: Option<UnboundedReceiver<CheetahString>>,
     running: AtomicBool,
     task_group: Mutex<Option<TaskGroup>>,
-    main_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPollingService<MS, RP> {
@@ -69,7 +67,6 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
             wakeup_rx: Some(wakeup_rx),
             running: AtomicBool::new(false),
             task_group: Mutex::new(None),
-            main_task: Mutex::new(None),
         }
     }
 
@@ -103,7 +100,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
         let cancellation_token = task_group.cancellation_token();
         let service = this.clone();
 
-        let spawn_result = task_group.spawn_service_with_handle("broker.long-polling.pop-lite.scan", async move {
+        let spawn_result = task_group.spawn_service("broker.long-polling.pop-lite.scan", async move {
             loop {
                 select! {
                     _ = cancellation_token.cancelled() => { break; }
@@ -152,36 +149,17 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
             service.running.store(false, Ordering::Release);
         });
 
-        let (_task_id, main_task) = match spawn_result {
-            Ok(result) => result,
-            Err(error) => {
-                this.running.store(false, Ordering::Release);
-                warn!(?error, "failed to spawn PopLiteLongPollingService scan task");
-                return;
-            }
-        };
+        if let Err(error) = spawn_result {
+            this.running.store(false, Ordering::Release);
+            warn!(?error, "failed to spawn PopLiteLongPollingService scan task");
+            return;
+        }
 
         *this.task_group.lock() = Some(task_group);
-        *this.main_task.lock() = Some(main_task);
     }
 
     pub(crate) async fn shutdown(&mut self) {
         self.notify.notify_waiters();
-        let main_task = self.main_task.lock().take();
-        if let Some(mut main_task) = main_task {
-            match tokio::time::timeout(Duration::from_secs(5), &mut main_task).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    warn!(?error, "PopLiteLongPollingService scan task failed during shutdown");
-                }
-                Err(_) => {
-                    warn!("PopLiteLongPollingService scan task did not stop before shutdown timeout");
-                    main_task.abort();
-                    let _ = main_task.await;
-                }
-            }
-        }
-
         let task_group = self.task_group.lock().take();
         if let Some(task_group) = task_group {
             let report = task_group.shutdown(Duration::from_secs(5)).await;

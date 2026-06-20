@@ -52,8 +52,8 @@ where
         TransactionalOpBatchService { service_manager }
     }
 
-    pub async fn start(&self) {
-        self.service_manager.start().await.unwrap();
+    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+        self.service_manager.start().await
     }
 
     pub async fn shutdown(&self) {

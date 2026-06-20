@@ -17,9 +17,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use parking_lot::Mutex;
 use parking_lot::RwLock;
-use tokio::task;
-use tokio::time::interval;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::TaskGroup;
 
 use crate::common::statistics::statistics_item::StatisticsItem;
 use crate::common::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
@@ -28,11 +31,37 @@ use crate::TimeUtils::current_millis;
 
 type StatsTable = Arc<RwLock<HashMap<String, HashMap<String, Arc<StatisticsItem>>>>>;
 
+const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct CleanupTask {
+    task_group: TaskGroup,
+}
+
+impl CleanupTask {
+    async fn shutdown(self, timeout: Duration) {
+        let report = self.task_group.shutdown(timeout).await;
+        if let Err(error) = report.assert_no_task_leak() {
+            tracing::warn!("statistics cleanup task shutdown report is unhealthy: {error}");
+        }
+    }
+
+    fn abort(self) {
+        let report = self.task_group.shutdown_now();
+        if !report.is_healthy() {
+            tracing::warn!(
+                report = %report.to_json(),
+                "statistics cleanup task abort report is unhealthy"
+            );
+        }
+    }
+}
+
 pub struct StatisticsManager {
     kind_meta_map: Arc<RwLock<HashMap<String, Arc<StatisticsKindMeta>>>>,
     brief_metas: Option<Vec<(String, Vec<Vec<i64>>)>>,
     stats_table: StatsTable,
-    statistics_item_state_getter: Option<Arc<dyn StatisticsItemStateGetter + Send + Sync>>,
+    statistics_item_state_getter: Arc<RwLock<Option<Arc<dyn StatisticsItemStateGetter + Send + Sync>>>>,
+    cleanup_task: Arc<Mutex<Option<CleanupTask>>>,
 }
 
 impl Default for StatisticsManager {
@@ -49,7 +78,8 @@ impl StatisticsManager {
             kind_meta_map: Arc::new(RwLock::new(HashMap::new())),
             brief_metas: None,
             stats_table: Arc::new(RwLock::new(HashMap::new())),
-            statistics_item_state_getter: None,
+            statistics_item_state_getter: Arc::new(RwLock::new(None)),
+            cleanup_task: Arc::new(Mutex::new(None)),
         };
         manager.start();
         manager
@@ -60,7 +90,8 @@ impl StatisticsManager {
             kind_meta_map: Arc::new(RwLock::new(kind_meta)),
             brief_metas: None,
             stats_table: Arc::new(RwLock::new(HashMap::new())),
-            statistics_item_state_getter: None,
+            statistics_item_state_getter: Arc::new(RwLock::new(None)),
+            cleanup_task: Arc::new(Mutex::new(None)),
         };
         manager.start();
         manager
@@ -78,37 +109,58 @@ impl StatisticsManager {
     }
 
     fn start(&self) {
+        let mut cleanup_task = self.cleanup_task.lock();
+        if cleanup_task.is_some() {
+            return;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                tracing::debug!(%error, "StatisticsManager cleanup task deferred until a Tokio runtime is available");
+                return;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-common.statistics", runtime);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let stats_table = self.stats_table.clone();
         let kind_meta_map = self.kind_meta_map.clone();
         let statistics_item_state_getter = self.statistics_item_state_getter.clone();
 
-        task::spawn(async move {
-            let mut interval = interval(Duration::from_millis(Self::MAX_IDLE_TIME / 3));
-            let stats_table_clone = stats_table.clone();
-            loop {
-                interval.tick().await;
-
-                let stats_table = stats_table.read();
-                for item_map in stats_table.values() {
-                    let tmp_item_map: HashMap<_, _> = item_map.clone().into_iter().collect();
-
-                    for item in tmp_item_map.values() {
-                        let last_time_stamp = item.last_timestamp();
-                        let expired = current_millis() - last_time_stamp > Self::MAX_IDLE_TIME;
-                        let offline = statistics_item_state_getter
-                            .as_ref()
-                            .is_none_or(|getter| !getter.online(item));
-                        if expired && offline {
-                            // Remove expired item
-                            remove(item, &stats_table_clone, &kind_meta_map);
-                        }
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
+            ScheduledTaskConfig::fixed_rate_no_overlap(
+                "common.statistics.cleanup",
+                Duration::from_millis(Self::MAX_IDLE_TIME / 3),
+            ),
+            move || {
+                let stats_table = stats_table.clone();
+                let kind_meta_map = kind_meta_map.clone();
+                let statistics_item_state_getter = statistics_item_state_getter.clone();
+                async move {
+                    let statistics_item_state_getter = statistics_item_state_getter.read().clone();
+                    let expired_items =
+                        expired_statistics_items(&stats_table, statistics_item_state_getter, current_millis());
+                    for item in expired_items {
+                        remove(item.as_ref(), &stats_table, &kind_meta_map);
                     }
                 }
-            }
-        });
+            },
+        ) {
+            tracing::warn!(%error, "failed to spawn StatisticsManager cleanup task");
+            return;
+        }
+        *cleanup_task = Some(CleanupTask { task_group });
+    }
+
+    pub async fn shutdown(&self) {
+        let cleanup_task = self.cleanup_task.lock().take();
+        if let Some(cleanup_task) = cleanup_task {
+            cleanup_task.shutdown(CLEANUP_TASK_SHUTDOWN_TIMEOUT).await;
+        }
     }
 
     pub async fn inc(&self, kind: &str, key: &str, item_accumulates: Vec<i64>) -> bool {
+        self.start();
         if let Some(item_map) = self.stats_table.write().get_mut(kind) {
             if let Some(item) = item_map.get(key) {
                 item.inc_items(item_accumulates);
@@ -139,8 +191,38 @@ impl StatisticsManager {
     }
 
     pub fn set_statistics_item_state_getter(&mut self, getter: Arc<dyn StatisticsItemStateGetter + Send + Sync>) {
-        self.statistics_item_state_getter = Some(getter);
+        *self.statistics_item_state_getter.write() = Some(getter);
+        self.start();
     }
+}
+
+impl Drop for StatisticsManager {
+    fn drop(&mut self) {
+        if let Some(cleanup_task) = self.cleanup_task.lock().take() {
+            cleanup_task.abort();
+        }
+    }
+}
+
+fn expired_statistics_items(
+    stats_table: &StatsTable,
+    statistics_item_state_getter: Option<Arc<dyn StatisticsItemStateGetter + Send + Sync>>,
+    now_millis: u64,
+) -> Vec<Arc<StatisticsItem>> {
+    let stats_table = stats_table.read();
+    let mut expired_items = Vec::new();
+    for item_map in stats_table.values() {
+        for item in item_map.values() {
+            let expired = now_millis.saturating_sub(item.last_timestamp()) > StatisticsManager::MAX_IDLE_TIME;
+            let offline = statistics_item_state_getter
+                .as_ref()
+                .is_none_or(|getter| !getter.online(item));
+            if expired && offline {
+                expired_items.push(item.clone());
+            }
+        }
+    }
+    expired_items
 }
 
 pub fn remove(
@@ -163,6 +245,9 @@ pub fn remove(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
     use super::*;
     use crate::common::statistics::statistics_item_scheduled_printer::StatisticsItemScheduledPrinter;
 
@@ -176,5 +261,120 @@ mod tests {
         )));
 
         assert!(!manager.inc("kind", "key", vec![1]).await);
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_idle_cleanup_task() {
+        let manager = StatisticsManager::new();
+        assert!(
+            manager.cleanup_task.lock().is_some(),
+            "cleanup task should be running after manager creation"
+        );
+
+        manager.shutdown().await;
+        assert!(manager.cleanup_task.lock().is_none());
+
+        manager.shutdown().await;
+        assert!(manager.cleanup_task.lock().is_none());
+    }
+
+    #[test]
+    fn new_without_tokio_runtime_does_not_spawn_panic() {
+        let manager = StatisticsManager::new();
+        assert!(
+            manager.cleanup_task.lock().is_none(),
+            "cleanup task should not start without an ambient Tokio runtime"
+        );
+    }
+
+    #[test]
+    fn cleanup_task_starts_lazily_when_used_inside_runtime() {
+        let manager = StatisticsManager::new();
+        assert!(
+            manager.cleanup_task.lock().is_none(),
+            "cleanup task should not start without an ambient Tokio runtime"
+        );
+        manager.add_statistics_kind_meta(Arc::new(StatisticsKindMeta::new(
+            "kind".to_string(),
+            vec!["count".to_string()],
+            StatisticsItemScheduledPrinter,
+        )));
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            assert!(manager.inc("kind", "key", vec![1]).await);
+            assert!(
+                manager.cleanup_task.lock().is_some(),
+                "cleanup task should start lazily once async use enters a Tokio runtime"
+            );
+            manager.shutdown().await;
+        });
+    }
+
+    #[test]
+    fn expired_items_are_collected_without_holding_remove_lock() {
+        let item = Arc::new(StatisticsItem::new("kind", "key", vec!["count"]).expect("valid statistics item"));
+        let stats_table: StatsTable = Arc::new(RwLock::new(HashMap::from([(
+            "kind".to_string(),
+            HashMap::from([("key".to_string(), item.clone())]),
+        )])));
+        let kind_meta_map = Arc::new(RwLock::new(HashMap::from([(
+            "kind".to_string(),
+            Arc::new(StatisticsKindMeta::new(
+                "kind".to_string(),
+                vec!["count".to_string()],
+                StatisticsItemScheduledPrinter,
+            )),
+        )])));
+
+        let expired_items = expired_statistics_items(
+            &stats_table,
+            None,
+            item.last_timestamp() + StatisticsManager::MAX_IDLE_TIME + 1,
+        );
+        assert_eq!(expired_items.len(), 1);
+
+        for item in expired_items {
+            remove(item.as_ref(), &stats_table, &kind_meta_map);
+        }
+
+        assert!(stats_table.read().get("kind").is_some_and(HashMap::is_empty));
+    }
+
+    #[tokio::test]
+    async fn cleanup_task_shutdown_cancels_worker_before_abort() {
+        let observed_shutdown = Arc::new(AtomicBool::new(false));
+        let observed_shutdown_in_task = observed_shutdown.clone();
+        let task_group = TaskGroup::root(
+            "statistics-cleanup-test",
+            RuntimeHandle::new(tokio::runtime::Handle::current()),
+        );
+        let shutdown_token = task_group.cancellation_token();
+        task_group
+            .spawn_service("statistics-cleanup-test-worker", async move {
+                shutdown_token.cancelled().await;
+                observed_shutdown_in_task.store(true, Ordering::SeqCst);
+            })
+            .expect("cleanup task test worker should spawn");
+        let cleanup_task = CleanupTask { task_group };
+
+        cleanup_task.shutdown(Duration::from_secs(1)).await;
+
+        assert!(observed_shutdown.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn drop_aborts_idle_cleanup_task_and_releases_state() {
+        let stats_table = {
+            let manager = StatisticsManager::new();
+            Arc::downgrade(&manager.stats_table)
+        };
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while stats_table.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping StatisticsManager should release cleanup task state");
     }
 }

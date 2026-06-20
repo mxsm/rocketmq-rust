@@ -95,6 +95,66 @@ harness = false
 name    = "client_hot_path_benchmark"
 harness = false
 
+[[bench]]
+name    = "client_runtime_spawn_benchmark"
+harness = false
+
+[[bench]]
+name    = "request_future_holder_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "latency_fault_detector_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "local_file_offset_store_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "orderly_lock_periodic_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "pop_orderly_lock_refresh_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "trace_worker_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "produce_accumulator_guard_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "consumer_stats_manager_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "namesrv_refresh_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "concurrent_clean_expire_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "pull_message_service_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "rebalance_service_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "connection_event_listener_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "lite_pull_task_lifecycle_bench"
+harness = false
+
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"

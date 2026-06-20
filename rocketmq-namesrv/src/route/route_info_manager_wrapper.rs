@@ -33,6 +33,7 @@ use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrok
 use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_runtime::ShutdownReport;
 
 use crate::route::error::RouteResult;
 use crate::route::route_info_manager::RouteInfoManager;
@@ -134,20 +135,20 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Shutdown the route info manager
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Option<ShutdownReport> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.shutdown(),
-            RouteInfoManagerWrapper::V2(manager) => manager.shutdown(),
+            RouteInfoManagerWrapper::V1(manager) => manager.shutdown().await,
+            RouteInfoManagerWrapper::V2(manager) => manager.shutdown().await,
         }
     }
 
     /// Shutdown unregister service (for bootstrap)
-    pub fn shutdown_unregister_service(&mut self) {
+    pub async fn shutdown_unregister_service(&mut self) -> Option<ShutdownReport> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.un_register_service.shutdown(),
+            RouteInfoManagerWrapper::V1(manager) => manager.un_register_service.shutdown().await,
             RouteInfoManagerWrapper::V2(manager) => {
                 // V2's shutdown already handles this
-                manager.shutdown();
+                manager.shutdown().await
             }
         }
     }

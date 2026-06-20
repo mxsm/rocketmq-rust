@@ -15,7 +15,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::time::MissedTickBehavior;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -27,6 +30,7 @@ pub struct CompactionService {
     schedule_interval: Duration,
     shutdown_token: CancellationToken,
     worker_group: Option<rocketmq_runtime::TaskGroup>,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
     loaded: bool,
 }
 
@@ -37,6 +41,7 @@ impl CompactionService {
             schedule_interval: Duration::from_millis(schedule_interval_ms.max(1) as u64),
             shutdown_token: CancellationToken::new(),
             worker_group: None,
+            scheduled_tasks: None,
             loaded: false,
         }
     }
@@ -53,7 +58,6 @@ impl CompactionService {
         }
 
         self.shutdown_token = CancellationToken::new();
-        let shutdown = self.shutdown_token.clone();
         let compaction_store = self.compaction_store.clone();
         let schedule_interval = self.schedule_interval;
         let worker_group = match crate::runtime::task_group("rocketmq-store.kv.compaction") {
@@ -63,23 +67,16 @@ impl CompactionService {
                 return;
             }
         };
+        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
+        let mut config = ScheduledTaskConfig::fixed_rate_no_overlap("store.kv.compaction", schedule_interval);
+        config.initial_delay = schedule_interval;
 
-        if let Err(error) = worker_group.spawn_service("kv-compaction-service", async move {
-            let mut interval = tokio::time::interval(schedule_interval);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            interval.tick().await;
-
-            loop {
-                tokio::select! {
-                    _ = shutdown.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        let removed = compaction_store.compact_once();
-                        if removed > 0 {
-                            info!("compaction service removed {} obsolete messages", removed);
-                        }
-                    }
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+            let compaction_store = compaction_store.clone();
+            async move {
+                let removed = compaction_store.compact_once();
+                if removed > 0 {
+                    info!("compaction service removed {} obsolete messages", removed);
                 }
             }
         }) {
@@ -87,19 +84,28 @@ impl CompactionService {
             return;
         }
 
+        self.scheduled_tasks = Some(scheduled_tasks);
         self.worker_group = Some(worker_group);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
+        let _ = self.shutdown_with_report().await;
+        info!("shutdown compaction service");
+    }
+
+    pub async fn shutdown_with_report(&mut self) -> Option<ShutdownReport> {
         self.shutdown_token.cancel();
+        self.scheduled_tasks.take();
+        let mut shutdown_report = None;
         if let Some(worker_group) = self.worker_group.take() {
             let report = worker_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("CompactionService", report) {
+            if let Err(error) = crate::runtime::shutdown_report_result("CompactionService", report.clone()) {
                 error!("compaction service task failed during shutdown: {error}");
             }
+            shutdown_report = Some(report);
         }
         self.loaded = false;
-        info!("shutdown compaction service");
+        shutdown_report
     }
 
     pub fn is_loaded(&self) -> bool {
@@ -108,6 +114,27 @@ impl CompactionService {
 
     pub fn has_worker_handle(&self) -> bool {
         self.worker_group.is_some()
+    }
+
+    pub fn task_count(&self) -> usize {
+        let root_count = self
+            .worker_group
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 }
 

@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -32,8 +32,10 @@ use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -51,6 +53,8 @@ use crate::consumer::listener::message_listener_concurrently::ArcMessageListener
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 
 pub struct ConsumeMessageConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -62,40 +66,73 @@ pub struct ConsumeMessageConcurrentlyService {
     ///   1. Backpressure: limits the number of concurrently executing consume tasks to the
     ///      Java-equivalent core pool size. New tasks that cannot acquire a permit are retried
     ///      after 5 s.
-    ///   2. Graceful shutdown: `shutdown()` acquires all permits, which is only possible once every
-    ///      in-flight task has released its permit.
+    ///   2. Permit ownership: each tracked consume task holds a permit until its future exits.
     consume_semaphore: Arc<Semaphore>,
     max_concurrency: Arc<AtomicUsize>,
     /// Token cancelled by `shutdown()` to prevent new task submissions.
     shutdown_token: CancellationToken,
     /// Background task matching Java's cleanExpireMsgExecutors lifecycle.
     clean_expire_task_handle: Arc<Mutex<Option<ConcurrentTaskHandle>>>,
+    consume_task_tracker: TaskTracker,
+    force_stop_token: CancellationToken,
+    submitted_tasks: Arc<AtomicU64>,
 }
 
 enum ConcurrentTaskHandle {
-    Tokio(tokio::task::JoinHandle<()>),
-    Thread(thread::JoinHandle<()>),
+    Tracked(ClientTrackedTaskHandle),
 }
 
 impl ConcurrentTaskHandle {
-    fn shutdown(self) {
+    async fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => handle.abort(),
-            Self::Thread(handle) => {
-                if handle.is_finished() {
-                    let _ = handle.join();
+            Self::Tracked(handle) => {
+                let report = handle.shutdown(timeout).await;
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "concurrent clean-expire task shutdown report is unhealthy"
+                    );
+                }
+                report.is_healthy()
+            }
+        }
+    }
+
+    fn abort(self) {
+        match self {
+            Self::Tracked(handle) => {
+                let report = handle.shutdown_now();
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "concurrent clean-expire task immediate shutdown report is unhealthy"
+                    );
                 }
             }
         }
     }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tracked(handle) => handle.task_count(),
+        }
+    }
 }
 
-fn spawn_concurrent_task<F>(thread_name: &'static str, task: F) -> Option<ConcurrentTaskHandle>
+#[derive(Debug, Clone, Serialize)]
+pub struct ConcurrentCleanExpireLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
+}
+
+fn spawn_concurrent_lifecycle_task<F>(thread_name: &'static str, task: F) -> Option<ConcurrentTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_task(thread_name, task) {
-        Ok(handle) => Some(ConcurrentTaskHandle::Tokio(handle)),
+    match spawn_client_tracked_task(thread_name, task) {
+        Ok(handle) => Some(ConcurrentTaskHandle::Tracked(handle)),
         Err(error) => {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
@@ -103,11 +140,30 @@ where
     }
 }
 
-fn spawn_detached_concurrent_task<F>(thread_name: &'static str, task: F)
-where
+fn spawn_tracked_concurrent_task<F>(
+    thread_name: &'static str,
+    tracker: &TaskTracker,
+    force_stop_token: &CancellationToken,
+    submitted_tasks: &Arc<AtomicU64>,
+    task: F,
+) where
     F: Future<Output = ()> + Send + 'static,
 {
-    drop(spawn_concurrent_task(thread_name, task));
+    submitted_tasks.fetch_add(1, Ordering::Relaxed);
+    let force_stop_token = force_stop_token.clone();
+    let tracked_task = tracker.track_future(async move {
+        let mut task = Box::pin(task);
+        tokio::select! {
+            biased;
+            _ = force_stop_token.cancelled() => {}
+            _ = &mut task => {}
+        }
+    });
+
+    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
+        warn!("Failed to spawn {} background task: {}", thread_name, error);
+        warn!("Failed to track {} background task", thread_name);
+    }
 }
 
 impl ConsumeMessageConcurrentlyService {
@@ -129,11 +185,22 @@ impl ConsumeMessageConcurrentlyService {
             max_concurrency: Arc::new(AtomicUsize::new(core_pool_size)),
             shutdown_token: CancellationToken::new(),
             clean_expire_task_handle: Arc::new(Mutex::new(None)),
+            consume_task_tracker: TaskTracker::new(),
+            force_stop_token: CancellationToken::new(),
+            submitted_tasks: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub(crate) fn is_shutdown(&self) -> bool {
         self.shutdown_token.is_cancelled()
+    }
+
+    fn clean_expire_task_count(&self) -> usize {
+        self.clean_expire_task_handle
+            .lock()
+            .as_ref()
+            .map(ConcurrentTaskHandle::task_count)
+            .unwrap_or_default()
     }
 
     fn resize_available_permits(semaphore: &Semaphore, old_total: usize, new_total: usize) {
@@ -289,14 +356,20 @@ impl ConsumeMessageConcurrentlyService {
         message_queue: MessageQueue,
     ) {
         let shutdown_token = self.shutdown_token.clone();
-        spawn_detached_concurrent_task("rocketmq-client-concurrent-consume-delay", async move {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => return,
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-            }
-            this.submit_consume_request(this.clone(), msgs, process_queue, message_queue, true)
-                .await;
-        });
+        spawn_tracked_concurrent_task(
+            "rocketmq-client-concurrent-consume-delay",
+            &self.consume_task_tracker,
+            &self.force_stop_token,
+            &self.submitted_tasks,
+            async move {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
+                this.submit_consume_request(this.clone(), msgs, process_queue, message_queue, true)
+                    .await;
+            },
+        );
     }
 
     pub async fn send_message_back(&mut self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
@@ -326,7 +399,7 @@ impl ConsumeMessageConcurrentlyService {
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     fn start(&mut self, mut this: ArcMut<Self>) {
         let shutdown_token = self.shutdown_token.clone();
-        let handle = spawn_concurrent_task("rocketmq-client-concurrent-clean-expire", async move {
+        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-clean-expire", async move {
             let timeout = this.consumer_config.consume_timeout;
             let interval = Duration::from_secs(timeout.saturating_mul(60));
             loop {
@@ -345,28 +418,36 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
         self.shutdown_token.cancel();
-        if let Some(handle) = self.clean_expire_task_handle.lock().take() {
-            handle.shutdown();
-        }
-        let max = self.max_concurrency.load(Ordering::Acquire) as u32;
-        match tokio::time::timeout(
-            Duration::from_millis(await_terminate_millis),
-            Arc::clone(&self.consume_semaphore).acquire_many_owned(max),
-        )
-        .await
-        {
-            Ok(Ok(_permits)) => {
-                info!("ConsumeMessageConcurrentlyService shutdown gracefully");
+        self.consume_task_tracker.close();
+        let shutdown_timeout = Duration::from_millis(await_terminate_millis);
+        let clean_expire_handle = { self.clean_expire_task_handle.lock().take() };
+        if let Some(handle) = clean_expire_handle {
+            if !handle.shutdown(shutdown_timeout).await {
+                warn!(
+                    "ConsumeMessageConcurrentlyService clean-expire task did not stop within {}ms; aborted",
+                    await_terminate_millis
+                );
             }
-            Ok(Err(_closed)) => {
-                // Semaphore was closed externally; treat as clean.
+        }
+
+        match tokio::time::timeout(shutdown_timeout, self.consume_task_tracker.wait()).await {
+            Ok(()) => {
+                info!("ConsumeMessageConcurrentlyService shutdown gracefully");
             }
             Err(_elapsed) => {
                 warn!(
-                    "ConsumeMessageConcurrentlyService shutdown timed out after {}ms; some consume tasks may still be \
-                     running",
-                    await_terminate_millis
+                    "ConsumeMessageConcurrentlyService shutdown timed out after {}ms; {} submitted consume tasks may \
+                     still be running",
+                    await_terminate_millis,
+                    self.submitted_tasks.load(Ordering::Acquire)
                 );
+                self.force_stop_token.cancel();
+                if tokio::time::timeout(Duration::from_secs(1), self.consume_task_tracker.wait())
+                    .await
+                    .is_err()
+                {
+                    warn!("ConsumeMessageConcurrentlyService force stop timed out");
+                }
             }
         }
     }
@@ -541,6 +622,10 @@ impl ConsumeMessageConcurrentlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
+        if self.shutdown_token.is_cancelled() {
+            return;
+        }
+
         match Arc::clone(&self.consume_semaphore).try_acquire_owned() {
             Ok(permit) => {
                 let mut consume_request = ConsumeRequest {
@@ -552,10 +637,16 @@ impl ConsumeMessageConcurrentlyService {
                     consumer_group: self.consumer_group.clone(),
                     default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                 };
-                spawn_detached_concurrent_task("rocketmq-client-concurrent-consume", async move {
-                    let _permit = permit;
-                    consume_request.run(this).await;
-                });
+                spawn_tracked_concurrent_task(
+                    "rocketmq-client-concurrent-consume",
+                    &self.consume_task_tracker,
+                    &self.force_stop_token,
+                    &self.submitted_tasks,
+                    async move {
+                        let _permit = permit;
+                        consume_request.run(this).await;
+                    },
+                );
             }
             Err(_saturated) => {
                 warn!(
@@ -817,9 +908,57 @@ fn classify_concurrent_consume_return_type(
     }
 }
 
+#[doc(hidden)]
+pub async fn run_concurrent_clean_expire_lifecycle_probe() -> ConcurrentCleanExpireLifecycleProbe {
+    let listener: ArcMessageListenerConcurrently =
+        Arc::new(|_msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
+            Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+        });
+    let mut service = ConsumeMessageConcurrentlyService::new(
+        ArcMut::new(ClientConfig::default()),
+        ArcMut::new(ConsumerConfig::default()),
+        CheetahString::from_static_str("concurrent-clean-expire-probe"),
+        listener.clone(),
+        None,
+    );
+    let this = ArcMut::new(ConsumeMessageConcurrentlyService::new(
+        ArcMut::new(ClientConfig::default()),
+        ArcMut::new(ConsumerConfig::default()),
+        CheetahString::from_static_str("concurrent-clean-expire-probe"),
+        listener,
+        None,
+    ));
+
+    service.start(this);
+    let task_count_before_shutdown = service.clean_expire_task_count();
+
+    let shutdown_started = Instant::now();
+    service.shutdown(1_000).await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = service.clean_expire_task_count();
+
+    ConcurrentCleanExpireLifecycleProbe {
+        healthy: task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     fn message_queue() -> MessageQueue {
         MessageQueue::from_parts("topic", "broker-a", 0)
@@ -995,6 +1134,103 @@ mod tests {
         assert!(service.clean_expire_task_handle.lock().is_none());
     }
 
+    #[tokio::test]
+    async fn concurrent_task_shutdown_waits_for_worker_completion() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-task-test", async move {
+            completed_in_task.store(true, Ordering::Release);
+        })
+        .expect("test task should spawn");
+
+        assert!(handle.shutdown(Duration::from_secs(1)).await);
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn concurrent_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let handle = spawn_concurrent_lifecycle_task("rocketmq-client-concurrent-task-test", async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!handle.shutdown(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn concurrent_clean_expire_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_concurrent_clean_expire_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
+    }
+
+    #[tokio::test]
+    async fn tracked_concurrent_task_shutdown_waits_for_completion() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let submitted = Arc::new(AtomicU64::new(0));
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+
+        spawn_tracked_concurrent_task(
+            "rocketmq-client-concurrent-tracker-test",
+            &tracker,
+            &token,
+            &submitted,
+            async move {
+                completed_in_task.store(true, Ordering::Release);
+            },
+        );
+        tracker.close();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("tracked task should finish before timeout");
+
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(submitted.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn tracked_concurrent_task_force_stop_cancels_pending_task() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let submitted = Arc::new(AtomicU64::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+
+        spawn_tracked_concurrent_task(
+            "rocketmq-client-concurrent-tracker-test",
+            &tracker,
+            &token,
+            &submitted,
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        );
+        tracker.close();
+
+        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
+            .await
+            .is_err());
+
+        token.cancel();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("force stop should release pending tracked task");
+
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(submitted.load(Ordering::Acquire), 1);
+    }
+
     #[test]
     fn start_without_tokio_runtime_does_not_spawn_panic() {
         let mut service = new_service(None);
@@ -1005,7 +1241,7 @@ mod tests {
         service.shutdown_token.cancel();
         let handle = { service.clean_expire_task_handle.lock().take() };
         if let Some(handle) = handle {
-            handle.shutdown();
+            handle.abort();
         }
     }
 

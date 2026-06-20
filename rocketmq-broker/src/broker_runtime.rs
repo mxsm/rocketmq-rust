@@ -57,6 +57,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
@@ -72,6 +73,7 @@ use rocketmq_store::message_store::GenericMessageStore;
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -159,6 +161,8 @@ type DefaultServerProcessor =
 
 type FasterServerProcessor =
     BrokerRequestProcessor<GenericMessageStore, DefaultTransactionalMessageService<GenericMessageStore>>;
+
+const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
     AuthConfig {
@@ -393,7 +397,50 @@ pub(crate) struct BrokerRuntime {
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     scheduled_task_manager: ScheduledTaskManager,
     remoting_server_task_group: Option<TaskGroup>,
+    remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
     request_processor_task_group: Option<TaskGroup>,
+}
+
+struct BrokerRemotingServerReportReceiver {
+    name: &'static str,
+    receiver: oneshot::Receiver<Option<ShutdownReport>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BrokerRemotingServerReport {
+    pub(crate) name: &'static str,
+    pub(crate) report: Option<ShutdownReport>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BrokerRemotingServerShutdownReport {
+    pub(crate) task_group: ShutdownReport,
+    pub(crate) server_reports: Vec<BrokerRemotingServerReport>,
+}
+
+impl BrokerRemotingServerShutdownReport {
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.task_group.is_healthy()
+            && self
+                .server_reports
+                .iter()
+                .all(|server| server.report.as_ref().is_some_and(ShutdownReport::is_healthy))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BrokerBasicServiceShutdownReport {
+    pub(crate) remoting: Option<BrokerRemotingServerShutdownReport>,
+    pub(crate) request_processor: Option<ShutdownReport>,
+}
+
+impl BrokerBasicServiceShutdownReport {
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.remoting
+            .as_ref()
+            .is_none_or(BrokerRemotingServerShutdownReport::is_healthy)
+            && self.request_processor.as_ref().is_none_or(ShutdownReport::is_healthy)
+    }
 }
 
 impl Drop for BrokerRuntime {
@@ -576,6 +623,7 @@ impl BrokerRuntime {
             consumer_ids_change_listener,
             scheduled_task_manager,
             remoting_server_task_group: None,
+            remoting_server_report_receivers: Vec::new(),
             request_processor_task_group: None,
         }
     }
@@ -588,7 +636,10 @@ impl BrokerRuntime {
         self.inner.message_store_config()
     }
 
-    #[cfg(test)]
+    pub(crate) fn scheduled_task_manager(&self) -> &ScheduledTaskManager {
+        &self.scheduled_task_manager
+    }
+
     pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<GenericMessageStore>> {
         &mut self.inner
     }
@@ -614,16 +665,15 @@ impl BrokerRuntime {
 
     pub async fn shutdown(&mut self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
-        self.scheduled_task_manager.abort_all();
 
         self.shutdown_basic_service().await;
 
         self.inner.broker_outer_api.shutdown();
 
-        self.scheduled_task_manager.abort_all();
+        self.shutdown_scheduled_tasks().await;
 
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
-            client_housekeeping_service.shutdown();
+            client_housekeeping_service.shutdown().await;
         }
     }
 
@@ -640,7 +690,12 @@ impl BrokerRuntime {
     }
 
     pub(crate) async fn shutdown_basic_service(&mut self) {
+        let _ = self.shutdown_basic_service_with_report().await;
+    }
+
+    pub(crate) async fn shutdown_basic_service_with_report(&mut self) -> BrokerBasicServiceShutdownReport {
         self.inner.shutdown.store(true, Ordering::SeqCst);
+        let mut shutdown_report = BrokerBasicServiceShutdownReport::default();
 
         self.unregister_broker().await;
 
@@ -648,8 +703,8 @@ impl BrokerRuntime {
             hook.before_shutdown();
         }
 
-        self.shutdown_remoting_servers().await;
-        self.shutdown_request_processor_tasks().await;
+        shutdown_report.remoting = self.shutdown_remoting_servers().await;
+        shutdown_report.request_processor = self.shutdown_request_processor_tasks().await;
 
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
@@ -665,11 +720,11 @@ impl BrokerRuntime {
         }
 
         if let Some(broker_stats_manager) = self.inner.broker_stats_manager.as_ref() {
-            broker_stats_manager.shutdown();
+            broker_stats_manager.shutdown().await;
         }
 
         if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
-            pull_request_hold_service.shutdown();
+            pull_request_hold_service.shutdown().await;
         }
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
@@ -693,7 +748,7 @@ impl BrokerRuntime {
         }
         self.consumer_ids_change_listener.shutdown();
         if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_ref() {
-            topic_queue_mapping_clean_service.shutdown();
+            topic_queue_mapping_clean_service.shutdown().await;
         }
 
         self.inner.broadcast_offset_manager.shutdown();
@@ -702,7 +757,7 @@ impl BrokerRuntime {
             replicas_manager.shutdown();
         }
 
-        self.inner.broker_fast_failure.shutdown();
+        self.inner.broker_fast_failure.shutdown().await;
 
         if let Some(consumer_filter_manager) = self.inner.consumer_filter_manager.as_ref() {
             consumer_filter_manager.persist();
@@ -728,11 +783,7 @@ impl BrokerRuntime {
             escape_bridge.shutdown();
         }
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
-            topic_route_info_manager.shutdown();
-        }
-
-        if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
-            topic_route_info_manager.shutdown();
+            topic_route_info_manager.shutdown().await;
         }
 
         if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
@@ -774,26 +825,154 @@ impl BrokerRuntime {
                 warn!("Timed out shutting down message store");
             }
         }
+
+        shutdown_report
     }
 
-    async fn shutdown_remoting_servers(&mut self) {
-        let Some(task_group) = self.remoting_server_task_group.take() else {
-            return;
-        };
+    async fn shutdown_scheduled_tasks(&self) {
+        let _ = self
+            .shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+            .await;
+    }
 
-        let report = task_group.shutdown(Duration::from_secs(35)).await;
+    pub(crate) async fn shutdown_scheduled_tasks_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> rocketmq_rust::schedule::simple_scheduler::ScheduledShutdownReport {
+        let report = self.scheduled_task_manager.shutdown_all(timeout).await;
         if !report.is_healthy() {
             warn!(
-                report = %report.to_json(),
+                task_count = report.task_count,
+                completed = report.completed,
+                aborted = report.aborted,
+                panicked = report.panicked,
+                timed_out = report.timed_out,
+                elapsed_ms = report.elapsed.as_millis(),
+                "Broker scheduled task shutdown report is unhealthy"
+            );
+        }
+        report
+    }
+
+    pub(crate) async fn shutdown_remoting_servers(&mut self) -> Option<BrokerRemotingServerShutdownReport> {
+        let task_group = self.remoting_server_task_group.take()?;
+
+        let report = task_group.shutdown(Duration::from_secs(35)).await;
+        let server_reports = Self::collect_remoting_server_reports(
+            std::mem::take(&mut self.remoting_server_report_receivers),
+            Duration::from_secs(1),
+        )
+        .await;
+        let shutdown_report = BrokerRemotingServerShutdownReport {
+            task_group: report,
+            server_reports,
+        };
+        if !shutdown_report.is_healthy() {
+            warn!(
+                task_group = %shutdown_report.task_group.to_json(),
                 "Broker remoting server shutdown report is unhealthy"
             );
         }
+        Some(shutdown_report)
     }
 
-    async fn shutdown_request_processor_tasks(&mut self) {
-        let Some(task_group) = self.request_processor_task_group.take() else {
-            return;
+    async fn collect_remoting_server_reports(
+        receivers: Vec<BrokerRemotingServerReportReceiver>,
+        timeout: Duration,
+    ) -> Vec<BrokerRemotingServerReport> {
+        let mut reports = Vec::with_capacity(receivers.len());
+        for receiver in receivers {
+            let report = match tokio::time::timeout(timeout, receiver.receiver).await {
+                Ok(Ok(report)) => report,
+                Ok(Err(_closed)) => {
+                    warn!(
+                        server = receiver.name,
+                        "Broker remoting server report channel closed before report was sent"
+                    );
+                    None
+                }
+                Err(_elapsed) => {
+                    warn!(
+                        server = receiver.name,
+                        "Timed out waiting for broker remoting server shutdown report"
+                    );
+                    None
+                }
+            };
+            reports.push(BrokerRemotingServerReport {
+                name: receiver.name,
+                report,
+            });
+        }
+        reports
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn install_remoting_server_report_probe(&mut self) -> bool {
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "failed to install broker remoting server report probe outside Tokio runtime"
+                );
+                return false;
+            }
         };
+        let task_group = TaskGroup::root("rocketmq-broker.remoting-server.probe", runtime);
+        let shutdown_token = task_group.cancellation_token();
+        let (report_tx, report_rx) = oneshot::channel();
+        if let Err(error) = task_group.spawn_service("broker.remoting-server.probe", async move {
+            shutdown_token.cancelled().await;
+            let _ = report_tx.send(Some(ShutdownReport::new(
+                "rocketmq.remoting.server.probe",
+                Duration::ZERO,
+            )));
+        }) {
+            warn!(?error, "failed to spawn broker remoting server report probe");
+            return false;
+        }
+
+        self.remoting_server_task_group = Some(task_group);
+        self.remoting_server_report_receivers
+            .push(BrokerRemotingServerReportReceiver {
+                name: "broker.remoting-server.probe",
+                receiver: report_rx,
+            });
+        true
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn install_request_processor_task_probe(&mut self) -> bool {
+        if self.request_processor_task_group.is_some() {
+            return false;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "failed to install broker request processor task probe outside Tokio runtime"
+                );
+                return false;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.request-processor.probe", runtime);
+        let shutdown_token = task_group.cancellation_token();
+        if let Err(error) = task_group.spawn_service("broker.request-processor.probe", async move {
+            shutdown_token.cancelled().await;
+        }) {
+            warn!(?error, "failed to spawn broker request processor task probe");
+            return false;
+        }
+
+        self.request_processor_task_group = Some(task_group);
+        true
+    }
+
+    async fn shutdown_request_processor_tasks(&mut self) -> Option<ShutdownReport> {
+        let task_group = self.request_processor_task_group.take()?;
 
         let report = task_group.shutdown(Duration::from_secs(35)).await;
         if !report.is_healthy() {
@@ -802,6 +981,7 @@ impl BrokerRuntime {
                 "Broker request processor shutdown report is unhealthy"
             );
         }
+        Some(report)
     }
 }
 
@@ -1295,6 +1475,9 @@ impl BrokerRuntime {
                     }
                 });
         if let Some(task_group) = request_processor_task_group.clone() {
+            pull_message_processor
+                .mut_from_ref()
+                .set_wakeup_task_group(task_group.clone());
             broker_request_processor.set_request_task_group(task_group);
         }
         self.request_processor_task_group = request_processor_task_group;
@@ -1505,91 +1688,106 @@ impl BrokerRuntime {
         let initial_delay = compute_next_morning_time_millis() - current_millis();
         let period = Duration::from_secs(24 * 60 * 60);
         let broker_stats_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_millis(initial_delay),
-            period,
-            async move |ctx| {
-                if ctx.is_cancelled() || broker_stats_.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                if let Some(broker_stats) = broker_stats_.broker_stats() {
-                    broker_stats.record();
-                } else {
-                    warn!("BrokerStats is not initialized");
-                }
-                Ok(())
-            },
+        Self::log_scheduled_task_start(
+            "daily_broker_stats_record",
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_millis(initial_delay),
+                period,
+                async move |ctx| {
+                    if ctx.is_cancelled() || broker_stats_.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    if let Some(broker_stats) = broker_stats_.broker_stats() {
+                        broker_stats.record();
+                    } else {
+                        warn!("BrokerStats is not initialized");
+                    }
+                    Ok(())
+                },
+            ),
         );
 
         //need to optimize
         let consumer_offset_manager_inner = self.inner.clone();
         let flush_consumer_offset_interval = self.inner.broker_config.flush_consumer_offset_interval;
 
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(10),
-            Duration::from_millis(flush_consumer_offset_interval),
-            async move |ctx| {
-                if ctx.is_cancelled() || consumer_offset_manager_inner.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                consumer_offset_manager_inner.consumer_offset_manager.persist();
-                Ok(())
-            },
+        Self::log_scheduled_task_start(
+            "flush_consumer_offset",
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_secs(10),
+                Duration::from_millis(flush_consumer_offset_interval),
+                async move |ctx| {
+                    if ctx.is_cancelled() || consumer_offset_manager_inner.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    consumer_offset_manager_inner.consumer_offset_manager.persist();
+                    Ok(())
+                },
+            ),
         );
 
         //need to optimize
         let mut _inner = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            async move |ctx| {
-                if ctx.is_cancelled() || _inner.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                if let Some(consumer_filter_manager_) = &mut _inner.consumer_filter_manager {
-                    consumer_filter_manager_.persist();
-                } else {
-                    warn!("ConsumerFilterManager is not initialized");
-                }
-                if let Some(consumer_order_info_manager_) = &mut _inner.consumer_order_info_manager {
-                    consumer_order_info_manager_.persist();
-                } else {
-                    warn!("ConsumerOrderInfoManager is not initialized");
-                }
+        Self::log_scheduled_task_start(
+            "persist_consumer_filter_and_order_info",
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+                async move |ctx| {
+                    if ctx.is_cancelled() || _inner.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    if let Some(consumer_filter_manager_) = &mut _inner.consumer_filter_manager {
+                        consumer_filter_manager_.persist();
+                    } else {
+                        warn!("ConsumerFilterManager is not initialized");
+                    }
+                    if let Some(consumer_order_info_manager_) = &mut _inner.consumer_order_info_manager {
+                        consumer_order_info_manager_.persist();
+                    } else {
+                        warn!("ConsumerOrderInfoManager is not initialized");
+                    }
 
-                Ok(())
-            },
+                    Ok(())
+                },
+            ),
         );
 
         let mut runtime = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_mins(3),
-            Duration::from_mins(3),
-            async move |ctx| {
-                if ctx.is_cancelled() || runtime.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                runtime.protect_broker();
-                Ok(())
-            },
+        Self::log_scheduled_task_start(
+            "protect_broker",
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_mins(3),
+                Duration::from_mins(3),
+                async move |ctx| {
+                    if ctx.is_cancelled() || runtime.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    runtime.protect_broker();
+                    Ok(())
+                },
+            ),
         );
 
         let message_store_inner = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(10),
-            Duration::from_secs(60),
-            async move |ctx| {
-                if ctx.is_cancelled() || message_store_inner.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                if let Some(message_store) = message_store_inner.message_store.as_ref() {
-                    let behind = message_store.dispatch_behind_bytes();
-                    info!("Dispatch task fall behind commit log {behind}bytes");
-                } else {
-                    warn!("MessageStore is not initialized");
-                }
-                Ok(())
-            },
+        Self::log_scheduled_task_start(
+            "report_dispatch_behind_bytes",
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_secs(10),
+                Duration::from_secs(60),
+                async move |ctx| {
+                    if ctx.is_cancelled() || message_store_inner.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    if let Some(message_store) = message_store_inner.message_store.as_ref() {
+                        let behind = message_store.dispatch_behind_bytes();
+                        info!("Dispatch task fall behind commit log {behind}bytes");
+                    } else {
+                        warn!("MessageStore is not initialized");
+                    }
+                    Ok(())
+                },
+            ),
         );
 
         if !self.inner.message_store_config.enable_dledger_commit_log
@@ -1615,39 +1813,45 @@ impl BrokerRuntime {
                     self.inner.update_master_haserver_addr_periodically = true;
                 }
                 let inner_clone = self.inner.clone();
-                self.scheduled_task_manager.add_fixed_rate_task_async(
-                    Duration::from_secs(10),
-                    Duration::from_secs(3),
-                    async move |ctx| {
-                        if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
-                            return Ok(());
-                        }
-                        if current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
-                            if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
-                                slave_synchronize.sync_all().await;
+                Self::log_scheduled_task_start(
+                    "slave_synchronize",
+                    self.scheduled_task_manager.add_fixed_rate_task_async(
+                        Duration::from_secs(10),
+                        Duration::from_secs(3),
+                        async move |ctx| {
+                            if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
+                                return Ok(());
                             }
-                            inner_clone.last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
-                        }
-                        if inner_clone.message_store_config.timer_wheel_enable {
-                            if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
-                                slave_synchronize.sync_timer_check_point().await
+                            if current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
+                                if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
+                                    slave_synchronize.sync_all().await;
+                                }
+                                inner_clone.last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
                             }
-                        }
-                        Ok(())
-                    },
+                            if inner_clone.message_store_config.timer_wheel_enable {
+                                if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
+                                    slave_synchronize.sync_timer_check_point().await
+                                }
+                            }
+                            Ok(())
+                        },
+                    ),
                 );
             } else {
                 let inner_clone = self.inner.clone();
-                self.scheduled_task_manager.add_fixed_rate_task_async(
-                    Duration::from_secs(10),
-                    Duration::from_secs(60),
-                    async move |ctx| {
-                        if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
-                            return Ok(());
-                        }
-                        inner_clone.print_master_and_slave_diff();
-                        Ok(())
-                    },
+                Self::log_scheduled_task_start(
+                    "print_master_and_slave_diff",
+                    self.scheduled_task_manager.add_fixed_rate_task_async(
+                        Duration::from_secs(10),
+                        Duration::from_secs(60),
+                        async move |ctx| {
+                            if ctx.is_cancelled() || inner_clone.shutdown.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                            inner_clone.print_master_and_slave_diff();
+                            Ok(())
+                        },
+                    ),
                 );
             }
         }
@@ -1660,17 +1864,26 @@ impl BrokerRuntime {
             self.update_namesrv_addr().await;
             info!("Set user specified name remoting_server address: {}", namesrv_address);
             let mut broker_runtime = self.inner.clone();
-            self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
-                Duration::from_secs(10),
-                Duration::from_secs(60),
-                async move |ctx| {
-                    if ctx.is_cancelled() || broker_runtime.shutdown.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    broker_runtime.update_namesrv_addr_inner().await;
-                    Ok(())
-                },
+            Self::log_scheduled_task_start(
+                "update_namesrv_addr",
+                self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
+                    Duration::from_secs(10),
+                    Duration::from_secs(60),
+                    async move |ctx| {
+                        if ctx.is_cancelled() || broker_runtime.shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        broker_runtime.update_namesrv_addr_inner().await;
+                        Ok(())
+                    },
+                ),
             );
+        }
+    }
+
+    fn log_scheduled_task_start(task_name: &str, task_id: anyhow::Result<u64>) {
+        if let Err(error) = task_id {
+            error!("Failed to start scheduled task {task_name}: {error}");
         }
     }
 
@@ -1682,7 +1895,9 @@ impl BrokerRuntime {
                 );
                 let mut service = ArcMut::new(DefaultTransactionalMessageService::new(bridge));
                                 let weak_service = ArcMut::downgrade(&service);
-                service.set_transactional_op_batch_service_start(weak_service).await;
+                if let Err(error) = service.set_transactional_op_batch_service_start(weak_service).await {
+                    error!("Failed to start transactional op batch service: {error}");
+                }
                 self.inner.transactional_message_service = Some(service);
             }
         }
@@ -1774,28 +1989,50 @@ impl BrokerRuntime {
             .map(|item| item as Arc<dyn ChannelEventListener>);
         let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
         let shutdown_token = remoting_server_task_group.cancellation_token();
+        let (normal_report_tx, normal_report_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.normal", async move {
-            server
-                .run_with_shutdown(request_processor, client_housekeeping_service_main, async move {
+            let report = server
+                .run_with_shutdown_report(request_processor, client_housekeeping_service_main, async move {
                     shutdown_token.cancelled().await;
                 })
-                .await
+                .await;
+            if let Some(report) = report.as_ref() {
+                report.log_if_unhealthy();
+            }
+            let _ = normal_report_tx.send(report);
         }) {
             warn!(?error, "failed to spawn broker normal remoting server task");
+        } else {
+            self.remoting_server_report_receivers
+                .push(BrokerRemotingServerReportReceiver {
+                    name: "broker.remoting-server.normal",
+                    receiver: normal_report_rx,
+                });
         }
         //start fast broker remoting_server
         let mut fast_server_config = self.inner.broker_config.broker_server_config.clone();
         fast_server_config.listen_port = self.inner.broker_config.broker_server_config.listen_port - 2;
         let mut fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         let shutdown_token = remoting_server_task_group.cancellation_token();
+        let (fast_report_tx, fast_report_rx) = oneshot::channel();
         if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.fast", async move {
-            fast_server
-                .run_with_shutdown(fast_request_processor, client_housekeeping_service_fast, async move {
+            let report = fast_server
+                .run_with_shutdown_report(fast_request_processor, client_housekeeping_service_fast, async move {
                     shutdown_token.cancelled().await;
                 })
-                .await
+                .await;
+            if let Some(report) = report.as_ref() {
+                report.log_if_unhealthy();
+            }
+            let _ = fast_report_tx.send(report);
         }) {
             warn!(?error, "failed to spawn broker fast remoting server task");
+        } else {
+            self.remoting_server_report_receivers
+                .push(BrokerRemotingServerReportReceiver {
+                    name: "broker.remoting-server.fast",
+                    receiver: fast_report_rx,
+                });
         }
         self.remoting_server_task_group = Some(remoting_server_task_group);
 
@@ -1838,7 +2075,9 @@ impl BrokerRuntime {
         }
 
         if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
-            broker_pre_online_service.start().await
+            if let Err(error) = broker_pre_online_service.start().await {
+                error!("Failed to start broker pre-online service: {error}");
+            }
         }
 
         if let Some(cold_data_pull_request_hold_service) = self.inner.cold_data_pull_request_hold_service.as_mut() {
@@ -1893,41 +2132,47 @@ impl BrokerRuntime {
         let period =
             Duration::from_millis(10000.max(60000.min(broker_runtime_inner.broker_config.register_name_server_period)));
         let initial_delay = Duration::from_secs(10);
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
-                if broker_runtime_inner.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
-                if current_millis() < start_time {
-                    info!("Register to namesrv after {}", start_time);
-                    return Ok(());
-                }
-                if broker_runtime_inner.is_isolated.load(Ordering::Relaxed) {
-                    info!("Skip register for broker is isolated");
-                    return Ok(());
-                }
-                let this = broker_runtime_inner.clone();
-                broker_runtime_inner
-                    .register_broker_all_inner(this, true, false, broker_runtime_inner.broker_config.force_register)
-                    .await;
-                Ok(())
-            });
+        Self::log_scheduled_task_start(
+            "register_broker_to_namesrv",
+            self.scheduled_task_manager
+                .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
+                    if broker_runtime_inner.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
+                    if current_millis() < start_time {
+                        info!("Register to namesrv after {}", start_time);
+                        return Ok(());
+                    }
+                    if broker_runtime_inner.is_isolated.load(Ordering::Relaxed) {
+                        info!("Skip register for broker is isolated");
+                        return Ok(());
+                    }
+                    let this = broker_runtime_inner.clone();
+                    broker_runtime_inner
+                        .register_broker_all_inner(this, true, false, broker_runtime_inner.broker_config.force_register)
+                        .await;
+                    Ok(())
+                }),
+        );
 
         if self.inner.broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
             let sync_broker_member_group_period = self.inner.broker_config.sync_broker_member_group_period;
             let inner_ = self.inner.clone();
-            self.scheduled_task_manager.add_fixed_rate_task_async(
-                Duration::from_millis(1000),
-                Duration::from_millis(sync_broker_member_group_period),
-                async move |ctx| {
-                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    BrokerRuntimeInner::sync_broker_member_group(&inner_).await;
-                    Ok(())
-                },
+            Self::log_scheduled_task_start(
+                "sync_broker_member_group",
+                self.scheduled_task_manager.add_fixed_rate_task_async(
+                    Duration::from_millis(1000),
+                    Duration::from_millis(sync_broker_member_group_period),
+                    async move |ctx| {
+                        if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        BrokerRuntimeInner::sync_broker_member_group(&inner_).await;
+                        Ok(())
+                    },
+                ),
             );
         }
 
@@ -1944,14 +2189,17 @@ impl BrokerRuntime {
         let inner = self.inner.clone();
         let period = Duration::from_secs(5);
         let initial_delay = Duration::from_secs(10);
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
-                if inner.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                inner.broker_outer_api.refresh_metadata();
-                Ok(())
-            });
+        Self::log_scheduled_task_start(
+            "refresh_broker_metadata",
+            self.scheduled_task_manager
+                .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
+                    if inner.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    inner.broker_outer_api.refresh_metadata();
+                    Ok(())
+                }),
+        );
         info!(
             "RocketMQ Broker({}) started successfully",
             self.inner.broker_config.broker_identity.broker_name
@@ -1961,58 +2209,67 @@ impl BrokerRuntime {
     pub(crate) fn schedule_send_heartbeat(&mut self) {
         let broker_heartbeat_interval = self.inner.broker_config.broker_heartbeat_interval;
         let inner_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
-            Duration::from_millis(1000),
-            Duration::from_millis(broker_heartbeat_interval),
-            async move |ctx| {
-                if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                if inner_.is_isolated.load(Ordering::Acquire) {
-                    if inner_.broker_config.enable_controller_mode {
-                        BrokerRuntimeInner::bootstrap_controller_mode(inner_.clone()).await;
+        Self::log_scheduled_task_start(
+            "send_heartbeat",
+            self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
+                Duration::from_millis(1000),
+                Duration::from_millis(broker_heartbeat_interval),
+                async move |ctx| {
+                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
                     }
-                    info!("Skip send heartbeat for broker is isolated");
-                    return Ok(());
-                }
-                if inner_.broker_config.enable_controller_mode {
-                    BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
-                }
-                inner_.send_heartbeat().await;
-                Ok(())
-            },
+                    if inner_.is_isolated.load(Ordering::Acquire) {
+                        if inner_.broker_config.enable_controller_mode {
+                            BrokerRuntimeInner::bootstrap_controller_mode(inner_.clone()).await;
+                        }
+                        info!("Skip send heartbeat for broker is isolated");
+                        return Ok(());
+                    }
+                    if inner_.broker_config.enable_controller_mode {
+                        BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
+                    }
+                    inner_.send_heartbeat().await;
+                    Ok(())
+                },
+            ),
         );
     }
 
     pub(crate) fn schedule_sync_controller_metadata(&mut self) {
         let period = self.inner.broker_config.sync_controller_metadata_period;
         let inner_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
-            Duration::from_millis(1000),
-            Duration::from_millis(period),
-            async move |ctx| {
-                if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
-                Ok(())
-            },
+        Self::log_scheduled_task_start(
+            "sync_controller_metadata",
+            self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
+                Duration::from_millis(1000),
+                Duration::from_millis(period),
+                async move |ctx| {
+                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    BrokerRuntimeInner::refresh_controller_leader(inner_.clone()).await;
+                    Ok(())
+                },
+            ),
         );
     }
 
     pub(crate) fn schedule_sync_controller_replica_info(&mut self) {
         let period = self.inner.broker_config.sync_broker_metadata_period;
         let inner_ = self.inner.clone();
-        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
-            Duration::from_millis(3000),
-            Duration::from_millis(period),
-            async move |ctx| {
-                if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                BrokerRuntimeInner::sync_controller_replica_info(inner_.clone()).await;
-                Ok(())
-            },
+        Self::log_scheduled_task_start(
+            "sync_controller_replica_info",
+            self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
+                Duration::from_millis(3000),
+                Duration::from_millis(period),
+                async move |ctx| {
+                    if ctx.is_cancelled() || inner_.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    BrokerRuntimeInner::sync_controller_replica_info(inner_.clone()).await;
+                    Ok(())
+                },
+            ),
         );
     }
 
@@ -3697,7 +3954,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             info!("TransactionCheckService status changed to {}", should_start);
             if should_start {
                 if let Some(transactional_message_check_service) = &mut self.transactional_message_check_service {
-                    transactional_message_check_service.start().await;
+                    if let Err(error) = transactional_message_check_service.start().await {
+                        error!("Failed to start transactional message check service: {error}");
+                        return;
+                    }
                 }
             } else if let Some(transactional_message_check_service) = &mut self.transactional_message_check_service {
                 transactional_message_check_service.shutdown_interrupt(true).await;
@@ -4086,9 +4346,11 @@ mod tests {
     use std::collections::BTreeSet;
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::future;
     use std::net::TcpListener;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicU16;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
@@ -4379,6 +4641,56 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
 
         assert!(!runtime.initial_rpc_hooks());
+    }
+
+    #[tokio::test]
+    async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
+        struct DropMarker(Arc<AtomicBool>);
+
+        impl Drop for DropMarker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        runtime
+            .scheduled_task_manager
+            .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
+                let started = Arc::clone(&started);
+                let dropped = Arc::clone(&dropped);
+                move |_token| {
+                    let started = Arc::clone(&started);
+                    let dropped = Arc::clone(&dropped);
+                    async move {
+                        let _marker = DropMarker(dropped);
+                        started.store(true, Ordering::Release);
+                        future::pending::<anyhow::Result<()>>().await
+                    }
+                }
+            })
+            .expect("scheduled shutdown test task should start");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduled task should start");
+
+        runtime
+            .shutdown_scheduled_tasks_with_timeout(Duration::from_millis(10))
+            .await;
+
+        assert_eq!(runtime.scheduled_task_manager.task_count(), 0);
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "broker scheduled shutdown should wait until aborted tasks release their running future"
+        );
     }
 
     #[tokio::test]

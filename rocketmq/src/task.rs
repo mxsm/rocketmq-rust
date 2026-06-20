@@ -14,7 +14,9 @@
 
 pub mod service_task;
 
+pub use service_task::run_service_manager_lifecycle_probe;
 pub use service_task::ServiceManager;
+pub use service_task::ServiceManagerLifecycleProbe;
 
 /// Helper macro to create a service thread implementation
 #[macro_export]

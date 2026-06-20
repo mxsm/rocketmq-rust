@@ -47,8 +47,8 @@ use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::runtime::spawn_client_blocking_io;
+use crate::runtime::spawn_client_task;
 use crate::runtime::spawn_client_task_on;
-use crate::runtime::spawn_detached_client_task;
 use cheetah_string::CheetahString;
 
 use crate::base::validators::Validators;
@@ -251,6 +251,8 @@ use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_remoting::ConsumerConnection;
 use rocketmq_rust::ArcMut;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::warn;
 
@@ -306,6 +308,8 @@ pub struct MQClientAPIImpl {
     top_addressing: Arc<Box<dyn TopAddressing>>,
     name_srv_addr: Option<String>,
     client_config: Arc<ClientConfig>,
+    background_tasks: TaskTracker,
+    background_shutdown: CancellationToken,
 }
 
 impl MQClientAPIImpl {
@@ -2086,6 +2090,8 @@ impl MQClientAPIImpl {
             //client_remoting_processor,
             name_srv_addr: None,
             client_config,
+            background_tasks: TaskTracker::new(),
+            background_shutdown: CancellationToken::new(),
         }
     }
 
@@ -2095,7 +2101,17 @@ impl MQClientAPIImpl {
     }
 
     pub fn shutdown(&mut self) {
+        self.background_shutdown.cancel();
+        self.background_tasks.close();
         self.remoting_client.shutdown();
+    }
+
+    pub async fn shutdown_background_tasks(&self, timeout: Duration) -> bool {
+        self.background_shutdown.cancel();
+        self.background_tasks.close();
+        tokio::time::timeout(timeout, self.background_tasks.wait())
+            .await
+            .is_ok()
     }
 
     pub fn get_remoting_client(&self) -> ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>> {
@@ -2137,11 +2153,15 @@ impl MQClientAPIImpl {
     }
 
     pub async fn update_name_server_address_list(&self, addrs: &str) {
+        self.update_name_server_address_list_sync(addrs);
+    }
+
+    pub(crate) fn update_name_server_address_list_sync(&self, addrs: &str) {
         let addr_vec = addrs
             .split(";")
             .map(CheetahString::from_slice)
             .collect::<Vec<CheetahString>>();
-        self.remoting_client.update_name_server_address_list(addr_vec).await;
+        self.remoting_client.update_name_server_address_list_sync(addr_vec);
     }
 
     pub async fn invoke(
@@ -2803,11 +2823,28 @@ impl MQClientAPIImpl {
         }
     }
 
-    fn spawn_api_background_task<F>(thread_name: &'static str, task: F)
-    where
+    fn spawn_api_background_task<F>(
+        thread_name: &'static str,
+        tracker: &TaskTracker,
+        shutdown_token: &CancellationToken,
+        task: F,
+    ) where
         F: Future<Output = ()> + Send + 'static,
     {
-        if let Err(error) = spawn_detached_client_task(thread_name, task) {
+        if shutdown_token.is_cancelled() {
+            return;
+        }
+
+        let shutdown_token = shutdown_token.clone();
+        let tracked_task = tracker.track_future(async move {
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {},
+                _ = task => {},
+            }
+        });
+
+        if let Err(error) = spawn_client_task(thread_name, tracked_task) {
             warn!("Failed to spawn {} background task: {}", thread_name, error);
         }
     }
@@ -3536,11 +3573,18 @@ impl MQClientAPIImpl {
                 Ok(Some(result_ext))
             }
             CommunicationMode::Async => {
-                Self::spawn_api_background_task("rocketmq-client-pull-message-async", async move {
-                    let _ = this
-                        .pull_message_async(&addr, request, timeout_millis, pull_callback)
-                        .await;
-                });
+                let tracker = this.background_tasks.clone();
+                let shutdown_token = this.background_shutdown.clone();
+                Self::spawn_api_background_task(
+                    "rocketmq-client-pull-message-async",
+                    &tracker,
+                    &shutdown_token,
+                    async move {
+                        let _ = this
+                            .pull_message_async(&addr, request, timeout_millis, pull_callback)
+                            .await;
+                    },
+                );
                 Ok(None)
             }
             CommunicationMode::Oneway => Ok(None),
@@ -6488,6 +6532,10 @@ impl MqClientAdminInner for MQClientAPIImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering as AtomicOrdering;
+
     use rocketmq_common::common::lite::LiteSubscriptionAction;
     use rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
@@ -6505,6 +6553,14 @@ mod tests {
             MessageQueue::from_parts("topicA", "broker-b", 1),
         ];
         info
+    }
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, AtomicOrdering::Release);
+        }
     }
 
     #[test]
@@ -7091,6 +7147,61 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("async send task should run on fallback runtime");
         assert_eq!(thread_name, "rocketmq-client-fallback");
+    }
+
+    #[tokio::test]
+    async fn api_background_task_tracker_waits_for_completion() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+
+        MQClientAPIImpl::spawn_api_background_task(
+            "rocketmq-client-api-background-test",
+            &tracker,
+            &token,
+            async move {
+                completed_in_task.store(true, AtomicOrdering::Release);
+            },
+        );
+        tracker.close();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("tracked API background task should finish");
+
+        assert!(completed.load(AtomicOrdering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn api_background_task_shutdown_token_cancels_pending_task() {
+        let tracker = TaskTracker::new();
+        let token = CancellationToken::new();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+
+        MQClientAPIImpl::spawn_api_background_task(
+            "rocketmq-client-api-background-test",
+            &tracker,
+            &token,
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            },
+        );
+        tracker.close();
+
+        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
+            .await
+            .is_err());
+
+        token.cancel();
+
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("shutdown token should release pending API background task");
+
+        assert!(dropped.load(AtomicOrdering::Acquire));
     }
 
     #[test]

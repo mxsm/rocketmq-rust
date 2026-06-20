@@ -34,10 +34,12 @@ use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::is_it_time_to_do;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::time::MissedTickBehavior;
-use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::warn;
 
@@ -250,8 +252,8 @@ pub struct TimerMessageStore {
     should_running_dequeue: AtomicBool,
     enqueue_suspended: AtomicBool,
     process_lock: AsyncMutex<()>,
-    scheduler_shutdown: Mutex<CancellationToken>,
     scheduler_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    scheduler_tasks: Mutex<Option<ScheduledTaskGroup>>,
     enqueue_tps_counter: TpsCounter,
     dequeue_tps_counter: TpsCounter,
 }
@@ -316,8 +318,6 @@ impl TimerMessageStore {
             return;
         }
 
-        let shutdown_token = CancellationToken::new();
-        *self.scheduler_shutdown.lock() = shutdown_token.clone();
         let scheduler = self.clone();
         let interval_ms = scheduler
             .message_store_config
@@ -330,22 +330,20 @@ impl TimerMessageStore {
                 return;
             }
         };
-        if let Err(error) = scheduler_group.spawn_service("timer-message-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let _ = scheduler.process_once().await;
-                    }
+        let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.child("scheduled"));
+        if let Err(error) = scheduler_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("timer-message-scheduler", Duration::from_millis(interval_ms)),
+            move || {
+                let scheduler = scheduler.clone();
+                async move {
+                    let _ = scheduler.process_once().await;
                 }
-            }
-        }) {
-            self.scheduler_shutdown.lock().cancel();
+            },
+        ) {
             error!("failed to spawn TimerMessageStore scheduler: {error}");
             return;
         }
+        *self.scheduler_tasks.lock() = Some(scheduler_tasks);
         *scheduler_group_guard = Some(scheduler_group);
     }
 
@@ -483,8 +481,8 @@ impl TimerMessageStore {
             should_running_dequeue: AtomicBool::new(false),
             enqueue_suspended: AtomicBool::new(false),
             process_lock: AsyncMutex::new(()),
-            scheduler_shutdown: Mutex::new(CancellationToken::new()),
             scheduler_group: Mutex::new(None),
+            scheduler_tasks: Mutex::new(None),
             enqueue_tps_counter: TpsCounter::default(),
             dequeue_tps_counter: TpsCounter::default(),
         }
@@ -505,7 +503,7 @@ impl TimerMessageStore {
     }
 
     pub fn shutdown(&self) {
-        self.scheduler_shutdown.lock().cancel();
+        self.scheduler_tasks.lock().take();
         if let Some(scheduler_group) = self.scheduler_group.lock().take() {
             scheduler_group.cancel();
         }
@@ -513,20 +511,53 @@ impl TimerMessageStore {
     }
 
     pub async fn shutdown_gracefully(&self) {
-        self.scheduler_shutdown.lock().cancel();
+        let _ = self.shutdown_gracefully_with_report().await;
+    }
+
+    pub async fn shutdown_gracefully_with_report(&self) -> Option<ShutdownReport> {
+        self.scheduler_tasks.lock().take();
         let scheduler_group = self.scheduler_group.lock().take();
         if let Some(scheduler_group) = scheduler_group {
             let report = scheduler_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("TimerMessageStore scheduler", report) {
+            if let Err(error) = crate::runtime::shutdown_report_result("TimerMessageStore scheduler", report.clone()) {
                 warn!("TimerMessageStore scheduler failed during shutdown: {error}");
+                self.shutdown_storage();
+                return None;
             }
+            self.shutdown_storage();
+            return Some(report);
         }
         self.shutdown_storage();
+        None
     }
 
     #[cfg(test)]
     pub(crate) fn has_scheduler_handle(&self) -> bool {
         self.scheduler_group.lock().is_some()
+    }
+
+    pub(crate) fn scheduler_task_count(&self) -> usize {
+        let root_count = self
+            .scheduler_group
+            .lock()
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduler_tasks
+            .lock()
+            .as_ref()
+            .map(|scheduler_tasks| scheduler_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn scheduler_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduler_tasks
+            .lock()
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     fn shutdown_storage(&self) {
@@ -1645,10 +1676,16 @@ mod tests {
         assert!(timer_message_store.load());
         timer_message_store.start();
         assert!(timer_message_store.has_scheduler_handle());
+        assert_eq!(timer_message_store.scheduler_task_count(), 1);
 
-        timer_message_store.shutdown_gracefully().await;
+        let report = timer_message_store
+            .shutdown_gracefully_with_report()
+            .await
+            .expect("timer scheduler shutdown should return report");
 
+        assert!(report.is_healthy(), "{}", report.to_json());
         assert!(!timer_message_store.has_scheduler_handle());
+        assert_eq!(timer_message_store.scheduler_task_count(), 0);
     }
 
     #[test]

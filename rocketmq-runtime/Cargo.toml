@@ -37,3 +37,18 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name    = "task_group_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "scheduled_task_group_bench"
+harness = false
+
+[[bench]]
+name    = "blocking_executor_bench"
+harness = false

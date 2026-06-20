@@ -86,10 +86,15 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::RuntimeResult;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownAnnotation;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use tokio::time;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -297,26 +302,55 @@ pub struct ConnectionPool<PR = DefaultRemotingRequestProcessor> {
 }
 
 /// Handle for a background connection-pool cleanup task.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionPoolCleanupTask {
-    task_group: TaskGroup,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
 }
 
 impl ConnectionPoolCleanupTask {
-    /// Stop the cleanup task immediately.
-    ///
-    /// This mirrors the previous `JoinHandle::abort()` usage while routing
-    /// the task through the runtime task accounting model.
+    fn inactive() -> Self {
+        Self { scheduled_tasks: None }
+    }
+
+    /// Returns true when the cleanup task was actually spawned.
+    pub fn is_active(&self) -> bool {
+        self.scheduled_tasks.is_some()
+    }
+
+    /// Request the cleanup task to stop without waiting for completion.
     pub fn abort(&self) {
-        let report = self.task_group.shutdown_now();
-        if let Err(error) = report.assert_no_task_leak() {
-            warn!("connection pool cleanup task stopped with report: {error}");
+        if let Some(scheduled_tasks) = &self.scheduled_tasks {
+            scheduled_tasks.group().cancel();
         }
     }
 
     /// Stop the cleanup task gracefully and return the shutdown report.
     pub async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
-        self.task_group.shutdown(timeout).await
+        if let Some(scheduled_tasks) = &self.scheduled_tasks {
+            return scheduled_tasks.shutdown(timeout).await;
+        }
+
+        let mut report = ShutdownReport::new("rocketmq-remoting.connection-pool.inactive", Duration::ZERO);
+        report.annotations.push(ShutdownAnnotation::new(
+            "connection pool cleanup task was not started because no Tokio runtime was available",
+        ));
+        report
+    }
+
+    /// Number of tracked cleanup tasks.
+    pub fn task_count(&self) -> usize {
+        self.scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default()
+    }
+
+    /// Snapshot of cleanup scheduler metrics.
+    pub fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 }
 
@@ -560,11 +594,26 @@ impl<PR> ConnectionPool<PR> {
     where
         PR: Send + Sync + 'static,
     {
-        let handle =
-            tokio::runtime::Handle::try_current().expect("connection pool cleanup task requires a Tokio runtime");
+        match self.try_start_cleanup_task(interval) {
+            Ok(cleanup_task) => cleanup_task,
+            Err(error) => {
+                warn!(?error, "connection pool cleanup task not started");
+                ConnectionPoolCleanupTask::inactive()
+            }
+        }
+    }
+
+    /// Try to start the background cleanup task.
+    ///
+    /// Unlike [`Self::start_cleanup_task`], this method returns an error when no
+    /// ambient Tokio runtime is available or when the task cannot be spawned.
+    pub fn try_start_cleanup_task(&self, interval: Duration) -> RuntimeResult<ConnectionPoolCleanupTask>
+    where
+        PR: Send + Sync + 'static,
+    {
+        let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
         let task_group = TaskGroup::root("rocketmq-remoting.connection-pool", RuntimeHandle::new(handle));
         self.start_cleanup_task_with_group(interval, task_group)
-            .expect("connection pool cleanup task must spawn")
     }
 
     /// Start background cleanup task under the provided task group.
@@ -578,50 +627,45 @@ impl<PR> ConnectionPool<PR> {
     {
         let connections = self.connections.clone();
         let max_idle = self.max_idle_duration;
-        let cleanup_group = task_group.child("remoting.connection-pool.cleanup");
-        let cancellation_token = cleanup_group.cancellation_token();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("remoting.connection-pool.cleanup"));
+        scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("remoting.connection-pool.cleanup", interval),
+            move || {
+                let connections = connections.clone();
+                async move {
+                    let mut idle_count = 0;
+                    let mut unhealthy_count = 0;
+                    let mut to_remove = Vec::new();
 
-        cleanup_group.spawn_service("remoting.connection-pool.cleanup", async move {
-            let mut ticker = time::interval(interval);
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled() => break,
-                    _ = ticker.tick() => {}
-                }
-
-                // Evict idle connections
-                let mut idle_count = 0;
-                let mut unhealthy_count = 0;
-                let mut to_remove = Vec::new();
-
-                for entry in connections.iter() {
-                    let conn = entry.value();
-                    if !conn.is_healthy() {
-                        to_remove.push((entry.key().clone(), "unhealthy"));
-                        unhealthy_count += 1;
-                    } else if conn.is_idle(max_idle) {
-                        to_remove.push((entry.key().clone(), "idle"));
-                        idle_count += 1;
+                    for entry in connections.iter() {
+                        let conn = entry.value();
+                        if !conn.is_healthy() {
+                            to_remove.push((entry.key().clone(), "unhealthy"));
+                            unhealthy_count += 1;
+                        } else if conn.is_idle(max_idle) {
+                            to_remove.push((entry.key().clone(), "idle"));
+                            idle_count += 1;
+                        }
                     }
-                }
 
-                if !to_remove.is_empty() {
-                    info!(
-                        "Cleanup: evicting {} idle and {} unhealthy connections",
-                        idle_count, unhealthy_count
-                    );
-                    for (addr, reason) in to_remove {
-                        connections.remove(&addr);
-                        debug!("Evicted connection to {} (reason: {})", addr, reason);
+                    if !to_remove.is_empty() {
+                        info!(
+                            "Cleanup: evicting {} idle and {} unhealthy connections",
+                            idle_count, unhealthy_count
+                        );
+                        for (addr, reason) in to_remove {
+                            connections.remove(&addr);
+                            debug!("Evicted connection to {} (reason: {})", addr, reason);
+                        }
                     }
-                }
 
-                debug!("Connection pool size: {} (after cleanup)", connections.len());
-            }
-        })?;
+                    debug!("Connection pool size: {} (after cleanup)", connections.len());
+                }
+            },
+        )?;
 
         Ok(ConnectionPoolCleanupTask {
-            task_group: cleanup_group,
+            scheduled_tasks: Some(scheduled_tasks),
         })
     }
 }
@@ -730,8 +774,33 @@ mod tests {
         let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
         let cleanup_task = pool.start_cleanup_task(Duration::from_millis(5));
 
+        assert!(cleanup_task.is_active());
+        assert_eq!(cleanup_task.task_count(), 1);
         let report = cleanup_task.shutdown(Duration::from_secs(1)).await;
 
         assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(cleanup_task.task_count(), 0);
+    }
+
+    #[test]
+    fn start_cleanup_task_without_tokio_runtime_returns_inactive_task() {
+        let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
+        let cleanup_task = pool.start_cleanup_task(Duration::from_millis(5));
+
+        assert!(!cleanup_task.is_active());
+        let report = futures::executor::block_on(cleanup_task.shutdown(Duration::from_secs(1)));
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.name, "rocketmq-remoting.connection-pool.inactive");
+    }
+
+    #[test]
+    fn try_start_cleanup_task_without_tokio_runtime_returns_error() {
+        let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
+
+        let error = pool
+            .try_start_cleanup_task(Duration::from_millis(5))
+            .expect_err("try_start_cleanup_task should require an ambient runtime");
+
+        assert!(matches!(error, RuntimeError::NoCurrentRuntime));
     }
 }

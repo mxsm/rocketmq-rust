@@ -462,8 +462,8 @@ impl<MS> BrokerPreOnlineService<MS>
 where
     MS: MessageStore,
 {
-    pub async fn start(&mut self) {
-        self.service_manager.start().await.unwrap();
+    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        self.service_manager.start().await
     }
 
     pub async fn shutdown(&mut self) {

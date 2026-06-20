@@ -22,6 +22,7 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 
 use crate::config::ProxyConfig;
@@ -29,10 +30,41 @@ use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::middleware;
 use crate::grpc::service::ProxyGrpcService;
+use crate::grpc::service::ProxyHousekeepingRunReport;
 use crate::processor::MessagingProcessor;
 use crate::proto::v2::messaging_service_server::MessagingServiceServer;
 
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct ProxyGrpcServerShutdownReport {
+    pub task_group: ShutdownReport,
+    pub housekeeping: Option<ProxyHousekeepingRunReport>,
+}
+
+impl ProxyGrpcServerShutdownReport {
+    pub fn is_healthy(&self) -> bool {
+        self.task_group.is_healthy()
+            && self
+                .housekeeping
+                .as_ref()
+                .is_none_or(|report| report.shutdown_report.is_healthy())
+    }
+}
+
 pub async fn serve<P, F>(config: Arc<ProxyConfig>, service: ProxyGrpcService<P>, shutdown: F) -> ProxyResult<()>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+{
+    serve_with_report(config, service, shutdown).await.map(|_| ())
+}
+
+#[doc(hidden)]
+pub async fn serve_with_report<P, F>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
     P: MessagingProcessor + 'static,
     F: Future<Output = ()> + Send + 'static,
@@ -47,6 +79,7 @@ where
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let shutdown_signal = shutdown_tx.clone();
     let housekeeping_service = service.clone();
+    let (housekeeping_report_tx, housekeeping_report_rx) = tokio::sync::oneshot::channel();
     let runtime = tokio::runtime::Handle::try_current().map_err(|error| ProxyError::Transport {
         message: format!("proxy gRPC server has no Tokio runtime for housekeeping task: {error}"),
     })?;
@@ -54,8 +87,8 @@ where
     task_group
         .spawn_service("proxy.grpc.housekeeping", async move {
             let mut shutdown_rx = shutdown_rx;
-            housekeeping_service
-                .run_housekeeping_until(async move {
+            let report = housekeeping_service
+                .run_housekeeping_until_with_report(async move {
                     loop {
                         if *shutdown_rx.borrow() {
                             break;
@@ -66,6 +99,7 @@ where
                     }
                 })
                 .await;
+            let _ = housekeeping_report_tx.send(report);
         })
         .map_err(|error| ProxyError::Transport {
             message: format!("proxy gRPC server failed to spawn housekeeping task: {error}"),
@@ -84,17 +118,34 @@ where
         })
         .await;
     let _ = shutdown_tx.send(true);
-    let report = task_group.shutdown(std::time::Duration::from_secs(10)).await;
-    if !report.is_healthy() {
+    let task_group_report = task_group.shutdown(std::time::Duration::from_secs(10)).await;
+    let housekeeping_report =
+        match tokio::time::timeout(std::time::Duration::from_secs(1), housekeeping_report_rx).await {
+            Ok(Ok(report)) => Some(report),
+            Ok(Err(_closed)) => {
+                tracing::warn!("Proxy gRPC housekeeping report channel closed before report was sent");
+                None
+            }
+            Err(_elapsed) => {
+                tracing::warn!("Timed out waiting for proxy gRPC housekeeping report");
+                None
+            }
+        };
+    let shutdown_report = ProxyGrpcServerShutdownReport {
+        task_group: task_group_report,
+        housekeeping: housekeeping_report,
+    };
+    if !shutdown_report.is_healthy() {
         tracing::warn!(
-            report = %report.to_json(),
+            task_group = %shutdown_report.task_group.to_json(),
             "Proxy gRPC server task shutdown report is unhealthy"
         );
     }
 
     result.map_err(|error| ProxyError::Transport {
         message: format!("proxy gRPC server failed: {error}"),
-    })
+    })?;
+    Ok(shutdown_report)
 }
 
 #[cfg(test)]
@@ -122,6 +173,7 @@ mod tests {
     use tonic::Request;
 
     use super::serve;
+    use super::serve_with_report;
     use crate::auth::ProxyAuthRuntime;
     use crate::config::GrpcConfig;
     use crate::config::ProxyAuthConfig;
@@ -208,6 +260,45 @@ mod tests {
         ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
             Ok(None)
         }
+    }
+
+    #[tokio::test]
+    async fn serve_with_report_includes_housekeeping_shutdown_report() {
+        let route_service = Arc::new(RecordingRouteService::default());
+        let metadata_service = Arc::new(StaticMetadataService);
+        let manager = Arc::new(ClusterServiceManager::with_services(
+            route_service,
+            metadata_service,
+            Arc::new(DefaultAssignmentService),
+            Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
+        ));
+        let processor = Arc::new(DefaultMessagingProcessor::new(manager));
+        let config = Arc::new(ProxyConfig {
+            grpc: GrpcConfig {
+                listen_addr: "127.0.0.1:0".to_string(),
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
+        });
+        let service = ProxyGrpcService::new(config.clone(), processor, ClientSessionRegistry::default());
+
+        let report = serve_with_report(config, service, async {})
+            .await
+            .expect("server should return a shutdown report");
+
+        assert!(report.is_healthy(), "{report:?}");
+        assert!(report.task_group.is_healthy(), "{}", report.task_group.to_json());
+        let housekeeping = report
+            .housekeeping
+            .as_ref()
+            .expect("server report should include housekeeping shutdown report");
+        assert!(
+            housekeeping.shutdown_report.is_healthy(),
+            "{}",
+            housekeeping.shutdown_report.to_json()
+        );
     }
 
     #[tokio::test]

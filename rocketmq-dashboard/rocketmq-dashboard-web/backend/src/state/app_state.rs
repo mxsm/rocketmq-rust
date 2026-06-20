@@ -49,7 +49,7 @@ impl AppState {
                 DashboardAdminFacade::new(admin_client.clone()),
                 history_store.clone(),
                 config.dashboard_history_interval_secs,
-            );
+            )?;
         }
 
         Ok(Self {

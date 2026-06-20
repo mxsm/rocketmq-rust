@@ -18,6 +18,9 @@ pub mod commit_log_recover_service;
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -33,6 +36,7 @@ where
     P: TieredStoreProvider,
 {
     cleanup_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    cleanup_schedule: tokio::sync::Mutex<Option<ScheduledTaskGroup>>,
     cleanup_shutdown: tokio::sync::Mutex<Option<CancellationToken>>,
     cleanup_error: Arc<tokio::sync::Mutex<Option<String>>>,
     _marker: std::marker::PhantomData<P>,
@@ -45,6 +49,7 @@ where
     pub fn new() -> Self {
         Self {
             cleanup_group: tokio::sync::Mutex::new(None),
+            cleanup_schedule: tokio::sync::Mutex::new(None),
             cleanup_shutdown: tokio::sync::Mutex::new(None),
             cleanup_error: Arc::new(tokio::sync::Mutex::new(None)),
             _marker: std::marker::PhantomData,
@@ -66,31 +71,60 @@ where
         let service = CleanupService::new(config, flat_file_store, shutdown);
         let cleanup_shutdown = service.shutdown_token();
         let task_group = runtime::task_group("rocketmq-tieredstore.cleanup")?;
-        let cleanup_error = self.cleanup_error.clone();
-        task_group
-            .spawn_service("cleanup-service", async move {
-                if let Err(error) = service.run().await {
-                    *cleanup_error.lock().await = Some(error.to_string());
-                }
-            })
-            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+        let scheduled_tasks = service.schedule(&task_group, self.cleanup_error.clone())?;
         *self.cleanup_shutdown.lock().await = Some(cleanup_shutdown);
+        *self.cleanup_schedule.lock().await = Some(scheduled_tasks);
         *self.cleanup_group.lock().await = Some(task_group);
         Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<(), RocketMQError> {
+        let _ = self.shutdown_with_report().await?;
+        Ok(())
+    }
+
+    pub async fn shutdown_with_report(&self) -> Result<Option<ShutdownReport>, RocketMQError> {
         if let Some(shutdown) = self.cleanup_shutdown.lock().await.take() {
             shutdown.cancel();
         }
+        self.cleanup_schedule.lock().await.take();
+        let mut shutdown_report = None;
         if let Some(task_group) = self.cleanup_group.lock().await.take() {
             let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
-            runtime::shutdown_report_result("tieredstore cleanup", report)?;
+            runtime::shutdown_report_result("tieredstore cleanup", report.clone())?;
+            shutdown_report = Some(report);
         }
         if let Some(error) = self.cleanup_error.lock().await.take() {
             return Err(RocketMQError::Internal(error));
         }
-        Ok(())
+        Ok(shutdown_report)
+    }
+
+    pub async fn task_count(&self) -> usize {
+        let root_task_count = self
+            .cleanup_group
+            .lock()
+            .await
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_task_count = self
+            .cleanup_schedule
+            .lock()
+            .await
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_task_count + scheduled_task_count
+    }
+
+    pub async fn cleanup_schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.cleanup_schedule
+            .lock()
+            .await
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 }
 

@@ -13,14 +13,22 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use dashmap::DashMap;
-use tokio_util::sync::CancellationToken;
+use parking_lot::Mutex;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use serde::Serialize;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
-use crate::runtime::spawn_detached_client_task;
+use crate::runtime::schedule_client_fixed_delay_task;
+use crate::runtime::ClientScheduledTaskHandle;
+
+const DETECTOR_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const DETECTOR_SCAN_INITIAL_DELAY: Duration = Duration::from_secs(3);
+const DETECTOR_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 
 pub struct LatencyFaultToleranceImpl<R, S> {
     fault_item_table: DashMap<CheetahString, FaultItem>,
@@ -29,7 +37,52 @@ pub struct LatencyFaultToleranceImpl<R, S> {
     start_detector_enable: AtomicBool,
     resolver: Option<R>,
     service_detector: Option<S>,
-    cancel_token: CancellationToken,
+    detector_task: Mutex<Option<FaultDetectorTaskHandle>>,
+}
+
+struct FaultDetectorTaskHandle {
+    handle: ClientScheduledTaskHandle,
+}
+
+impl FaultDetectorTaskHandle {
+    fn is_finished(&self) -> bool {
+        !self.handle.is_running()
+    }
+
+    fn abort(self) {
+        let report = self.handle.shutdown_now();
+        if !report.is_healthy() {
+            tracing::warn!(
+                report = %report.to_json(),
+                "fault detector task shutdown_now report is unhealthy"
+            );
+        }
+    }
+
+    async fn shutdown(self, timeout: Duration) -> bool {
+        let report = self.handle.shutdown(timeout).await;
+        report.is_healthy()
+    }
+
+    fn task_count(&self) -> usize {
+        self.handle.task_count()
+    }
+
+    fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.handle.schedule_snapshot()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LatencyFaultDetectorLifecycleProbe {
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub scheduled_runs: u64,
+    pub scheduled_skips: u64,
+    pub scheduled_overlaps: u64,
+    pub scheduled_failures: u64,
+    pub shutdown_elapsed_us: u128,
+    pub healthy: bool,
 }
 
 impl<R, S> LatencyFaultToleranceImpl<R, S> {
@@ -41,7 +94,7 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
             detect_timeout: 200,
             detect_interval: 2000,
             start_detector_enable: AtomicBool::new(false),
-            cancel_token: CancellationToken::new(),
+            detector_task: Mutex::new(None),
         }
     }
 
@@ -56,6 +109,14 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
     #[cfg(test)]
     pub(crate) fn detector_config_for_test(&self) -> (u32, u32) {
         (self.detect_interval, self.detect_timeout)
+    }
+
+    pub async fn shutdown_detector(&self) -> bool {
+        let handle = { self.detector_task.lock().take() };
+        match handle {
+            Some(handle) => handle.shutdown(DETECTOR_TASK_SHUTDOWN_TIMEOUT).await,
+            None => true,
+        }
     }
 }
 
@@ -119,12 +180,22 @@ where
     }
 
     fn start_detector(this: ArcMut<Self>) {
-        let token = this.cancel_token.clone();
-        spawn_detector_loop(this, token);
+        {
+            let guard = this.detector_task.lock();
+            if guard.as_ref().is_some_and(|handle| !handle.is_finished()) {
+                return;
+            }
+        }
+
+        if let Some(handle) = spawn_detector_loop(this.clone(), DETECTOR_SCAN_INITIAL_DELAY, DETECTOR_SCAN_INTERVAL) {
+            *this.detector_task.lock() = Some(handle);
+        }
     }
 
     fn shutdown(&self) {
-        self.cancel_token.cancel();
+        if let Some(handle) = self.detector_task.lock().take() {
+            handle.abort();
+        }
     }
 
     async fn detect_by_one_round(&self) {
@@ -200,38 +271,121 @@ use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 
-async fn run_detector_loop<R, S>(this: ArcMut<LatencyFaultToleranceImpl<R, S>>, token: CancellationToken)
+fn spawn_detector_loop<R, S>(
+    this: ArcMut<LatencyFaultToleranceImpl<R, S>>,
+    initial_delay: Duration,
+    scan_interval: Duration,
+) -> Option<FaultDetectorTaskHandle>
 where
     R: Resolver,
     S: ServiceDetector,
 {
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
-    // First tick completes immediately; skip it to match Java's 3s initial delay.
-    interval.tick().await;
-
-    loop {
-        tokio::select! {
-            _ = token.cancelled() => {
-                tracing::info!("Fault tolerance detector stopped");
-                break;
+    match schedule_client_fixed_delay_task(
+        "rocketmq-client-fault-detector",
+        initial_delay,
+        scan_interval,
+        DETECTOR_TASK_SHUTDOWN_TIMEOUT,
+        move || {
+            let detector = this.clone();
+            async move {
+                if detector
+                    .start_detector_enable
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    detector.detect_by_one_round().await;
+                }
             }
-            _ = interval.tick() => {}
+        },
+    ) {
+        Ok(handle) => Some(FaultDetectorTaskHandle { handle }),
+        Err(error) => {
+            error!("Failed to spawn fault tolerance detector task: {}", error);
+            None
         }
-        if !this.start_detector_enable.load(std::sync::atomic::Ordering::Relaxed) {
-            continue;
-        }
-
-        this.detect_by_one_round().await;
     }
 }
 
-fn spawn_detector_loop<R, S>(this: ArcMut<LatencyFaultToleranceImpl<R, S>>, token: CancellationToken)
-where
-    R: Resolver,
-    S: ServiceDetector,
-{
-    if let Err(error) = spawn_detached_client_task("rocketmq-client-fault-detector", run_detector_loop(this, token)) {
-        error!("Failed to spawn fault tolerance detector task: {}", error);
+#[doc(hidden)]
+pub async fn run_latency_fault_detector_lifecycle_probe() -> LatencyFaultDetectorLifecycleProbe {
+    let detector = ArcMut::new(LatencyFaultToleranceImpl::<ProbeResolver, ProbeServiceDetector>::new());
+    detector.mut_from_ref().set_start_detector_enable(true);
+    let handle = spawn_detector_loop(detector.clone(), Duration::ZERO, Duration::from_millis(1))
+        .expect("latency fault detector probe task should start");
+    *detector.detector_task.lock() = Some(handle);
+
+    let mut snapshots = detector
+        .detector_task
+        .lock()
+        .as_ref()
+        .map(FaultDetectorTaskHandle::schedule_snapshot)
+        .unwrap_or_default();
+    for _ in 0..100 {
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        snapshots = detector
+            .detector_task
+            .lock()
+            .as_ref()
+            .map(FaultDetectorTaskHandle::schedule_snapshot)
+            .unwrap_or_default();
+    }
+
+    let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+    let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+    let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+    let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+    let task_count_before_shutdown = detector
+        .detector_task
+        .lock()
+        .as_ref()
+        .map(FaultDetectorTaskHandle::task_count)
+        .unwrap_or_default();
+    let shutdown_started_at = std::time::Instant::now();
+    let shutdown_healthy = detector.shutdown_detector().await;
+    let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+    let task_count_after_shutdown = detector
+        .detector_task
+        .lock()
+        .as_ref()
+        .map(FaultDetectorTaskHandle::task_count)
+        .unwrap_or_default();
+    let healthy = shutdown_healthy
+        && scheduled_runs > 0
+        && scheduled_overlaps == 0
+        && scheduled_failures == 0
+        && task_count_before_shutdown > 0
+        && task_count_after_shutdown == 0;
+
+    LatencyFaultDetectorLifecycleProbe {
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        scheduled_runs,
+        scheduled_skips,
+        scheduled_overlaps,
+        scheduled_failures,
+        shutdown_elapsed_us,
+        healthy,
+    }
+}
+
+struct ProbeResolver;
+
+impl Resolver for ProbeResolver {
+    async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
+        None
+    }
+}
+
+struct ProbeServiceDetector;
+
+impl ServiceDetector for ProbeServiceDetector {
+    async fn detect(&self, _endpoint: &str, _timeout_millis: u64) -> bool {
+        true
     }
 }
 
@@ -389,7 +543,19 @@ impl std::fmt::Display for FaultItem {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
 
     struct NoopResolver;
 
@@ -427,5 +593,138 @@ mod tests {
         detector.shutdown();
 
         std::thread::sleep(tokio::time::Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn sync_shutdown_aborts_and_drains_detector_task() {
+        let detector = LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new();
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started_in_task = started.clone();
+        let dropped_in_task = dropped.clone();
+        let handle = schedule_client_fixed_delay_task(
+            "latency-fault-detector-sync-shutdown-test",
+            Duration::ZERO,
+            Duration::from_secs(60),
+            Duration::from_millis(20),
+            move || {
+                let started = started_in_task.clone();
+                let dropped = dropped_in_task.clone();
+                async move {
+                    let _drop_flag = DropFlag(dropped);
+                    started.store(true, std::sync::atomic::Ordering::Release);
+                    pending::<()>().await;
+                }
+            },
+        )
+        .expect("scheduled detector test task should start");
+        *detector.detector_task.lock() = Some(FaultDetectorTaskHandle { handle });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detector task should start before shutdown");
+
+        detector.shutdown();
+
+        assert!(detector.detector_task.lock().is_none());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("sync shutdown should abort the detector task");
+    }
+
+    #[tokio::test]
+    async fn detector_task_shutdown_waits_for_worker_completion() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let handle = FaultDetectorTaskHandle {
+            handle: schedule_client_fixed_delay_task(
+                "latency-fault-detector-clean-shutdown-test",
+                Duration::ZERO,
+                Duration::from_secs(60),
+                Duration::from_secs(1),
+                move || {
+                    let completed = completed_in_task.clone();
+                    async move {
+                        completed.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                },
+            )
+            .expect("scheduled detector test task should start"),
+        };
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !completed.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detector task should complete one run before shutdown");
+        assert!(handle.shutdown(Duration::from_secs(1)).await);
+        assert!(completed.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn detector_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let started_in_task = started.clone();
+        let handle = FaultDetectorTaskHandle {
+            handle: schedule_client_fixed_delay_task(
+                "latency-fault-detector-timeout-shutdown-test",
+                Duration::ZERO,
+                Duration::from_secs(60),
+                Duration::from_millis(20),
+                move || {
+                    let dropped = dropped_in_task.clone();
+                    let started = started_in_task.clone();
+                    async move {
+                        let _drop_flag = DropFlag(dropped);
+                        started.store(true, std::sync::atomic::Ordering::Release);
+                        pending::<()>().await;
+                    }
+                },
+            )
+            .expect("scheduled detector test task should start"),
+        };
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detector task should start before timeout shutdown");
+        assert!(!handle.shutdown(Duration::from_millis(20)).await);
+        assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn shutdown_detector_waits_for_started_detector_task() {
+        let detector = ArcMut::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+
+        LatencyFaultTolerance::start_detector(detector.clone());
+
+        assert!(detector.detector_task.lock().is_some());
+        assert!(detector.shutdown_detector().await);
+        assert!(detector.detector_task.lock().is_none());
+    }
+
+    #[tokio::test]
+    async fn latency_fault_detector_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_latency_fault_detector_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 }

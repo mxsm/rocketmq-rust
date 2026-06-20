@@ -310,7 +310,10 @@ impl HAClient for DefaultHAClient {
             return;
         }
 
-        self.inner.flow_monitor.start().await;
+        if let Err(error) = self.inner.flow_monitor.start().await {
+            warn!("HAClient flow monitor not started: {error}");
+            return;
+        }
         let mut client = ArcMut::clone(&self.inner);
         let service_group = match crate::runtime::task_group("rocketmq-store.ha.client") {
             Ok(service_group) => service_group,

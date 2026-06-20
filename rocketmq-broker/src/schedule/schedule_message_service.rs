@@ -45,6 +45,9 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -68,7 +71,7 @@ const DELAY_FOR_A_WHILE: u64 = 100;
 const DELAY_FOR_A_PERIOD: u64 = 10000;
 const WAIT_FOR_SHUTDOWN: u64 = 5000;
 const DELAY_FOR_A_SLEEP: u64 = 10;
-const PERSIST_TASK_SHUTDOWN_POLL_INTERVAL: u64 = 100;
+const PERSIST_DELAY_INITIAL_DELAY: u64 = 10000;
 
 // Performance optimization constants
 /// Maximum number of messages to process in a single batch
@@ -136,6 +139,7 @@ pub struct ScheduleMessageService<MS: MessageStore> {
     version_change_counter: AtomicI64,
     /// Tracks all scheduled delivery and persistence tasks for graceful shutdown.
     task_group: ParkingMutex<Option<TaskGroup>>,
+    scheduled_tasks: ParkingMutex<Option<ScheduledTaskGroup>>,
 }
 
 impl<MS: MessageStore> ScheduleMessageService<MS> {
@@ -154,6 +158,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             broker_controller,
             version_change_counter: AtomicI64::new(0),
             task_group: ParkingMutex::new(None),
+            scheduled_tasks: ParkingMutex::new(None),
         }
     }
 
@@ -234,6 +239,13 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     ///
     /// `Ok(())` on successful start, error otherwise
     pub fn start(this: ArcMut<Self>) -> Result<(), Box<dyn std::error::Error>> {
+        Self::start_with_persist_initial_delay(this, Duration::from_millis(PERSIST_DELAY_INITIAL_DELAY))
+    }
+
+    pub(crate) fn start_with_persist_initial_delay(
+        this: ArcMut<Self>,
+        persist_initial_delay: Duration,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if this
             .started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -242,14 +254,13 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             info!("Starting ScheduleMessageService...");
             this.load();
 
-            let runtime = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => RuntimeHandle::new(handle),
+            let scheduled_tasks = match Self::install_task_groups(&this) {
+                Ok(scheduled_tasks) => scheduled_tasks,
                 Err(error) => {
                     this.started.store(false, Ordering::SeqCst);
-                    return Err(Box::new(error));
+                    return Err(error);
                 }
             };
-            *this.task_group.lock() = Some(TaskGroup::root("rocketmq-broker.schedule", runtime));
 
             for level in this.delay_level_table.keys() {
                 let offset = { this.offset_table.get(level).map_or(0, |key_value| *key_value.value()) };
@@ -280,52 +291,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 });
             }
 
-            // Spawn periodic persist task
-            let service = this.clone();
-            let shutdown_flag = Arc::clone(&this.shutdown_requested);
-
-            this.spawn_schedule_task("broker.schedule.persist-delay-offset", async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(
-                    service
-                        .broker_controller
-                        .message_store_config()
-                        .flush_delay_offset_interval,
-                ));
-                let initial_delay = tokio::time::sleep(Duration::from_millis(10000));
-                tokio::pin!(initial_delay);
-                let mut shutdown_poll =
-                    tokio::time::interval(Duration::from_millis(PERSIST_TASK_SHUTDOWN_POLL_INTERVAL));
-
-                loop {
-                    tokio::select! {
-                        _ = &mut initial_delay => break,
-                        _ = shutdown_poll.tick() => {
-                            if shutdown_flag.load(Ordering::Relaxed) {
-                                info!("Persist task received shutdown signal before initial delay elapsed");
-                                return;
-                            }
-                        }
-                    }
-                }
-
-                loop {
-                    tokio::select! {
-                        _ = interval.tick() => {
-                            if shutdown_flag.load(Ordering::Relaxed) {
-                                info!("Persist task received shutdown signal");
-                                return;
-                            }
-                            service.persist();
-                        }
-                        _ = shutdown_poll.tick() => {
-                            if shutdown_flag.load(Ordering::Relaxed) {
-                                info!("Persist task received shutdown signal");
-                                return;
-                            }
-                        }
-                    }
-                }
-            });
+            Self::schedule_persist_task(&this, &scheduled_tasks, persist_initial_delay);
 
             info!(
                 "ScheduleMessageService started successfully with {} delay levels",
@@ -334,6 +300,67 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn start_persist_task_for_probe(
+        this: ArcMut<Self>,
+        persist_initial_delay: Duration,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if this
+            .started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            == Ok(false)
+        {
+            let scheduled_tasks = match Self::install_task_groups(&this) {
+                Ok(scheduled_tasks) => scheduled_tasks,
+                Err(error) => {
+                    this.started.store(false, Ordering::SeqCst);
+                    return Err(error);
+                }
+            };
+            Self::schedule_persist_task(&this, &scheduled_tasks, persist_initial_delay);
+        }
+
+        Ok(())
+    }
+
+    fn install_task_groups(this: &ArcMut<Self>) -> Result<ScheduledTaskGroup, Box<dyn std::error::Error>> {
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => return Err(Box::new(error)),
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.schedule", runtime);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        *this.task_group.lock() = Some(task_group);
+        *this.scheduled_tasks.lock() = Some(scheduled_tasks.clone());
+        Ok(scheduled_tasks)
+    }
+
+    fn schedule_persist_task(this: &ArcMut<Self>, scheduled_tasks: &ScheduledTaskGroup, initial_delay: Duration) {
+        let service = this.clone();
+        let shutdown_flag = Arc::clone(&this.shutdown_requested);
+        let period = Duration::from_millis(
+            this.broker_controller
+                .message_store_config()
+                .flush_delay_offset_interval
+                .max(1),
+        );
+        let mut config = ScheduledTaskConfig::fixed_delay("broker.schedule.persist-delay-offset", period);
+        config.initial_delay = initial_delay;
+        config.shutdown_timeout = Duration::from_millis(WAIT_FOR_SHUTDOWN);
+
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
+            let service = service.clone();
+            let shutdown_flag = Arc::clone(&shutdown_flag);
+            async move {
+                if shutdown_flag.load(Ordering::Relaxed) || !service.is_started() {
+                    return;
+                }
+                service.persist();
+            }
+        }) {
+            warn!(?error, "failed to spawn ScheduleMessageService persist task");
+        }
     }
 
     /// Gracefully shuts down the schedule message service.
@@ -346,6 +373,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         self.shutdown_requested.store(true, Ordering::SeqCst);
         self.stop();
 
+        self.scheduled_tasks.lock().take();
         let task_group = self.task_group.lock().take();
         let Some(task_group) = task_group else {
             warn!("No schedule task group found during shutdown");
@@ -379,6 +407,30 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 
     pub fn is_started(&self) -> bool {
         self.started.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        let root_count = self
+            .task_group
+            .lock()
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     fn spawn_schedule_task<F>(&self, task_name: &'static str, future: F)

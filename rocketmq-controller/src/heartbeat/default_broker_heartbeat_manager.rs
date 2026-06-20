@@ -22,6 +22,10 @@ use dashmap::DashMap;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tracing::info;
@@ -34,6 +38,8 @@ use crate::heartbeat::broker_identity_info::BrokerIdentityInfo;
 use crate::heartbeat::broker_live_info::BrokerLiveInfo;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::helper::broker_valid_predicate::BrokerValidPredicate;
+
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default implementation of BrokerHeartbeatManager
 ///
@@ -73,6 +79,9 @@ pub struct DefaultBrokerHeartbeatManager {
     /// Background scan task group
     scan_task_group: Option<TaskGroup>,
 
+    /// Scheduled scan task group
+    scan_scheduled_tasks: Option<ScheduledTaskGroup>,
+
     /// Scan interval in milliseconds
     scan_interval_ms: u64,
 }
@@ -90,8 +99,51 @@ impl DefaultBrokerHeartbeatManager {
             broker_live_table: Arc::new(DashMap::with_capacity(256)),
             lifecycle_listeners: Vec::new(),
             scan_task_group: None,
+            scan_scheduled_tasks: None,
             scan_interval_ms,
         }
+    }
+
+    pub(crate) async fn shutdown_gracefully(&mut self) {
+        let _ = self.shutdown_gracefully_with_report().await;
+    }
+
+    pub(crate) async fn shutdown_gracefully_with_report(&mut self) -> ShutdownReport {
+        self.scan_scheduled_tasks.take();
+        if let Some(task_group) = self.scan_task_group.take() {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "DefaultBrokerHeartbeatManager shutdown report is unhealthy"
+                );
+            }
+            info!("DefaultBrokerHeartbeatManager background scan stopped");
+            report
+        } else {
+            ShutdownReport::new("rocketmq-controller.heartbeat", Duration::ZERO)
+        }
+    }
+
+    pub(crate) fn scan_task_count(&self) -> usize {
+        let root_count = self
+            .scan_task_group
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scan_scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn scan_schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scan_scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     /// Set the scan interval
@@ -259,39 +311,37 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
         let listeners = Arc::new(self.lifecycle_listeners.clone());
         let scan_interval_ms = self.scan_interval_ms;
         let task_group = TaskGroup::root("rocketmq-controller.heartbeat", runtime);
-        let shutdown_token = task_group.cancellation_token();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let mut config = ScheduledTaskConfig::fixed_delay(
+            "controller.heartbeat.scan-not-active-broker",
+            Duration::from_millis(scan_interval_ms),
+        );
+        config.initial_delay = Duration::from_millis(scan_interval_ms);
 
-        if let Err(error) = task_group.spawn_service("controller.heartbeat.scan-not-active-broker", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(scan_interval_ms));
-            // Skip the first tick (fires immediately)
-            interval.tick().await;
-
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => {
-                        return;
-                    }
-                    _ = interval.tick() => {
-                        Self::scan_not_active_broker(broker_live_table.clone(), listeners.clone()).await;
-                    }
-                }
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
+            let broker_live_table = broker_live_table.clone();
+            let listeners = listeners.clone();
+            async move {
+                Self::scan_not_active_broker(broker_live_table, listeners).await;
             }
         }) {
             warn!(?error, "failed to spawn DefaultBrokerHeartbeatManager scan task");
             return;
         }
 
+        self.scan_scheduled_tasks = Some(scheduled_tasks);
         self.scan_task_group = Some(task_group);
         info!("DefaultBrokerHeartbeatManager background scan started");
     }
 
     fn shutdown(&mut self) {
+        self.scan_scheduled_tasks.take();
         if let Some(task_group) = self.scan_task_group.take() {
             let report = task_group.shutdown_now();
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
-                    "DefaultBrokerHeartbeatManager shutdown report is unhealthy"
+                    "DefaultBrokerHeartbeatManager immediate shutdown report is unhealthy"
                 );
             }
             info!("DefaultBrokerHeartbeatManager background scan stopped");
@@ -448,5 +498,28 @@ mod tests {
         let config = ArcMut::new(ControllerConfig::test_config());
         let manager = DefaultBrokerHeartbeatManager::new(config.clone());
         assert_eq!(manager.scan_interval_ms, config.scan_not_active_broker_interval);
+    }
+
+    #[test]
+    fn start_without_tokio_runtime_does_not_leave_scan_task_group() {
+        let config = ArcMut::new(ControllerConfig::test_config());
+        let mut manager = DefaultBrokerHeartbeatManager::new(config);
+
+        manager.start();
+
+        assert!(manager.scan_task_group.is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_shutdown_clears_scan_task_group() {
+        let config = ArcMut::new(ControllerConfig::test_config());
+        let mut manager = DefaultBrokerHeartbeatManager::new(config).with_scan_interval_ms(1);
+
+        manager.start();
+        assert!(manager.scan_task_group.is_some());
+
+        manager.shutdown();
+
+        assert!(manager.scan_task_group.is_none());
     }
 }

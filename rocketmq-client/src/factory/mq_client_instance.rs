@@ -18,6 +18,7 @@ use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -59,6 +60,9 @@ use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use rocketmq_rust::WeakArcMut;
+use serde::Serialize;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -83,11 +87,13 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::runtime::spawn_delayed_client_action;
-use crate::runtime::spawn_detached_client_task;
+use crate::runtime::spawn_client_task;
+use crate::runtime::spawn_client_tracked_task;
+use crate::runtime::ClientTrackedTaskHandle;
 use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
+const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigRequestHeader {
     let mut request_header = GetTopicConfigRequestHeader {
@@ -101,61 +107,97 @@ fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigReques
     request_header
 }
 
-fn update_name_server_address_list_sync(api_impl: ArcMut<MQClientAPIImpl>, addr: String) {
-    futures::executor::block_on(async move {
-        api_impl.update_name_server_address_list(&addr).await;
-    });
-}
-
 async fn run_connection_net_event_listener(
     mut rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
     weak_instance: WeakArcMut<MQClientInstance>,
+    shutdown_token: CancellationToken,
 ) {
-    while let Ok(value) = rx.recv().await {
-        if let Some(instance_) = weak_instance.upgrade() {
-            match value {
-                ConnectionNetEvent::CONNECTED(remote_address) => {
-                    info!("ConnectionNetEvent CONNECTED");
-                    let remote_address = remote_address.to_string();
-                    instance_.on_channel_active(&remote_address).await;
-                }
-                ConnectionNetEvent::DISCONNECTED => {
-                    instance_.on_channel_close("");
-                }
-                ConnectionNetEvent::EXCEPTION => {
-                    instance_.on_channel_exception("");
-                }
-                ConnectionNetEvent::IDLE => {
-                    instance_.on_channel_idle("");
-                }
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {
+                break;
             }
+            event = rx.recv() => {
+                let Ok(value) = event else {
+                    warn!("ConnectionNetEvent recv error");
+                    break;
+                };
+
+                if let Some(instance_) = weak_instance.upgrade() {
+                    match value {
+                        ConnectionNetEvent::CONNECTED(remote_address) => {
+                            info!("ConnectionNetEvent CONNECTED");
+                            let remote_address = remote_address.to_string();
+                            instance_.on_channel_active(&remote_address).await;
+                        }
+                        ConnectionNetEvent::DISCONNECTED => {
+                            instance_.on_channel_close("");
+                        }
+                        ConnectionNetEvent::EXCEPTION => {
+                            instance_.on_channel_exception("");
+                        }
+                        ConnectionNetEvent::IDLE => {
+                            instance_.on_channel_idle("");
+                        }
+                    }
+                }
+            },
         }
     }
-    warn!("ConnectionNetEvent recv error");
 }
 
 fn spawn_connection_net_event_listener(
     rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
     weak_instance: WeakArcMut<MQClientInstance>,
-) {
-    if let Err(error) = spawn_detached_client_task(
+    shutdown_token: CancellationToken,
+) -> Option<ClientTrackedTaskHandle> {
+    match spawn_client_tracked_task(
         "rocketmq-client-connection-events",
-        run_connection_net_event_listener(rx, weak_instance),
+        run_connection_net_event_listener(rx, weak_instance, shutdown_token),
     ) {
-        error!(
-            "Failed to spawn MQClientInstance connection event listener task: {}",
-            error
-        );
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            error!(
+                "Failed to spawn MQClientInstance connection event listener task: {}",
+                error
+            );
+            None
+        }
     }
 }
 
-fn schedule_rebalance_wakeup(service: RebalanceService, delay: Duration) {
+fn schedule_rebalance_wakeup(
+    service: RebalanceService,
+    delay: Duration,
+    tracker: &TaskTracker,
+    shutdown_token: &CancellationToken,
+) {
     if delay.is_zero() {
         service.wakeup();
         return;
     }
 
-    spawn_delayed_client_action("rocketmq-client-rebalance-delay", delay, move || service.wakeup());
+    if shutdown_token.is_cancelled() {
+        return;
+    }
+
+    let shutdown_token = shutdown_token.clone();
+    let task = tracker.track_future(async move {
+        tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {},
+            _ = tokio::time::sleep(delay) => {
+                if !shutdown_token.is_cancelled() {
+                    service.wakeup();
+                }
+            },
+        }
+    });
+
+    if let Err(error) = spawn_client_task("rocketmq-client-rebalance-delay", task) {
+        error!("Failed to spawn delayed rebalance wakeup task: {}", error);
+    }
 }
 
 pub struct MQClientInstance {
@@ -197,6 +239,18 @@ pub struct MQClientInstance {
     /// HeartbeatV2: Set of brokers that support V2 protocol
     broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
     consumer_stats_manager: ConsumerStatsManager,
+    connection_event_shutdown: CancellationToken,
+    connection_event_task_handle: Option<ClientTrackedTaskHandle>,
+    rebalance_delay_tasks: TaskTracker,
+    rebalance_delay_shutdown: CancellationToken,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectionEventListenerLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub shutdown_elapsed_us: u128,
 }
 
 impl MQClientInstance {
@@ -249,6 +303,10 @@ impl MQClientInstance {
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             consumer_stats_manager: ConsumerStatsManager::new(),
+            connection_event_shutdown: CancellationToken::new(),
+            connection_event_task_handle: None,
+            rebalance_delay_tasks: TaskTracker::new(),
+            rebalance_delay_shutdown: CancellationToken::new(),
         });
 
         // Clone instance first to avoid borrow checker issues
@@ -266,16 +324,16 @@ impl MQClientInstance {
         ));
 
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
-            let api_impl = mq_client_api_impl.clone();
-            let addr = namesrv_addr.to_string();
-            update_name_server_address_list_sync(api_impl, addr);
+            mq_client_api_impl.update_name_server_address_list_sync(namesrv_addr);
         }
 
         instance.mq_client_api_impl = Some(mq_client_api_impl);
 
         // Use weak reference to avoid circular dependencies
         let weak_instance = ArcMut::downgrade(&instance);
-        spawn_connection_net_event_listener(rx, weak_instance);
+        let connection_event_shutdown = instance.connection_event_shutdown.clone();
+        instance.connection_event_task_handle =
+            spawn_connection_net_event_listener(rx, weak_instance, connection_event_shutdown);
         instance
     }
 
@@ -322,7 +380,12 @@ impl MQClientInstance {
     }
 
     pub fn re_balance_later(&self, delay_millis: Duration) {
-        schedule_rebalance_wakeup(self.rebalance_service.clone(), delay_millis);
+        schedule_rebalance_wakeup(
+            self.rebalance_service.clone(),
+            delay_millis,
+            &self.rebalance_delay_tasks,
+            &self.rebalance_delay_shutdown,
+        );
     }
 
     pub async fn start(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
@@ -342,7 +405,7 @@ impl MQClientInstance {
                 };
                 mq_client_api_impl.start().await;
                 // Start various schedule tasks
-                self.start_scheduled_task(this.clone());
+                self.start_scheduled_task(this.clone())?;
                 // Start pull service
                 let instance = this.clone();
                 if let Err(e) = self.pull_message_service.start(instance).await {
@@ -382,6 +445,20 @@ impl MQClientInstance {
                     "MQClientInstance shutdown called but state is {:?}, ignoring shutdown request",
                     self.service_state
                 );
+                if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() {
+                    if !mq_client_api_impl
+                        .shutdown_background_tasks(Duration::from_secs(1))
+                        .await
+                    {
+                        warn!(
+                            "MQClientInstance[{}] client API background tasks did not finish in time",
+                            self.client_id
+                        );
+                    }
+                    mq_client_api_impl.shutdown();
+                }
+                self.shutdown_connection_event_listener(Duration::from_secs(1)).await;
+                self.shutdown_rebalance_delay_tasks(Duration::from_secs(1)).await;
                 return;
             }
             ServiceState::Running => {
@@ -422,20 +499,48 @@ impl MQClientInstance {
         info!("MQClientInstance[{}] unregistering all producers", self.client_id);
         self.unregister_all_producers().await;
 
-        if self.mq_client_api_impl.is_some() {
+        if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_mut() {
             info!(
-                "MQClientInstance[{}] network client shutdown (deferred to Drop)",
+                "MQClientInstance[{}] shutting down client API background tasks and network client",
                 self.client_id
+            );
+            if !mq_client_api_impl
+                .shutdown_background_tasks(Duration::from_secs(1))
+                .await
+            {
+                warn!(
+                    "MQClientInstance[{}] client API background tasks did not finish in time",
+                    self.client_id
+                );
+            }
+            mq_client_api_impl.shutdown();
+        }
+
+        self.shutdown_connection_event_listener(Duration::from_secs(1)).await;
+        self.shutdown_rebalance_delay_tasks(Duration::from_secs(1)).await;
+
+        info!("MQClientInstance[{}] shutting down scheduled tasks", self.client_id);
+        let scheduled_report = self
+            .scheduled_task_manager
+            .shutdown_all(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+            .await;
+        if scheduled_report.is_healthy() {
+            info!(
+                "MQClientInstance[{}] scheduled tasks stopped: {:?}",
+                self.client_id, scheduled_report
+            );
+        } else {
+            warn!(
+                "MQClientInstance[{}] scheduled task shutdown unhealthy: {:?}",
+                self.client_id, scheduled_report
             );
         }
 
-        info!("MQClientInstance[{}] canceling scheduled tasks", self.client_id);
-        self.scheduled_task_manager.cancel_all();
         info!(
-            "MQClientInstance[{}] scheduled tasks canceled, total canceled: {}",
-            self.client_id,
-            self.scheduled_task_manager.task_count()
+            "MQClientInstance[{}] shutting down consumer stats manager",
+            self.client_id
         );
+        self.consumer_stats_manager.shutdown_async().await;
 
         info!("MQClientInstance[{}] clearing all registration tables", self.client_id);
         self.producer_table.clear();
@@ -450,6 +555,43 @@ impl MQClientInstance {
         self.service_state = ServiceState::ShutdownAlready;
 
         info!("MQClientInstance[{}] shutdown completed successfully", self.client_id);
+    }
+
+    async fn shutdown_connection_event_listener(&mut self, timeout: Duration) {
+        self.connection_event_shutdown.cancel();
+        let Some(handle) = self.connection_event_task_handle.take() else {
+            return;
+        };
+
+        let report = handle.shutdown(timeout).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "MQClientInstance[{}] connection event listener shutdown report is unhealthy",
+                self.client_id
+            );
+        }
+    }
+
+    fn connection_event_task_count(&self) -> usize {
+        self.connection_event_task_handle
+            .as_ref()
+            .map(ClientTrackedTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
+    async fn shutdown_rebalance_delay_tasks(&self, timeout: Duration) {
+        self.rebalance_delay_shutdown.cancel();
+        self.rebalance_delay_tasks.close();
+        if tokio::time::timeout(timeout, self.rebalance_delay_tasks.wait())
+            .await
+            .is_err()
+        {
+            warn!(
+                "MQClientInstance[{}] rebalance delay tasks did not finish in time",
+                self.client_id
+            );
+        }
     }
 
     /// Unregister all producers from broker
@@ -500,21 +642,23 @@ impl MQClientInstance {
         true
     }
 
-    fn start_scheduled_task(&mut self, this: ArcMut<Self>) {
+    fn start_scheduled_task(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
         info!("Starting scheduled tasks with ScheduledTaskManager");
 
         if self.client_config.namesrv_addr.is_none() {
             if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref().cloned() {
-                self.scheduled_task_manager.add_fixed_rate_task_async(
-                    Duration::from_secs(10),
-                    Duration::from_secs(120),
-                    async move |_token| {
+                self.scheduled_task_manager
+                    .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), async move |_token| {
                         let mut api = mq_client_api_impl.clone();
                         info!("ScheduledTask: fetchNameServerAddr");
                         api.fetch_name_server_addr().await;
                         Ok(())
-                    },
-                );
+                    })
+                    .map_err(|error| {
+                        rocketmq_error::RocketMQError::Internal(format!(
+                            "failed to start fetchNameServerAddr scheduled task: {error}"
+                        ))
+                    })?;
             } else {
                 warn!(
                     "ScheduledTask: fetchNameServerAddr skipped because mq_client_api_impl is None. [{}]",
@@ -525,48 +669,67 @@ impl MQClientInstance {
 
         let client_instance = this.clone();
         let poll_name_server_interval = self.client_config.poll_name_server_interval;
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_millis(10),
-            Duration::from_millis(poll_name_server_interval as u64),
-            async move |_token| {
-                let mut instance = client_instance.clone();
-                info!("ScheduledTask: update_topic_route_info_from_name_server");
-                instance.update_topic_route_info_from_name_server().await;
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(
+                Duration::from_millis(10),
+                Duration::from_millis(poll_name_server_interval as u64),
+                async move |_token| {
+                    let mut instance = client_instance.clone();
+                    info!("ScheduledTask: update_topic_route_info_from_name_server");
+                    instance.update_topic_route_info_from_name_server().await;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to start update_topic_route_info_from_name_server scheduled task: {error}"
+                ))
+            })?;
 
         let client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(1),
-            Duration::from_millis(heartbeat_broker_interval as u64),
-            async move |_token| {
-                let mut instance = client_instance.clone();
-                info!("ScheduledTask: clean_offline_broker and send_heartbeat");
-                instance.clean_offline_broker().await;
-                instance.send_heartbeat_to_all_broker_with_lock().await;
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(
+                Duration::from_secs(1),
+                Duration::from_millis(heartbeat_broker_interval as u64),
+                async move |_token| {
+                    let mut instance = client_instance.clone();
+                    info!("ScheduledTask: clean_offline_broker and send_heartbeat");
+                    instance.clean_offline_broker().await;
+                    instance.send_heartbeat_to_all_broker_with_lock().await;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to start clean_offline_broker_and_send_heartbeat scheduled task: {error}"
+                ))
+            })?;
 
         let client_instance = this;
         let persist_consumer_offset_interval = self.client_config.persist_consumer_offset_interval as u64;
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(10),
-            Duration::from_millis(persist_consumer_offset_interval),
-            async move |_token| {
-                let mut instance = client_instance.clone();
-                info!("ScheduledTask: persistAllConsumerOffset");
-                instance.persist_all_consumer_offset().await;
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(
+                Duration::from_secs(10),
+                Duration::from_millis(persist_consumer_offset_interval),
+                async move |_token| {
+                    let mut instance = client_instance.clone();
+                    info!("ScheduledTask: persistAllConsumerOffset");
+                    instance.persist_all_consumer_offset().await;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to start persistAllConsumerOffset scheduled task: {error}"
+                ))
+            })?;
 
         info!(
             "All scheduled tasks started, total tasks: {}",
             self.scheduled_task_manager.task_count()
         );
+        Ok(())
     }
 
     pub async fn update_topic_route_info_from_name_server(&mut self) {
@@ -1673,7 +1836,12 @@ impl MQClientInstance {
     }
 
     pub fn rebalance_later(&mut self, delay_millis: u64) {
-        schedule_rebalance_wakeup(self.rebalance_service.clone(), Duration::from_millis(delay_millis));
+        schedule_rebalance_wakeup(
+            self.rebalance_service.clone(),
+            Duration::from_millis(delay_millis),
+            &self.rebalance_delay_tasks,
+            &self.rebalance_delay_shutdown,
+        );
     }
 
     pub async fn find_broker_address_in_subscribe(
@@ -2076,6 +2244,30 @@ pub fn topic_route_data2_topic_subscribe_info(topic: &str, route: &TopicRouteDat
     topic_route_data2topic_subscribe_info(topic, route)
 }
 
+#[doc(hidden)]
+pub async fn run_connection_event_listener_lifecycle_probe() -> ConnectionEventListenerLifecycleProbe {
+    let client_config = ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    };
+    let mut instance = MQClientInstance::new_arc(client_config, 0, "connection-event-listener-probe", None);
+    let task_count_before_shutdown = instance.connection_event_task_count();
+
+    let shutdown_started = Instant::now();
+    instance
+        .shutdown_connection_event_listener(Duration::from_secs(1))
+        .await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = instance.connection_event_task_count();
+
+    ConnectionEventListenerLifecycleProbe {
+        healthy: task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        shutdown_elapsed_us,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
@@ -2164,6 +2356,64 @@ mod tests {
         instance.rebalance_later(1);
 
         std::thread::sleep(Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_scheduled_tasks_to_exit() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "scheduled-shutdown-test", None);
+        instance.service_state = ServiceState::Running;
+        assert!(instance.connection_event_task_handle.is_some());
+        instance
+            .scheduled_task_manager
+            .add_fixed_delay_task(Duration::from_secs(60), Duration::from_secs(60), |_token| async {
+                Ok(())
+            })
+            .expect("scheduled shutdown test task should start");
+
+        assert_eq!(instance.scheduled_task_manager.task_count(), 1);
+
+        instance.shutdown().await;
+
+        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
+        assert_eq!(instance.scheduled_task_manager.task_count(), 0);
+        assert!(instance.connection_event_task_handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_before_start_stops_connection_event_listener() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "pre-start-shutdown-test", None);
+
+        assert_eq!(instance.service_state, ServiceState::CreateJust);
+        assert!(instance.connection_event_task_handle.is_some());
+        instance.re_balance_later(Duration::from_secs(60));
+        instance.rebalance_later(60_000);
+        tokio::task::yield_now().await;
+
+        instance.shutdown().await;
+
+        assert_eq!(instance.service_state, ServiceState::CreateJust);
+        assert!(instance.connection_event_task_handle.is_none());
+        assert!(instance.rebalance_delay_shutdown.is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), instance.rebalance_delay_tasks.wait())
+            .await
+            .expect("shutdown should cancel delayed rebalance tasks");
+    }
+
+    #[tokio::test]
+    async fn connection_event_listener_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_connection_event_listener_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
     }
 
     #[tokio::test]

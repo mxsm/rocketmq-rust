@@ -207,7 +207,10 @@ impl HAConnection for DefaultHAConnection {
         self.change_current_state(HAConnectionState::Transfer).await;
 
         // Start flow monitor
-        self.flow_monitor.start().await;
+        self.flow_monitor
+            .start()
+            .await
+            .map_err(|error| HAConnectionError::Service(format!("failed to start flow monitor: {error}")))?;
 
         let tcp_stream = self
             .socket_stream

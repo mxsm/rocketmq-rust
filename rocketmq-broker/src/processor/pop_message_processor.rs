@@ -85,6 +85,7 @@ use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 
 const BORN_TIME: &str = "bornTime";
+const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct PopMessageProcessor<MS: MessageStore> {
     ck_message_number: AtomicI64,
@@ -1450,7 +1451,7 @@ where
         {
             warn!(?error, "failed to gracefully shutdown PopBufferMergeService");
         }
-        self.queue_lock_manager.shutdown();
+        self.queue_lock_manager.shutdown().await;
     }
 }
 
@@ -1693,11 +1694,12 @@ impl QueueLockManager {
         *lifecycle = Some(task_group);
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.running.store(false, Ordering::Release);
         self.shutdown.notify_waiters();
-        if let Some(task_group) = self.task_group.lock().take() {
-            let report = task_group.shutdown_now();
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(QUEUE_LOCK_SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
@@ -1914,7 +1916,7 @@ mod tests {
         manager.start();
         assert!(manager.is_running());
 
-        manager.shutdown();
+        manager.shutdown().await;
         assert!(!manager.is_running());
     }
 

@@ -29,6 +29,10 @@ use parking_lot::Mutex;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use tokio::sync::Notify;
 use tracing::info;
 use tracing::warn;
@@ -103,6 +107,7 @@ pub struct StoreStatsService {
     stopped: AtomicBool,
     shutdown_notify: Notify,
     worker_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    scheduled_tasks: Mutex<Option<ScheduledTaskGroup>>,
     broker_identity: Option<BrokerIdentity>,
 }
 
@@ -134,6 +139,7 @@ impl StoreStatsService {
             stopped: AtomicBool::new(true),
             shutdown_notify: Notify::new(),
             worker_group: Mutex::new(None),
+            scheduled_tasks: Mutex::new(None),
             broker_identity,
         }
     }
@@ -155,57 +161,89 @@ impl StoreStatsService {
                 return;
             }
         };
-        let task_name = service_name.clone();
-        if let Err(error) = worker_group.spawn_service(task_name, async move {
-            info!("{} service started", service_name);
-            let mut interval = tokio::time::interval(Duration::from_millis(FREQUENCY_OF_SAMPLING));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            loop {
-                tokio::select! {
-                    _ = service.shutdown_notify.notified() => break,
-                    _ = interval.tick() => {
-                        if service.stopped.load(Ordering::Acquire) {
-                            break;
-                        }
-                        service.sampling();
-                        service.print_tps();
+        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay(service_name.clone(), Duration::from_millis(FREQUENCY_OF_SAMPLING)),
+            move || {
+                let service = Arc::clone(&service);
+                async move {
+                    if service.stopped.load(Ordering::Acquire) {
+                        return;
                     }
+                    service.sampling();
+                    service.print_tps();
                 }
-            }
-
-            info!("{} service end", service.get_service_name());
-        }) {
+            },
+        ) {
             self.stopped.store(true, Ordering::Release);
             warn!("failed to spawn StoreStatsService task: {error}");
             return;
         }
+        info!("{} service started", service_name);
+        *self.scheduled_tasks.lock() = Some(scheduled_tasks);
         *worker_group_guard = Some(worker_group);
     }
 
     pub fn shutdown(&self) {
         self.stopped.store(true, Ordering::Release);
         self.shutdown_notify.notify_waiters();
+        self.scheduled_tasks.lock().take();
         if let Some(worker_group) = self.worker_group.lock().take() {
             worker_group.cancel();
         }
     }
 
     pub async fn shutdown_gracefully(&self) {
+        let _ = self.shutdown_gracefully_with_report().await;
+    }
+
+    pub async fn shutdown_gracefully_with_report(&self) -> Option<ShutdownReport> {
         self.stopped.store(true, Ordering::Release);
         self.shutdown_notify.notify_waiters();
+        self.scheduled_tasks.lock().take();
         let worker_group = self.worker_group.lock().take();
         if let Some(worker_group) = worker_group {
             let report = worker_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("StoreStatsService", report) {
+            if let Err(error) = crate::runtime::shutdown_report_result("StoreStatsService", report.clone()) {
                 warn!("StoreStatsService task failed during shutdown: {error}");
+                return None;
             }
+            return Some(report);
         }
+        None
     }
 
     #[cfg(test)]
     pub(crate) fn has_worker_handle(&self) -> bool {
         self.worker_group.lock().is_some()
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        let root_count = self
+            .worker_group
+            .lock()
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn put_snapshot_count(&self) -> usize {
+        self.put_times_list.lock().len()
     }
 
     #[inline]
@@ -630,6 +668,7 @@ impl Drop for StoreStatsService {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
         self.shutdown_notify.notify_waiters();
+        self.scheduled_tasks.get_mut().take();
         if let Some(worker_group) = self.worker_group.get_mut().take() {
             worker_group.cancel();
         }
@@ -920,12 +959,18 @@ mod call_snapshot_tests {
         stats.start();
         stats.start();
         assert!(stats.has_worker_handle());
+        assert_eq!(stats.task_count(), 1);
         assert!(!stats.stopped.load(Ordering::Acquire));
 
         task::yield_now().await;
-        stats.shutdown_gracefully().await;
+        let report = stats
+            .shutdown_gracefully_with_report()
+            .await
+            .expect("shutdown should return a report");
+        assert!(report.is_healthy(), "{}", report.to_json());
         stats.shutdown_gracefully().await;
         assert!(!stats.has_worker_handle());
+        assert_eq!(stats.task_count(), 0);
         assert!(stats.stopped.load(Ordering::Acquire));
 
         stats.start();

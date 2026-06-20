@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use dashmap::DashMap;
-use tokio::task;
-use tokio::time::interval;
+use parking_lot::Mutex;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::TaskGroup;
 use tokio::time::Duration;
+use tracing::warn;
 
 use crate::common::stats::moment_stats_item::MomentStatsItem;
 use crate::TimeUtils::current_millis;
@@ -28,17 +31,17 @@ use crate::UtilAll::compute_next_minutes_time_millis;
 pub struct MomentStatsItemSet {
     stats_item_table: Arc<DashMap<String, MomentStatsItem>>,
     stats_name: String,
-    scheduled_task: Arc<Mutex<Option<task::JoinHandle<()>>>>,
+    task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
 
 impl MomentStatsItemSet {
     pub fn new(stats_name: String) -> Self {
         let stats_item_table = Arc::new(DashMap::new());
-        let scheduled_task = Arc::new(Mutex::new(None));
+        let task_group = Arc::new(Mutex::new(None));
         let set = MomentStatsItemSet {
             stats_item_table,
             stats_name,
-            scheduled_task,
+            task_group,
         };
         set.init();
         set
@@ -53,19 +56,44 @@ impl MomentStatsItemSet {
     }
 
     pub fn init(&self) {
+        if self.task_group.lock().is_some() {
+            return;
+        }
+
         let stats_item_table = Arc::clone(&self.stats_item_table);
         let initial_delay =
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
-        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    "[{}] failed to initialize MomentStatsItemSet outside Tokio runtime: {}",
+                    self.stats_name, error
+                );
+                return;
+            }
+        };
+        let task_group = TaskGroup::root(format!("rocketmq-common.moment-stats-set.{}", self.stats_name), runtime);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let mut config =
+            ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats-set.print", Duration::from_secs(300));
+        config.initial_delay = initial_delay;
 
-        task::spawn(async move {
-            tokio::time::sleep(initial_delay).await;
-            loop {
-                interval.tick().await;
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+            let stats_item_table = stats_item_table.clone();
+            async move {
                 MomentStatsItemSet::print_at_minutes(&stats_item_table);
             }
-        });
+        }) {
+            warn!(
+                "[{}] failed to spawn MomentStatsItemSet task: {}",
+                self.stats_name, error
+            );
+            return;
+        }
+
+        *self.task_group.lock() = Some(task_group);
     }
 
     fn print_at_minutes(stats_item_table: &DashMap<String, MomentStatsItem>) {
@@ -113,6 +141,29 @@ impl MomentStatsItemSet {
         let new_item = MomentStatsItem::new(self.stats_name.clone(), stats_key.clone());
         self.stats_item_table.insert(stats_key, new_item.clone());
         new_item
+    }
+
+    pub async fn shutdown(&self) {
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "[{}] MomentStatsItemSet shutdown report is unhealthy",
+                    self.stats_name
+                );
+            }
+        }
+
+        let stats_items = self
+            .stats_item_table
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        for stats_item in stats_items {
+            stats_item.shutdown().await;
+        }
     }
 }
 

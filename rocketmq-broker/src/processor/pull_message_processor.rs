@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -43,6 +44,8 @@ use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
@@ -90,6 +93,7 @@ pub struct PullMessageProcessor<MS: MessageStore> {
     /// Future optimization: consider per-channel locks for better parallelism.
     write_message_lock: Arc<Mutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    wakeup_task_group: Option<TaskGroup>,
 }
 
 impl<MS> RequestProcessor for PullMessageProcessor<MS>
@@ -153,7 +157,12 @@ where
             pull_message_result_handler,
             write_message_lock: Arc::new(Default::default()),
             broker_runtime_inner,
+            wakeup_task_group: None,
         }
+    }
+
+    pub(crate) fn set_wakeup_task_group(&mut self, task_group: TaskGroup) {
+        self.wakeup_task_group = Some(task_group);
     }
 
     /// Creates an error response with the given code and remark.
@@ -1009,14 +1018,21 @@ where
                 drop(guard);
             }
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                drop(handle.spawn(task));
-            }
-            Err(error) => {
-                warn!("Cannot execute wakeup pull request without Tokio runtime: {}", error);
-            }
-        }
+        spawn_wakeup_pull_task(self.wakeup_task_group.as_ref(), task);
+    }
+}
+
+fn spawn_wakeup_pull_task<F>(task_group: Option<&TaskGroup>, task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let Some(task_group) = task_group else {
+        warn!("Cannot execute wakeup pull request without broker request processor task group");
+        return;
+    };
+
+    if let Err(error) = task_group.spawn("broker.pull-message.wakeup", TaskKind::Worker, task) {
+        warn!(%error, "failed to spawn tracked wakeup pull request task");
     }
 }
 pub(crate) fn is_broadcast(proxy_pull_broadcast: bool, consumer_group_info: Option<&ConsumerGroupInfo>) -> bool {
@@ -1040,7 +1056,10 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use rocketmq_common::common::broker::broker_config::BrokerConfig;
     use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -1086,6 +1105,46 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await);
         runtime
+    }
+
+    #[tokio::test]
+    async fn wakeup_pull_task_is_tracked_by_request_processor_group() {
+        struct DropFlag(Arc<AtomicBool>);
+
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let task_group = TaskGroup::root(
+            "broker.pull-wakeup-test",
+            rocketmq_runtime::RuntimeHandle::new(tokio::runtime::Handle::current()),
+        );
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started_in_task = started.clone();
+        let dropped_in_task = dropped.clone();
+
+        spawn_wakeup_pull_task(Some(&task_group), async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            started_in_task.store(true, Ordering::Release);
+            std::future::pending::<()>().await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("tracked wakeup task should start");
+
+        let report = task_group.shutdown(Duration::from_millis(20)).await;
+
+        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(report.leaked, 0, "{}", report.to_json());
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     fn new_processor<MS: MessageStore>(inner: ArcMut<BrokerRuntimeInner<MS>>) -> PullMessageProcessor<MS> {

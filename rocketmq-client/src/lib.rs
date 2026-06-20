@@ -107,8 +107,36 @@ pub use crate::common::admin_tool_result::AdminToolResult;
 pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_concurrently_service::run_concurrent_clean_expire_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_concurrently_service::ConcurrentCleanExpireLifecycleProbe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_orderly_service::run_orderly_lock_periodic_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_orderly_service::OrderlyLockPeriodicLifecycleProbe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::run_pop_orderly_lock_refresh_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::PopOrderlyLockRefreshLifecycleProbe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::run_lite_pull_task_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullTaskLifecycleProbe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::pull_message_service::run_pull_message_service_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::pull_message_service::PullMessageServiceLifecycleProbe;
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::re_balance::rebalance_service::run_rebalance_service_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceServiceLifecycleProbe;
 pub use crate::consumer::notify_result::NotifyResult;
+#[doc(hidden)]
+pub use crate::consumer::store::local_file_offset_store::run_local_file_offset_store_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::store::local_file_offset_store::LocalFileOffsetStoreLifecycleProbe;
 pub use crate::consumer::AbstractAllocateMessageQueueStrategy;
 pub use crate::consumer::AckCallback;
 pub use crate::consumer::AckCallbackFn;
@@ -162,12 +190,40 @@ pub use crate::exception::MQBrokerException;
 pub use crate::exception::MQClientException;
 pub use crate::exception::OffsetNotFoundException;
 pub use crate::exception::RequestTimeoutException;
+#[doc(hidden)]
+pub use crate::factory::mq_client_instance::run_connection_event_listener_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::factory::mq_client_instance::ConnectionEventListenerLifecycleProbe;
 pub use crate::hook::consume_message_context::ConsumeMessageContext;
 pub use crate::hook::consume_message_hook::ConsumeMessageHook;
 pub use crate::hook::consume_message_hook::ConsumeMessageHookArc;
+#[doc(hidden)]
+pub use crate::implementation::mq_client_api_factory::run_namesrv_refresh_lifecycle_probe;
 pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
+#[doc(hidden)]
+pub use crate::implementation::mq_client_api_factory::NamesrvRefreshLifecycleProbe;
+#[doc(hidden)]
+pub use crate::runtime::client_runtime_fallback_snapshot;
+#[doc(hidden)]
+pub use crate::runtime::reset_client_runtime_fallback_for_diagnostics;
+#[doc(hidden)]
+pub use crate::runtime::spawn_client_runtime_probe_task;
+#[doc(hidden)]
+pub use crate::runtime::ClientRuntimeTaskHandle;
+#[doc(hidden)]
+pub use crate::runtime::ClientSharedFallbackLifecycleState;
+#[doc(hidden)]
+pub use crate::runtime::ClientSharedFallbackSnapshot;
+#[doc(hidden)]
+pub use crate::stat::consumer_stats_manager::run_consumer_stats_manager_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::stat::consumer_stats_manager::ConsumerStatsManagerLifecycleProbe;
 pub type MQClientAPIExt = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 pub type MqClientAdminImpl = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+#[doc(hidden)]
+pub use crate::latency::latency_fault_tolerance_impl::run_latency_fault_detector_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::latency::latency_fault_tolerance_impl::LatencyFaultDetectorLifecycleProbe;
 pub use crate::latency::BrokerFilter;
 pub use crate::latency::MQFaultStrategy;
 pub use crate::latency::Resolver;
@@ -202,6 +258,14 @@ pub use crate::legacy::SendMessageOpenTracingHookImpl;
 #[allow(deprecated)]
 pub use crate::legacy::TransactionCheckListener;
 pub use crate::lock::ReadWriteCASLock;
+#[doc(hidden)]
+pub use crate::producer::produce_accumulator::run_produce_accumulator_guard_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::producer::produce_accumulator::ProduceAccumulatorGuardLifecycleProbe;
+#[doc(hidden)]
+pub use crate::producer::request_future_holder::run_request_future_holder_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::producer::request_future_holder::RequestFutureHolderLifecycleProbe;
 pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;
@@ -219,7 +283,11 @@ pub use crate::producer::TransactionListener;
 pub use crate::producer::TransactionMQProducer;
 pub use crate::producer::TransactionMQProducerBuilder;
 pub use crate::producer::TransactionSendResult;
+#[doc(hidden)]
+pub use crate::trace::async_trace_dispatcher::run_trace_worker_lifecycle_probe;
 pub use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
+#[doc(hidden)]
+pub use crate::trace::async_trace_dispatcher::TraceWorkerLifecycleProbe;
 pub use crate::trace::trace_data_encoder::TraceDataEncoder;
 pub use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 pub use crate::trace::trace_dispatcher::TraceDispatcher;

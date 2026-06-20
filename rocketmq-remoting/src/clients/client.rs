@@ -14,6 +14,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_common::common::tls_config::TlsConfig;
 use rocketmq_error::RocketMQResult;
@@ -78,6 +79,18 @@ struct ClientTaskLifecycle {
     task_group: TaskGroup,
 }
 
+fn new_client_connection_task_group(addr: &str) -> RocketMQResult<TaskGroup> {
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        remote_error(format!(
+            "failed to create remoting client connection task group outside Tokio runtime: {error}"
+        ))
+    })?;
+    Ok(TaskGroup::root(
+        format!("rocketmq-remoting.client.connection[{addr}]"),
+        RuntimeHandle::new(runtime),
+    ))
+}
+
 impl<PR> Drop for Client<PR> {
     fn drop(&mut self) {
         if Arc::strong_count(&self.task_lifecycle) != 1 {
@@ -85,13 +98,7 @@ impl<PR> Drop for Client<PR> {
         }
 
         let _ = self.notify_shutdown.send(());
-        let report = self.task_lifecycle.task_group.shutdown_now();
-        if !report.is_healthy() {
-            tracing::warn!(
-                report = %report.to_json(),
-                "Remoting client connection task shutdown report is unhealthy"
-            );
-        }
+        self.task_lifecycle.task_group.cancel();
     }
 }
 
@@ -129,7 +136,7 @@ where
         } else {
             Connection::new(stream)
         };
-        let channel_inner = ArcMut::new(ChannelInner::new(connection, cmd_handler.response_table.clone()));
+        let channel_inner = ArcMut::new(ChannelInner::try_new(connection, cmd_handler.response_table.clone())?);
         let channel = Channel::new(channel_inner, local_addr, remote_address);
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
@@ -145,7 +152,7 @@ where
         if let Err(error) = task_group.spawn_service("remoting.client.connection.recv", async move {
             let _ = client_.run_recv().await;
         }) {
-            let _ = task_group.shutdown_now();
+            let _ = task_group.shutdown(Duration::from_secs(1)).await;
             return Err(remote_error(format!(
                 "failed to spawn remoting client receive task: {error}"
             )));
@@ -154,7 +161,7 @@ where
         if let Err(error) = task_group.spawn_service("remoting.client.connection.send", async move {
             client_.run_send(rx).await;
         }) {
-            let _ = task_group.shutdown_now();
+            let _ = task_group.shutdown(Duration::from_secs(1)).await;
             return Err(remote_error(format!(
                 "failed to spawn remoting client send task: {error}"
             )));
@@ -247,10 +254,7 @@ where
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
-        let task_group = TaskGroup::root(
-            format!("rocketmq-remoting.client.connection[{addr}]"),
-            RuntimeHandle::new(tokio::runtime::Handle::current()),
-        );
+        let task_group = new_client_connection_task_group(&addr)?;
         let task_lifecycle = Arc::new(ClientTaskLifecycle {
             task_group: task_group.clone(),
         });
@@ -502,6 +506,16 @@ mod lifecycle_tests {
     use super::*;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 
+    #[test]
+    fn connection_task_group_without_tokio_runtime_returns_error() {
+        let error = new_client_connection_task_group("127.0.0.1:10911")
+            .expect_err("client connection task group should require an ambient Tokio runtime");
+
+        assert!(error
+            .to_string()
+            .contains("failed to create remoting client connection task group outside Tokio runtime"));
+    }
+
     #[tokio::test]
     async fn drop_last_client_closes_connection_task_group() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
@@ -526,7 +540,7 @@ mod lifecycle_tests {
 
         drop(client);
 
-        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert!(task_group.cancellation_token().is_cancelled());
         server.abort();
     }
 }

@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use crate::blocking::BlockingPoolPolicy;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 
@@ -24,6 +25,7 @@ pub struct RuntimeConfig {
     pub thread_name: String,
     pub thread_keep_alive: Duration,
     pub shutdown_timeout: Duration,
+    pub blocking_pool_policy: BlockingPoolPolicy,
     pub enable_io: bool,
     pub enable_time: bool,
 }
@@ -54,6 +56,7 @@ impl RuntimeConfig {
         if self.thread_name.trim().is_empty() {
             return Err(RuntimeError::InvalidConfig("thread_name must not be empty".to_string()));
         }
+        self.blocking_pool_policy.validate()?;
         Ok(())
     }
 }
@@ -68,6 +71,10 @@ impl Default for RuntimeConfig {
             thread_name: "rocketmq-runtime".to_string(),
             thread_keep_alive: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
+            blocking_pool_policy: BlockingPoolPolicy {
+                max_concurrency: parallelism * 4,
+                ..BlockingPoolPolicy::default()
+            },
             enable_io: true,
             enable_time: true,
         }

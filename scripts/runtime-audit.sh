@@ -9,6 +9,27 @@ BASELINE_ROOT="$ROOT/$BASELINE"
 
 mkdir -p "$AUDIT_ROOT" "$BASELINE_ROOT"
 
+RG_BIN="$(command -v rg 2>/dev/null || true)"
+if [[ -n "$RG_BIN" && -x "$RG_BIN" ]]; then
+  SEARCH_BACKEND="rg"
+else
+  SEARCH_BACKEND="grep"
+fi
+
+search_rs() {
+  local pattern="$1"
+  local root="${2:-$ROOT}"
+
+  if [[ "$SEARCH_BACKEND" == "rg" ]]; then
+    "$RG_BIN" -n --glob "*.rs" --glob "!target/**" "$pattern" "$root"
+  else
+    find "$root" \
+      \( -path '*/target/*' -o -path '*/.git/*' \) -prune -o \
+      -type f -name '*.rs' -print0 \
+      | xargs -0 -r grep -nE -- "$pattern"
+  fi
+}
+
 scan() {
   local name="$1"
   local pattern="$2"
@@ -21,9 +42,9 @@ scan() {
     echo
     echo "| File | Line | Code |"
     echo "|---|---:|---|"
-    rg -n --glob "*.rs" --glob "!target/**" "$pattern" "$ROOT" \
+    (search_rs "$pattern" "$ROOT" || true) \
       | sed "s#^$ROOT/##" \
-      | awk -F: '{ code=$0; sub($1 ":" $2 ":", "", code); gsub(/\|/, "\\\\|", code); printf("| `%s` | %s | `%s` |\n", $1, $2, code) }' || true
+      | awk -F: '{ code=$0; sub($1 ":" $2 ":", "", code); trimmed=code; sub(/^[[:space:]]+/, "", trimmed); if (trimmed ~ /^(\/\/|\/\*|\*|\*\/)/) next; gsub(/\|/, "\\\\|", code); printf("| `%s` | %s | `%s` |\n", $1, $2, code) }' || true
   } > "$file"
 }
 
@@ -46,13 +67,15 @@ cat > "$AUDIT_ROOT/task-classification.md" <<'MARKDOWN'
 | dedicated loop | dedicated thread + CancellationToken | runtime-creation-sites.md, shutdown-sites.md |
 | detached task | DetachedTaskPolicy or eliminate | runtime-spawn-sites.md |
 
+Comment-only Rust lines are omitted so documentation examples do not count as runtime sites.
+
 Manual review is still required before migrating each site.
 MARKDOWN
 
 count_pattern() {
   local crate="$1"
   local pattern="$2"
-  rg -n --glob "*.rs" --glob "!target/**" "$pattern" "$ROOT/$crate" 2>/dev/null | wc -l | tr -d ' '
+  (search_rs "$pattern" "$ROOT/$crate" 2>/dev/null || true) | wc -l | tr -d ' '
 }
 
 write_json() {

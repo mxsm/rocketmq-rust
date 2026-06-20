@@ -47,10 +47,10 @@ impl LocalRequestHarness {
         debug_assert_eq!(local_address, peer_remote_address);
         debug_assert_eq!(remote_address, peer_local_address);
 
-        let channel_inner = ArcMut::new(ChannelInner::new(
+        let channel_inner = ArcMut::new(ChannelInner::try_new(
             Connection::new(server_stream),
             ArcMut::new(HashMap::<i32, ResponseFuture>::new()),
-        ));
+        )?);
         let channel = Channel::new(channel_inner, local_address, remote_address);
         let context = ArcMut::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 

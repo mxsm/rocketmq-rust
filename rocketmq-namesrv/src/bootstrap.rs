@@ -24,6 +24,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
@@ -42,11 +43,15 @@ use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use tokio::sync::broadcast;
+use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -152,6 +157,31 @@ pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NameServerShutdownReport {
+    pub elapsed_ms: u64,
+    pub scheduled: Option<ShutdownReport>,
+    pub route_unregistration: Option<ShutdownReport>,
+    pub server: Option<ShutdownReport>,
+    pub remoting_server: Option<ShutdownReport>,
+    pub root: Option<ShutdownReport>,
+}
+
+impl NameServerShutdownReport {
+    #[doc(hidden)]
+    pub fn is_healthy(&self) -> bool {
+        self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self
+                .route_unregistration
+                .as_ref()
+                .is_none_or(ShutdownReport::is_healthy)
+            && self.server.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.remoting_server.as_ref().is_none_or(ShutdownReport::is_healthy)
+            && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
+    }
+}
+
 /// Builder for creating NameServerBootstrap with custom configuration
 pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
@@ -165,12 +195,13 @@ pub struct Builder {
 /// Coordinates initialization, startup, and graceful shutdown of all components.
 struct NameServerRuntime {
     inner: ArcMut<NameServerRuntimeInner>,
-    scheduled_task_manager: ScheduledTaskManager,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
     shutdown_tx: Option<broadcast::Sender<()>>,
     shutdown_rx: Option<broadcast::Receiver<()>>,
     server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
     /// Server task group for graceful shutdown
     server_task_group: Option<TaskGroup>,
+    server_report_rx: Option<oneshot::Receiver<Option<ShutdownReport>>>,
     /// Runtime state machine for lifecycle management
     state: Arc<AtomicU8>,
 }
@@ -197,7 +228,16 @@ impl NameServerBootstrap {
     /// This keeps the default `boot()` behavior unchanged while giving tests and
     /// embedding callers a deterministic shutdown path.
     #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown")]
-    pub async fn boot_with_shutdown<F>(mut self, shutdown_signal: F) -> RocketMQResult<()>
+    pub async fn boot_with_shutdown<F>(self, shutdown_signal: F) -> RocketMQResult<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.boot_with_shutdown_report(shutdown_signal).await.map(|_| ())
+    }
+
+    #[doc(hidden)]
+    #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown_report")]
+    pub async fn boot_with_shutdown_report<F>(mut self, shutdown_signal: F) -> RocketMQResult<NameServerShutdownReport>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -220,15 +260,15 @@ impl NameServerBootstrap {
                 relay_shutdown_signal(shutdown_tx, shutdown_signal),
             )
             .map_err(|error| RocketMQError::Internal(format!("failed to spawn shutdown relay: {error}")))?;
-        let start_result = self.name_server_runtime.start().await;
-        let report = relay_group.shutdown_now();
+        let start_result = self.name_server_runtime.start_with_shutdown_report().await;
+        let report = relay_group.shutdown(Duration::from_secs(5)).await;
         if let Err(error) = report.assert_no_task_leak() {
             warn!("NameServer shutdown relay task group stopped with report: {error}");
         }
-        start_result?;
+        let shutdown_report = start_result?;
 
         info!("NameServer shutdown completed");
-        Ok(())
+        Ok(shutdown_report)
     }
 }
 
@@ -329,7 +369,7 @@ impl NameServerRuntime {
         self.initialize_rpc_hooks();
 
         info!("Phase 4/4: Starting scheduled tasks...");
-        self.start_schedule_service();
+        self.start_schedule_service()?;
 
         // Transition to Initialized state
         self.transition_to(RuntimeState::Initialized)?;
@@ -413,26 +453,41 @@ impl NameServerRuntime {
     /// Start scheduled tasks for system health monitoring
     ///
     /// Schedules periodic broker health checks to detect and remove inactive brokers
-    fn start_schedule_service(&self) {
+    fn start_schedule_service(&mut self) -> RocketMQResult<()> {
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
-        let mut name_server_runtime_inner = self.inner.clone();
-
-        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
-            Duration::from_secs(5), // Initial delay
+        let name_server_runtime_inner = self.inner.clone();
+        let task_group = self
+            .inner
+            .task_group()
+            .map(|task_group| task_group.child("namesrv.scheduled"))
+            .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group);
+        let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
+            "namesrv.scan-not-active-broker",
             Duration::from_millis(scan_not_active_broker_interval),
-            async move |_ctx| {
-                debug!("Running scheduled broker health check");
-                if let Some(route_info_manager) = name_server_runtime_inner.route_info_manager.as_mut() {
-                    route_info_manager.scan_not_active_broker();
-                }
-                Ok(())
-            },
         );
+        config.initial_delay = Duration::from_secs(5);
+
+        scheduled_tasks
+            .schedule_fixed_rate_no_overlap(config, move || {
+                let mut name_server_runtime_inner = name_server_runtime_inner.clone();
+                async move {
+                    debug!("Running scheduled broker health check");
+                    if let Some(route_info_manager) = name_server_runtime_inner.route_info_manager.as_mut() {
+                        route_info_manager.scan_not_active_broker();
+                    }
+                }
+            })
+            .map_err(|error| {
+                RocketMQError::Internal(format!("failed to start broker health check scheduled task: {error}"))
+            })?;
+        self.scheduled_tasks = Some(scheduled_tasks);
 
         info!(
             "Scheduled task started: broker health check (interval: {}ms)",
             scan_not_active_broker_interval
         );
+        Ok(())
     }
 
     /// Initialize RPC hooks for request pre/post-processing
@@ -453,6 +508,11 @@ impl NameServerRuntime {
     /// 5. Performs graceful shutdown
     #[instrument(skip(self), name = "runtime_start")]
     pub async fn start(&mut self) -> RocketMQResult<()> {
+        self.start_with_shutdown_report().await.map(|_| ())
+    }
+
+    #[instrument(skip(self), name = "runtime_start_with_shutdown_report")]
+    async fn start_with_shutdown_report(&mut self) -> RocketMQResult<NameServerShutdownReport> {
         // Validate we're in Initialized state
         if let Err(e) = self.validate_state(&[RuntimeState::Initialized], "start") {
             error!("Cannot start: {}", e);
@@ -487,18 +547,24 @@ impl NameServerRuntime {
             .task_group()
             .map(|task_group| task_group.child("namesrv.server"))
             .ok_or_else(|| RocketMQError::Internal("NameServer task group is unavailable".to_string()))?;
+        let (server_report_tx, server_report_rx) = oneshot::channel();
         server_task_group
             .spawn_service("namesrv.server", async move {
                 debug!("Server task started");
-                server
-                    .run_with_shutdown(request_processor, channel_event_listener, async move {
+                let report = server
+                    .run_with_shutdown_report(request_processor, channel_event_listener, async move {
                         let _ = server_shutdown_rx.recv().await;
                     })
                     .await;
+                if let Some(report) = report.as_ref() {
+                    report.log_if_unhealthy();
+                }
+                let _ = server_report_tx.send(report);
                 debug!("Server task completed");
             })
             .map_err(|error| RocketMQError::Internal(format!("failed to spawn namesrv server task: {error}")))?;
         self.server_task_group = Some(server_task_group);
+        self.server_report_rx = Some(server_report_rx);
 
         // Setup remoting client with name server address
         let local_address = NetworkUtil::get_local_address().unwrap_or_else(|| {
@@ -525,7 +591,7 @@ impl NameServerRuntime {
                 if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
                     let _ = shutdown_tx.send(());
                 }
-                self.shutdown().await;
+                let _ = self.shutdown().await;
                 return Err(error.into());
             }
         }
@@ -539,7 +605,7 @@ impl NameServerRuntime {
         info!("NameServer is now running and accepting requests");
 
         // Wait for shutdown signal
-        tokio::select! {
+        let shutdown_report = tokio::select! {
             result = self.shutdown_rx.as_mut()
                 .expect("Shutdown channel not initialized")
                 .recv() => {
@@ -547,11 +613,11 @@ impl NameServerRuntime {
                     Ok(_) => info!("Shutdown signal received, initiating graceful shutdown..."),
                     Err(e) => error!("Error receiving shutdown signal: {}", e),
                 }
-                self.shutdown().await;
+                self.shutdown().await
             }
-        }
+        };
 
-        Ok(())
+        Ok(shutdown_report)
     }
 
     /// Perform graceful shutdown of all components
@@ -563,7 +629,9 @@ impl NameServerRuntime {
     /// 4. Wait for server task to complete (with timeout)
     /// 5. Release all resources
     #[instrument(skip(self), name = "runtime_shutdown")]
-    async fn shutdown(&mut self) {
+    async fn shutdown(&mut self) -> NameServerShutdownReport {
+        let started_at = Instant::now();
+        let mut shutdown_report = NameServerShutdownReport::default();
         // Validate we're in Running state and transition to ShuttingDown
         if let Err(e) = self.validate_state(&[RuntimeState::Running], "shutdown") {
             warn!("Shutdown called in unexpected state: {}", e);
@@ -578,15 +646,21 @@ impl NameServerRuntime {
         const TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
 
         info!(
-            "Phase 1/4: Waiting for in-flight requests (timeout: {}s)...",
+            "Phase 1/5: Waiting for in-flight requests (timeout: {}s)...",
             SHUTDOWN_TIMEOUT.as_secs()
         );
         if let Err(e) = self.wait_for_inflight_requests(SHUTDOWN_TIMEOUT).await {
             warn!("In-flight request wait timeout or error: {}", e);
         }
 
-        info!("Phase 2/4: Stopping scheduled tasks...");
-        self.scheduled_task_manager.cancel_all();
+        info!("Phase 2/5: Stopping scheduled tasks...");
+        if let Some(scheduled_tasks) = self.scheduled_tasks.take() {
+            let scheduled_report = scheduled_tasks.shutdown(TASK_JOIN_TIMEOUT).await;
+            if let Err(error) = scheduled_report.assert_no_task_leak() {
+                warn!("NameServer scheduled task shutdown report is unhealthy: {error}");
+            }
+            shutdown_report.scheduled = Some(scheduled_report);
+        }
 
         info!("Phase 3/5: Shutting down embedded controller...");
         if let Some(controller_manager) = self.inner.controller_manager() {
@@ -596,7 +670,7 @@ impl NameServerRuntime {
         }
 
         info!("Phase 4/5: Shutting down route info manager...");
-        self.inner.route_info_manager_mut().shutdown_unregister_service();
+        shutdown_report.route_unregistration = self.inner.route_info_manager_mut().shutdown_unregister_service().await;
 
         if let Some(cluster_test_route_lookup) = self.inner.cluster_test_route_lookup() {
             cluster_test_route_lookup.shutdown().await;
@@ -606,15 +680,15 @@ impl NameServerRuntime {
             "Phase 5/5: Waiting for server task (timeout: {}s)...",
             TASK_JOIN_TIMEOUT.as_secs()
         );
-        if let Err(e) = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await {
-            warn!("Task join timeout or error: {}", e);
-        }
+        shutdown_report.server = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await;
+        shutdown_report.remoting_server = self.wait_for_remoting_server_report(TASK_JOIN_TIMEOUT).await;
 
         if let Some(task_group) = self.inner.task_group.get().cloned() {
             let report = task_group.shutdown(TASK_JOIN_TIMEOUT).await;
             if let Err(error) = report.assert_no_task_leak() {
                 warn!("NameServer task group shutdown report is unhealthy: {error}");
             }
+            shutdown_report.root = Some(report);
         }
 
         // Transition to Stopped state
@@ -622,7 +696,9 @@ impl NameServerRuntime {
             error!("Failed to transition to Stopped state: {}", e);
         }
 
+        shutdown_report.elapsed_ms = started_at.elapsed().as_millis() as u64;
         info!("Graceful shutdown completed");
+        shutdown_report
     }
 
     /// Wait for all in-flight requests to complete
@@ -632,13 +708,11 @@ impl NameServerRuntime {
     #[instrument(skip(self), name = "wait_inflight_requests")]
     async fn wait_for_inflight_requests(&self, timeout: Duration) -> RocketMQResult<()> {
         tokio::time::timeout(timeout, async {
-            // In a production implementation, you would:
-            // 1. Check active connection count
-            // 2. Monitor pending request queue
-            // 3. Wait for all to drain
-            // For now, we provide a short grace period
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            debug!("In-flight request grace period completed");
+            // There is not yet an in-flight request tracker here. A fixed sleep
+            // does not prove drain and only delays shutdown; the server TaskGroup
+            // below performs the actual graceful wait.
+            tokio::task::yield_now().await;
+            debug!("No in-flight request tracker registered; skipping fixed grace wait");
         })
         .await
         .map_err(|_| RocketMQError::Timeout {
@@ -652,20 +726,45 @@ impl NameServerRuntime {
     /// Attempts graceful task-group shutdown with timeout. If timeout is exceeded,
     /// tracked server tasks are aborted and reported.
     #[instrument(skip(self), name = "wait_server_task")]
-    async fn wait_for_server_task(&mut self, timeout: Duration) -> RocketMQResult<()> {
+    async fn wait_for_server_task(&mut self, timeout: Duration) -> Option<ShutdownReport> {
         if let Some(task_group) = self.server_task_group.take() {
             let report = task_group.shutdown(timeout).await;
             if let Err(error) = report.assert_no_task_leak() {
                 warn!("Server task group shutdown report is unhealthy: {error}");
-                return Err(RocketMQError::Internal(format!(
-                    "Server task group shutdown report is unhealthy: {error}"
-                )));
             }
             debug!("Server task completed successfully");
-            Ok(())
+            Some(report)
         } else {
             debug!("No server task group to wait for");
-            Ok(())
+            None
+        }
+    }
+
+    async fn wait_for_remoting_server_report(&mut self, timeout: Duration) -> Option<ShutdownReport> {
+        let Some(server_report_rx) = self.server_report_rx.take() else {
+            debug!("No remoting server shutdown report receiver to wait for");
+            return None;
+        };
+
+        match tokio::time::timeout(timeout, server_report_rx).await {
+            Ok(Ok(Some(report))) => {
+                if let Err(error) = report.assert_no_task_leak() {
+                    warn!("Remoting server shutdown report is unhealthy: {error}");
+                }
+                Some(report)
+            }
+            Ok(Ok(None)) => {
+                warn!("Remoting server exited without a shutdown report");
+                None
+            }
+            Ok(Err(_closed)) => {
+                warn!("Remoting server shutdown report channel closed before report was sent");
+                None
+            }
+            Err(_elapsed) => {
+                warn!("Timed out waiting for remoting server shutdown report");
+                None
+            }
         }
     }
 
@@ -852,11 +951,12 @@ impl Builder {
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
                 inner,
-                scheduled_task_manager: ScheduledTaskManager::new(),
+                scheduled_tasks: None,
                 shutdown_rx: None,
                 shutdown_tx: None,
                 server_inner: None,
                 server_task_group: None,
+                server_report_rx: None,
                 state: Arc::new(AtomicU8::new(RuntimeState::Created as u8)),
             },
         }
@@ -1577,8 +1677,13 @@ mod tests {
         bootstrap.name_server_runtime.inner.route_info_manager().start();
     }
 
-    fn shutdown_unregister_service(bootstrap: &NameServerBootstrap) {
-        bootstrap.name_server_runtime.inner.route_info_manager().shutdown();
+    async fn shutdown_unregister_service(bootstrap: &NameServerBootstrap) {
+        bootstrap
+            .name_server_runtime
+            .inner
+            .route_info_manager()
+            .shutdown()
+            .await;
     }
 
     async fn wait_until<F>(description: &str, mut condition: F)
@@ -2215,7 +2320,7 @@ mod tests {
                 .is_none()
         })
         .await;
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2522,7 +2627,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2566,7 +2671,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2621,7 +2726,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2729,7 +2834,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2819,7 +2924,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2921,7 +3026,7 @@ mod tests {
         })
         .await;
 
-        shutdown_unregister_service(&bootstrap);
+        shutdown_unregister_service(&bootstrap).await;
     }
 
     #[tokio::test]
@@ -2957,6 +3062,31 @@ mod tests {
             .boot_with_shutdown(async {})
             .await
             .expect("controller-in-namesrv mode should boot and shut down cleanly once implemented");
+    }
+
+    #[tokio::test]
+    async fn boot_shutdown_report_includes_remoting_server_report() {
+        let bootstrap = Builder::new().set_server_config(namesrv_server_config()).build();
+
+        let report = bootstrap
+            .boot_with_shutdown_report(async {})
+            .await
+            .expect("namesrv should boot and return shutdown report");
+
+        assert!(report.is_healthy(), "{report:?}");
+        let route_report = report
+            .route_unregistration
+            .as_ref()
+            .expect("namesrv report should include route unregistration report");
+        assert!(route_report.is_healthy(), "{}", route_report.to_json());
+        assert_eq!(route_report.leaked, 0, "{}", route_report.to_json());
+        assert!(report.server.is_some(), "{report:?}");
+        let remoting_report = report
+            .remoting_server
+            .as_ref()
+            .expect("namesrv report should include remoting server report");
+        assert!(remoting_report.is_healthy(), "{}", remoting_report.to_json());
+        assert_eq!(remoting_report.leaked, 0, "{}", remoting_report.to_json());
     }
 
     #[tokio::test]

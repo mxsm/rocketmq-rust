@@ -569,12 +569,37 @@ impl RefactoredConnection {
 
 impl ConcurrentConnection {
     /// Create concurrent connection with default channel capacity (1024)
+    #[deprecated(
+        since = "1.0.0",
+        note = "use try_new to handle missing Tokio runtime or writer task spawn failures"
+    )]
     pub fn new(stream: TcpStream) -> Self {
-        Self::with_channel_capacity(stream, 1024)
+        Self::try_new(stream).expect("ConcurrentConnection writer task requires a Tokio runtime")
+    }
+
+    /// Try to create a concurrent connection with default channel capacity (1024).
+    pub fn try_new(stream: TcpStream) -> RocketMQResult<Self> {
+        Self::try_with_channel_capacity(stream, 1024)
     }
 
     /// Create concurrent connection with specified channel capacity
+    #[deprecated(
+        since = "1.0.0",
+        note = "use try_with_channel_capacity to handle missing Tokio runtime or writer task spawn failures"
+    )]
     pub fn with_channel_capacity(stream: TcpStream, channel_capacity: usize) -> Self {
+        Self::try_with_channel_capacity(stream, channel_capacity)
+            .expect("ConcurrentConnection writer task requires a Tokio runtime")
+    }
+
+    /// Try to create a concurrent connection with specified channel capacity.
+    pub fn try_with_channel_capacity(stream: TcpStream, channel_capacity: usize) -> RocketMQResult<Self> {
+        let runtime_handle = tokio::runtime::Handle::try_current().map_err(|error| {
+            RocketMQError::network_connection_failed(
+                "connection",
+                format!("ConcurrentConnection writer task requires a Tokio runtime: {error}"),
+            )
+        })?;
         let (read_half, write_half) = stream.into_split();
 
         let framed_reader = FramedRead::new(read_half, CompositeCodec::default());
@@ -584,8 +609,6 @@ impl ConcurrentConnection {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
         let connection_id = CheetahString::from_string(format!("concurrent-{}", uuid::Uuid::new_v4()));
-        let runtime_handle =
-            tokio::runtime::Handle::try_current().expect("ConcurrentConnection writer task requires a Tokio runtime");
         let writer_group = TaskGroup::root(
             format!("rocketmq-remoting.connection.{connection_id}"),
             RuntimeHandle::new(runtime_handle),
@@ -595,15 +618,20 @@ impl ConcurrentConnection {
                 "remoting.connection.writer",
                 Self::writer_task(framed_writer, write_rx, state_tx),
             )
-            .expect("ConcurrentConnection writer task must spawn");
+            .map_err(|error| {
+                RocketMQError::network_connection_failed(
+                    "connection",
+                    format!("failed to spawn ConcurrentConnection writer task: {error}"),
+                )
+            })?;
 
-        Self {
+        Ok(Self {
             framed_reader,
             write_tx,
             state_rx,
             writer_group,
             connection_id,
-        }
+        })
     }
 
     /// Dedicated writer task that owns FramedWrite
@@ -1241,6 +1269,29 @@ mod concurrent_tests {
     use super::*;
     use crate::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 
+    #[test]
+    fn try_new_without_tokio_runtime_returns_error() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (stream, _client_stream) = runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = TcpStream::connect(addr);
+            let server = listener.accept();
+            let (client_stream, server_stream) = tokio::join!(client, server);
+            (server_stream.unwrap().0, client_stream.unwrap())
+        });
+        drop(runtime);
+
+        let error = match ConcurrentConnection::try_new(stream) {
+            Ok(_) => panic!("try_new should report missing Tokio runtime instead of panicking"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("ConcurrentConnection writer task requires a Tokio runtime"));
+    }
+
     /// Test concurrent connection basic send/recv
     #[tokio::test]
     async fn test_concurrent_basic() {
@@ -1249,14 +1300,14 @@ mod concurrent_tests {
 
         let client = tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
-            let conn = ConcurrentConnection::new(stream);
+            let conn = ConcurrentConnection::try_new(stream).unwrap();
 
             let cmd = RemotingCommand::create_request_command(100, PullMessageResponseHeader::default());
             conn.send_command(cmd).await.unwrap();
         });
 
         let (socket, _) = listener.accept().await.unwrap();
-        let mut server_conn = ConcurrentConnection::new(socket);
+        let mut server_conn = ConcurrentConnection::try_new(socket).unwrap();
 
         let received = server_conn.recv_command().await.unwrap();
         assert!(received.is_some());
@@ -1273,7 +1324,7 @@ mod concurrent_tests {
 
         let client = tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
-            let conn = ConcurrentConnection::new(stream);
+            let conn = ConcurrentConnection::try_new(stream).unwrap();
 
             // Spawn 3 concurrent writers
             let mut handles = vec![];
@@ -1296,7 +1347,7 @@ mod concurrent_tests {
         });
 
         let (socket, _) = listener.accept().await.unwrap();
-        let mut server_conn = ConcurrentConnection::new(socket);
+        let mut server_conn = ConcurrentConnection::try_new(socket).unwrap();
 
         // Receive 3 messages
         for _ in 0..3 {
@@ -1316,7 +1367,7 @@ mod concurrent_tests {
 
         let client = tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
-            let conn = ConcurrentConnection::new(stream);
+            let conn = ConcurrentConnection::try_new(stream).unwrap();
 
             let bytes_vec = vec![
                 Bytes::from("Message1"),
@@ -1349,7 +1400,7 @@ mod concurrent_tests {
 
         let client = tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
-            let conn = ConcurrentConnection::new(stream);
+            let conn = ConcurrentConnection::try_new(stream).unwrap();
 
             let chunks = vec![Bytes::from("Zero"), Bytes::from("Copy"), Bytes::from("Test")];
 
@@ -1374,7 +1425,7 @@ mod concurrent_tests {
 
         let client = tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
-            let conn = ConcurrentConnection::new(stream);
+            let conn = ConcurrentConnection::try_new(stream).unwrap();
 
             let response = RemotingCommand::create_response_command();
             let bodies = vec![Bytes::from("Body1"), Bytes::from("Body2")];
@@ -1383,7 +1434,7 @@ mod concurrent_tests {
         });
 
         let (socket, _) = listener.accept().await.unwrap();
-        let mut server_conn = ConcurrentConnection::new(socket);
+        let mut server_conn = ConcurrentConnection::try_new(socket).unwrap();
 
         // Receive response header
         let received = server_conn.recv_command().await.unwrap();
@@ -1401,7 +1452,7 @@ mod concurrent_tests {
 
         let client = tokio::spawn(async move {
             let stream = TcpStream::connect(addr).await.unwrap();
-            let conn = ConcurrentConnection::new(stream);
+            let conn = ConcurrentConnection::try_new(stream).unwrap();
 
             assert_eq!(conn.state(), ConnectionState::Healthy);
 
@@ -1412,7 +1463,7 @@ mod concurrent_tests {
         });
 
         let (socket, _) = listener.accept().await.unwrap();
-        let mut server_conn = ConcurrentConnection::new(socket);
+        let mut server_conn = ConcurrentConnection::try_new(socket).unwrap();
 
         assert_eq!(server_conn.state(), ConnectionState::Healthy);
 

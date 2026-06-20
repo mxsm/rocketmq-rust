@@ -37,6 +37,8 @@ use tracing::info;
 use tracing::warn;
 type TaskId = u64;
 
+const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct BrokerStatsManager {
     stats_table: Arc<DashMap<String, StatsItemSet>>,
     cluster_name: String,
@@ -124,7 +126,7 @@ impl BrokerStatsManager {
                 Ok(())
             }
         });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "sample_stats_table_in_seconds");
 
         // Task 2: Sample every 10 minutes for hour-level statistics
         let stats_table = Arc::clone(&self.stats_table);
@@ -135,7 +137,7 @@ impl BrokerStatsManager {
                 Ok(())
             }
         });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "sample_stats_table_in_minutes");
 
         // Task 3: Sample every hour for day-level statistics
         let stats_table = Arc::clone(&self.stats_table);
@@ -146,7 +148,7 @@ impl BrokerStatsManager {
                 Ok(())
             }
         });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "sample_stats_table_in_hours");
 
         // Task 4: Clean up expired stats every 10 minutes
         let stats_table = Arc::clone(&self.stats_table);
@@ -159,12 +161,19 @@ impl BrokerStatsManager {
                     Ok(())
                 }
             });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "cleanup_expired_stats");
 
         info!(
             "Started {} scheduled tasks for BrokerStatsManager",
             self.task_ids.lock().len()
         );
+    }
+
+    fn track_sampling_task(&self, task_id: anyhow::Result<TaskId>, task_name: &str) {
+        match task_id {
+            Ok(task_id) => self.task_ids.lock().push(task_id),
+            Err(error) => warn!("Failed to start BrokerStatsManager scheduled task {task_name}: {error}"),
+        }
     }
 
     fn sample_stats_table_in_seconds(stats_table: &DashMap<String, StatsItemSet>) {
@@ -943,15 +952,29 @@ impl BrokerStatsManager {
         }
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         info!("Shutting down BrokerStatsManager...");
 
         if let Some(scheduler) = &self.scheduler {
-            for task_id in self.task_ids.lock().drain(..) {
-                scheduler.cancel_task(task_id);
-                info!("Cancelled task {}", task_id);
+            let task_ids = self.task_ids.lock().drain(..).collect::<Vec<_>>();
+            let report = scheduler
+                .shutdown_tasks(task_ids, SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+                .await;
+            if report.is_healthy() {
+                info!("BrokerStatsManager scheduled tasks stopped: {:?}", report);
+            } else {
+                warn!("BrokerStatsManager scheduled task shutdown unhealthy: {:?}", report);
             }
         }
+
+        if let Some(fall_size_set) = &self.moment_stats_item_set_fall_size {
+            fall_size_set.shutdown().await;
+        }
+        if let Some(fall_time_set) = &self.moment_stats_item_set_fall_time {
+            fall_time_set.shutdown().await;
+        }
+
+        self.account_stat_manager.shutdown().await;
 
         info!("BrokerStatsManager shutdown complete");
     }
@@ -1422,7 +1445,7 @@ mod tests {
     async fn test_start_with_scheduler() {
         let broker_config = Arc::new(BrokerConfig::default());
         let scheduler = Arc::new(ScheduledTaskManager::new());
-        let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler));
+        let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler.clone()));
 
         manager.start();
 
@@ -1433,15 +1456,16 @@ mod tests {
     async fn test_shutdown_cancels_tasks() {
         let broker_config = Arc::new(BrokerConfig::default());
         let scheduler = Arc::new(ScheduledTaskManager::new());
-        let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler));
+        let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler.clone()));
 
         manager.start();
         let task_count_before = manager.task_ids.lock().len();
         assert_eq!(task_count_before, 4);
 
-        manager.shutdown();
+        manager.shutdown().await;
         let task_count_after = manager.task_ids.lock().len();
         assert_eq!(task_count_after, 0);
+        assert_eq!(scheduler.task_count(), 0);
     }
 
     #[tokio::test]

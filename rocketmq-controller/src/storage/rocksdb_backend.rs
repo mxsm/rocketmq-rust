@@ -18,6 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::TaskGroup;
 use rocksdb::Options;
@@ -115,7 +116,10 @@ impl RocksDBBackend {
     }
 
     fn new_blocking_executor() -> Result<BlockingExecutor> {
-        let runtime = RuntimeHandle::new(tokio::runtime::Handle::current());
+        let runtime = RuntimeHandle::new(
+            tokio::runtime::Handle::try_current()
+                .map_err(|_error| map_blocking_error(RuntimeError::NoCurrentRuntime))?,
+        );
         let group = TaskGroup::root("controller.rocksdb", runtime);
         BlockingExecutor::new(
             BlockingPoolPolicy {
@@ -356,6 +360,14 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn blocking_executor_without_tokio_runtime_returns_error() {
+        let error = RocksDBBackend::new_blocking_executor()
+            .expect_err("RocksDB blocking executor should require an ambient Tokio runtime");
+
+        assert!(error.to_string().contains("no current Tokio runtime"));
+    }
 
     #[tokio::test]
     async fn test_rocksdb_backend() {

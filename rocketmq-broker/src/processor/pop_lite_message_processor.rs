@@ -87,7 +87,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
 
     pub(crate) async fn shutdown(&mut self) {
         self.pop_lite_long_polling_service.shutdown().await;
-        self.queue_lock_manager.shutdown();
+        self.queue_lock_manager.shutdown().await;
     }
 
     pub(crate) fn pop_lite_long_polling_service(

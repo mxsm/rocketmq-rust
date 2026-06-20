@@ -19,9 +19,9 @@ use std::sync::MutexGuard;
 use std::task::Context;
 use std::task::Poll;
 use std::task::Waker;
-use std::thread;
 
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 
 /// Enumeration representing the state of a CompletableFuture.
@@ -77,6 +77,8 @@ pub struct CompletableFuture<T> {
     state: Arc<std::sync::Mutex<CompletableFutureState<T>>>,
     /// The sender part of a channel used for communication with the CompletableFuture.
     tx_rx: Sender<T>,
+    /// Receiver polled by this future. Polling directly avoids per-future background tasks.
+    rx: Receiver<T>,
 }
 
 impl<T: Send + 'static> Default for CompletableFuture<T> {
@@ -95,31 +97,12 @@ impl<T: Send + 'static> CompletableFuture<T> {
             data: None,
             error: None,
         }));
-        let arc = status.clone();
-
-        let (tx, mut rx) = mpsc::channel::<T>(1);
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                if let Some(data) = rx.recv().await {
-                    complete_state(&arc, data);
-                    rx.close();
-                }
-            });
-        } else if let Err(error) = thread::Builder::new()
-            .name("rocketmq-completable-future".to_string())
-            .spawn(move || {
-                if let Some(data) = rx.blocking_recv() {
-                    complete_state(&arc, data);
-                    rx.close();
-                }
-            })
-        {
-            complete_exceptionally(&status, Box::new(error));
-        }
+        let (tx, rx) = mpsc::channel::<T>(1);
 
         Self {
             state: status,
             tx_rx: tx,
+            rx,
         }
     }
 
@@ -138,19 +121,28 @@ impl<T: Send + 'static> CompletableFuture<T> {
     }
 }
 
+impl<T> Unpin for CompletableFuture<T> {}
+
 impl<T> std::future::Future for CompletableFuture<T> {
     type Output = Option<T>;
 
     /// Polls the CompletableFuture to determine if the future value is ready.
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut shared_state = lock_state(&self.state);
-        if shared_state.completed == State::Ready {
-            // If the future value is ready, return it.
-            Poll::Ready(shared_state.data.take())
-        } else {
-            // Otherwise, set the waker to be notified upon completion and return pending.
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        {
+            let mut shared_state = lock_state(&self.state);
+            if shared_state.completed == State::Ready {
+                // If the future value is ready, return it.
+                return Poll::Ready(shared_state.data.take());
+            }
+
+            // Otherwise, set the waker for direct complete()/complete_exceptionally().
             shared_state.waker = Some(cx.waker().clone());
-            Poll::Pending
+        }
+
+        match Pin::new(&mut self.rx).poll_recv(cx) {
+            Poll::Ready(Some(data)) => Poll::Ready(Some(data)),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -210,7 +202,15 @@ mod tests {
 
         sender
             .blocking_send(42)
-            .expect("fallback completion thread should receive data");
+            .expect("completable future receiver should accept data");
+
+        assert_eq!(futures::executor::block_on(cf), Some(42));
+    }
+
+    #[test]
+    fn completable_future_direct_complete_wakes_without_channel_send() {
+        let mut cf = CompletableFuture::new();
+        cf.complete(42);
 
         assert_eq!(futures::executor::block_on(cf), Some(42));
     }

@@ -12,13 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
+use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -127,10 +134,101 @@ pub struct ServiceManager<T: ServiceTask + 'static> {
     wait_point: Arc<Notify>,
 
     /// Task handle for the running service
-    task_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    task_handle: Arc<RwLock<Option<ServiceTaskHandle>>>,
+
+    last_task_group_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
 
     /// Whether this is a daemon service
     is_daemon: AtomicBool,
+}
+
+struct ServiceTaskHandle {
+    task_id: TaskId,
+    task_group: TaskGroup,
+}
+
+impl ServiceTaskHandle {
+    fn new(task_id: TaskId, task_group: TaskGroup) -> Self {
+        Self { task_id, task_group }
+    }
+
+    async fn shutdown(self, timeout_duration: Duration, interrupt: bool, service_name: &str) -> ShutdownReport {
+        if interrupt {
+            let aborted = self
+                .task_group
+                .abort_task_and_wait(self.task_id, timeout_duration)
+                .await;
+            if !aborted {
+                warn!(
+                    "Service thread {} interrupt did not finish before timeout",
+                    service_name
+                );
+            }
+            let report = self.task_group.shutdown(Duration::ZERO).await;
+            if !report.is_healthy() {
+                warn!(
+                    "Service thread {} shutdown report is unhealthy: {}",
+                    service_name,
+                    report.to_json()
+                );
+            }
+            return report;
+        }
+
+        let report = if self.task_group.wait_task(self.task_id, timeout_duration).await {
+            self.task_group.shutdown(timeout_duration).await
+        } else {
+            warn!("Service thread {} shutdown timeout", service_name);
+            self.task_group.shutdown(Duration::ZERO).await
+        };
+        if !report.is_healthy() {
+            warn!(
+                "Service thread {} shutdown report is unhealthy: {}",
+                service_name,
+                report.to_json()
+            );
+        }
+        report
+    }
+
+    fn task_count(&self) -> usize {
+        usize::from(self.task_group.contains_task(self.task_id))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceManagerLifecycleProbe {
+    pub healthy: bool,
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub task_group_count_before_shutdown: usize,
+    pub task_group_count_after_shutdown: usize,
+    pub task_group_completed: usize,
+    pub task_group_cancelled: usize,
+    pub task_group_aborted: usize,
+    pub task_group_timed_out: usize,
+    pub task_group_healthy: bool,
+    pub shutdown_elapsed_us: u128,
+}
+
+fn spawn_service_task<F>(operation: &'static str, task_name: String, future: F) -> RocketMQResult<ServiceTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+        RocketMQError::network_connection_failed(
+            "service-task",
+            format!("{operation} requires a Tokio runtime: {error}"),
+        )
+    })?;
+    let task_group = TaskGroup::root("rocketmq.service-manager", RuntimeHandle::new(handle));
+    let task_id = task_group.spawn_service(task_name, future).map_err(|error| {
+        RocketMQError::network_connection_failed(
+            "service-task",
+            format!("{operation} failed to spawn service task: {error}"),
+        )
+    })?;
+    Ok(ServiceTaskHandle::new(task_id, task_group))
 }
 
 impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
@@ -160,6 +258,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
             has_notified: Arc::new(AtomicBool::new(false)),
             wait_point: Arc::new(Notify::new()),
             task_handle: Arc::new(RwLock::new(None)),
+            last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
             is_daemon: AtomicBool::new(false),
         }
     }
@@ -173,6 +272,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
             has_notified: Arc::new(AtomicBool::new(false)),
             wait_point: Arc::new(Notify::new()),
             task_handle: Arc::new(RwLock::new(None)),
+            last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
             is_daemon: AtomicBool::new(false),
         }
     }
@@ -217,9 +317,20 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         let task_handle = self.task_handle.clone();
 
         // Spawn the service task
-        let handle = tokio::spawn(async move {
+        let handle = match spawn_service_task("ServiceManager::start", service_name.clone(), async move {
             Self::run_internal(service, state, stopped, started, has_notified, wait_point).await;
-        });
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.started.store(false, Ordering::Release);
+                self.has_notified.store(false, Ordering::Release);
+                {
+                    let mut state = self.state.write().await;
+                    *state = ServiceLifecycle::NotStarted;
+                }
+                return Err(error);
+            }
+        };
 
         // Store the task handle
         {
@@ -322,20 +433,14 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         // Wait for the task to complete
         let join_time = self.service.get_join_time();
         let result = if !self.is_daemon() {
-            let mut handle_guard = self.task_handle.write().await;
-            if let Some(handle) = handle_guard.take() {
-                if interrupt {
-                    handle.abort();
-                    Ok(())
-                } else {
-                    match timeout(join_time, handle).await {
-                        Ok(_) => Ok(()),
-                        Err(_) => {
-                            warn!("Service thread {} shutdown timeout", service_name);
-                            Ok(())
-                        }
-                    }
-                }
+            let handle = {
+                let mut handle_guard = self.task_handle.write().await;
+                handle_guard.take()
+            };
+            if let Some(handle) = handle {
+                let report = handle.shutdown(join_time, interrupt, &service_name).await;
+                *self.last_task_group_shutdown_report.write().await = Some(report);
+                Ok(())
             } else {
                 Ok(())
             }
@@ -431,10 +536,87 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
     pub fn is_started(&self) -> bool {
         self.started.load(Ordering::Acquire)
     }
+
+    pub async fn task_count(&self) -> usize {
+        self.task_handle
+            .read()
+            .await
+            .as_ref()
+            .map(ServiceTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
+    pub async fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
+        self.last_task_group_shutdown_report.read().await.clone()
+    }
+}
+
+struct LifecycleProbeService;
+
+impl ServiceTask for LifecycleProbeService {
+    fn get_service_name(&self) -> String {
+        "service-manager-lifecycle-probe".to_string()
+    }
+
+    async fn run(&self, context: &ServiceContext) {
+        while !context.is_stopped() {
+            context.wait_for_running(Duration::from_millis(1)).await;
+        }
+    }
+
+    fn get_join_time(&self) -> Duration {
+        Duration::from_secs(1)
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_service_manager_lifecycle_probe() -> ServiceManagerLifecycleProbe {
+    let manager = ServiceManager::new(LifecycleProbeService);
+    let start_result = manager.start().await;
+    let task_count_before_shutdown = manager.task_count().await;
+    let task_group_count_before_shutdown = task_count_before_shutdown;
+
+    let shutdown_started = Instant::now();
+    let shutdown_result = manager.shutdown().await;
+    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
+    let task_count_after_shutdown = manager.task_count().await;
+    let report = manager.last_task_group_shutdown_report().await;
+    let task_group_healthy = report.as_ref().is_some_and(ShutdownReport::is_healthy);
+    let task_group_completed = report.as_ref().map(|report| report.completed).unwrap_or_default();
+    let task_group_cancelled = report.as_ref().map(|report| report.cancelled).unwrap_or_default();
+    let task_group_aborted = report.as_ref().map(|report| report.aborted).unwrap_or_default();
+    let task_group_timed_out = report.as_ref().map(|report| report.timed_out).unwrap_or_default();
+    let task_group_count_after_shutdown = manager.task_count().await;
+
+    ServiceManagerLifecycleProbe {
+        healthy: start_result.is_ok()
+            && shutdown_result.is_ok()
+            && task_count_before_shutdown == 1
+            && task_count_after_shutdown == 0
+            && task_group_healthy
+            && task_group_completed == 1
+            && task_group_cancelled == 0
+            && task_group_timed_out == 0,
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        task_group_count_before_shutdown,
+        task_group_count_after_shutdown,
+        task_group_completed,
+        task_group_cancelled,
+        task_group_aborted,
+        task_group_timed_out,
+        task_group_healthy,
+        shutdown_elapsed_us,
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::future;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
     use tokio::time::sleep;
     use tokio::time::Duration;
 
@@ -546,6 +728,50 @@ mod tests {
 
     service_manager!(TestService);
 
+    struct PendingService {
+        dropped: Arc<AtomicBool>,
+    }
+
+    struct DropMarker {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    impl ServiceTask for PendingService {
+        fn get_service_name(&self) -> String {
+            "pending-service".to_string()
+        }
+
+        async fn run(&self, _context: &ServiceContext) {
+            let _marker = DropMarker {
+                dropped: Arc::clone(&self.dropped),
+            };
+            future::pending::<()>().await;
+        }
+
+        fn get_join_time(&self) -> Duration {
+            Duration::from_millis(10)
+        }
+    }
+
+    #[test]
+    fn spawn_service_task_without_tokio_runtime_returns_error() {
+        let error = match spawn_service_task("test-service-start", "test-service".to_string(), async {}) {
+            Ok(_) => panic!("spawning without a Tokio runtime should return an error"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("requires a Tokio runtime"),
+            "unexpected error: {error}"
+        );
+    }
+
     #[tokio::test]
     async fn test_service_lifecycle() {
         let service = TestService::new("test-service".to_string(), Duration::from_millis(50));
@@ -607,6 +833,48 @@ mod tests {
         // Shutdown
         service_thread.shutdown().await.unwrap();
         assert!(!service_thread.is_started());
+    }
+
+    #[tokio::test]
+    async fn shutdown_timeout_aborts_service_task() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let service_thread = ServiceManager::new(PendingService {
+            dropped: Arc::clone(&dropped),
+        });
+
+        service_thread.start().await.unwrap();
+        service_thread.shutdown().await.unwrap();
+
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "service future should be dropped after shutdown timeout aborts the task"
+        );
+        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Stopped);
+        assert!(!service_thread.is_started());
+        assert!(service_thread.is_stopped());
+        let report = service_thread
+            .last_task_group_shutdown_report()
+            .await
+            .expect("service task group shutdown report should be recorded");
+        assert!(!report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(report.timed_out, 1, "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn service_manager_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_service_manager_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_before_shutdown, 1);
+        assert_eq!(probe.task_count_after_shutdown, 0);
+        assert_eq!(probe.task_group_count_before_shutdown, 1);
+        assert_eq!(probe.task_group_count_after_shutdown, 0);
+        assert_eq!(probe.task_group_completed, 1);
+        assert_eq!(probe.task_group_cancelled, 0);
+        assert_eq!(probe.task_group_aborted, 0);
+        assert_eq!(probe.task_group_timed_out, 0);
+        assert!(probe.task_group_healthy);
     }
 
     #[tokio::test]

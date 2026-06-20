@@ -523,6 +523,78 @@ async fn receive_message_integration_streams_delivery_message_and_status() {
 }
 
 #[tokio::test]
+async fn telemetry_integration_streams_settings_response() {
+    let (listen_addr, shutdown_tx, server_task) = spawn_runtime(Arc::new(ClusterServiceManager::with_services(
+        Arc::new(StaticRouteService::default()),
+        Arc::new(NormalMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    )))
+    .await;
+    let mut client = connect_with_retry(listen_addr).await;
+    let command = v2::TelemetryCommand {
+        status: None,
+        command: Some(v2::telemetry_command::Command::Settings(v2::Settings {
+            client_type: Some(v2::ClientType::Producer as i32),
+            access_point: None,
+            backoff_policy: None,
+            request_timeout: None,
+            pub_sub: Some(v2::settings::PubSub::Publishing(v2::Publishing {
+                topics: Vec::new(),
+                max_body_size: 0,
+                validate_message_type: false,
+            })),
+            user_agent: None,
+            metric: None,
+        })),
+    };
+    let mut request = Request::new(tokio_stream::iter(vec![command]));
+    request
+        .metadata_mut()
+        .insert("x-mq-client-id", MetadataValue::from_static("telemetry-client"));
+
+    let mut response_stream = client
+        .telemetry(request)
+        .await
+        .expect("telemetry stream should open")
+        .into_inner();
+    let response = tokio::time::timeout(Duration::from_secs(2), response_stream.message())
+        .await
+        .expect("telemetry response should arrive")
+        .expect("telemetry stream should not fail")
+        .expect("telemetry stream should produce one response");
+
+    assert_eq!(
+        response.status.as_ref().map(|status| status.code),
+        Some(v2::Code::Ok as i32)
+    );
+    match response.command {
+        Some(v2::telemetry_command::Command::Settings(settings)) => match settings.pub_sub {
+            Some(v2::settings::PubSub::Publishing(publishing)) => {
+                assert_eq!(publishing.max_body_size, 4 * 1024 * 1024);
+                assert!(publishing.validate_message_type);
+            }
+            other => panic!("expected publishing settings, got {other:?}"),
+        },
+        other => panic!("expected settings response, got {other:?}"),
+    }
+    let end = tokio::time::timeout(Duration::from_secs(2), response_stream.message())
+        .await
+        .expect("telemetry stream should finish")
+        .expect("telemetry stream should finish cleanly");
+    assert!(end.is_none());
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
+#[tokio::test]
 async fn spawn_runtime_retries_when_initial_candidate_port_is_occupied() {
     let occupied_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied test port");
     let occupied_addr = occupied_listener.local_addr().expect("discover occupied test port");

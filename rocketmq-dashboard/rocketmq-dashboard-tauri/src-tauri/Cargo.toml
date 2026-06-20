@@ -60,3 +60,4 @@ rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-
 rocketmq-client-rust = { path = "../../../rocketmq-client" }
 rocketmq-remoting = { path = "../../../rocketmq-remoting" }
 rocketmq-error = { path = "../../../rocketmq-error" }
+rocketmq-runtime = { path = "../../../rocketmq-runtime" }

@@ -26,6 +26,7 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
+use crate::core::RocketMQError;
 use crate::core::RocketMQResult;
 
 /// Builder for creating and configuring admin clients
@@ -165,6 +166,11 @@ impl AdminBuilder {
     ///
     /// Returns an [`AdminGuard`] that automatically calls shutdown when dropped.
     ///
+    /// # Errors
+    ///
+    /// Returns error if no active Tokio runtime is available for asynchronous
+    /// shutdown scheduling, or if admin startup fails.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
@@ -179,8 +185,9 @@ impl AdminBuilder {
     /// } // admin automatically cleaned up here
     /// ```
     pub async fn build_with_guard(self) -> RocketMQResult<AdminGuard> {
+        let runtime = current_admin_guard_runtime()?;
         let admin = self.build_and_start().await?;
-        Ok(AdminGuard::new(admin))
+        Ok(AdminGuard::new(admin, runtime))
     }
 }
 
@@ -213,10 +220,10 @@ pub struct AdminGuard {
 
 impl AdminGuard {
     /// Create a new guard wrapping an admin client
-    fn new(admin: DefaultMQAdminExt) -> Self {
+    fn new(admin: DefaultMQAdminExt, runtime: tokio::runtime::Handle) -> Self {
         Self {
             admin: Some(admin),
-            runtime: tokio::runtime::Handle::current(),
+            runtime,
         }
     }
 
@@ -254,6 +261,14 @@ impl std::ops::DerefMut for AdminGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner_mut()
     }
+}
+
+fn current_admin_guard_runtime() -> RocketMQResult<tokio::runtime::Handle> {
+    tokio::runtime::Handle::try_current().map_err(|error| {
+        RocketMQError::Internal(format!(
+            "AdminGuard automatic shutdown requires an active Tokio runtime: {error}"
+        ))
+    })
 }
 
 impl Drop for AdminGuard {
@@ -385,5 +400,19 @@ mod tests {
             .namesrv_addr("new_addr"); // Can override
 
         assert_eq!(builder.namesrv_addr, Some("new_addr".to_string()));
+    }
+
+    #[test]
+    fn admin_guard_runtime_without_tokio_runtime_returns_error() {
+        let error = current_admin_guard_runtime()
+            .expect_err("AdminGuard automatic shutdown should require an active Tokio runtime");
+
+        match error {
+            RocketMQError::Internal(message) => assert!(
+                message.contains("AdminGuard automatic shutdown requires an active Tokio runtime"),
+                "unexpected error message: {message}"
+            ),
+            other => panic!("unexpected error variant: {other}"),
+        }
     }
 }

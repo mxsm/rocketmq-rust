@@ -78,6 +78,9 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_rust::ArcMut;
 #[cfg(feature = "tieredstore")]
 use rocketmq_tieredstore::fetcher::TieredGetMessageResult;
@@ -93,7 +96,6 @@ use rocketmq_tieredstore::TieredMessageFetcher;
 use rocketmq_tieredstore::TieredStore;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -341,6 +343,7 @@ pub struct LocalFileMessageStore {
     flush_consume_queue_service: FlushConsumeQueueService,
     scheduled_task_shutdown: CancellationToken,
     scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
     ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
@@ -536,6 +539,7 @@ impl LocalFileMessageStore {
             reput_message_service: ReputMessageService {
                 shutdown_token: CancellationToken::new(),
                 new_message_notify: Arc::new(Notify::new()),
+                dispatch_progress_notify: Arc::new(Notify::new()),
                 pending_messages: Arc::new(AtomicI64::new(0)),
                 reput_from_offset: None,
                 dispatch_tx: None,
@@ -574,6 +578,7 @@ impl LocalFileMessageStore {
             ),
             scheduled_task_shutdown: CancellationToken::new(),
             scheduled_task_group: None,
+            scheduled_tasks: None,
             ha_update_master_group: Arc::new(StdMutex::new(None)),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
@@ -1330,104 +1335,125 @@ impl LocalFileMessageStore {
                 return;
             }
         };
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
 
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("clean-commit-log-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let service = Arc::clone(&clean_commit_log_service_arc);
-                        if !run_blocking_scheduled_task("clean commit log", move || service.run()).await {
-                            break;
-                        }
-                    },
+        let clean_commit_log_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay(
+                "clean-commit-log-scheduler",
+                Duration::from_millis(clean_resource_interval.max(1)),
+            ),
+            move || {
+                let service = Arc::clone(&clean_commit_log_service_arc);
+                let active = Arc::clone(&clean_commit_log_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("clean commit log", move || service.run()).await {
+                        active.store(false, Ordering::Release);
+                    }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task clean commit log: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task clean commit log: {error}");
             return;
         }
 
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("store-self-check-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let message_store = message_store.clone();
-                        if !run_blocking_scheduled_task("store self check", move || message_store.check_self()).await {
-                            break;
-                        }
-                    },
+        let store_self_check_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("store-self-check-scheduler", Duration::from_secs(10 * 60)),
+            move || {
+                let message_store = message_store.clone();
+                let active = Arc::clone(&store_self_check_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("store self check", move || message_store.check_self()).await {
+                        active.store(false, Ordering::Release);
+                    }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task self check: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task self check: {error}");
             return;
         }
 
         // store check point flush
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("store-checkpoint-flush-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let checkpoint = Arc::clone(&store_checkpoint_arc);
-                        if !run_blocking_scheduled_task("store checkpoint flush", move || {
-                            let _ = checkpoint.flush();
-                        }).await {
-                            break;
-                        }
+        let checkpoint_flush_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("store-checkpoint-flush-scheduler", Duration::from_secs(1)),
+            move || {
+                let checkpoint = Arc::clone(&store_checkpoint_arc);
+                let active = Arc::clone(&checkpoint_flush_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("store checkpoint flush", move || {
+                        let _ = checkpoint.flush();
+                    })
+                    .await
+                    {
+                        active.store(false, Ordering::Release);
                     }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task checkpoint flush: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task checkpoint flush: {error}");
             return;
         }
 
         let correct_logic_offset_service_arc = self.correct_logic_offset_service.clone();
         let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("clean-consume-queue-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let correct_service = Arc::clone(&correct_logic_offset_service_arc);
-                        let clean_service = Arc::clone(&clean_consume_queue_service_arc);
-                        if !run_blocking_scheduled_task("clean consume queue", move || {
-                            correct_service.run();
-                            clean_service.run();
-                        }).await {
-                            break;
-                        }
+        let clean_consume_queue_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay(
+                "clean-consume-queue-scheduler",
+                Duration::from_millis(clean_resource_interval.max(1)),
+            ),
+            move || {
+                let correct_service = Arc::clone(&correct_logic_offset_service_arc);
+                let clean_service = Arc::clone(&clean_consume_queue_service_arc);
+                let active = Arc::clone(&clean_consume_queue_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("clean consume queue", move || {
+                        correct_service.run();
+                        clean_service.run();
+                    })
+                    .await
+                    {
+                        active.store(false, Ordering::Release);
                     }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task clean consume queue: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task clean consume queue: {error}");
             return;
         }
 
+        self.scheduled_tasks = Some(scheduled_tasks);
         self.scheduled_task_group = Some(task_group);
     }
 
     async fn shutdown_schedule_tasks(&mut self) {
         self.scheduled_task_shutdown.cancel();
+        self.scheduled_tasks.take();
         if let Some(task_group) = self.scheduled_task_group.take() {
             let report = task_group.shutdown(Duration::from_secs(5)).await;
             if let Err(error) = crate::runtime::shutdown_report_result("LocalFileMessageStore scheduled tasks", report)
@@ -1440,6 +1466,27 @@ impl LocalFileMessageStore {
     #[cfg(test)]
     fn has_scheduled_task_group(&self) -> bool {
         self.scheduled_task_group.is_some()
+    }
+
+    pub(crate) fn scheduled_task_count(&self) -> usize {
+        let root_count = self
+            .scheduled_task_group
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn scheduled_task_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     async fn shutdown_ha_update_master_tasks(&self) {
@@ -3391,6 +3438,7 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
 struct ReputMessageService {
     shutdown_token: CancellationToken,
     new_message_notify: Arc<Notify>,
+    dispatch_progress_notify: Arc<Notify>,
     pending_messages: Arc<AtomicI64>,
     reput_from_offset: Option<Arc<AtomicI64>>,
     dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
@@ -3457,13 +3505,12 @@ impl ReputMessageService {
 
         let shutdown = self.shutdown_token.clone();
         let new_message_notify = self.new_message_notify.clone();
+        let dispatch_progress_notify = self.dispatch_progress_notify.clone();
         let pending_messages = self.pending_messages.clone();
 
         // Task 1: Read messages from CommitLog and send to channel
         let shutdown_reader = shutdown.clone();
         if let Err(error) = task_group.spawn_service("reput-reader", async move {
-            let mut fallback_interval = tokio::time::interval(Duration::from_millis(1));
-            fallback_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = new_message_notify.notified() => {
@@ -3485,14 +3532,16 @@ impl ReputMessageService {
 
                                     // Decrement pending counter after successful send
                                     // Use saturating_sub to prevent underflow
-                                    pending_messages.fetch_update(
-                                        Ordering::Relaxed,
-                                        Ordering::Relaxed,
-                                        |x| if x > 0 { Some(x - 1) } else { Some(0) }
-                                    ).ok();
+                                    pending_messages
+                                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
+                                            if x > 0 { Some(x - 1) } else { Some(0) }
+                                        })
+                                        .ok();
+                                    dispatch_progress_notify.notify_waiters();
                                 }
                                 None => {
                                     // No more messages available at this offset
+                                    dispatch_progress_notify.notify_waiters();
                                     break;
                                 }
                             }
@@ -3502,20 +3551,6 @@ impl ReputMessageService {
                             if pending_messages.load(Ordering::Relaxed) == 0
                                 && !inner.is_commit_log_available() {
                                 break;
-                            }
-                        }
-                    }
-                    _ = fallback_interval.tick() => {
-                        // Fallback: periodic check
-                        if pending_messages.load(Ordering::Relaxed) > 0 || inner.is_commit_log_available() {
-                            if let Some(batch) = inner.read_and_parse_batch().await {
-                                if dispatch_tx.send(batch).await.is_ok() {
-                                    pending_messages.fetch_update(
-                                        Ordering::Relaxed,
-                                        Ordering::Relaxed,
-                                        |x| if x > 0 { Some(x - 1) } else { Some(0) }
-                                    ).ok();
-                                }
                             }
                         }
                     }
@@ -3571,6 +3606,20 @@ impl ReputMessageService {
         }
 
         self.task_group = Some(task_group);
+        self.new_message_notify.notify_one();
+    }
+
+    async fn wait_until_commit_log_dispatched(&self, inner: &ReputMessageServiceInner, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let progress = self.dispatch_progress_notify.notified();
+            if !inner.is_commit_log_available() {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, progress).await.is_err() {
+                return !inner.is_commit_log_available();
+            }
+        }
     }
 
     pub async fn run_once(
@@ -3604,14 +3653,10 @@ impl ReputMessageService {
     }
 
     pub async fn shutdown(&mut self) {
-        // Step 1: Wait for pending messages to be dispatched (max 5 seconds, 50 * 100ms)
+        // Step 1: Wait for pending messages to be dispatched (max 5 seconds)
         if let Some(inner) = self.inner.as_ref() {
-            for i in 0..50 {
-                if !inner.is_commit_log_available() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
+            self.wait_until_commit_log_dispatched(inner, Duration::from_secs(5))
+                .await;
 
             // Warn if there are still undispatched messages
             if inner.is_commit_log_available() {
@@ -4478,11 +4523,13 @@ mod tests {
     #[cfg(feature = "tieredstore")]
     use rocketmq_tieredstore::TieredStoreConfig;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
 
     use super::run_blocking_scheduled_task;
     use super::CleanCommitLogService;
     use super::DiskCleanDecision;
     use super::LocalFileMessageStore;
+    use super::ReputMessageService;
     use super::ReputMessageServiceInner;
     use super::StoreLifecycleState;
     use crate::base::dispatch_request::DispatchRequest;
@@ -4636,6 +4683,85 @@ mod tests {
             notify_message_arrive_in_batch: false,
             message_store: store,
         }
+    }
+
+    #[tokio::test]
+    async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
+        let temp_dir = tempdir().unwrap();
+        let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+        let mut inner = reput_inner_for_store(store);
+        inner.set_reput_from_offset(-1);
+
+        let service = ReputMessageService {
+            shutdown_token: CancellationToken::new(),
+            new_message_notify: Arc::new(tokio::sync::Notify::new()),
+            dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
+            pending_messages: Arc::new(AtomicI64::new(0)),
+            reput_from_offset: None,
+            dispatch_tx: None,
+            inner: None,
+            task_group: None,
+        };
+        let reput_from_offset = inner.reput_from_offset.clone();
+        let dispatch_progress_notify = service.dispatch_progress_notify.clone();
+
+        let (dispatched, _) = tokio::time::timeout(Duration::from_millis(100), async {
+            tokio::join!(
+                service.wait_until_commit_log_dispatched(&inner, Duration::from_secs(5)),
+                async move {
+                    tokio::task::yield_now().await;
+                    reput_from_offset.store(0, Ordering::Release);
+                    dispatch_progress_notify.notify_waiters();
+                }
+            )
+        })
+        .await
+        .expect("dispatch progress notification should wake shutdown wait");
+
+        assert!(dispatched);
+    }
+
+    #[tokio::test]
+    async fn reput_service_start_wakes_existing_commitlog_backlog() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = new_configured_test_store(
+            &temp_dir,
+            MessageStoreConfig {
+                read_uncommitted: true,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let topic = CheetahString::from_static_str("reput-start-backlog-topic");
+        let msg_size =
+            append_encoded_test_message(&mut store, &topic, 0, 1_000, Bytes::from_static(b"backlog-body")).await;
+
+        store.reput_message_service.set_reput_from_offset(0);
+        let commit_log = store.commit_log.clone();
+        let message_store_config = store.message_store_config.clone();
+        let dispatcher = store.dispatcher.clone();
+        let message_store = store.clone();
+        store
+            .reput_message_service
+            .start(commit_log, message_store_config, dispatcher, false, message_store);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let offset = store
+                    .reput_message_service
+                    .reput_from_offset
+                    .as_ref()
+                    .expect("reput offset should exist")
+                    .load(Ordering::Acquire);
+                if offset >= i64::from(msg_size) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial reput wakeup should process existing backlog");
+
+        store.reput_message_service.shutdown().await;
     }
 
     fn new_async_flush_test_store(temp_dir: &tempfile::TempDir) -> ArcMut<LocalFileMessageStore> {
@@ -5321,6 +5447,22 @@ mod tests {
         store.start().await.expect("start store");
 
         assert!(store.has_scheduled_task_group());
+        let mut snapshots = store.scheduled_task_snapshot();
+        for _ in 0..100 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            snapshots = store.scheduled_task_snapshot();
+        }
+        assert_eq!(snapshots.len(), 4, "{snapshots:?}");
+        assert!(store.scheduled_task_count() >= 4);
+        assert!(snapshots.iter().map(|snapshot| snapshot.runs).sum::<u64>() > 0);
+        assert_eq!(snapshots.iter().map(|snapshot| snapshot.overlaps).sum::<u64>(), 0);
+        assert_eq!(snapshots.iter().map(|snapshot| snapshot.failures).sum::<u64>(), 0);
         assert!(store.store_stats_service.has_worker_handle());
         assert!(store
             .compaction_service
@@ -5336,6 +5478,7 @@ mod tests {
         store.shutdown().await;
 
         assert!(!store.has_scheduled_task_group());
+        assert_eq!(store.scheduled_task_count(), 0);
         assert!(!store.store_stats_service.has_worker_handle());
         assert!(store
             .compaction_service

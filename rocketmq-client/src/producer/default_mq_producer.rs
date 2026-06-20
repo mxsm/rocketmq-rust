@@ -1657,11 +1657,15 @@ impl MQProducer for DefaultMQProducer {
         }
 
         if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
-            produce_accumulator.shutdown();
+            produce_accumulator.shutdown_async().await;
         }
 
         if let Some(ref trace_dispatcher) = self.producer_config.trace_dispatcher {
-            trace_dispatcher.shutdown();
+            if let Some(async_dispatcher) = trace_dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
+                async_dispatcher.shutdown_async().await;
+            } else {
+                trace_dispatcher.shutdown();
+            }
         }
     }
 

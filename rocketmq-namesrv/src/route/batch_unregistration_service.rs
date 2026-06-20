@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +23,8 @@ use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
+
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct BatchUnregistrationService {
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
@@ -79,12 +84,16 @@ impl BatchUnregistrationService {
         *self.task_group.lock() = Some(task_group);
     }
 
-    pub fn shutdown(&self) {
-        if let Some(task_group) = self.task_group.lock().take() {
-            let report = task_group.shutdown_now();
+    pub async fn shutdown(&self) -> Option<ShutdownReport> {
+        let task_group = { self.task_group.lock().take() };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if let Err(error) = report.assert_no_task_leak() {
                 warn!("BatchUnregistrationService shutdown report is unhealthy: {error}");
             }
+            Some(report)
+        } else {
+            None
         }
     }
 

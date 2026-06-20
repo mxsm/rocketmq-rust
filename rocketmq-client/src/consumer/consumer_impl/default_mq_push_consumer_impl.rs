@@ -107,6 +107,7 @@ const MAX_POP_INVISIBLE_TIME: u64 = 300000;
 const MIN_POP_INVISIBLE_TIME: u64 = 5000;
 const ASYNC_TIMEOUT: u64 = 3000;
 const RESET_OFFSET_MAX_WAIT: Duration = Duration::from_secs(10);
+const OFFSET_STORE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 //const DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED: bool = false;
 const _1MB: u64 = 1024 * 1024;
@@ -459,6 +460,18 @@ impl DefaultMQPushConsumerImpl {
                         .await;
                 }
                 self.persist_consumer_offset().await;
+                if let Some(offset_store) = self.offset_store.as_mut() {
+                    if !offset_store
+                        .mut_from_ref()
+                        .shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT)
+                        .await
+                    {
+                        warn!(
+                            "consumer [{}] offset store did not stop before timeout",
+                            self.consumer_config.consumer_group
+                        );
+                    }
+                }
                 if let Some(client) = self.client_instance.as_mut() {
                     client
                         .unregister_consumer(self.consumer_config.consumer_group.as_str())

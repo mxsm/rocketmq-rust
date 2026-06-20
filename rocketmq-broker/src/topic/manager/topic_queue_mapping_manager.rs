@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -30,11 +31,18 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
+use tokio::runtime::Handle;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_path_config_helper::get_topic_queue_mapping_path;
+
+static TOPIC_QUEUE_MAPPING_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
 
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
@@ -319,11 +327,12 @@ impl TopicQueueMappingManager {
         }
 
         let file_name = self.config_file_path();
-        tokio::task::spawn_blocking(move || {
-            rocketmq_common::FileUtils::string_to_file(json.as_str(), file_name.as_str())
-        })
-        .await
-        .map_err(|err| RocketMQError::Internal(format!("persist topic queue mapping clean result failed: {err}")))?
+        topic_queue_mapping_blocking_executor()?
+            .spawn_io("broker.topic_queue_mapping.persist_clean_result", move || {
+                rocketmq_common::FileUtils::string_to_file(json.as_str(), file_name.as_str())
+            })
+            .await
+            .map_err(|err| RocketMQError::Internal(format!("persist topic queue mapping clean result failed: {err}")))?
     }
 
     pub fn delete(&self, topic: &CheetahString) {
@@ -339,6 +348,42 @@ impl TopicQueueMappingManager {
             }
         }
     }
+}
+
+fn topic_queue_mapping_blocking_executor() -> RocketMQResult<BlockingExecutor> {
+    if let Some(executor) = TOPIC_QUEUE_MAPPING_BLOCKING.get() {
+        return Ok(executor.clone());
+    }
+
+    let handle = Handle::try_current().map_err(|error| {
+        RocketMQError::Internal(format!(
+            "topic queue mapping blocking executor requires a Tokio runtime: {error}"
+        ))
+    })?;
+    let group = TaskGroup::root(
+        "rocketmq-broker.topic_queue_mapping.blocking",
+        RuntimeHandle::new(handle),
+    );
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            name: "rocketmq-broker.topic_queue_mapping.blocking".to_string(),
+            max_concurrency: 8,
+            ..BlockingPoolPolicy::default()
+        },
+        group.child("rocketmq-broker.topic_queue_mapping.blocking-reaper"),
+    )
+    .map_err(|error| {
+        RocketMQError::Internal(format!("create topic queue mapping blocking executor failed: {error}"))
+    })?;
+
+    if TOPIC_QUEUE_MAPPING_BLOCKING.set(executor.clone()).is_err() {
+        return Ok(TOPIC_QUEUE_MAPPING_BLOCKING
+            .get()
+            .expect("topic queue mapping blocking executor must be initialized")
+            .clone());
+    }
+
+    Ok(executor)
 }
 
 //Fully implemented will be removed

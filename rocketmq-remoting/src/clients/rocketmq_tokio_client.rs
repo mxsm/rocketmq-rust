@@ -22,8 +22,10 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
+use rocketmq_runtime::TaskId;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::time;
@@ -256,6 +258,55 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         &self.tokio_client_config.tls_config
     }
 
+    pub fn update_name_server_address_list_sync(&self, addrs: Vec<CheetahString>) {
+        if addrs.is_empty() {
+            return;
+        }
+
+        let mut update = false;
+
+        {
+            let current: &Vec<CheetahString> = &self.namesrv_addr_list;
+            if current.is_empty() || addrs.len() != current.len() {
+                update = true;
+            } else {
+                for addr in &addrs {
+                    if !current.contains(addr) {
+                        update = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !update {
+            return;
+        }
+
+        info!(
+            "name server address updated. NEW : {:?} , OLD: {:?}",
+            addrs,
+            self.namesrv_addr_list.as_ref() as &Vec<CheetahString>
+        );
+
+        use rand::seq::SliceRandom;
+        let mut shuffled = addrs.clone();
+        shuffled.shuffle(&mut rand::rng());
+
+        let list = self.namesrv_addr_list.mut_from_ref();
+        list.clear();
+        list.extend(shuffled);
+
+        let stale_addr = self.namesrv_addr_choosed.as_ref().clone();
+        if let Some(namesrv_addr) = stale_addr {
+            if !addrs.contains(&namesrv_addr) {
+                self.namesrv_addr_choosed.mut_from_ref().take();
+
+                self.connection_tables.remove(&namesrv_addr);
+            }
+        }
+    }
+
     fn get_or_create_worker_task_group(&self) -> Option<TaskGroup> {
         if self.shutdown_token.is_cancelled() {
             return None;
@@ -287,18 +338,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         self.worker_task_group.lock().as_ref().cloned()
     }
 
-    pub(crate) fn spawn_worker_task_with_handle<F>(
-        &self,
-        name: impl Into<Arc<str>>,
-        future: F,
-    ) -> Option<tokio::task::JoinHandle<()>>
+    pub(crate) fn spawn_worker_task<F>(&self, name: impl Into<Arc<str>>, future: F) -> Option<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         let name = name.into();
         let task_group = self.get_or_create_worker_task_group()?;
-        match task_group.spawn_service_with_handle(name.clone(), future) {
-            Ok((_task_id, join_handle)) => Some(join_handle),
+        match task_group.spawn_service(name.clone(), future) {
+            Ok(task_id) => Some(task_id),
             Err(error) => {
                 warn!(
                     ?error,
@@ -362,6 +409,23 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             max_connections, max_idle_duration, cleanup_interval
         );
         cleanup_task
+    }
+
+    /// Enable advanced connection pool and return an error if cleanup cannot be spawned.
+    pub fn try_enable_connection_pool(
+        &mut self,
+        max_connections: usize,
+        max_idle_duration: Duration,
+        cleanup_interval: Duration,
+    ) -> RuntimeResult<ConnectionPoolCleanupTask> {
+        let pool = ConnectionPool::new(max_connections, max_idle_duration);
+        let cleanup_task = pool.try_start_cleanup_task(cleanup_interval)?;
+        self.connection_pool = Some(pool);
+        info!(
+            "Connection pool enabled: max={}, idle_timeout={:?}, cleanup_interval={:?}",
+            max_connections, max_idle_duration, cleanup_interval
+        );
+        Ok(cleanup_task)
     }
 
     /// Get connection pool statistics (if enabled).
@@ -952,54 +1016,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqDefaultClient<PR> {
     async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>) {
-        if addrs.is_empty() {
-            return;
-        }
-
-        let mut update = false;
-
-        // Determine if the list has changed (read-only comparison, no mutable borrow)
-        {
-            let current: &Vec<CheetahString> = &self.namesrv_addr_list;
-            if current.is_empty() || addrs.len() != current.len() {
-                update = true;
-            } else {
-                for addr in &addrs {
-                    if !current.contains(addr) {
-                        update = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if !update {
-            return;
-        }
-
-        info!(
-            "name server address updated. NEW : {:?} , OLD: {:?}",
-            addrs,
-            self.namesrv_addr_list.as_ref() as &Vec<CheetahString>
-        );
-
-        use rand::seq::SliceRandom;
-        let mut shuffled = addrs.clone();
-        shuffled.shuffle(&mut rand::rng());
-
-        let list = self.namesrv_addr_list.mut_from_ref();
-        list.clear();
-        list.extend(shuffled);
-
-        // Clone the cached choice before mutating to avoid use-after-free
-        let stale_addr = self.namesrv_addr_choosed.as_ref().clone();
-        if let Some(namesrv_addr) = stale_addr {
-            if !addrs.contains(&namesrv_addr) {
-                self.namesrv_addr_choosed.mut_from_ref().take();
-
-                self.connection_tables.remove(&namesrv_addr);
-            }
-        }
+        self.update_name_server_address_list_sync(addrs);
     }
 
     fn get_name_server_address_list(&self) -> &[CheetahString] {
@@ -1373,7 +1390,7 @@ mod tests {
 
         client.mut_from_ref().shutdown();
 
-        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
     }
 
     #[tokio::test]
@@ -1478,6 +1495,9 @@ mod tests {
 
         server.await.expect("server task");
         client.shutdown();
-        assert_eq!(worker_task_group.lifecycle_state(), TaskGroupLifecycleState::Closed);
+        assert_eq!(
+            worker_task_group.lifecycle_state(),
+            TaskGroupLifecycleState::ShutdownCompleted
+        );
     }
 }

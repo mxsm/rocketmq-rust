@@ -33,6 +33,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpStream;
@@ -141,14 +142,21 @@ impl TlsServerRuntime {
         #[cfg(feature = "tls")]
         {
             if let Some(task_group) = self.reload_task_group.lock().take() {
-                let report = task_group.shutdown_now();
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "TLS reload task shutdown report is unhealthy"
-                    );
-                }
+                task_group.cancel();
             }
+        }
+    }
+
+    pub async fn shutdown_gracefully(&self, timeout: Duration) -> Option<ShutdownReport> {
+        #[cfg(feature = "tls")]
+        {
+            self.shutdown_reload_task(timeout).await
+        }
+
+        #[cfg(not(feature = "tls"))]
+        {
+            let _ = timeout;
+            None
         }
     }
 
@@ -222,6 +230,12 @@ impl TlsServerRuntime {
         }) {
             warn!(?error, "failed to spawn TLS reload task");
         }
+    }
+
+    #[cfg(feature = "tls")]
+    async fn shutdown_reload_task(&self, timeout: Duration) -> Option<ShutdownReport> {
+        let task_group = self.reload_task_group.lock().take()?;
+        Some(task_group.shutdown(timeout).await)
     }
 }
 
@@ -770,7 +784,7 @@ mod tests {
 
     #[cfg(feature = "tls")]
     #[tokio::test]
-    async fn tls_reload_task_shutdown_closes_task_group() {
+    async fn tls_reload_task_shutdown_requests_cancellation() {
         let config = TlsConfig {
             test_mode_enable: true,
             server: rocketmq_common::common::tls_config::TlsServerConfig {
@@ -795,9 +809,38 @@ mod tests {
 
         runtime.shutdown();
 
+        assert!(runtime.reload_task_group.lock().is_none());
+        assert!(task_group.cancellation_token().is_cancelled());
+    }
+
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn tls_reload_task_shutdown_gracefully_reports_healthy() {
+        let config = TlsConfig {
+            test_mode_enable: true,
+            server: rocketmq_common::common::tls_config::TlsServerConfig {
+                mode: TlsMode::Permissive,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let runtime = TlsServerRuntime::new(config);
+        let task_group = runtime
+            .reload_task_group
+            .lock()
+            .as_ref()
+            .cloned()
+            .expect("reload task group");
+
+        let report = runtime
+            .shutdown_gracefully(Duration::from_secs(1))
+            .await
+            .expect("reload task should be running");
+
+        assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(
             task_group.lifecycle_state(),
-            rocketmq_runtime::TaskGroupLifecycleState::Closed
+            rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
         );
     }
 

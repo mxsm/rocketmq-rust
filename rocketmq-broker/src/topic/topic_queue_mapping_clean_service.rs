@@ -33,10 +33,13 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use tokio::time::MissedTickBehavior;
 use tracing::info;
 use tracing::warn;
 
@@ -45,10 +48,12 @@ use crate::broker_runtime::BrokerRuntimeInner;
 const INITIAL_DELAY: Duration = Duration::from_secs(5 * 60);
 const CLEAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TOPIC_SCAN_YIELD_DELAY: Duration = Duration::from_millis(10);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 struct CleanServiceLifecycle {
     task_group: Option<TaskGroup>,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
 }
 
 struct TopicQueueMappingCleanServiceInner<MS: MessageStore> {
@@ -81,6 +86,10 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
     }
 
     pub fn start(&self) {
+        self.start_with_schedule(INITIAL_DELAY, CLEAN_INTERVAL);
+    }
+
+    pub(crate) fn start_with_schedule(&self, initial_delay: Duration, clean_interval: Duration) {
         if self
             .inner
             .running
@@ -102,35 +111,18 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
             }
         };
         let task_group = TaskGroup::root("rocketmq-broker.topic-queue-mapping-clean", runtime);
-        let cancel_for_task = task_group.cancellation_token();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let this = Self {
             inner: Arc::clone(&self.inner),
         };
-        let mut lifecycle = self.inner.lifecycle.lock();
+        let mut config = ScheduledTaskConfig::fixed_delay("broker.topic-queue-mapping-clean.scan", clean_interval);
+        config.initial_delay = initial_delay;
 
-        if let Err(error) = task_group.spawn_service("broker.topic-queue-mapping-clean.scan", async move {
-            tokio::select! {
-                _ = cancel_for_task.cancelled() => {
-                    this.inner.running.store(false, Ordering::Release);
-                    return;
-                }
-                _ = tokio::time::sleep(INITIAL_DELAY) => {}
-            }
-
-            let mut interval = tokio::time::interval(CLEAN_INTERVAL);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-            loop {
-                tokio::select! {
-                    _ = cancel_for_task.cancelled() => {
-                        this.inner.running.store(false, Ordering::Release);
-                        return;
-                    }
-                    _ = interval.tick() => {
-                        if let Err(err) = this.run_once().await {
-                            warn!("TopicQueueMappingCleanService scan failed: {}", err);
-                        }
-                    }
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(config, move || {
+            let this = this.clone();
+            async move {
+                if let Err(err) = this.run_once().await {
+                    warn!("TopicQueueMappingCleanService scan failed: {}", err);
                 }
             }
         }) {
@@ -139,23 +131,61 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
             return;
         }
 
+        let mut lifecycle = self.inner.lifecycle.lock();
+        lifecycle.scheduled_tasks = Some(scheduled_tasks);
         lifecycle.task_group = Some(task_group);
         info!("TopicQueueMappingCleanService started");
     }
 
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self) {
+        let _ = self.shutdown_with_report().await;
+    }
+
+    pub(crate) async fn shutdown_with_report(&self) -> Option<ShutdownReport> {
         self.inner.running.store(false, Ordering::Release);
-        let mut lifecycle = self.inner.lifecycle.lock();
-        if let Some(task_group) = lifecycle.task_group.take() {
-            let report = task_group.shutdown_now();
+        let task_group = {
+            let mut lifecycle = self.inner.lifecycle.lock();
+            lifecycle.scheduled_tasks.take();
+            lifecycle.task_group.take()
+        };
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
                 warn!(
                     report = %report.to_json(),
                     "TopicQueueMappingCleanService shutdown report is unhealthy"
                 );
             }
+            info!("TopicQueueMappingCleanService shutdown");
+            return Some(report);
         }
         info!("TopicQueueMappingCleanService shutdown");
+        None
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        let lifecycle = self.inner.lifecycle.lock();
+        let root_count = lifecycle
+            .task_group
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = lifecycle
+            .scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.inner
+            .lifecycle
+            .lock()
+            .scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -565,8 +595,14 @@ mod tests {
         service.start();
         service.start();
         assert!(service.is_running());
+        assert_eq!(service.task_count(), 1);
 
-        service.shutdown();
+        let report = service
+            .shutdown_with_report()
+            .await
+            .expect("shutdown should return a report");
         assert!(!service.is_running());
+        assert_eq!(service.task_count(), 0);
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

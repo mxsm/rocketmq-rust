@@ -77,3 +77,9 @@ tonic-prost-build = "0.14.6"
 hex = "0.4"
 hmac = "0.13.0"
 sha1 = "0.11"
+criterion = { version = "0.8", features = ["html_reports"] }
+serde_json = { workspace = true }
+
+[[bench]]
+name    = "proxy_housekeeping_lifecycle_bench"
+harness = false

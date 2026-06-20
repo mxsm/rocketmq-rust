@@ -110,3 +110,8 @@ criterion = { version = "0.8", features = ["html_reports"] }
 [[bench]]
 name = "observability_hot_path"
 harness = false
+
+[[bench]]
+name              = "observability_prometheus_lifecycle_bench"
+harness           = false
+required-features = ["prometheus"]

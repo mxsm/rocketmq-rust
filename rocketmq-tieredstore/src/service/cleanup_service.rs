@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
-use tokio::time::interval;
-use tokio::time::MissedTickBehavior;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::TaskGroup;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -52,19 +55,76 @@ where
         self.shutdown.clone()
     }
 
-    pub async fn run(self) -> Result<(), RocketMQError> {
-        let mut ticker = interval(self.config.delete_file_interval);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    pub fn schedule(
+        &self,
+        task_group: &TaskGroup,
+        cleanup_error: Arc<Mutex<Option<String>>>,
+    ) -> Result<ScheduledTaskGroup, RocketMQError> {
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let flat_file_store = self.flat_file_store.clone();
+        let task_group_on_error = task_group.clone();
+        let shutdown_on_error = self.shutdown.clone();
+        let cleanup_error_on_error = cleanup_error.clone();
 
-        loop {
-            tokio::select! {
-                _ = self.shutdown.cancelled() => {
-                    break;
+        scheduled_tasks
+            .schedule_fixed_rate_no_overlap(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "tieredstore.cleanup.expired-files",
+                    self.config.delete_file_interval,
+                ),
+                move || {
+                    let flat_file_store = flat_file_store.clone();
+                    let task_group_on_error = task_group_on_error.clone();
+                    let shutdown_on_error = shutdown_on_error.clone();
+                    let cleanup_error_on_error = cleanup_error_on_error.clone();
+                    async move {
+                        if let Err(error) = flat_file_store.cleanup_expired(current_time_millis()).await {
+                            let mut cleanup_error = cleanup_error_on_error.lock().await;
+                            if cleanup_error.is_none() {
+                                *cleanup_error = Some(error.to_string());
+                            }
+                            shutdown_on_error.cancel();
+                            task_group_on_error.cancel();
+                        }
+                    }
+                },
+            )
+            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
+
+        let shutdown = self.shutdown.clone();
+        let task_group_on_shutdown = task_group.clone();
+        let group_token = task_group.cancellation_token();
+        task_group
+            .spawn_service("cleanup-shutdown-watcher", async move {
+                tokio::select! {
+                    _ = shutdown.cancelled() => {
+                        task_group_on_shutdown.cancel();
+                    }
+                    _ = group_token.cancelled() => {}
                 }
-                _ = ticker.tick() => {
-                    self.flat_file_store.cleanup_expired(current_time_millis()).await?;
-                }
-            }
+            })
+            .map_err(|error| {
+                task_group.cancel();
+                RocketMQError::Internal(error.to_string())
+            })?;
+
+        Ok(scheduled_tasks)
+    }
+
+    pub async fn cleanup_once(&self) -> Result<(), RocketMQError> {
+        self.flat_file_store.cleanup_expired(current_time_millis()).await
+    }
+
+    pub async fn run(self) -> Result<(), RocketMQError> {
+        let task_group = crate::runtime::task_group("rocketmq-tieredstore.cleanup.run")?;
+        let cleanup_error = Arc::new(Mutex::new(None));
+        self.schedule(&task_group, cleanup_error.clone())?;
+
+        self.shutdown.cancelled().await;
+        let report = task_group.shutdown(Duration::from_secs(5)).await;
+        crate::runtime::shutdown_report_result("tieredstore cleanup run", report)?;
+        if let Some(error) = cleanup_error.lock().await.take() {
+            return Err(RocketMQError::Internal(error));
         }
         Ok(())
     }

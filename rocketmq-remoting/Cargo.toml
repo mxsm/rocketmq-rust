@@ -107,3 +107,11 @@ harness = false
 [[bench]]
 name    = "encode_buffer_bench"
 harness = false
+
+[[bench]]
+name    = "remoting_connection_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "remoting_connection_pool_cleanup_bench"
+harness = false

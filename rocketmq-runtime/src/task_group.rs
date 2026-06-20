@@ -23,10 +23,12 @@ use std::time::Duration;
 use std::time::Instant;
 
 use dashmap::DashMap;
+use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use parking_lot::Mutex;
 use serde::Serialize;
+use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -41,6 +43,8 @@ use crate::shutdown_report::TaskSnapshot;
 const STATE_OPEN: u8 = 0;
 const STATE_CLOSING: u8 = 1;
 const STATE_CLOSED: u8 = 2;
+const STATE_SHUTDOWN_COMPLETED: u8 = 3;
+const STATE_POISONED: u8 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TaskId(u64);
@@ -90,7 +94,7 @@ pub enum TaskResult {
     Panicked,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DetachedTaskPolicy {
     TrackOnly,
     AbortOnShutdown,
@@ -101,6 +105,8 @@ pub enum TaskGroupLifecycleState {
     Open,
     Closing,
     Closed,
+    ShutdownCompleted,
+    Poisoned,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +128,7 @@ struct TaskGroupInner {
     next_child_id: AtomicU64,
     completed: AtomicUsize,
     cancelled: AtomicUsize,
+    aborted: AtomicUsize,
     panicked: AtomicUsize,
     lifecycle: AtomicU8,
     spawn_gate: Mutex<()>,
@@ -138,7 +145,54 @@ struct TaskMeta {
     state: TaskState,
     started_at: Instant,
     detached: bool,
+    detached_policy: Option<DetachedTaskPolicy>,
     abort_handle: Option<AbortHandle>,
+    completion: Arc<TaskCompletion>,
+}
+
+#[derive(Debug)]
+struct TaskCompletion {
+    done: AtomicU8,
+    notify: Notify,
+}
+
+struct TaskCompletionGuard {
+    completion: Arc<TaskCompletion>,
+}
+
+impl TaskCompletion {
+    fn new() -> Self {
+        Self {
+            done: AtomicU8::new(0),
+            notify: Notify::new(),
+        }
+    }
+
+    fn mark_done(&self) {
+        if self.done.swap(1, Ordering::AcqRel) == 0 {
+            self.notify.notify_waiters();
+        }
+    }
+
+    fn is_done(&self) -> bool {
+        self.done.load(Ordering::Acquire) != 0
+    }
+
+    async fn wait(&self) {
+        loop {
+            let notified = self.notify.notified();
+            if self.is_done() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl Drop for TaskCompletionGuard {
+    fn drop(&mut self) {
+        self.completion.mark_done();
+    }
 }
 
 impl TaskGroup {
@@ -182,18 +236,49 @@ impl TaskGroup {
         self.inner.tasks.len()
     }
 
+    pub fn contains_task(&self, task_id: TaskId) -> bool {
+        self.inner.tasks.contains_key(&task_id)
+    }
+
     pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
+        let name = name.into();
+        self.try_child(name.clone())
+            .unwrap_or_else(|_error| self.closed_child(name))
+    }
+
+    pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+        let name = name.into();
+        let _spawn_guard = self.inner.spawn_gate.lock();
+        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
+            return Err(RuntimeError::TaskGroupClosing {
+                group_id: self.inner.id,
+                group_name: self.inner.name.clone(),
+            });
+        }
+
+        let child = self.open_child(name);
+        self.inner.children.lock().push(child.clone());
+        Ok(child)
+    }
+
+    fn open_child(&self, name: Arc<str>) -> Self {
         let child_id = TaskGroupId(self.inner.next_child_id.fetch_add(1, Ordering::Relaxed));
-        let child = Self {
+        Self {
             inner: Arc::new(TaskGroupInner::new(
                 child_id,
                 Some(self.inner.id),
-                name.into(),
+                name,
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
             )),
-        };
-        self.inner.children.lock().push(child.clone());
+        }
+    }
+
+    fn closed_child(&self, name: Arc<str>) -> Self {
+        let child = self.open_child(name);
+        child.inner.tracker.close();
+        child.inner.cancellation_token.cancel();
+        child.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         child
     }
 
@@ -201,7 +286,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, false, future)
+        self.spawn_inner(name.into(), kind, None, future)
     }
 
     pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
@@ -220,7 +305,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner_with_handle(name.into(), kind, false, true, future)
+        self.spawn_inner_with_handle(name.into(), kind, None, true, future)
     }
 
     pub fn spawn_service_with_handle<F>(
@@ -238,11 +323,60 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, true, future)
+        self.spawn_detached_with_policy(name, kind, DetachedTaskPolicy::TrackOnly, future)
+    }
+
+    pub fn spawn_detached_with_policy<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: TaskKind,
+        policy: DetachedTaskPolicy,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn_inner(name.into(), kind, Some(policy), future)
     }
 
     pub fn cancel(&self) {
         self.inner.cancellation_token.cancel();
+    }
+
+    pub fn abort_task(&self, task_id: TaskId) -> bool {
+        self.abort_task_inner(task_id).is_some()
+    }
+
+    pub async fn abort_task_and_wait(&self, task_id: TaskId, timeout: Duration) -> bool {
+        let Some(completion) = self.abort_task_inner(task_id) else {
+            return false;
+        };
+
+        if completion.is_done() {
+            return true;
+        }
+
+        if timeout.is_zero() {
+            return false;
+        }
+
+        tokio::time::timeout(timeout, completion.wait()).await.is_ok()
+    }
+
+    pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
+        let Some(completion) = self.inner.tasks.get(&task_id).map(|meta| meta.completion.clone()) else {
+            return true;
+        };
+
+        if completion.is_done() {
+            return true;
+        }
+
+        if timeout.is_zero() {
+            return false;
+        }
+
+        tokio::time::timeout(timeout, completion.wait()).await.is_ok()
     }
 
     pub fn shutdown(&self, timeout: Duration) -> BoxFuture<'_, ShutdownReport> {
@@ -266,11 +400,17 @@ impl TaskGroup {
         report
     }
 
-    fn spawn_inner<F>(&self, name: Arc<str>, kind: TaskKind, detached: bool, future: F) -> RuntimeResult<TaskId>
+    fn spawn_inner<F>(
+        &self,
+        name: Arc<str>,
+        kind: TaskKind,
+        detached_policy: Option<DetachedTaskPolicy>,
+        future: F,
+    ) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached, false, future)?;
+        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached_policy, false, future)?;
         drop(join_handle);
         Ok(task_id)
     }
@@ -279,7 +419,7 @@ impl TaskGroup {
         &self,
         name: Arc<str>,
         kind: TaskKind,
-        detached: bool,
+        detached_policy: Option<DetachedTaskPolicy>,
         propagate_panic: bool,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
@@ -295,6 +435,7 @@ impl TaskGroup {
         }
 
         let task_id = TaskId(self.inner.next_task_id.fetch_add(1, Ordering::Relaxed));
+        let completion = Arc::new(TaskCompletion::new());
         self.inner.tasks.insert(
             task_id,
             TaskMeta {
@@ -305,25 +446,33 @@ impl TaskGroup {
                 kind,
                 state: TaskState::Queued,
                 started_at: Instant::now(),
-                detached,
+                detached: detached_policy.is_some(),
+                detached_policy,
                 abort_handle: None,
+                completion: completion.clone(),
             },
         );
 
         let inner = self.inner.clone();
         let token = inner.cancellation_token.clone();
         let wrapped = async move {
+            let _completion_guard = TaskCompletionGuard {
+                completion: completion.clone(),
+            };
             let result = AssertUnwindSafe(future).catch_unwind().await;
             match result {
                 Ok(()) if token.is_cancelled() => {
                     inner.finish_task(task_id, TaskResult::Cancelled);
+                    completion.mark_done();
                 }
                 Ok(()) => {
                     inner.finish_task(task_id, TaskResult::Completed);
+                    completion.mark_done();
                 }
                 Err(error) => {
                     tracing::error!(task_id = task_id.as_u64(), ?error, "task panicked");
                     inner.finish_task(task_id, TaskResult::Panicked);
+                    completion.mark_done();
                     if propagate_panic {
                         std::panic::resume_unwind(error);
                     }
@@ -331,7 +480,7 @@ impl TaskGroup {
             }
         };
 
-        let join_handle = if detached {
+        let join_handle = if detached_policy.is_some() {
             self.inner.runtime.spawn(wrapped)
         } else {
             self.inner.tracker.spawn_on(wrapped, self.inner.runtime.inner())
@@ -346,29 +495,50 @@ impl TaskGroup {
         Ok((task_id, join_handle))
     }
 
+    fn abort_task_inner(&self, task_id: TaskId) -> Option<Arc<TaskCompletion>> {
+        let (_, meta) = self.inner.tasks.remove(&task_id)?;
+        if let Some(abort_handle) = meta.abort_handle {
+            abort_handle.abort();
+        }
+        self.inner.aborted.fetch_add(1, Ordering::Relaxed);
+        Some(meta.completion)
+    }
+
     async fn shutdown_inner(&self, timeout: Duration) -> ShutdownReport {
         let started_at = Instant::now();
-        let children = self.inner.children.lock().clone();
-
-        {
+        let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
             self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
-        }
+            self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+            self.inner.children.lock().clone()
+        };
+        self.abort_detached_abort_on_shutdown_tasks();
 
-        let mut child_reports = Vec::with_capacity(children.len());
-        for child in children {
-            child_reports.push(child.shutdown(timeout).await);
-        }
+        let child_reports = async {
+            join_all(children.into_iter().map(|child| async move {
+                let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
+                child.shutdown(remaining).await
+            }))
+            .await
+        };
+        let tracked_shutdown = async {
+            let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
+            if tokio::time::timeout(remaining, self.inner.tracker.wait())
+                .await
+                .is_err()
+            {
+                self.abort_tracked_tasks();
+                let drain_timeout = timeout.min(Duration::from_secs(1));
+                let _ = tokio::time::timeout(drain_timeout, self.inner.tracker.wait()).await;
+                true
+            } else {
+                false
+            }
+        };
 
-        let mut timed_out = false;
-        if tokio::time::timeout(timeout, self.inner.tracker.wait()).await.is_err() {
-            timed_out = true;
-            self.abort_tracked_tasks();
-            let drain_timeout = timeout.min(Duration::from_secs(1));
-            let _ = tokio::time::timeout(drain_timeout, self.inner.tracker.wait()).await;
-        }
+        let (child_reports, timed_out) = tokio::join!(child_reports, tracked_shutdown);
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
         report.completed = self.inner.completed.load(Ordering::Relaxed);
@@ -376,7 +546,7 @@ impl TaskGroup {
         report.panicked = self.inner.panicked.load(Ordering::Relaxed);
         report.children = child_reports;
 
-        let aborted = self.remove_aborted_tasks();
+        let aborted = self.inner.aborted.load(Ordering::Relaxed) + self.remove_aborted_tasks();
         report.aborted = aborted;
         if aborted > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
@@ -399,26 +569,27 @@ impl TaskGroup {
             )));
         }
 
-        self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+        self.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         report
     }
 
     fn shutdown_now_inner(&self) -> ShutdownReport {
         let started_at = Instant::now();
-        let children = self.inner.children.lock().clone();
-
-        {
+        let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
             self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
-        }
+            self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+            self.inner.children.lock().clone()
+        };
 
         let mut child_reports = Vec::with_capacity(children.len());
         for child in children {
             child_reports.push(child.shutdown_now());
         }
 
+        self.abort_detached_abort_on_shutdown_tasks();
         self.abort_tracked_tasks();
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
@@ -427,7 +598,7 @@ impl TaskGroup {
         report.panicked = self.inner.panicked.load(Ordering::Relaxed);
         report.children = child_reports;
 
-        let aborted = self.remove_aborted_tasks();
+        let aborted = self.inner.aborted.load(Ordering::Relaxed) + self.remove_aborted_tasks();
         report.aborted = aborted;
         if aborted > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
@@ -447,7 +618,7 @@ impl TaskGroup {
             )));
         }
 
-        self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+        self.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         report
     }
 
@@ -463,12 +634,24 @@ impl TaskGroup {
         }
     }
 
+    fn abort_detached_abort_on_shutdown_tasks(&self) {
+        for mut entry in self.inner.tasks.iter_mut() {
+            if entry.detached_policy != Some(DetachedTaskPolicy::AbortOnShutdown) {
+                continue;
+            }
+            entry.state = TaskState::Aborted;
+            if let Some(abort_handle) = &entry.abort_handle {
+                abort_handle.abort();
+            }
+        }
+    }
+
     fn remove_aborted_tasks(&self) -> usize {
         let aborted_ids = self
             .inner
             .tasks
             .iter()
-            .filter_map(|entry| (!entry.detached && entry.state == TaskState::Aborted).then_some(*entry.key()))
+            .filter_map(|entry| (entry.state == TaskState::Aborted).then_some(*entry.key()))
             .collect::<Vec<_>>();
 
         for task_id in &aborted_ids {
@@ -508,6 +691,7 @@ impl TaskGroupInner {
             next_child_id: AtomicU64::new(id.as_u64() * 1_000_000 + 1),
             completed: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
+            aborted: AtomicUsize::new(0),
             panicked: AtomicUsize::new(0),
             lifecycle: AtomicU8::new(STATE_OPEN),
             spawn_gate: Mutex::new(()),
@@ -519,11 +703,28 @@ impl TaskGroupInner {
         match self.lifecycle.load(Ordering::Acquire) {
             STATE_OPEN => TaskGroupLifecycleState::Open,
             STATE_CLOSING => TaskGroupLifecycleState::Closing,
-            _ => TaskGroupLifecycleState::Closed,
+            STATE_CLOSED => TaskGroupLifecycleState::Closed,
+            STATE_SHUTDOWN_COMPLETED => TaskGroupLifecycleState::ShutdownCompleted,
+            _ => TaskGroupLifecycleState::Poisoned,
         }
     }
 
+    fn mark_poisoned_if_open(&self) {
+        let _ = self
+            .lifecycle
+            .compare_exchange(STATE_OPEN, STATE_POISONED, Ordering::AcqRel, Ordering::Acquire);
+    }
+
     fn finish_task(&self, task_id: TaskId, result: TaskResult) {
+        let Some((_, meta)) = self.tasks.remove(&task_id) else {
+            return;
+        };
+
+        if meta.state == TaskState::Aborted {
+            self.aborted.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
         match result {
             TaskResult::Completed => {
                 self.completed.fetch_add(1, Ordering::Relaxed);
@@ -533,11 +734,10 @@ impl TaskGroupInner {
             }
             TaskResult::Panicked => {
                 self.panicked.fetch_add(1, Ordering::Relaxed);
+                self.mark_poisoned_if_open();
             }
             TaskResult::Aborted => {}
         }
-
-        self.tasks.remove(&task_id);
     }
 }
 
@@ -552,6 +752,7 @@ impl TaskMeta {
             state: override_state,
             elapsed: self.started_at.elapsed(),
             detached: self.detached,
+            detached_policy: self.detached_policy,
         }
     }
 }
