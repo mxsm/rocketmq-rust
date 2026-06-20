@@ -114,6 +114,72 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Default controller listen port
 pub const DEFAULT_CONTROLLER_PORT: u16 = 9878;
 
+#[doc(hidden)]
+pub mod bench_support {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use rocketmq_runtime::ShutdownReport;
+    use rocketmq_rust::ArcMut;
+    use serde::Serialize;
+
+    use crate::config::ControllerConfig;
+    use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+    use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
+
+    #[derive(Clone, Debug, Serialize)]
+    pub struct ControllerHeartbeatLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: ShutdownReport,
+        pub healthy: bool,
+    }
+
+    pub async fn run_controller_heartbeat_lifecycle_probe() -> ControllerHeartbeatLifecycleProbe {
+        let mut manager =
+            DefaultBrokerHeartbeatManager::new(ArcMut::new(ControllerConfig::test_config())).with_scan_interval_ms(1);
+
+        manager.start();
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let task_count_before_shutdown = manager.scan_task_count();
+
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = manager.shutdown_gracefully_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = manager.scan_task_count();
+        let finished_tasks = shutdown_report.completed + shutdown_report.cancelled;
+        let healthy = shutdown_report.is_healthy()
+            && task_count_before_shutdown == 1
+            && task_count_after_shutdown == 0
+            && finished_tasks == 1;
+
+        ControllerHeartbeatLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+}
+
+#[cfg(test)]
+mod bench_support_tests {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn controller_heartbeat_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_controller_heartbeat_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert!(
+            probe.shutdown_report.is_healthy(),
+            "{}",
+            probe.shutdown_report.to_json()
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

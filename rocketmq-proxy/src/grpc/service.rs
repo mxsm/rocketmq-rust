@@ -25,10 +25,15 @@ use futures::Stream;
 use futures::StreamExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskGroup;
 use tokio::sync::mpsc;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
-use tokio::time::MissedTickBehavior;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -192,6 +197,12 @@ pub struct ProxyGrpcService<P> {
     auth_runtime: Option<Arc<ProxyAuthRuntime>>,
     hooks: ProxyHookChain,
     metrics: ProxyMetrics,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProxyHousekeepingRunReport {
+    pub schedule_snapshot: Vec<ScheduledTaskSnapshot>,
+    pub shutdown_report: ShutdownReport,
 }
 
 impl<P> Clone for ProxyGrpcService<P> {
@@ -427,21 +438,50 @@ impl<P> ProxyGrpcService<P> {
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        let mut interval = tokio::time::interval(self.housekeeping_interval());
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        tokio::pin!(shutdown);
+        let _ = self.run_housekeeping_until_with_report(shutdown).await;
+    }
 
-        loop {
-            tokio::select! {
-                _ = &mut shutdown => break,
-                _ = interval.tick() => {
-                    self.reap_session_state();
-                    self.renew_due_receipt_handles().await;
-                    self.dispatch_due_prepared_transaction_recoveries();
-                    self.schedule_next_reap();
+    pub async fn run_housekeeping_until_with_report<F>(&self, shutdown: F) -> ProxyHousekeepingRunReport
+    where
+        F: std::future::Future<Output = ()> + Send,
+        P: MessagingProcessor + 'static,
+    {
+        let task_group = TaskGroup::root(
+            "rocketmq-proxy.grpc.housekeeping",
+            RuntimeHandle::new(tokio::runtime::Handle::current()),
+        );
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let service = self.clone();
+        let schedule_result = scheduled_tasks.schedule_fixed_rate_no_overlap(
+            ScheduledTaskConfig::fixed_rate_no_overlap("proxy.grpc.housekeeping", self.housekeeping_interval()),
+            move || {
+                let service = service.clone();
+                async move {
+                    service.run_housekeeping_once().await;
                 }
-            }
+            },
+        );
+        if let Err(error) = schedule_result {
+            tracing::warn!(%error, "failed to schedule proxy gRPC housekeeping task");
         }
+
+        shutdown.await;
+        let schedule_snapshot = scheduled_tasks.snapshot();
+        let shutdown_report = task_group.shutdown(Duration::from_secs(5)).await;
+        ProxyHousekeepingRunReport {
+            schedule_snapshot,
+            shutdown_report,
+        }
+    }
+
+    async fn run_housekeeping_once(&self)
+    where
+        P: MessagingProcessor + 'static,
+    {
+        self.reap_session_state();
+        self.renew_due_receipt_handles().await;
+        self.dispatch_due_prepared_transaction_recoveries();
+        self.schedule_next_reap();
     }
 
     fn housekeeping_interval(&self) -> Duration {

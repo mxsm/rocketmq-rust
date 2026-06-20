@@ -164,7 +164,12 @@ pub mod bench_support {
         pub task_count_before_shutdown: usize,
         pub task_count_after_shutdown: usize,
         pub shutdown_elapsed_us: u128,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
         pub report: ShutdownReport,
+        pub housekeeping_report: Option<ShutdownReport>,
         pub healthy: bool,
     }
 
@@ -174,16 +179,18 @@ pub mod bench_support {
         let task_group = TaskGroup::root("rocketmq-proxy.bench.housekeeping", RuntimeHandle::new(runtime));
         let (started_tx, started_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (report_tx, report_rx) = oneshot::channel();
         let housekeeping = service.clone();
 
         task_group
             .spawn_service("proxy.grpc.housekeeping", async move {
                 let _ = started_tx.send(());
-                housekeeping
-                    .run_housekeeping_until(async move {
+                let run_report = housekeeping
+                    .run_housekeeping_until_with_report(async move {
                         let _ = shutdown_rx.await;
                     })
                     .await;
+                let _ = report_tx.send(run_report);
             })
             .expect("proxy housekeeping benchmark task should spawn");
 
@@ -197,18 +204,42 @@ pub mod bench_support {
         let _ = shutdown_tx.send(());
         let report = task_group.shutdown(Duration::from_secs(5)).await;
         let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let housekeeping_report = report_rx.await.ok();
+        let schedule_snapshot = housekeeping_report
+            .as_ref()
+            .map(|report| report.schedule_snapshot.as_slice())
+            .unwrap_or_default();
+        let scheduled_runs = schedule_snapshot.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = schedule_snapshot.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = schedule_snapshot.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = schedule_snapshot.iter().map(|snapshot| snapshot.failures).sum();
+        let housekeeping_shutdown_report = housekeeping_report
+            .as_ref()
+            .map(|report| report.shutdown_report.clone());
         let task_count_after_shutdown = task_group.task_count();
         let finished_tasks = report.completed + report.cancelled;
+        let housekeeping_healthy = housekeeping_shutdown_report
+            .as_ref()
+            .map(ShutdownReport::is_healthy)
+            .unwrap_or(false);
         let healthy = report.is_healthy()
             && task_count_before_shutdown == 1
             && task_count_after_shutdown == 0
-            && finished_tasks == 1;
+            && finished_tasks == 1
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && housekeeping_healthy;
 
         ProxyHousekeepingLifecycleProbe {
             task_count_before_shutdown,
             task_count_after_shutdown,
             shutdown_elapsed_us,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
             report,
+            housekeeping_report: housekeeping_shutdown_report,
             healthy,
         }
     }

@@ -19,6 +19,8 @@ use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use rocketmq_runtime::ShutdownReport;
+
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
 use crate::file::ConsumeQueueUnit;
@@ -91,6 +93,30 @@ where
 
     pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
         self.metrics.clone()
+    }
+
+    pub async fn task_count(&self) -> usize {
+        self.task_group
+            .lock()
+            .await
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or(0)
+    }
+
+    pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, RocketMQError> {
+        self.shutdown.cancel();
+        let report = if let Some(task_group) = self.task_group.lock().await.take() {
+            let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
+            runtime::shutdown_report_result("tieredstore dispatcher", report.clone())?;
+            report
+        } else {
+            ShutdownReport::new("rocketmq-tieredstore.dispatcher", std::time::Duration::ZERO)
+        };
+        if let Some(error) = self.task_error.lock().await.take() {
+            return Err(RocketMQError::Internal(error));
+        }
+        Ok(report)
     }
 
     pub fn try_dispatch(&self, request: TieredDispatchRequest) -> Result<(), RocketMQError> {
@@ -233,14 +259,7 @@ where
     }
 
     async fn shutdown(&self) -> Result<(), RocketMQError> {
-        self.shutdown.cancel();
-        if let Some(task_group) = self.task_group.lock().await.take() {
-            let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
-            runtime::shutdown_report_result("tieredstore dispatcher", report)?;
-        }
-        if let Some(error) = self.task_error.lock().await.take() {
-            return Err(RocketMQError::Internal(error));
-        }
+        self.shutdown_with_report().await?;
         Ok(())
     }
 }

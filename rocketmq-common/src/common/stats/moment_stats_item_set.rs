@@ -17,9 +17,10 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
 use tokio::time::Duration;
-use tokio::time::MissedTickBehavior;
 use tracing::warn;
 
 use crate::common::stats::moment_stats_item::MomentStatsItem;
@@ -74,26 +75,15 @@ impl MomentStatsItemSet {
             }
         };
         let task_group = TaskGroup::root(format!("rocketmq-common.moment-stats-set.{}", self.stats_name), runtime);
-        let shutdown_token = task_group.cancellation_token();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let mut config =
+            ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats-set.print", Duration::from_secs(300));
+        config.initial_delay = initial_delay;
 
-        if let Err(error) = task_group.spawn_service("common.moment-stats-set.print", async move {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    return;
-                }
-                _ = tokio::time::sleep(initial_delay) => {}
-            }
-            let mut interval = tokio::time::interval(Duration::from_secs(300));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        MomentStatsItemSet::print_at_minutes(&stats_item_table);
-                    }
-                }
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+            let stats_item_table = stats_item_table.clone();
+            async move {
+                MomentStatsItemSet::print_at_minutes(&stats_item_table);
             }
         }) {
             warn!(

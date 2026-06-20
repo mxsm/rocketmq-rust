@@ -91,6 +91,10 @@ tracing-subscriber = { workspace = true }
 name    = "controller_bench"
 harness = false
 
+[[bench]]
+name    = "controller_heartbeat_lifecycle_bench"
+harness = false
+
 [features]
 default         = ["storage-file"]
 storage-rocksdb = ["rocksdb"]

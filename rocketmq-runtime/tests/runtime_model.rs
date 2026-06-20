@@ -611,6 +611,37 @@ fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
     assert!(context.root_group().spawn_service("late-task", async {}).is_err());
 }
 
+#[test]
+fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
+    let config = RuntimeConfig {
+        worker_threads: 2,
+        max_blocking_threads: 2,
+        shutdown_timeout: Duration::from_millis(50),
+        ..RuntimeConfig::default()
+    };
+    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let context = owner.context().clone();
+
+    owner.block_on(async {
+        context
+            .root_group()
+            .spawn_service("owner-background-pending-task", async {
+                std::future::pending::<()>().await;
+            })
+            .expect("pending task should spawn");
+        tokio::task::yield_now().await;
+    });
+
+    let report = owner.shutdown_background();
+
+    assert_eq!(report.aborted, 1, "{}", report.to_json());
+    assert_eq!(
+        context.root_group().lifecycle_state(),
+        TaskGroupLifecycleState::ShutdownCompleted
+    );
+    assert!(context.root_group().spawn_service("late-task", async {}).is_err());
+}
+
 async fn run_limited_blocking_task(
     executor: BlockingExecutor,
     active: Arc<AtomicUsize>,

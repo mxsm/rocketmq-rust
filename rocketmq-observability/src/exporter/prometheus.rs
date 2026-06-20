@@ -72,6 +72,10 @@ impl PrometheusHttpHandle {
         self.local_addr
     }
 
+    pub fn task_count(&self) -> usize {
+        self.task_group.task_count()
+    }
+
     pub fn shutdown(mut self) {
         self.signal_shutdown();
         self.task_group.cancel();

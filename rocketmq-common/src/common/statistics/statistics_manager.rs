@@ -20,8 +20,9 @@ use std::time::SystemTime;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
-use tokio::time::interval;
 
 use crate::common::statistics::statistics_item::StatisticsItem;
 use crate::common::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
@@ -121,30 +122,30 @@ impl StatisticsManager {
             }
         };
         let task_group = TaskGroup::root("rocketmq-common.statistics", runtime);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let stats_table = self.stats_table.clone();
         let kind_meta_map = self.kind_meta_map.clone();
         let statistics_item_state_getter = self.statistics_item_state_getter.clone();
-        let shutdown_token = task_group.cancellation_token();
 
-        if let Err(error) = task_group.spawn_service("common.statistics.cleanup", async move {
-            let mut interval = interval(Duration::from_millis(Self::MAX_IDLE_TIME / 3));
-            let stats_table_clone = stats_table.clone();
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        let statistics_item_state_getter = statistics_item_state_getter.read().clone();
-                        let expired_items =
-                            expired_statistics_items(&stats_table, statistics_item_state_getter, current_millis());
-                        for item in expired_items {
-                            remove(item.as_ref(), &stats_table_clone, &kind_meta_map);
-                        }
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
+            ScheduledTaskConfig::fixed_rate_no_overlap(
+                "common.statistics.cleanup",
+                Duration::from_millis(Self::MAX_IDLE_TIME / 3),
+            ),
+            move || {
+                let stats_table = stats_table.clone();
+                let kind_meta_map = kind_meta_map.clone();
+                let statistics_item_state_getter = statistics_item_state_getter.clone();
+                async move {
+                    let statistics_item_state_getter = statistics_item_state_getter.read().clone();
+                    let expired_items =
+                        expired_statistics_items(&stats_table, statistics_item_state_getter, current_millis());
+                    for item in expired_items {
+                        remove(item.as_ref(), &stats_table, &kind_meta_map);
                     }
                 }
-            }
-        }) {
+            },
+        ) {
             tracing::warn!(%error, "failed to spawn StatisticsManager cleanup task");
             return;
         }

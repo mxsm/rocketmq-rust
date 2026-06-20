@@ -22,15 +22,15 @@ use std::time::Duration;
 
 use anyhow::bail;
 use anyhow::Context;
-use rocketmq_runtime::RuntimeContext;
-use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 pub struct TokioExecutorService {
-    inner: tokio::runtime::Runtime,
+    inner: RuntimeOwner,
 }
 
 impl Default for TokioExecutorService {
@@ -45,7 +45,9 @@ impl TokioExecutorService {
     }
 
     pub fn shutdown_timeout(self, timeout: Duration) {
-        self.inner.shutdown_timeout(timeout);
+        if let Err(error) = self.inner.shutdown_runtime_blocking_with_timeout(timeout) {
+            tracing::warn!(%error, "failed to shut down TokioExecutorService runtime");
+        }
     }
 }
 
@@ -55,13 +57,13 @@ impl TokioExecutorService {
     }
 
     pub fn try_new() -> anyhow::Result<TokioExecutorService> {
-        Ok(TokioExecutorService {
-            inner: tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(num_cpus::get())
-                .enable_all()
-                .build()
-                .context("failed to create TokioExecutorService runtime")?,
-        })
+        Self::from_config(common_runtime_config(
+            num_cpus::get(),
+            "rocketmq-common-tokio-executor",
+            Duration::from_secs(30),
+            num_cpus::get().saturating_mul(4),
+        ))
+        .context("failed to create TokioExecutorService runtime")
     }
 
     pub fn new_with_config(
@@ -86,20 +88,18 @@ impl TokioExecutorService {
         } else {
             "rocketmq-thread-".to_string()
         };
-        Ok(TokioExecutorService {
-            inner: tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(thread_num)
-                .thread_keep_alive(keep_alive)
-                .max_blocking_threads(max_blocking_threads)
-                .thread_name_fn(move || {
-                    static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                    let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                    format!("{thread_prefix_inner}{id}")
-                })
-                .enable_all()
-                .build()
-                .context("failed to create configured TokioExecutorService runtime")?,
-        })
+        Self::from_config(common_runtime_config(
+            thread_num,
+            thread_prefix_inner,
+            keep_alive,
+            max_blocking_threads,
+        ))
+        .context("failed to create configured TokioExecutorService runtime")
+    }
+
+    fn from_config(config: RuntimeConfig) -> anyhow::Result<TokioExecutorService> {
+        let inner = RuntimeOwner::new(config)?;
+        Ok(TokioExecutorService { inner })
     }
 }
 
@@ -109,11 +109,11 @@ impl TokioExecutorService {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.inner.spawn(future)
+        self.inner.context().runtime().spawn(future)
     }
 
     pub fn get_handle(&self) -> &Handle {
-        self.inner.handle()
+        self.inner.context().runtime().inner()
     }
 
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
@@ -172,8 +172,7 @@ impl FuturesExecutorServiceBuilder {
 }
 
 pub struct ScheduledExecutorService {
-    inner: tokio::runtime::Runtime,
-    context: RuntimeContext,
+    inner: RuntimeOwner,
     scheduled_tasks: ScheduledTaskGroup,
 }
 
@@ -188,12 +187,13 @@ impl ScheduledExecutorService {
     }
 
     pub fn try_new() -> anyhow::Result<ScheduledExecutorService> {
-        let inner = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(num_cpus::get())
-            .enable_all()
-            .build()
-            .context("failed to create ScheduledExecutorService runtime")?;
-        Self::from_runtime(inner)
+        Self::from_config(common_runtime_config(
+            num_cpus::get(),
+            "rocketmq-common-scheduled-executor",
+            Duration::from_secs(30),
+            num_cpus::get().saturating_mul(4),
+        ))
+        .context("failed to create ScheduledExecutorService runtime")
     }
 
     pub fn new_with_config(
@@ -218,19 +218,13 @@ impl ScheduledExecutorService {
         } else {
             "rocketmq-thread-".to_string()
         };
-        let inner = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(thread_num)
-            .thread_keep_alive(keep_alive)
-            .max_blocking_threads(max_blocking_threads)
-            .thread_name_fn(move || {
-                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                format!("{thread_prefix_inner}{id}")
-            })
-            .enable_all()
-            .build()
-            .context("failed to create configured ScheduledExecutorService runtime")?;
-        Self::from_runtime(inner)
+        Self::from_config(common_runtime_config(
+            thread_num,
+            thread_prefix_inner,
+            keep_alive,
+            max_blocking_threads,
+        ))
+        .context("failed to create configured ScheduledExecutorService runtime")
     }
 
     pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
@@ -262,19 +256,25 @@ impl ScheduledExecutorService {
         }
     }
 
-    fn from_runtime(inner: tokio::runtime::Runtime) -> anyhow::Result<ScheduledExecutorService> {
-        let context = RuntimeContext::new(
-            RuntimeHandle::new(inner.handle().clone()),
-            "rocketmq.common.scheduled-executor",
-        )
-        .map_err(|error| anyhow::anyhow!("failed to create scheduled executor context: {error}"))?;
-        let scheduled_tasks = ScheduledTaskGroup::new(context.root_group().child("scheduled"));
-        Ok(ScheduledExecutorService {
-            inner,
-            context,
-            scheduled_tasks,
-        })
+    fn from_config(config: RuntimeConfig) -> anyhow::Result<ScheduledExecutorService> {
+        let inner = RuntimeOwner::new(config)?;
+        let scheduled_tasks = ScheduledTaskGroup::new(inner.context().root_group().child("scheduled"));
+        Ok(ScheduledExecutorService { inner, scheduled_tasks })
     }
+}
+
+fn common_runtime_config(
+    thread_num: usize,
+    thread_name: impl Into<String>,
+    keep_alive: Duration,
+    max_blocking_threads: usize,
+) -> RuntimeConfig {
+    let mut config = RuntimeConfig::server_default(thread_name);
+    config.worker_threads = thread_num;
+    config.max_blocking_threads = max_blocking_threads;
+    config.thread_keep_alive = keep_alive;
+    config.blocking_pool_policy.max_concurrency = max_blocking_threads;
+    config
 }
 
 fn validate_runtime_config(thread_num: usize, max_blocking_threads: usize) -> anyhow::Result<()> {
@@ -334,12 +334,11 @@ impl ScheduledExecutorService {
     pub fn shutdown_timeout(self, timeout: Duration) {
         let ScheduledExecutorService {
             inner,
-            context,
             scheduled_tasks: _,
         } = self;
-        let report = inner.block_on(context.shutdown_tasks(timeout));
-        report.log_if_unhealthy();
-        inner.shutdown_timeout(timeout);
+        if let Err(error) = inner.shutdown_runtime_blocking_with_timeout(timeout) {
+            tracing::warn!(%error, "failed to shut down ScheduledExecutorService runtime");
+        }
     }
 }
 
@@ -351,8 +350,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use super::FuturesExecutorServiceBuilder;
-    use super::ScheduledExecutorService;
+    use super::*;
 
     #[test]
     fn futures_executor_builder_create_returns_executor() {
@@ -365,6 +363,21 @@ mod tests {
         });
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
+    }
+
+    #[test]
+    fn tokio_executor_uses_runtime_owner_and_runs_tasks() {
+        let executor =
+            TokioExecutorService::try_new_with_config(2, Some("tokio-executor-test"), Duration::from_secs(1), 2)
+                .expect("tokio executor should be created");
+        let (tx, rx) = mpsc::channel();
+
+        executor.spawn(async move {
+            tx.send(42).expect("test receiver should be alive");
+        });
+
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
+        executor.shutdown_timeout(Duration::from_secs(1));
     }
 
     #[test]

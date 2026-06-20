@@ -62,3 +62,13 @@ tempfile  = "3.27.0"
 [[bench]]
 name    = "tieredstore_bench"
 harness = false
+
+[[bench]]
+name              = "tieredstore_dispatcher_lifecycle_bench"
+harness           = false
+required-features = ["serde"]
+
+[[bench]]
+name              = "tieredstore_cleanup_lifecycle_bench"
+harness           = false
+required-features = ["serde"]

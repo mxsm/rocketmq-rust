@@ -22,6 +22,7 @@ use dashmap::DashMap;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tracing::info;
@@ -97,6 +98,10 @@ impl DefaultBrokerHeartbeatManager {
     }
 
     pub(crate) async fn shutdown_gracefully(&mut self) {
+        let _ = self.shutdown_gracefully_with_report().await;
+    }
+
+    pub(crate) async fn shutdown_gracefully_with_report(&mut self) -> ShutdownReport {
         if let Some(task_group) = self.scan_task_group.take() {
             let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
             if !report.is_healthy() {
@@ -106,7 +111,14 @@ impl DefaultBrokerHeartbeatManager {
                 );
             }
             info!("DefaultBrokerHeartbeatManager background scan stopped");
+            report
+        } else {
+            ShutdownReport::new("rocketmq-controller.heartbeat", Duration::ZERO)
         }
+    }
+
+    pub(crate) fn scan_task_count(&self) -> usize {
+        self.scan_task_group.as_ref().map(TaskGroup::task_count).unwrap_or(0)
     }
 
     /// Set the scan interval

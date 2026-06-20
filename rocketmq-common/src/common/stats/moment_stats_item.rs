@@ -20,8 +20,9 @@ use std::time::SystemTime;
 
 use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
-use tokio::time;
 use tracing::info;
 use tracing::warn;
 
@@ -71,26 +72,16 @@ impl MomentStatsItem {
             format!("rocketmq-common.moment-stats.{}.{}", self.stats_name, self.stats_key),
             runtime,
         );
-        let shutdown_token = task_group.cancellation_token();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
         let self_clone = self.clone();
-        if let Err(error) = task_group.spawn_service("common.moment-stats.print", async move {
-            let initial_delay = Duration::from_millis(
-                (compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs(),
-            );
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    return;
-                }
-                _ = time::sleep(initial_delay) => {}
-            }
-            let mut interval = time::interval(Duration::from_secs(300));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {}
-                }
+        let mut config =
+            ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats.print", Duration::from_secs(300));
+        config.initial_delay =
+            Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
+
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+            let self_clone = self_clone.clone();
+            async move {
                 self_clone.print_at_minutes();
                 self_clone.value.store(0, Ordering::Relaxed);
             }

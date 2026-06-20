@@ -21,27 +21,26 @@ use std::time::UNIX_EPOCH;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
-use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_proxy::bench_support::run_proxy_housekeeping_lifecycle_probe;
-use rocketmq_proxy::bench_support::ProxyHousekeepingLifecycleProbe;
+use rocketmq_observability::bench_support::run_prometheus_lifecycle_probe;
+use rocketmq_observability::bench_support::PrometheusLifecycleProbe;
 
-fn run_housekeeping_probe(shutdown_delay: Duration) -> ProxyHousekeepingLifecycleProbe {
+fn run_lifecycle_probe() -> PrometheusLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(4)
-        .thread_name("rocketmq-proxy-housekeeping-bench")
+        .thread_name("rocketmq-observability-prometheus-bench")
         .enable_all()
         .build()
-        .expect("proxy housekeeping benchmark runtime should start");
+        .expect("observability prometheus benchmark runtime should start");
 
-    runtime.block_on(run_proxy_housekeeping_lifecycle_probe(shutdown_delay))
+    runtime.block_on(run_prometheus_lifecycle_probe())
 }
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("rocketmq-proxy should live below workspace root")
+        .expect("rocketmq-observability should live below workspace root")
         .to_path_buf()
 }
 
@@ -49,8 +48,8 @@ fn benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/runtime-baseline/prototype")
 }
 
-fn write_proxy_housekeeping_report_artifact() {
-    let output = run_housekeeping_probe(Duration::from_millis(5));
+fn write_prometheus_lifecycle_report_artifact() {
+    let output = run_lifecycle_probe();
     assert!(output.healthy, "{output:?}");
     let output_dir = benchmark_artifact_dir();
     fs::create_dir_all(&output_dir).expect("runtime benchmark artifact directory should be created");
@@ -60,40 +59,29 @@ fn write_proxy_housekeeping_report_artifact() {
         .expect("system clock should be after unix epoch")
         .as_millis();
     let payload = serde_json::json!({
-        "case": "proxy_housekeeping_lifecycle",
+        "case": "observability_prometheus_lifecycle",
         "generated_at_unix_ms": generated_at_unix_ms,
         "probe": output,
     });
-    let path = output_dir.join("proxy-housekeeping-lifecycle-report.json");
+    let path = output_dir.join("observability-prometheus-lifecycle-report.json");
     fs::write(
         path,
-        serde_json::to_vec_pretty(&payload).expect("proxy housekeeping benchmark artifact should serialize"),
+        serde_json::to_vec_pretty(&payload).expect("observability prometheus benchmark artifact should serialize"),
     )
-    .expect("proxy housekeeping benchmark artifact should be written");
+    .expect("observability prometheus benchmark artifact should be written");
 }
 
-fn bench_proxy_housekeeping_lifecycle(criterion: &mut Criterion) {
-    write_proxy_housekeeping_report_artifact();
+fn bench_observability_prometheus_lifecycle(criterion: &mut Criterion) {
+    write_prometheus_lifecycle_report_artifact();
 
-    let mut group = criterion.benchmark_group("proxy_housekeeping_lifecycle");
-    for shutdown_delay_ms in [5u64, 20] {
-        group.bench_with_input(
-            BenchmarkId::new("shutdown_drain", shutdown_delay_ms),
-            &shutdown_delay_ms,
-            |bencher, shutdown_delay_ms| {
-                bencher.iter(|| {
-                    let output = run_housekeeping_probe(Duration::from_millis(black_box(*shutdown_delay_ms)));
-                    assert!(output.healthy, "{output:?}");
-                    black_box(output.shutdown_elapsed_us);
-                    black_box(output.scheduled_runs);
-                    black_box(output.scheduled_skips);
-                    black_box(output.scheduled_overlaps);
-                    black_box(output.task_count_after_shutdown);
-                });
-            },
-        );
-    }
-    group.finish();
+    criterion.bench_function("observability_prometheus_lifecycle/scrape_and_shutdown", |bencher| {
+        bencher.iter(|| {
+            let output = run_lifecycle_probe();
+            assert!(output.healthy, "{output:?}");
+            black_box(output.shutdown_elapsed_us);
+            black_box(output.response_bytes);
+        });
+    });
 }
 
 criterion_group! {
@@ -102,6 +90,6 @@ criterion_group! {
         .sample_size(10)
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(1));
-    targets = bench_proxy_housekeeping_lifecycle
+    targets = bench_observability_prometheus_lifecycle
 }
 criterion_main!(benches);

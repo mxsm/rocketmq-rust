@@ -105,3 +105,19 @@ harness = false
 [[bench]]
 name    = "json_utils_comparison"
 harness = false
+
+[[bench]]
+name    = "common_executor_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "common_completable_future_bench"
+harness = false
+
+[[bench]]
+name    = "common_service_thread_bench"
+harness = false
+
+[[bench]]
+name    = "common_stats_scheduler_bench"
+harness = false

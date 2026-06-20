@@ -23,25 +23,31 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_proxy::bench_support::run_proxy_housekeeping_lifecycle_probe;
-use rocketmq_proxy::bench_support::ProxyHousekeepingLifecycleProbe;
+use rocketmq_tieredstore::bench_support::run_tiered_dispatcher_lifecycle_probe;
+use rocketmq_tieredstore::bench_support::unique_probe_root;
+use rocketmq_tieredstore::bench_support::TieredDispatcherLifecycleProbe;
 
-fn run_housekeeping_probe(shutdown_delay: Duration) -> ProxyHousekeepingLifecycleProbe {
+fn run_lifecycle_probe(request_count: usize) -> TieredDispatcherLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(4)
-        .thread_name("rocketmq-proxy-housekeeping-bench")
+        .thread_name("rocketmq-tieredstore-dispatcher-bench")
         .enable_all()
         .build()
-        .expect("proxy housekeeping benchmark runtime should start");
+        .expect("tieredstore dispatcher benchmark runtime should start");
 
-    runtime.block_on(run_proxy_housekeeping_lifecycle_probe(shutdown_delay))
+    runtime
+        .block_on(run_tiered_dispatcher_lifecycle_probe(
+            unique_probe_root(),
+            request_count,
+        ))
+        .expect("tieredstore dispatcher lifecycle probe should run")
 }
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("rocketmq-proxy should live below workspace root")
+        .expect("rocketmq-tieredstore should live below workspace root")
         .to_path_buf()
 }
 
@@ -49,8 +55,8 @@ fn benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/runtime-baseline/prototype")
 }
 
-fn write_proxy_housekeeping_report_artifact() {
-    let output = run_housekeeping_probe(Duration::from_millis(5));
+fn write_tiered_dispatcher_report_artifact() {
+    let output = run_lifecycle_probe(64);
     assert!(output.healthy, "{output:?}");
     let output_dir = benchmark_artifact_dir();
     fs::create_dir_all(&output_dir).expect("runtime benchmark artifact directory should be created");
@@ -60,35 +66,32 @@ fn write_proxy_housekeeping_report_artifact() {
         .expect("system clock should be after unix epoch")
         .as_millis();
     let payload = serde_json::json!({
-        "case": "proxy_housekeeping_lifecycle",
+        "case": "tieredstore_dispatcher_lifecycle",
         "generated_at_unix_ms": generated_at_unix_ms,
         "probe": output,
     });
-    let path = output_dir.join("proxy-housekeeping-lifecycle-report.json");
+    let path = output_dir.join("tieredstore-dispatcher-lifecycle-report.json");
     fs::write(
         path,
-        serde_json::to_vec_pretty(&payload).expect("proxy housekeeping benchmark artifact should serialize"),
+        serde_json::to_vec_pretty(&payload).expect("tieredstore dispatcher benchmark artifact should serialize"),
     )
-    .expect("proxy housekeeping benchmark artifact should be written");
+    .expect("tieredstore dispatcher benchmark artifact should be written");
 }
 
-fn bench_proxy_housekeeping_lifecycle(criterion: &mut Criterion) {
-    write_proxy_housekeeping_report_artifact();
+fn bench_tieredstore_dispatcher_lifecycle(criterion: &mut Criterion) {
+    write_tiered_dispatcher_report_artifact();
 
-    let mut group = criterion.benchmark_group("proxy_housekeeping_lifecycle");
-    for shutdown_delay_ms in [5u64, 20] {
+    let mut group = criterion.benchmark_group("tieredstore_dispatcher_lifecycle");
+    for request_count in [16usize, 64] {
         group.bench_with_input(
-            BenchmarkId::new("shutdown_drain", shutdown_delay_ms),
-            &shutdown_delay_ms,
-            |bencher, shutdown_delay_ms| {
+            BenchmarkId::new("dispatch_drain_shutdown", request_count),
+            &request_count,
+            |bencher, request_count| {
                 bencher.iter(|| {
-                    let output = run_housekeeping_probe(Duration::from_millis(black_box(*shutdown_delay_ms)));
+                    let output = run_lifecycle_probe(black_box(*request_count));
                     assert!(output.healthy, "{output:?}");
                     black_box(output.shutdown_elapsed_us);
-                    black_box(output.scheduled_runs);
-                    black_box(output.scheduled_skips);
-                    black_box(output.scheduled_overlaps);
-                    black_box(output.task_count_after_shutdown);
+                    black_box(output.last_message_read);
                 });
             },
         );
@@ -102,6 +105,6 @@ criterion_group! {
         .sample_size(10)
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(1));
-    targets = bench_proxy_housekeeping_lifecycle
+    targets = bench_tieredstore_dispatcher_lifecycle
 }
 criterion_main!(benches);

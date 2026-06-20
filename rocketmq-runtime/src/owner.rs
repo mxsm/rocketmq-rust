@@ -85,6 +85,15 @@ impl RuntimeOwner {
         self.shutdown_runtime_blocking_with_timeout(timeout)
     }
 
+    pub fn shutdown_background(mut self) -> ShutdownReport {
+        let report = self.context.shutdown_tasks_now();
+        report.log_if_unhealthy();
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+        report
+    }
+
     pub fn shutdown_runtime_blocking_with_timeout(
         mut self,
         timeout: std::time::Duration,

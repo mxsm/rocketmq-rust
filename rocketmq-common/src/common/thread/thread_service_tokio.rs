@@ -15,13 +15,13 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -33,6 +33,7 @@ pub struct ServiceThreadTokio {
     name: String,
     runnable: Arc<Mutex<dyn Runnable>>,
     thread: Option<JoinHandle<()>>,
+    completion: Option<oneshot::Receiver<()>>,
     stopped: Arc<AtomicBool>,
     started: Arc<AtomicBool>,
     notified: Arc<Notify>,
@@ -44,6 +45,7 @@ impl ServiceThreadTokio {
             name,
             runnable,
             thread: None,
+            completion: None,
             stopped: Arc::new(AtomicBool::new(false)),
             started: Arc::new(AtomicBool::new(false)),
             notified: Arc::new(Notify::new()),
@@ -61,12 +63,22 @@ impl ServiceThreadTokio {
         } else {
             return;
         }
-        let join_handle = tokio::task::spawn_blocking(move || {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let join_handle = match std::thread::Builder::new().name(name.clone()).spawn(move || {
             info!("Starting service thread: {}", name);
             let mut guard = runnable.blocking_lock();
             guard.run();
-        });
+            let _ = completion_tx.send(());
+        }) {
+            Ok(join_handle) => join_handle,
+            Err(error) => {
+                self.started.store(false, Ordering::Release);
+                warn!(%error, "failed to start service thread: {}", self.name);
+                return;
+            }
+        };
         self.thread = Some(join_handle);
+        self.completion = Some(completion_rx);
     }
 
     pub fn make_stop(&mut self) {
@@ -103,26 +115,46 @@ impl ServiceThreadTokio {
         self.stopped.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             info!("Shutting down service thread: {}", self.name);
-            let mut thread = thread;
             if interrupt {
-                thread.abort();
+                drop(thread);
+                self.completion.take();
+                return;
             }
-            match timeout(join_timeout, &mut thread).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if error.is_cancelled() => {}
-                Ok(Err(error)) => {
-                    error!("Failed to join service thread {}: {}", self.name, error);
+            if let Some(completion) = self.completion.take() {
+                match timeout(join_timeout, completion).await {
+                    Ok(Ok(())) => {
+                        if thread.join().is_err() {
+                            warn!("service thread {} panicked during join", self.name);
+                        }
+                    }
+                    Ok(Err(_closed)) => {
+                        warn!("service thread {} completion signal dropped", self.name);
+                        if thread.join().is_err() {
+                            warn!("service thread {} panicked during join", self.name);
+                        }
+                    }
+                    Err(_) => {
+                        warn!(
+                            "Timed out joining service thread {} after {}ms; dedicated thread will continue detached",
+                            self.name,
+                            join_timeout.as_millis()
+                        );
+                        drop(thread);
+                    }
                 }
-                Err(_) => {
+            } else if thread.join().is_err() {
+                warn!("service thread {} panicked during join", self.name);
+            }
+        } else {
+            if let Some(completion) = self.completion.take() {
+                if timeout(join_timeout, completion).await.is_err() {
                     warn!(
-                        "Timed out joining service thread {} after {}ms; spawn_blocking work may still be running",
+                        "Timed out waiting for detached service thread {} after {}ms",
                         self.name,
                         join_timeout.as_millis()
                     );
-                    thread.abort();
                 }
             }
-        } else {
             warn!("Service thread not started: {}", self.name);
         }
     }
@@ -141,7 +173,6 @@ impl ServiceThreadTokio {
 
 #[cfg(test)]
 mod tests {
-    use mockall::automock;
     use tokio::time;
     use tokio::time::timeout;
 
@@ -222,7 +253,7 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(
             elapsed.elapsed() < Duration::from_millis(100),
-            "Runnable::run should execute on Tokio's blocking pool"
+            "Runnable::run should execute on a dedicated service thread"
         );
 
         timeout(Duration::from_secs(1), async {
@@ -237,7 +268,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn shutdown_interrupt_with_timeout_bounds_spawn_blocking_join() {
+    async fn shutdown_interrupt_with_timeout_bounds_dedicated_thread_join() {
         let started = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
         let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -266,7 +297,7 @@ mod tests {
 
         assert!(
             elapsed.elapsed() < Duration::from_millis(250),
-            "shutdown should not wait indefinitely for already-running spawn_blocking work"
+            "shutdown should not wait indefinitely for already-running dedicated thread work"
         );
         assert!(!service_thread.started.load(Ordering::SeqCst));
         assert!(service_thread.stopped.load(Ordering::SeqCst));
