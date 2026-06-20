@@ -20,6 +20,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -57,6 +58,8 @@ use crate::trace::trace_dispatcher::Type;
 use crate::trace::trace_transfer_bean::TraceTransferBean;
 
 // Configuration for the async trace dispatcher.
+const TRACE_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone)]
 struct TraceDispatcherConfig {
     group: String,
@@ -98,15 +101,39 @@ impl DispatcherState {
 }
 
 enum TraceTaskHandle {
-    Tokio(JoinHandle<()>),
+    Tokio {
+        handle: JoinHandle<()>,
+        completion_rx: std_mpsc::Receiver<()>,
+    },
     Thread(thread::JoinHandle<()>),
 }
 
 impl TraceTaskHandle {
     fn abort(self) {
         match self {
-            Self::Tokio(handle) => handle.abort(),
+            Self::Tokio { handle, .. } => handle.abort(),
             Self::Thread(handle) => drop(handle),
+        }
+    }
+
+    fn shutdown(self, timeout: Duration) -> bool {
+        match self {
+            Self::Tokio { handle, completion_rx } => match completion_rx.recv_timeout(timeout) {
+                Ok(()) => true,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    handle.abort();
+                    false
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    if handle.is_finished() {
+                        true
+                    } else {
+                        handle.abort();
+                        false
+                    }
+                }
+            },
+            Self::Thread(handle) => handle.join().is_ok(),
         }
     }
 }
@@ -459,7 +486,13 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         }
 
         if let Some(handle) = self.worker_handle.lock().take() {
-            handle.abort();
+            let stopped = handle.shutdown(TRACE_WORKER_SHUTDOWN_TIMEOUT);
+            if !stopped {
+                warn!(
+                    timeout_ms = TRACE_WORKER_SHUTDOWN_TIMEOUT.as_millis(),
+                    "Trace worker did not stop before timeout and was aborted"
+                );
+            }
         }
 
         if let Some(_producer) = self.trace_producer.read().as_ref() {
@@ -511,9 +544,13 @@ fn spawn_trace_task<F>(thread_name: &'static str, task: F) -> RocketMQResult<Tra
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    spawn_client_task(thread_name, task)
-        .map(TraceTaskHandle::Tokio)
-        .map_err(|error| RocketMQError::Internal(format!("failed to spawn {thread_name} task: {error}")))
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    spawn_client_task(thread_name, async move {
+        task.await;
+        let _ = completion_tx.send(());
+    })
+    .map(|handle| TraceTaskHandle::Tokio { handle, completion_rx })
+    .map_err(|error| RocketMQError::Internal(format!("failed to spawn {thread_name} task: {error}")))
 }
 
 // Main worker loop that processes trace contexts in batches.
@@ -791,7 +828,30 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("trace task should run on fallback runtime");
         assert_eq!(thread_name, "rocketmq-client-fallback");
-        handle.abort();
+        assert!(handle.shutdown(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn trace_task_shutdown_waits_for_completed_worker() {
+        let handle = spawn_trace_task("rocketmq-client-trace-complete-test", async move {})
+            .expect("fallback trace runtime should start");
+
+        assert!(handle.shutdown(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn trace_task_shutdown_aborts_worker_after_timeout() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = spawn_trace_task("rocketmq-client-trace-timeout-test", async move {
+            tx.send(()).expect("test receiver should be alive");
+            std::future::pending::<()>().await;
+        })
+        .expect("fallback trace runtime should start");
+
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("trace task should start");
+
+        assert!(!handle.shutdown(Duration::from_millis(20)));
     }
 
     #[test]

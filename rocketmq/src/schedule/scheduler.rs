@@ -182,21 +182,28 @@ impl TaskScheduler {
 
     /// Stop the scheduler
     pub async fn stop(&self) -> SchedulerResult<()> {
-        let mut running = self.running.write().await;
-        if !*running {
-            return Ok(());
-        }
-        *running = false;
-        drop(running);
+        let was_running = {
+            let mut running = self.running.write().await;
+            let was_running = *running;
+            *running = false;
+            was_running
+        };
 
         info!("Stopping task scheduler");
         self.shutdown_notify.notify_waiters();
 
-        let handles = {
-            let mut handles = self.scheduler_handles.write().await;
-            handles.drain(..).collect::<Vec<_>>()
-        };
-        Self::shutdown_scheduler_handles(handles).await;
+        if was_running {
+            let handles = {
+                let mut handles = self.scheduler_handles.write().await;
+                handles.drain(..).collect::<Vec<_>>()
+            };
+            Self::shutdown_scheduler_handles(handles).await;
+        }
+
+        let cancelled = self.executor_pool.shutdown_all(SCHEDULER_SHUTDOWN_TIMEOUT).await;
+        if cancelled > 0 {
+            info!("Task scheduler stopped {} running executor tasks", cancelled);
+        }
 
         info!("Task scheduler stopped");
         Ok(())
@@ -567,9 +574,23 @@ pub struct SchedulerStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::future;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use tokio::time::Duration;
 
+    use crate::schedule::TaskResult;
+    use crate::schedule::TaskStatus;
+
     use super::*;
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[tokio::test]
     async fn stop_notifies_and_drains_scheduler_tasks() {
@@ -591,5 +612,61 @@ mod tests {
 
         assert!(scheduler.scheduler_handles.read().await.is_empty());
         assert!(!scheduler.get_status().await.running);
+    }
+
+    #[tokio::test]
+    async fn stop_aborts_running_executor_tasks() {
+        let scheduler = TaskScheduler::new(SchedulerConfig {
+            check_interval: Duration::from_secs(60),
+            max_scheduler_threads: 1,
+            executor_pool_size: 1,
+            ..SchedulerConfig::default()
+        });
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task = Arc::new(Task::new("pending-task", "pending-task", {
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            move |_context| {
+                let started = Arc::clone(&started);
+                let dropped = Arc::clone(&dropped);
+                async move {
+                    let _marker = DropMarker(dropped);
+                    started.store(true, Ordering::Release);
+                    future::pending::<TaskResult>().await
+                }
+            }
+        }));
+
+        scheduler
+            .schedule_delayed_job_with_id("pending-job", task, Duration::from_secs(60))
+            .await
+            .expect("job should be scheduled");
+        scheduler.start().await.expect("scheduler should start");
+        let execution_id = scheduler
+            .execute_job_now("pending-job")
+            .await
+            .expect("job should execute");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("executor task should start");
+        assert_eq!(scheduler.get_status().await.running_tasks, 1);
+
+        scheduler.stop().await.expect("scheduler should stop");
+
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "stop should wait until the aborted executor task future is dropped"
+        );
+        assert_eq!(scheduler.get_status().await.running_tasks, 0);
+        let execution = scheduler
+            .get_execution(execution_id.as_str())
+            .await
+            .expect("execution record should exist");
+        assert_eq!(execution.status, TaskStatus::Cancelled);
     }
 }

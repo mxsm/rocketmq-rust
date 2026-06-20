@@ -15,6 +15,7 @@
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::thread;
 
@@ -39,7 +40,11 @@ pub struct MQClientAPIFactory {
 }
 
 enum NamesrvRefreshTaskHandle {
-    Tokio(JoinHandle<()>),
+    Tokio {
+        stop_signal: Arc<AtomicBool>,
+        handle: JoinHandle<()>,
+        completion_rx: std_mpsc::Receiver<()>,
+    },
     Thread {
         stop_signal: Arc<AtomicBool>,
         handle: thread::JoinHandle<()>,
@@ -47,19 +52,40 @@ enum NamesrvRefreshTaskHandle {
 }
 
 impl NamesrvRefreshTaskHandle {
-    fn abort(self) {
+    fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => handle.abort(),
+            Self::Tokio {
+                stop_signal,
+                handle,
+                completion_rx,
+            } => {
+                stop_signal.store(true, Ordering::Release);
+                match completion_rx.recv_timeout(timeout) {
+                    Ok(()) => true,
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                        handle.abort();
+                        false
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                        if handle.is_finished() {
+                            true
+                        } else {
+                            handle.abort();
+                            false
+                        }
+                    }
+                }
+            }
             Self::Thread { stop_signal, handle } => {
                 stop_signal.store(true, Ordering::Release);
-                drop(handle);
+                handle.join().is_ok()
             }
         }
     }
 
     fn is_finished(&self) -> bool {
         match self {
-            Self::Tokio(handle) => handle.is_finished(),
+            Self::Tokio { handle, .. } => handle.is_finished(),
             Self::Thread { handle, .. } => handle.is_finished(),
         }
     }
@@ -68,6 +94,7 @@ impl NamesrvRefreshTaskHandle {
 impl MQClientAPIFactory {
     const NAMESRV_DOMAIN_FETCH_INITIAL_DELAY: Duration = Duration::from_secs(10);
     const NAMESRV_DOMAIN_FETCH_INTERVAL: Duration = Duration::from_secs(120);
+    const NAMESRV_REFRESH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
     pub fn new(
         nameserver_access_config: NameserverAccessConfig,
@@ -200,7 +227,9 @@ impl MQClientAPIFactory {
 
     fn stop_nameserver_domain_refresh(&mut self) {
         if let Some(task) = self.namesrv_refresh_task.take() {
-            task.abort();
+            if !task.shutdown(Self::NAMESRV_REFRESH_SHUTDOWN_TIMEOUT) {
+                tracing::warn!("nameserver domain refresh task did not stop before timeout; aborted");
+            }
         }
     }
 }
@@ -216,17 +245,45 @@ fn validate_nameserver_access_config(config: &NameserverAccessConfig) -> RocketM
 
 fn spawn_namesrv_refresh_task<F>(
     thread_name: &'static str,
-    _stop_signal: Arc<AtomicBool>,
+    stop_signal: Arc<AtomicBool>,
     task: F,
 ) -> Option<NamesrvRefreshTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_task(thread_name, task) {
-        Ok(handle) => Some(NamesrvRefreshTaskHandle::Tokio(handle)),
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    match spawn_client_task(thread_name, async move {
+        let _completion_guard = CompletionSignal::new(completion_tx);
+        task.await;
+    }) {
+        Ok(handle) => Some(NamesrvRefreshTaskHandle::Tokio {
+            stop_signal,
+            handle,
+            completion_rx,
+        }),
         Err(error) => {
             tracing::warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
+        }
+    }
+}
+
+struct CompletionSignal {
+    completion_tx: Option<std_mpsc::Sender<()>>,
+}
+
+impl CompletionSignal {
+    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
+        Self {
+            completion_tx: Some(completion_tx),
+        }
+    }
+}
+
+impl Drop for CompletionSignal {
+    fn drop(&mut self) {
+        if let Some(completion_tx) = self.completion_tx.take() {
+            let _ = completion_tx.send(());
         }
     }
 }
@@ -251,6 +308,15 @@ async fn sleep_or_stop(stop_signal: &Arc<AtomicBool>, delay: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::pending;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[test]
     fn factory_rejects_missing_nameserver_like_java() {
@@ -321,6 +387,50 @@ mod tests {
         factory.start_nameserver_domain_refresh();
 
         assert!(factory.namesrv_refresh_task.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn namesrv_refresh_task_shutdown_waits_for_worker_completion() {
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let stop_signal_in_task = stop_signal.clone();
+        let task = spawn_namesrv_refresh_task(
+            "rocketmq-client-namesrv-refresh-test",
+            stop_signal.clone(),
+            async move {
+                while !stop_signal_in_task.load(Ordering::Acquire) {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                completed_in_task.store(true, Ordering::Release);
+            },
+        )
+        .expect("test task should spawn");
+
+        assert!(task.shutdown(Duration::from_secs(1)));
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn namesrv_refresh_task_shutdown_aborts_after_timeout() {
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let task = spawn_namesrv_refresh_task("rocketmq-client-namesrv-refresh-test", stop_signal, async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!task.shutdown(Duration::from_millis(20)));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("aborted task should be dropped");
     }
 
     #[test]

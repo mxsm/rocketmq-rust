@@ -88,6 +88,7 @@ use crate::runtime::spawn_detached_client_task;
 use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
+const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigRequestHeader {
     let mut request_header = GetTopicConfigRequestHeader {
@@ -429,13 +430,28 @@ impl MQClientInstance {
             );
         }
 
-        info!("MQClientInstance[{}] canceling scheduled tasks", self.client_id);
-        self.scheduled_task_manager.cancel_all();
+        info!("MQClientInstance[{}] shutting down scheduled tasks", self.client_id);
+        let scheduled_report = self
+            .scheduled_task_manager
+            .shutdown_all(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+            .await;
+        if scheduled_report.is_healthy() {
+            info!(
+                "MQClientInstance[{}] scheduled tasks stopped: {:?}",
+                self.client_id, scheduled_report
+            );
+        } else {
+            warn!(
+                "MQClientInstance[{}] scheduled task shutdown unhealthy: {:?}",
+                self.client_id, scheduled_report
+            );
+        }
+
         info!(
-            "MQClientInstance[{}] scheduled tasks canceled, total canceled: {}",
-            self.client_id,
-            self.scheduled_task_manager.task_count()
+            "MQClientInstance[{}] shutting down consumer stats manager",
+            self.client_id
         );
+        self.consumer_stats_manager.shutdown_async().await;
 
         info!("MQClientInstance[{}] clearing all registration tables", self.client_id);
         self.producer_table.clear();
@@ -2164,6 +2180,28 @@ mod tests {
         instance.rebalance_later(1);
 
         std::thread::sleep(Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_scheduled_tasks_to_exit() {
+        let client_config = ClientConfig {
+            namesrv_addr: None,
+            ..Default::default()
+        };
+        let mut instance = MQClientInstance::new_arc(client_config, 0, "scheduled-shutdown-test", None);
+        instance.service_state = ServiceState::Running;
+        instance.scheduled_task_manager.add_fixed_delay_task(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            |_token| async { Ok(()) },
+        );
+
+        assert_eq!(instance.scheduled_task_manager.task_count(), 1);
+
+        instance.shutdown().await;
+
+        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
+        assert_eq!(instance.scheduled_task_manager.task_count(), 0);
     }
 
     #[tokio::test]

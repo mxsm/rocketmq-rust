@@ -15,12 +15,16 @@
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
-use crate::runtime::spawn_detached_client_task;
+use crate::runtime::spawn_client_task;
+use parking_lot::Mutex;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_remoting::protocol::body::consume_status::ConsumeStatus;
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 const TOPIC_AND_GROUP_CONSUME_OK_TPS: &str = "CONSUME_OK_TPS";
@@ -28,6 +32,7 @@ const TOPIC_AND_GROUP_CONSUME_FAILED_TPS: &str = "CONSUME_FAILED_TPS";
 const TOPIC_AND_GROUP_CONSUME_RT: &str = "CONSUME_RT";
 const TOPIC_AND_GROUP_PULL_TPS: &str = "PULL_TPS";
 const TOPIC_AND_GROUP_PULL_RT: &str = "PULL_RT";
+const CONSUMER_STATS_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Tracks consumer-side statistics for each topic/group pair.
 ///
@@ -41,6 +46,72 @@ pub struct ConsumerStatsManager {
     topic_and_group_pull_tps: StatsItemSet,
     topic_and_group_pull_rt: StatsItemSet,
     shutdown_signal: Arc<AtomicBool>,
+    task_handles: Mutex<Vec<ConsumerStatsTask>>,
+}
+
+struct ConsumerStatsTask {
+    handle: JoinHandle<()>,
+    completion_rx: std_mpsc::Receiver<()>,
+}
+
+impl ConsumerStatsTask {
+    async fn shutdown_async(self, timeout: Duration) -> bool {
+        let mut handle = self.handle;
+        match tokio::time::timeout(timeout, &mut handle).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) if error.is_cancelled() => true,
+            Ok(Err(error)) => {
+                warn!(%error, "consumer stats task exited with join error");
+                true
+            }
+            Err(_) => {
+                abort_consumer_stats_task(handle).await;
+                false
+            }
+        }
+    }
+
+    fn shutdown_blocking(self, timeout: Duration) -> bool {
+        match self.completion_rx.recv_timeout(timeout) {
+            Ok(()) => true,
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                self.handle.abort();
+                false
+            }
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                if self.handle.is_finished() {
+                    true
+                } else {
+                    self.handle.abort();
+                    false
+                }
+            }
+        }
+    }
+
+    fn abort(self) {
+        self.handle.abort();
+    }
+}
+
+struct CompletionSignal {
+    completion_tx: Option<std_mpsc::Sender<()>>,
+}
+
+impl CompletionSignal {
+    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
+        Self {
+            completion_tx: Some(completion_tx),
+        }
+    }
+}
+
+impl Drop for CompletionSignal {
+    fn drop(&mut self) {
+        if let Some(completion_tx) = self.completion_tx.take() {
+            let _ = completion_tx.send(());
+        }
+    }
 }
 
 impl Default for ConsumerStatsManager {
@@ -59,6 +130,7 @@ impl ConsumerStatsManager {
             topic_and_group_pull_tps: StatsItemSet::new(TOPIC_AND_GROUP_PULL_TPS.to_string()),
             topic_and_group_pull_rt: StatsItemSet::new(TOPIC_AND_GROUP_PULL_RT.to_string()),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
+            task_handles: Mutex::new(Vec::new()),
         }
     }
 
@@ -71,6 +143,12 @@ impl ConsumerStatsManager {
     /// - every 10 min: `cs_list_hour` (drives per-hour stats)
     /// - every 1 h: `cs_list_day` (drives per-day stats)
     pub fn start(&self) {
+        let mut task_handles = self.task_handles.lock();
+        if !task_handles.is_empty() {
+            warn!("ConsumerStatsManager already started; ignoring duplicate start");
+            return;
+        }
+
         self.shutdown_signal.store(false, Ordering::Release);
 
         // 10-second tick drives cs_list_minute on each StatsItem.
@@ -82,7 +160,7 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_rt.clone(),
         ];
         let shutdown_signal = self.shutdown_signal.clone();
-        spawn_stats_task("rocketmq-client-consumer-stats-seconds", async move {
+        if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-seconds", async move {
             loop {
                 if shutdown_signal.load(Ordering::Acquire) {
                     break;
@@ -94,7 +172,9 @@ impl ConsumerStatsManager {
                     break;
                 }
             }
-        });
+        }) {
+            task_handles.push(task);
+        }
 
         // 10-minute tick drives cs_list_hour on each StatsItem.
         let sets_min = [
@@ -105,7 +185,7 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_rt.clone(),
         ];
         let shutdown_signal = self.shutdown_signal.clone();
-        spawn_stats_task("rocketmq-client-consumer-stats-minutes", async move {
+        if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-minutes", async move {
             loop {
                 if shutdown_signal.load(Ordering::Acquire) {
                     break;
@@ -117,7 +197,9 @@ impl ConsumerStatsManager {
                     break;
                 }
             }
-        });
+        }) {
+            task_handles.push(task);
+        }
 
         // 1-hour tick drives cs_list_day on each StatsItem.
         let sets_hour = [
@@ -128,7 +210,7 @@ impl ConsumerStatsManager {
             self.topic_and_group_pull_rt.clone(),
         ];
         let shutdown_signal = self.shutdown_signal.clone();
-        spawn_stats_task("rocketmq-client-consumer-stats-hours", async move {
+        if let Some(task) = spawn_stats_task("rocketmq-client-consumer-stats-hours", async move {
             loop {
                 if shutdown_signal.load(Ordering::Acquire) {
                     break;
@@ -140,12 +222,33 @@ impl ConsumerStatsManager {
                     break;
                 }
             }
-        });
+        }) {
+            task_handles.push(task);
+        }
     }
 
     /// Shuts down the stats manager.
     pub fn shutdown(&self) {
         self.shutdown_signal.store(true, Ordering::Release);
+        let tasks = self.drain_task_handles();
+        let timed_out = shutdown_consumer_stats_tasks_blocking(tasks, CONSUMER_STATS_TASK_SHUTDOWN_TIMEOUT);
+        if timed_out > 0 {
+            warn!(timed_out, "consumer stats tasks did not stop before timeout; aborted");
+        }
+    }
+
+    /// Shuts down the stats manager without blocking the Tokio runtime worker.
+    pub async fn shutdown_async(&self) {
+        self.shutdown_signal.store(true, Ordering::Release);
+        let tasks = self.drain_task_handles();
+        let timed_out = shutdown_consumer_stats_tasks_async(tasks, CONSUMER_STATS_TASK_SHUTDOWN_TIMEOUT).await;
+        if timed_out > 0 {
+            warn!(timed_out, "consumer stats tasks did not stop before timeout; aborted");
+        }
+    }
+
+    fn drain_task_handles(&self) -> Vec<ConsumerStatsTask> {
+        std::mem::take(&mut *self.task_handles.lock())
     }
 
     /// Records a single pull response-time observation in milliseconds.
@@ -238,12 +341,69 @@ fn stats_key(topic: &str, group: &str) -> String {
     format!("{topic}@{group}")
 }
 
-fn spawn_stats_task<F>(thread_name: &'static str, task: F)
+fn spawn_stats_task<F>(thread_name: &'static str, task: F) -> Option<ConsumerStatsTask>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Err(error) = spawn_detached_client_task(thread_name, task) {
-        warn!("Failed to spawn {} background task: {}", thread_name, error);
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    match spawn_client_task(thread_name, async move {
+        let _completion_guard = CompletionSignal::new(completion_tx);
+        task.await;
+    }) {
+        Ok(handle) => Some(ConsumerStatsTask { handle, completion_rx }),
+        Err(error) => {
+            warn!("Failed to spawn {} background task: {}", thread_name, error);
+            None
+        }
+    }
+}
+
+async fn shutdown_consumer_stats_tasks_async(tasks: Vec<ConsumerStatsTask>, timeout: Duration) -> usize {
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = 0;
+
+    for task in tasks {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            task.abort();
+            timed_out += 1;
+            continue;
+        }
+
+        if !task.shutdown_async(remaining).await {
+            timed_out += 1;
+        }
+    }
+
+    timed_out
+}
+
+fn shutdown_consumer_stats_tasks_blocking(tasks: Vec<ConsumerStatsTask>, timeout: Duration) -> usize {
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = 0;
+
+    for task in tasks {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            task.abort();
+            timed_out += 1;
+            continue;
+        }
+
+        if !task.shutdown_blocking(remaining) {
+            timed_out += 1;
+        }
+    }
+
+    timed_out
+}
+
+async fn abort_consumer_stats_task(handle: JoinHandle<()>) {
+    handle.abort();
+    match handle.await {
+        Ok(()) => {}
+        Err(error) if error.is_cancelled() => {}
+        Err(error) => warn!(%error, "consumer stats task aborted with join error"),
     }
 }
 
@@ -266,9 +426,18 @@ async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, delay: Duration) -
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
     use std::thread;
 
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     fn make_manager() -> ConsumerStatsManager {
         ConsumerStatsManager::new()
@@ -337,17 +506,49 @@ mod tests {
     #[tokio::test]
     async fn start_launches_background_tasks() {
         let mgr = make_manager();
-        // Verifies start() does not panic in a Tokio runtime context.
         mgr.start();
-        mgr.shutdown();
+        assert_eq!(mgr.task_handles.lock().len(), 3);
+
+        mgr.shutdown_async().await;
+
+        assert!(mgr.task_handles.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_ignores_duplicate_background_tasks() {
+        let mgr = make_manager();
+        mgr.start();
+        mgr.start();
+
+        assert_eq!(mgr.task_handles.lock().len(), 3);
+
+        mgr.shutdown_async().await;
+    }
+
+    #[tokio::test]
+    async fn stats_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let task = spawn_stats_task("rocketmq-client-consumer-stats-test", async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!task.shutdown_async(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[test]
     fn start_without_tokio_runtime_does_not_panic() {
         let mgr = make_manager();
         mgr.start();
+        assert_eq!(mgr.task_handles.lock().len(), 3);
+
         mgr.shutdown();
-        thread::sleep(Duration::from_millis(80));
+
+        assert!(mgr.task_handles.lock().is_empty());
+        thread::sleep(Duration::from_millis(20));
     }
 
     #[test]

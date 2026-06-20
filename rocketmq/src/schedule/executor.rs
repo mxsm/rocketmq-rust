@@ -128,18 +128,36 @@ impl TaskExecutor {
                 Err(error) => warn!("Cancelled task {} exited with join error: {}", execution_id, error),
             }
 
-            // Update execution record
-            if let Some(mut execution) = self.get_execution(execution_id).await {
-                execution.cancel();
-                let mut executions = self.executions.write().await;
-                executions.insert(execution_id.to_string(), execution);
-            }
+            self.mark_execution_cancelled(execution_id).await;
 
             info!("Task cancelled: {}", execution_id);
             Ok(())
         } else {
             Err(SchedulerError::TaskNotFound(execution_id.to_string()))
         }
+    }
+
+    /// Abort all running task executions and wait for their futures to be dropped.
+    pub async fn shutdown_all(&self, join_timeout: Duration) -> usize {
+        let handles = {
+            let mut running_tasks = self.running_tasks.write().await;
+            running_tasks.drain().collect::<Vec<_>>()
+        };
+
+        let mut cancelled = 0;
+        for (execution_id, mut handle) in handles {
+            handle.abort();
+            match timeout(join_timeout, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if error.is_cancelled() => {}
+                Ok(Err(error)) => warn!("Shutdown task {} exited with join error: {}", execution_id, error),
+                Err(_) => warn!("Shutdown task {} timed out after abort", execution_id),
+            }
+            self.mark_execution_cancelled(execution_id.as_str()).await;
+            cancelled += 1;
+        }
+
+        cancelled
     }
 
     /// Get task execution status
@@ -202,6 +220,14 @@ impl TaskExecutor {
             .is_some_and(|handle| handle.is_finished())
         {
             running_tasks.remove(execution_id);
+        }
+    }
+
+    async fn mark_execution_cancelled(&self, execution_id: &str) {
+        if let Some(mut execution) = self.get_execution(execution_id).await {
+            execution.cancel();
+            let mut executions = self.executions.write().await;
+            executions.insert(execution_id.to_string(), execution);
         }
     }
 
@@ -387,6 +413,15 @@ impl ExecutorPool {
         total
     }
 
+    /// Abort all running tasks across the pool.
+    pub async fn shutdown_all(&self, join_timeout: Duration) -> usize {
+        let mut total = 0;
+        for executor in &self.executors {
+            total += executor.shutdown_all(join_timeout).await;
+        }
+        total
+    }
+
     /// Get combined metrics from all executors
     pub async fn combined_metrics(&self) -> ExecutionMetrics {
         let mut combined = ExecutionMetrics::default();
@@ -476,6 +511,51 @@ mod tests {
         assert!(
             dropped.load(Ordering::Acquire),
             "cancel_task should wait until the aborted task future is dropped"
+        );
+        assert_eq!(executor.running_task_count().await, 0);
+        let execution = executor
+            .get_execution(execution_id.as_str())
+            .await
+            .expect("execution record should exist");
+        assert_eq!(execution.status, TaskStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_aborts_and_waits_for_running_tasks() {
+        let executor = TaskExecutor::new(ExecutorConfig::default());
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task = Arc::new(Task::new("pending-task", "pending-task", {
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            move |_context| {
+                let started = Arc::clone(&started);
+                let dropped = Arc::clone(&dropped);
+                async move {
+                    let _marker = DropMarker(dropped);
+                    started.store(true, Ordering::Release);
+                    future::pending::<TaskResult>().await
+                }
+            }
+        }));
+
+        let execution_id = executor
+            .execute_task(task, SystemTime::now())
+            .await
+            .expect("task should be scheduled");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("task should start");
+
+        assert_eq!(executor.shutdown_all(Duration::from_secs(1)).await, 1);
+
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "shutdown_all should wait until the aborted task future is dropped"
         );
         assert_eq!(executor.running_task_count().await, 0);
         let execution = executor

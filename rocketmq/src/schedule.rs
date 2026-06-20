@@ -54,6 +54,7 @@ pub type SchedulerResult<T> = Result<T, SchedulerError>;
 
 pub mod simple_scheduler {
     use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::future::Future;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
@@ -434,6 +435,25 @@ pub mod simple_scheduler {
                 let mut tasks = self.tasks.write();
                 tasks.drain().collect::<Vec<_>>()
             };
+            Self::shutdown_entries(tasks, timeout).await
+        }
+
+        pub async fn shutdown_tasks<I>(&self, task_ids: I, timeout: Duration) -> ScheduledShutdownReport
+        where
+            I: IntoIterator<Item = TaskId>,
+        {
+            let task_ids = task_ids.into_iter().collect::<HashSet<_>>();
+            let tasks = {
+                let mut tasks = self.tasks.write();
+                task_ids
+                    .into_iter()
+                    .filter_map(|id| tasks.remove(&id).map(|info| (id, info)))
+                    .collect::<Vec<_>>()
+            };
+            Self::shutdown_entries(tasks, timeout).await
+        }
+
+        async fn shutdown_entries(tasks: Vec<(TaskId, TaskInfo)>, timeout: Duration) -> ScheduledShutdownReport {
             let mut report = ScheduledShutdownReport::new(tasks.len());
             let started = Instant::now();
 
@@ -859,6 +879,36 @@ mod tests {
         assert_eq!(report.aborted, 0);
         assert_eq!(report.timed_out, 0);
         assert!(report.is_healthy());
+    }
+
+    #[tokio::test]
+    async fn shutdown_tasks_only_stops_selected_drivers() {
+        let manager = ScheduledTaskManager::new();
+        let selected = manager.add_scheduled_task(
+            ScheduleMode::FixedDelay,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            |_token| async move { Ok(()) },
+        );
+        manager.add_scheduled_task(
+            ScheduleMode::FixedDelay,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            |_token| async move { Ok(()) },
+        );
+
+        let report = manager.shutdown_tasks([selected], Duration::from_secs(1)).await;
+
+        assert_eq!(report.task_count, 1);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.timed_out, 0);
+        assert!(report.is_healthy());
+        assert_eq!(manager.task_count(), 1);
+
+        let report = manager.shutdown_all(Duration::from_secs(1)).await;
+        assert_eq!(report.task_count, 1);
+        assert!(report.is_healthy());
+        assert_eq!(manager.task_count(), 0);
     }
 
     #[tokio::test]

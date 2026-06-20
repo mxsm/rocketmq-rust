@@ -18,16 +18,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use std::sync::LazyLock;
+use tokio::sync::watch;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::task;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
+use tracing::error;
+use tracing::warn;
 
 use crate::producer::request_response_future::RequestResponseFuture;
+use crate::runtime::spawn_client_task;
 
 const REQUEST_SCAN_INITIAL_DELAY: Duration = Duration::from_millis(3_000);
 const REQUEST_SCAN_INTERVAL: Duration = Duration::from_millis(1_000);
+const REQUEST_SCAN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub static REQUEST_FUTURE_HOLDER: LazyLock<Arc<RequestFutureHolder>> =
     LazyLock::new(|| Arc::new(RequestFutureHolder::new()));
@@ -35,7 +39,40 @@ pub static REQUEST_FUTURE_HOLDER: LazyLock<Arc<RequestFutureHolder>> =
 pub struct RequestFutureHolder {
     request_future_table: Arc<RwLock<HashMap<String, Arc<RequestResponseFuture>>>>,
     producer_set: Arc<Mutex<HashSet<String>>>,
-    scheduled_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    scheduled_task: Arc<Mutex<Option<RequestScanTask>>>,
+}
+
+struct RequestScanTask {
+    shutdown_tx: watch::Sender<bool>,
+    handle: JoinHandle<()>,
+}
+
+impl RequestScanTask {
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
+    async fn shutdown(self, timeout: Duration) -> bool {
+        let _ = self.shutdown_tx.send(true);
+        let mut handle = self.handle;
+        match tokio::time::timeout(timeout, &mut handle).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) if error.is_cancelled() => true,
+            Ok(Err(error)) => {
+                warn!(%error, "request future scan task exited with join error");
+                true
+            }
+            Err(_) => {
+                handle.abort();
+                match handle.await {
+                    Ok(()) => {}
+                    Err(error) if error.is_cancelled() => {}
+                    Err(error) => warn!(%error, "request future scan task aborted with join error"),
+                }
+                false
+            }
+        }
+    }
 }
 
 impl RequestFutureHolder {
@@ -84,14 +121,38 @@ impl RequestFutureHolder {
         }
 
         let holder = Arc::clone(self);
-        *scheduled_task = Some(task::spawn(async move {
-            tokio::time::sleep(REQUEST_SCAN_INITIAL_DELAY).await;
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let handle = match spawn_client_task("rocketmq-client-request-future-scan", async move {
+            tokio::select! {
+                _ = tokio::time::sleep(REQUEST_SCAN_INITIAL_DELAY) => {}
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
+                        return;
+                    }
+                }
+            }
+
             let mut interval = interval(REQUEST_SCAN_INTERVAL);
             loop {
-                interval.tick().await;
-                holder.scan_expired_request().await;
+                tokio::select! {
+                    _ = interval.tick() => {
+                        holder.scan_expired_request().await;
+                    }
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_err() || *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
             }
-        }));
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                error!(%error, "failed to spawn request future scan task");
+                return;
+            }
+        };
+        *scheduled_task = Some(RequestScanTask { shutdown_tx, handle });
     }
 
     pub async fn shutdown(&self, producer_id: &str) {
@@ -102,7 +163,12 @@ impl RequestFutureHolder {
 
         if should_stop {
             if let Some(task) = self.scheduled_task.lock().await.take() {
-                task.abort();
+                if !task.shutdown(REQUEST_SCAN_SHUTDOWN_TIMEOUT).await {
+                    warn!(
+                        timeout_ms = REQUEST_SCAN_SHUTDOWN_TIMEOUT.as_millis(),
+                        "request future scan task did not stop before timeout and was aborted"
+                    );
+                }
             }
         }
     }
@@ -132,6 +198,7 @@ impl RequestFutureHolder {
 mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
+    use std::time::Instant;
 
     use rocketmq_common::common::message::MessageTrait;
 
@@ -173,6 +240,46 @@ mod tests {
 
         holder.shutdown("producer-b").await;
         assert_eq!(holder.producer_count().await, 0);
+        assert!(!holder.scheduled_task_active().await);
+    }
+
+    #[tokio::test]
+    async fn request_scan_task_shutdown_waits_for_worker_completion() {
+        let task = RequestScanTask {
+            shutdown_tx: watch::channel(false).0,
+            handle: tokio::spawn(async {}),
+        };
+
+        assert!(task.shutdown(Duration::from_secs(1)).await);
+    }
+
+    #[tokio::test]
+    async fn request_scan_task_shutdown_aborts_after_timeout() {
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let task = RequestScanTask {
+            shutdown_tx,
+            handle: tokio::spawn(async {
+                std::future::pending::<()>().await;
+            }),
+        };
+
+        assert!(!task.shutdown(Duration::from_millis(20)).await);
+    }
+
+    #[tokio::test]
+    async fn scheduled_task_shutdown_interrupts_initial_delay() {
+        let holder = Arc::new(RequestFutureHolder::new());
+
+        holder.start_scheduled_task("producer-a").await;
+        assert!(holder.scheduled_task_active().await);
+
+        let started = Instant::now();
+        holder.shutdown("producer-a").await;
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "shutdown should not wait for the full initial scan delay"
+        );
         assert!(!holder.scheduled_task_active().await);
     }
 
