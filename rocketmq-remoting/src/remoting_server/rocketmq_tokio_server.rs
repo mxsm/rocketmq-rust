@@ -625,8 +625,10 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
     let ConnectionListener {
         shutdown_complete_tx,
         notify_shutdown,
+        tls_runtime,
         ..
     } = listener;
+    tls_runtime.shutdown();
     drop(notify_shutdown);
     drop(shutdown_complete_tx);
 

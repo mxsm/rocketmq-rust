@@ -27,12 +27,12 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use tokio::sync::oneshot;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
@@ -353,8 +353,7 @@ impl FastFailureQueues {
 
 #[derive(Default)]
 struct FastFailureLifecycle {
-    cancel: Option<CancellationToken>,
-    handle: Option<JoinHandle<()>>,
+    task_group: Option<TaskGroup>,
 }
 
 struct BrokerFastFailureInner {
@@ -414,10 +413,20 @@ impl BrokerFastFailure {
             return;
         }
 
-        let cancel = CancellationToken::new();
-        let cancel_for_task = cancel.clone();
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                self.inner.running.store(false, Ordering::Release);
+                warn!(?error, "failed to start BrokerFastFailure outside Tokio runtime");
+                return;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.fast-failure", runtime);
+        let cancel_for_task = task_group.cancellation_token();
         let this = self.clone();
-        let handle = tokio::spawn(async move {
+        let mut lifecycle = self.inner.lifecycle.lock();
+
+        if let Err(error) = task_group.spawn_service("broker.fast-failure.scan", async move {
             tokio::select! {
                 _ = cancel_for_task.cancelled() => {
                     this.inner.running.store(false, Ordering::Release);
@@ -442,22 +451,27 @@ impl BrokerFastFailure {
                     }
                 }
             }
-        });
+        }) {
+            self.inner.running.store(false, Ordering::Release);
+            warn!(?error, "failed to spawn BrokerFastFailure scan task");
+            return;
+        }
 
-        let mut lifecycle = self.inner.lifecycle.lock();
-        lifecycle.cancel = Some(cancel);
-        lifecycle.handle = Some(handle);
+        lifecycle.task_group = Some(task_group);
         info!("BrokerFastFailure started");
     }
 
     pub(crate) fn shutdown(&self) {
         self.inner.running.store(false, Ordering::Release);
         let mut lifecycle = self.inner.lifecycle.lock();
-        if let Some(cancel) = lifecycle.cancel.take() {
-            cancel.cancel();
-        }
-        if let Some(handle) = lifecycle.handle.take() {
-            handle.abort();
+        if let Some(task_group) = lifecycle.task_group.take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "BrokerFastFailure shutdown report is unhealthy"
+                );
+            }
         }
         info!("BrokerFastFailure shutdown");
     }

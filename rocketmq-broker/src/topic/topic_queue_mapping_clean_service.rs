@@ -32,11 +32,11 @@ use rocketmq_remoting::protocol::static_topic::logic_queue_mapping_item::LogicQu
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
@@ -48,8 +48,7 @@ const TOPIC_SCAN_YIELD_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Default)]
 struct CleanServiceLifecycle {
-    cancel: Option<CancellationToken>,
-    handle: Option<JoinHandle<()>>,
+    task_group: Option<TaskGroup>,
 }
 
 struct TopicQueueMappingCleanServiceInner<MS: MessageStore> {
@@ -91,12 +90,25 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
             return;
         }
 
-        let cancel = CancellationToken::new();
-        let cancel_for_task = cancel.clone();
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                self.inner.running.store(false, Ordering::Release);
+                warn!(
+                    ?error,
+                    "failed to start TopicQueueMappingCleanService outside Tokio runtime"
+                );
+                return;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.topic-queue-mapping-clean", runtime);
+        let cancel_for_task = task_group.cancellation_token();
         let this = Self {
             inner: Arc::clone(&self.inner),
         };
-        let handle = tokio::spawn(async move {
+        let mut lifecycle = self.inner.lifecycle.lock();
+
+        if let Err(error) = task_group.spawn_service("broker.topic-queue-mapping-clean.scan", async move {
             tokio::select! {
                 _ = cancel_for_task.cancelled() => {
                     this.inner.running.store(false, Ordering::Release);
@@ -121,22 +133,27 @@ impl<MS: MessageStore> TopicQueueMappingCleanService<MS> {
                     }
                 }
             }
-        });
+        }) {
+            self.inner.running.store(false, Ordering::Release);
+            warn!(?error, "failed to spawn TopicQueueMappingCleanService scan task");
+            return;
+        }
 
-        let mut lifecycle = self.inner.lifecycle.lock();
-        lifecycle.cancel = Some(cancel);
-        lifecycle.handle = Some(handle);
+        lifecycle.task_group = Some(task_group);
         info!("TopicQueueMappingCleanService started");
     }
 
     pub fn shutdown(&self) {
         self.inner.running.store(false, Ordering::Release);
         let mut lifecycle = self.inner.lifecycle.lock();
-        if let Some(cancel) = lifecycle.cancel.take() {
-            cancel.cancel();
-        }
-        if let Some(handle) = lifecycle.handle.take() {
-            handle.abort();
+        if let Some(task_group) = lifecycle.task_group.take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "TopicQueueMappingCleanService shutdown report is unhealthy"
+                );
+            }
         }
         info!("TopicQueueMappingCleanService shutdown");
     }
