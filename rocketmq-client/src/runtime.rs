@@ -30,8 +30,12 @@ use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskGroupLifecycleState;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
@@ -78,6 +82,72 @@ where
 {
     drop(spawn_client_task(task_name, task)?);
     Ok(())
+}
+
+pub(crate) struct ClientScheduledTaskHandle {
+    task_group: TaskGroup,
+    scheduled_tasks: ScheduledTaskGroup,
+    _fallback_lease: Option<ClientSharedFallbackLease>,
+}
+
+impl ClientScheduledTaskHandle {
+    pub(crate) fn is_running(&self) -> bool {
+        self.task_group.lifecycle_state() == TaskGroupLifecycleState::Open && self.task_count() > 0
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        self.task_group.task_count() + self.scheduled_tasks.group().task_count()
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks.snapshot()
+    }
+
+    pub(crate) async fn shutdown(self, timeout: Duration) -> ShutdownReport {
+        self.task_group.shutdown(timeout).await
+    }
+
+    pub(crate) fn shutdown_now(self) -> ShutdownReport {
+        self.task_group.shutdown_now()
+    }
+}
+
+pub(crate) fn schedule_client_fixed_delay_task<F, Fut>(
+    task_name: &'static str,
+    initial_delay: Duration,
+    period: Duration,
+    shutdown_timeout: Duration,
+    task: F,
+) -> io::Result<ClientScheduledTaskHandle>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let (task_group, fallback_lease) = client_task_group(task_name)?;
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
+    config.initial_delay = initial_delay;
+    config.shutdown_timeout = shutdown_timeout;
+    scheduled_tasks
+        .schedule_fixed_delay(config, task)
+        .map_err(io::Error::other)?;
+
+    Ok(ClientScheduledTaskHandle {
+        task_group,
+        scheduled_tasks,
+        _fallback_lease: fallback_lease,
+    })
+}
+
+fn client_task_group(task_name: &'static str) -> io::Result<(TaskGroup, Option<ClientSharedFallbackLease>)> {
+    if let Ok(handle) = Handle::try_current() {
+        let group = TaskGroup::root(task_name, RuntimeHandle::new(handle));
+        return Ok((group, None));
+    }
+
+    let lease = shared_fallback()?;
+    let group = lease.runtime.owner.context().root_group().child(task_name);
+    Ok((group, Some(lease)))
 }
 
 pub(crate) async fn spawn_client_blocking_io<F, R>(task_name: &'static str, task: F) -> io::Result<R>

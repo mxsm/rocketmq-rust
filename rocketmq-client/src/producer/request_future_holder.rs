@@ -17,17 +17,17 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use serde::Serialize;
 use std::sync::LazyLock;
-use tokio::sync::watch;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
-use tokio::time::interval;
 use tracing::error;
 use tracing::warn;
 
 use crate::producer::request_response_future::RequestResponseFuture;
-use crate::runtime::spawn_client_task;
+use crate::runtime::schedule_client_fixed_delay_task;
+use crate::runtime::ClientScheduledTaskHandle;
 
 const REQUEST_SCAN_INITIAL_DELAY: Duration = Duration::from_millis(3_000);
 const REQUEST_SCAN_INTERVAL: Duration = Duration::from_millis(1_000);
@@ -39,40 +39,19 @@ pub static REQUEST_FUTURE_HOLDER: LazyLock<Arc<RequestFutureHolder>> =
 pub struct RequestFutureHolder {
     request_future_table: Arc<RwLock<HashMap<String, Arc<RequestResponseFuture>>>>,
     producer_set: Arc<Mutex<HashSet<String>>>,
-    scheduled_task: Arc<Mutex<Option<RequestScanTask>>>,
+    scheduled_task: Arc<Mutex<Option<ClientScheduledTaskHandle>>>,
 }
 
-struct RequestScanTask {
-    shutdown_tx: watch::Sender<bool>,
-    handle: JoinHandle<()>,
-}
-
-impl RequestScanTask {
-    fn is_finished(&self) -> bool {
-        self.handle.is_finished()
-    }
-
-    async fn shutdown(self, timeout: Duration) -> bool {
-        let _ = self.shutdown_tx.send(true);
-        let mut handle = self.handle;
-        match tokio::time::timeout(timeout, &mut handle).await {
-            Ok(Ok(())) => true,
-            Ok(Err(error)) if error.is_cancelled() => true,
-            Ok(Err(error)) => {
-                warn!(%error, "request future scan task exited with join error");
-                true
-            }
-            Err(_) => {
-                handle.abort();
-                match handle.await {
-                    Ok(()) => {}
-                    Err(error) if error.is_cancelled() => {}
-                    Err(error) => warn!(%error, "request future scan task aborted with join error"),
-                }
-                false
-            }
-        }
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestFutureHolderLifecycleProbe {
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub scheduled_runs: u64,
+    pub scheduled_skips: u64,
+    pub scheduled_overlaps: u64,
+    pub scheduled_failures: u64,
+    pub shutdown_elapsed_us: u128,
+    pub healthy: bool,
 }
 
 impl RequestFutureHolder {
@@ -113,46 +92,45 @@ impl RequestFutureHolder {
     }
 
     pub async fn start_scheduled_task(self: &Arc<Self>, producer_id: impl Into<String>) {
-        self.producer_set.lock().await.insert(producer_id.into());
+        self.start_scheduled_task_with_schedule(producer_id, REQUEST_SCAN_INITIAL_DELAY, REQUEST_SCAN_INTERVAL)
+            .await;
+    }
 
+    async fn start_scheduled_task_with_schedule(
+        self: &Arc<Self>,
+        producer_id: impl Into<String>,
+        initial_delay: Duration,
+        scan_interval: Duration,
+    ) {
+        self.producer_set.lock().await.insert(producer_id.into());
         let mut scheduled_task = self.scheduled_task.lock().await;
-        if scheduled_task.as_ref().is_some_and(|handle| !handle.is_finished()) {
+        if scheduled_task
+            .as_ref()
+            .is_some_and(ClientScheduledTaskHandle::is_running)
+        {
             return;
         }
 
         let holder = Arc::clone(self);
-        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        let handle = match spawn_client_task("rocketmq-client-request-future-scan", async move {
-            tokio::select! {
-                _ = tokio::time::sleep(REQUEST_SCAN_INITIAL_DELAY) => {}
-                changed = shutdown_rx.changed() => {
-                    if changed.is_err() || *shutdown_rx.borrow() {
-                        return;
-                    }
+        let handle = match schedule_client_fixed_delay_task(
+            "rocketmq-client-request-future-scan",
+            initial_delay,
+            scan_interval.max(Duration::from_millis(1)),
+            REQUEST_SCAN_SHUTDOWN_TIMEOUT,
+            move || {
+                let holder = Arc::clone(&holder);
+                async move {
+                    holder.scan_expired_request().await;
                 }
-            }
-
-            let mut interval = interval(REQUEST_SCAN_INTERVAL);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        holder.scan_expired_request().await;
-                    }
-                    changed = shutdown_rx.changed() => {
-                        if changed.is_err() || *shutdown_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }) {
+            },
+        ) {
             Ok(handle) => handle,
             Err(error) => {
                 error!(%error, "failed to spawn request future scan task");
                 return;
             }
         };
-        *scheduled_task = Some(RequestScanTask { shutdown_tx, handle });
+        *scheduled_task = Some(handle);
     }
 
     pub async fn shutdown(&self, producer_id: &str) {
@@ -163,9 +141,11 @@ impl RequestFutureHolder {
 
         if should_stop {
             if let Some(task) = self.scheduled_task.lock().await.take() {
-                if !task.shutdown(REQUEST_SCAN_SHUTDOWN_TIMEOUT).await {
+                let report = task.shutdown(REQUEST_SCAN_SHUTDOWN_TIMEOUT).await;
+                if !report.is_healthy() {
                     warn!(
                         timeout_ms = REQUEST_SCAN_SHUTDOWN_TIMEOUT.as_millis(),
+                        report = %report.to_json(),
                         "request future scan task did not stop before timeout and was aborted"
                     );
                 }
@@ -192,6 +172,70 @@ impl RequestFutureHolder {
         let table = self.request_future_table.read().await;
         table.get(correlation_id).cloned()
     }
+
+    async fn task_count(&self) -> usize {
+        self.scheduled_task
+            .lock()
+            .await
+            .as_ref()
+            .map(ClientScheduledTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
+    async fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_task
+            .lock()
+            .await
+            .as_ref()
+            .map(ClientScheduledTaskHandle::schedule_snapshot)
+            .unwrap_or_default()
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_request_future_holder_lifecycle_probe() -> RequestFutureHolderLifecycleProbe {
+    let holder = Arc::new(RequestFutureHolder::new());
+    holder
+        .start_scheduled_task_with_schedule("producer-a", Duration::ZERO, Duration::from_millis(1))
+        .await;
+
+    let mut snapshots = holder.schedule_snapshot().await;
+    for _ in 0..100 {
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        snapshots = holder.schedule_snapshot().await;
+    }
+
+    let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+    let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+    let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+    let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+    let task_count_before_shutdown = holder.task_count().await;
+    let shutdown_started_at = std::time::Instant::now();
+    holder.shutdown("producer-a").await;
+    let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+    let task_count_after_shutdown = holder.task_count().await;
+    let healthy = scheduled_runs > 0
+        && scheduled_overlaps == 0
+        && scheduled_failures == 0
+        && task_count_before_shutdown > 0
+        && task_count_after_shutdown == 0;
+
+    RequestFutureHolderLifecycleProbe {
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        scheduled_runs,
+        scheduled_skips,
+        scheduled_overlaps,
+        scheduled_failures,
+        shutdown_elapsed_us,
+        healthy,
+    }
 }
 
 #[cfg(test)]
@@ -214,7 +258,7 @@ mod tests {
                 .lock()
                 .await
                 .as_ref()
-                .is_some_and(|handle| !handle.is_finished())
+                .is_some_and(ClientScheduledTaskHandle::is_running)
         }
     }
 
@@ -241,29 +285,6 @@ mod tests {
         holder.shutdown("producer-b").await;
         assert_eq!(holder.producer_count().await, 0);
         assert!(!holder.scheduled_task_active().await);
-    }
-
-    #[tokio::test]
-    async fn request_scan_task_shutdown_waits_for_worker_completion() {
-        let task = RequestScanTask {
-            shutdown_tx: watch::channel(false).0,
-            handle: tokio::spawn(async {}),
-        };
-
-        assert!(task.shutdown(Duration::from_secs(1)).await);
-    }
-
-    #[tokio::test]
-    async fn request_scan_task_shutdown_aborts_after_timeout() {
-        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
-        let task = RequestScanTask {
-            shutdown_tx,
-            handle: tokio::spawn(async {
-                std::future::pending::<()>().await;
-            }),
-        };
-
-        assert!(!task.shutdown(Duration::from_millis(20)).await);
     }
 
     #[tokio::test]
@@ -320,5 +341,15 @@ mod tests {
 
         assert!(Arc::ptr_eq(&removed, &request));
         assert!(holder.get_request("corr-remove").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn request_future_holder_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_request_future_holder_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 }

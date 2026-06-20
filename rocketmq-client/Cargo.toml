@@ -99,6 +99,22 @@ harness = false
 name    = "client_runtime_spawn_benchmark"
 harness = false
 
+[[bench]]
+name    = "request_future_holder_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "latency_fault_detector_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "local_file_offset_store_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "orderly_lock_periodic_lifecycle_bench"
+harness = false
+
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"

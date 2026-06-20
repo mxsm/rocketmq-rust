@@ -60,6 +60,9 @@ use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
@@ -384,6 +387,7 @@ pub struct ControllerManager {
     remoting_server: Option<RocketMQServer<ControllerRequestProcessor>>,
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
+    leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
 
     /// Remoting client for outbound RPC calls
     remoting_client: ArcMut<RocketmqDefaultClient>,
@@ -495,6 +499,7 @@ impl ControllerManager {
             remoting_server,
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
+            leadership_watch_tasks: Arc::new(Mutex::new(None)),
             remoting_client,
             #[cfg(feature = "metrics")]
             metrics_manager,
@@ -526,6 +531,7 @@ impl ControllerManager {
     }
 
     async fn shutdown_manager_tasks(&self) {
+        self.leadership_watch_tasks.lock().take();
         let task_group = self.manager_task_group.lock().take();
         let Some(task_group) = task_group else {
             return;
@@ -983,8 +989,24 @@ impl ControllerManager {
         &self.raft_controller
     }
 
-    fn scheduling_enabled(&self) -> bool {
+    pub(crate) fn scheduling_enabled(&self) -> bool {
         self.raft_controller.scheduling_enabled()
+    }
+
+    pub(crate) fn leadership_watch_task_count(&self) -> usize {
+        self.leadership_watch_tasks
+            .lock()
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn leadership_watch_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.leadership_watch_tasks
+            .lock()
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     pub fn set_raft_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {
@@ -1003,41 +1025,38 @@ impl ControllerManager {
         let weak_manager = ArcMut::downgrade(self);
         let interval = Duration::from_millis(self.config.heartbeat_interval_ms.max(100));
         let task_group = self.ensure_manager_task_group()?;
-        let shutdown_token = task_group.cancellation_token();
-        task_group
-            .spawn_service("controller.leadership-watch", async move {
-                let mut was_leader = false;
-                let mut ticker = tokio::time::interval(interval);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("leadership-watch"));
+        let was_leader = Arc::new(AtomicBool::new(false));
+        let task_config = ScheduledTaskConfig::fixed_delay("controller.leadership-watch", interval);
 
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            break;
-                        }
-                        _ = ticker.tick() => {}
-                    }
-
+        scheduled_tasks
+            .schedule_fixed_delay(task_config, move || {
+                let weak_manager = weak_manager.clone();
+                let was_leader = was_leader.clone();
+                async move {
                     let Some(manager) = weak_manager.upgrade() else {
-                        break;
+                        return;
                     };
 
                     if !manager.is_running() {
-                        break;
+                        return;
                     }
 
                     let is_leader = manager.is_leader();
-                    if is_leader == was_leader {
-                        continue;
+                    if is_leader == was_leader.load(Ordering::Acquire) {
+                        return;
                     }
 
                     if let Err(error) = manager.apply_leadership_state(is_leader).await {
                         warn!("Failed to apply leadership state transition: {}", error);
                     } else {
-                        was_leader = is_leader;
+                        was_leader.store(is_leader, Ordering::Release);
                     }
                 }
             })
-            .map_err(|error| ControllerError::Internal(format!("Failed to spawn leadership watch task: {error}")))?;
+            .map_err(|error| ControllerError::Internal(format!("Failed to schedule leadership watch task: {error}")))?;
+
+        *self.leadership_watch_tasks.lock() = Some(scheduled_tasks);
         Ok(())
     }
 
@@ -1357,6 +1376,7 @@ impl Drop for ControllerManager {
             self.notify_cache.write().clear();
             BrokerHeartbeatManager::shutdown(self.heartbeat_manager.as_mut());
             self.remoting_client.shutdown();
+            self.leadership_watch_tasks.lock().take();
             if let Some(task_group) = self.manager_task_group.lock().take() {
                 task_group.cancel();
             }

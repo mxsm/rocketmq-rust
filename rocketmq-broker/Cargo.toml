@@ -142,3 +142,7 @@ harness = false
 [[bench]]
 name    = "broker_fast_failure_lifecycle_bench"
 harness = false
+
+[[bench]]
+name    = "broker_schedule_persistence_lifecycle_bench"
+harness = false

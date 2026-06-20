@@ -99,6 +99,14 @@ harness = false
 name    = "controller_broker_metadata_lifecycle_bench"
 harness = false
 
+[[bench]]
+name    = "controller_leadership_watch_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "controller_openraft_scan_lifecycle_bench"
+harness = false
+
 [features]
 default         = ["storage-file"]
 storage-rocksdb = ["rocksdb"]

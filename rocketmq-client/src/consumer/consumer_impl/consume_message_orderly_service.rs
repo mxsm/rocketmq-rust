@@ -38,8 +38,10 @@ use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
+use serde::Serialize;
 use std::sync::LazyLock;
 use tracing::info;
 use tracing::warn;
@@ -57,8 +59,10 @@ use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrder
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::schedule_client_fixed_delay_task;
 use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
+use crate::runtime::ClientScheduledTaskHandle;
 
 static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.maxTimeConsumeContinuously")
@@ -87,6 +91,7 @@ pub struct ConsumeMessageOrderlyService {
 
 pub(crate) enum OrderlyTaskHandle {
     Tokio(JoinHandle<()>),
+    Scheduled(ClientScheduledTaskHandle),
 }
 
 impl OrderlyTaskHandle {
@@ -112,14 +117,59 @@ impl OrderlyTaskHandle {
                     }
                 }
             }
+            Self::Scheduled(handle) => {
+                let report = handle.shutdown(timeout).await;
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "orderly lock periodic task shutdown report is unhealthy"
+                    );
+                }
+                report.is_healthy()
+            }
         }
     }
 
     fn abort(self) {
         match self {
             Self::Tokio(handle) => handle.abort(),
+            Self::Scheduled(handle) => {
+                let report = handle.shutdown_now();
+                if !report.is_healthy() {
+                    warn!(
+                        report = %report.to_json(),
+                        "orderly lock periodic task shutdown_now report is unhealthy"
+                    );
+                }
+            }
         }
     }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tokio(handle) => usize::from(!handle.is_finished()),
+            Self::Scheduled(handle) => handle.task_count(),
+        }
+    }
+
+    fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        match self {
+            Self::Tokio(_) => Vec::new(),
+            Self::Scheduled(handle) => handle.schedule_snapshot(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderlyLockPeriodicLifecycleProbe {
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub scheduled_runs: u64,
+    pub scheduled_skips: u64,
+    pub scheduled_overlaps: u64,
+    pub scheduled_failures: u64,
+    pub shutdown_elapsed_us: u128,
+    pub healthy: bool,
 }
 
 fn spawn_orderly_task<F>(thread_name: &'static str, task: F) -> Option<OrderlyTaskHandle>
@@ -226,6 +276,48 @@ impl ConsumeMessageOrderlyService {
 
     pub async fn lock_mq_periodically(&mut self) {
         self.lock_mqperiodically().await;
+    }
+
+    fn start_lock_periodic_with_schedule(&mut self, this: ArcMut<Self>, initial_delay: Duration, period: Duration) {
+        let lock_handle = self.lock_periodic_task_handle.clone();
+        let stopped = self.stopped.clone();
+        let handle = schedule_client_fixed_delay_task(
+            "rocketmq-client-orderly-lock-periodic",
+            initial_delay,
+            period,
+            Duration::from_secs(5),
+            move || {
+                let mut service = this.clone();
+                let stopped = stopped.clone();
+                async move {
+                    if !stopped.load(Ordering::Acquire) {
+                        service.lock_mqperiodically().await;
+                    }
+                }
+            },
+        )
+        .map(OrderlyTaskHandle::Scheduled)
+        .map_err(|error| {
+            warn!("Failed to spawn rocketmq-client-orderly-lock-periodic background task: {error}");
+        })
+        .ok();
+        *lock_handle.lock() = handle;
+    }
+
+    fn lock_periodic_task_count(&self) -> usize {
+        self.lock_periodic_task_handle
+            .lock()
+            .as_ref()
+            .map(OrderlyTaskHandle::task_count)
+            .unwrap_or_default()
+    }
+
+    fn lock_periodic_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.lock_periodic_task_handle
+            .lock()
+            .as_ref()
+            .map(OrderlyTaskHandle::schedule_snapshot)
+            .unwrap_or_default()
     }
 
     pub fn reset_namespace(&mut self, msgs: &mut [ArcMut<MessageExt>]) {
@@ -553,21 +645,13 @@ impl ConsumeMessageOrderlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
-    fn start(&mut self, mut this: ArcMut<Self>) {
+    fn start(&mut self, this: ArcMut<Self>) {
         if MessageModel::Clustering == self.consumer_config.message_model {
-            let lock_handle = self.lock_periodic_task_handle.clone();
-            let stopped = self.stopped.clone();
-            let handle = spawn_orderly_task("rocketmq-client-orderly-lock-periodic", async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
-                loop {
-                    if stopped.load(Ordering::Acquire) {
-                        break;
-                    }
-                    this.lock_mqperiodically().await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(*REBALANCE_LOCK_INTERVAL)).await;
-                }
-            });
-            *lock_handle.lock() = handle;
+            self.start_lock_periodic_with_schedule(
+                this,
+                Duration::from_millis(1_000),
+                Duration::from_millis(*REBALANCE_LOCK_INTERVAL),
+            );
         }
     }
 
@@ -1130,6 +1214,63 @@ impl ConsumeRequest {
     }
 }
 
+#[doc(hidden)]
+pub async fn run_orderly_lock_periodic_lifecycle_probe() -> OrderlyLockPeriodicLifecycleProbe {
+    let consumer_config = ConsumerConfig {
+        message_model: MessageModel::Clustering,
+        ..Default::default()
+    };
+    let listener: ArcMessageListenerOrderly =
+        Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
+    let mut service = ArcMut::new(ConsumeMessageOrderlyService::new(
+        ArcMut::new(ClientConfig::default()),
+        ArcMut::new(consumer_config),
+        CheetahString::from_static_str("orderly_lock_periodic_probe_group"),
+        listener,
+        None,
+    ));
+    let this = service.clone();
+    service.start_lock_periodic_with_schedule(this, Duration::ZERO, Duration::from_millis(1));
+
+    let mut snapshots = service.lock_periodic_snapshot();
+    for _ in 0..100 {
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        snapshots = service.lock_periodic_snapshot();
+    }
+
+    let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+    let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+    let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+    let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+    let task_count_before_shutdown = service.lock_periodic_task_count();
+    let shutdown_started_at = std::time::Instant::now();
+    service.shutdown(1_000).await;
+    let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+    let task_count_after_shutdown = service.lock_periodic_task_count();
+    let healthy = scheduled_runs > 0
+        && scheduled_overlaps == 0
+        && scheduled_failures == 0
+        && task_count_before_shutdown > 0
+        && task_count_after_shutdown == 0;
+
+    OrderlyLockPeriodicLifecycleProbe {
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        scheduled_runs,
+        scheduled_skips,
+        scheduled_overlaps,
+        scheduled_failures,
+        shutdown_elapsed_us,
+        healthy,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::pending;
@@ -1308,6 +1449,16 @@ mod tests {
 
         assert!(dropped.load(Ordering::Acquire));
         assert_eq!(submitted.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn orderly_lock_periodic_lifecycle_probe_reports_clean_shutdown() {
+        let probe = run_orderly_lock_periodic_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 
     #[test]

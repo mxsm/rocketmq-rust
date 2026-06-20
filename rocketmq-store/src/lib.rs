@@ -51,15 +51,27 @@ pub mod bench_support {
 
     use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use dashmap::DashMap;
     use futures_util::future::join_all;
+    use rocketmq_common::common::broker::broker_config::BrokerConfig;
+    use rocketmq_common::common::config::TopicConfig;
     use rocketmq_runtime::BlockingExecutorSnapshot;
     use rocketmq_runtime::ShutdownReport;
+    use rocketmq_rust::ArcMut;
     use serde::Serialize;
 
+    use crate::base::message_store::MessageStore;
     use crate::base::store_stats_service::StoreStatsService;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::kv::compaction_service::CompactionService;
     use crate::kv::compaction_store::CompactionStore;
+    use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::rocksdb::config::RocksDbConfig;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::rocksdb::maintenance::RocksDbMaintenanceService;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::rocksdb::store::RocksDbStore;
     use crate::timer::timer_message_store::TimerMessageStore;
 
     #[derive(Debug, Clone, Serialize)]
@@ -107,6 +119,32 @@ pub mod bench_support {
 
     #[derive(Debug, Clone, Serialize)]
     pub struct StoreTimerSchedulerLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct StoreLocalFileScheduledLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub shutdown_elapsed_us: u128,
+        pub healthy: bool,
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct StoreRocksDbMaintenanceLifecycleProbe {
         pub task_count_before_shutdown: usize,
         pub task_count_after_shutdown: usize,
         pub scheduled_runs: u64,
@@ -342,6 +380,127 @@ pub mod bench_support {
         }
     }
 
+    pub async fn run_store_local_file_scheduled_lifecycle_probe() -> StoreLocalFileScheduledLifecycleProbe {
+        let root = tempfile::tempdir().expect("local file store scheduled benchmark root should be created");
+        let config = MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
+            clean_resource_interval: 1,
+            ..MessageStoreConfig::default()
+        };
+        let mut store = ArcMut::new(LocalFileMessageStore::new(
+            Arc::new(config),
+            Arc::new(BrokerConfig::default()),
+            Arc::new(DashMap::<CheetahString, ArcMut<TopicConfig>>::new()),
+            None,
+            false,
+        ));
+        let store_clone = store.clone();
+        store.set_message_store_arc(store_clone);
+        store.init().await.expect("local file store benchmark should init");
+        store.start().await.expect("local file store benchmark should start");
+
+        let mut snapshots = store.scheduled_task_snapshot();
+        for _ in 0..100 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            snapshots = store.scheduled_task_snapshot();
+        }
+
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = store.scheduled_task_count();
+        let shutdown_started_at = Instant::now();
+        store.shutdown().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = store.scheduled_task_count();
+        let healthy = snapshots.len() == 4
+            && scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown >= 4
+            && task_count_after_shutdown == 0;
+
+        StoreLocalFileScheduledLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            shutdown_elapsed_us,
+            healthy,
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub async fn run_store_rocksdb_maintenance_lifecycle_probe() -> StoreRocksDbMaintenanceLifecycleProbe {
+        let root = tempfile::tempdir().expect("rocksdb maintenance benchmark root should be created");
+        let config = RocksDbConfig {
+            enabled: true,
+            path: root.path().join("maintenance-db"),
+            flush_interval_ms: 1,
+            ..RocksDbConfig::default()
+        };
+        let store =
+            Arc::new(RocksDbStore::open(config.clone()).expect("rocksdb maintenance benchmark store should open"));
+        let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), config);
+        service.start();
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..100 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            snapshots = service.schedule_snapshot();
+        }
+
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = service.task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = service
+            .shutdown_gracefully_with_report()
+            .await
+            .expect("rocksdb maintenance shutdown should complete");
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        StoreRocksDbMaintenanceLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+
     fn percentile_us(values: &[u128], percentile: usize) -> u128 {
         if values.is_empty() {
             return 0;
@@ -393,6 +552,27 @@ mod bench_support_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn store_timer_scheduler_lifecycle_probe_reports_clean_shutdown() {
         let probe = super::bench_support::run_store_timer_scheduler_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_local_file_scheduled_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_store_local_file_scheduled_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_rocksdb_maintenance_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_store_rocksdb_maintenance_lifecycle_probe().await;
 
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");

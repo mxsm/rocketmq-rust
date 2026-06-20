@@ -107,8 +107,16 @@ pub use crate::common::admin_tool_result::AdminToolResult;
 pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_orderly_service::run_orderly_lock_periodic_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::consume_message_orderly_service::OrderlyLockPeriodicLifecycleProbe;
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 pub use crate::consumer::notify_result::NotifyResult;
+#[doc(hidden)]
+pub use crate::consumer::store::local_file_offset_store::run_local_file_offset_store_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::store::local_file_offset_store::LocalFileOffsetStoreLifecycleProbe;
 pub use crate::consumer::AbstractAllocateMessageQueueStrategy;
 pub use crate::consumer::AckCallback;
 pub use crate::consumer::AckCallbackFn;
@@ -178,6 +186,10 @@ pub use crate::runtime::ClientSharedFallbackLifecycleState;
 pub use crate::runtime::ClientSharedFallbackSnapshot;
 pub type MQClientAPIExt = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 pub type MqClientAdminImpl = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+#[doc(hidden)]
+pub use crate::latency::latency_fault_tolerance_impl::run_latency_fault_detector_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::latency::latency_fault_tolerance_impl::LatencyFaultDetectorLifecycleProbe;
 pub use crate::latency::BrokerFilter;
 pub use crate::latency::MQFaultStrategy;
 pub use crate::latency::Resolver;
@@ -212,6 +224,10 @@ pub use crate::legacy::SendMessageOpenTracingHookImpl;
 #[allow(deprecated)]
 pub use crate::legacy::TransactionCheckListener;
 pub use crate::lock::ReadWriteCASLock;
+#[doc(hidden)]
+pub use crate::producer::request_future_holder::run_request_future_holder_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::producer::request_future_holder::RequestFutureHolderLifecycleProbe;
 pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;

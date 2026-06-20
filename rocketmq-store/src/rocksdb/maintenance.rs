@@ -19,8 +19,10 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use rocketmq_error::RocketMQError;
-use tokio::time::MissedTickBehavior;
-use tokio_util::sync::CancellationToken;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use tracing::error;
 use tracing::warn;
 
@@ -63,8 +65,8 @@ impl RocksDbMaintenanceConfig {
 pub struct RocksDbMaintenanceService {
     store: Arc<RocksDbStore>,
     config: RocksDbMaintenanceConfig,
-    shutdown_token: CancellationToken,
     worker_group: Option<rocketmq_runtime::TaskGroup>,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
 }
 
 impl RocksDbMaintenanceService {
@@ -72,8 +74,8 @@ impl RocksDbMaintenanceService {
         Self {
             store,
             config: RocksDbMaintenanceConfig::from_rocksdb_config(&config),
-            shutdown_token: CancellationToken::new(),
             worker_group: None,
+            scheduled_tasks: None,
         }
     }
 
@@ -81,8 +83,8 @@ impl RocksDbMaintenanceService {
         Self {
             store,
             config,
-            shutdown_token: CancellationToken::new(),
             worker_group: None,
+            scheduled_tasks: None,
         }
     }
 
@@ -91,7 +93,6 @@ impl RocksDbMaintenanceService {
             return;
         }
 
-        self.shutdown_token = CancellationToken::new();
         let worker_group = match crate::rocksdb::runtime::task_group("rocksdb.maintenance") {
             Ok(worker_group) => worker_group,
             Err(error) => {
@@ -99,35 +100,72 @@ impl RocksDbMaintenanceService {
                 return;
             }
         };
+        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
 
-        self.spawn_enabled_operation(&worker_group, MaintenanceOperation::Flush, self.config.flush_interval);
-        self.spawn_enabled_operation(
-            &worker_group,
+        self.schedule_enabled_operation(
+            &scheduled_tasks,
+            MaintenanceOperation::Flush,
+            self.config.flush_interval,
+        );
+        self.schedule_enabled_operation(
+            &scheduled_tasks,
             MaintenanceOperation::CompactDefaultCf,
             self.config.compaction_interval,
         );
-        self.spawn_enabled_operation(
-            &worker_group,
+        self.schedule_enabled_operation(
+            &scheduled_tasks,
             MaintenanceOperation::Checkpoint,
             self.config.checkpoint_interval,
         );
         if self.config.backup_dir.is_some() {
-            self.spawn_enabled_operation(&worker_group, MaintenanceOperation::Backup, self.config.backup_interval);
+            self.schedule_enabled_operation(
+                &scheduled_tasks,
+                MaintenanceOperation::Backup,
+                self.config.backup_interval,
+            );
         }
+        self.scheduled_tasks = Some(scheduled_tasks);
         self.worker_group = Some(worker_group);
     }
 
     pub async fn shutdown_gracefully(&mut self) -> Result<(), RocketMQError> {
-        self.shutdown_token.cancel();
+        let _ = self.shutdown_gracefully_with_report().await?;
+        Ok(())
+    }
+
+    pub async fn shutdown_gracefully_with_report(&mut self) -> Result<Option<ShutdownReport>, RocketMQError> {
+        self.scheduled_tasks.take();
         if let Some(worker_group) = self.worker_group.take() {
             let report = worker_group.shutdown(Duration::from_secs(5)).await;
-            crate::rocksdb::runtime::shutdown_report_result("maintenance shutdown", report)?;
+            crate::rocksdb::runtime::shutdown_report_result("maintenance shutdown", report.clone())?;
+            return Ok(Some(report));
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn is_running(&self) -> bool {
         self.worker_group.is_some()
+    }
+
+    pub fn task_count(&self) -> usize {
+        let root_count = self
+            .worker_group
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     pub async fn run_once(&self) -> Result<(), RocketMQError> {
@@ -151,9 +189,9 @@ impl RocksDbMaintenanceService {
         Ok(())
     }
 
-    fn spawn_enabled_operation(
+    fn schedule_enabled_operation(
         &self,
-        worker_group: &rocketmq_runtime::TaskGroup,
+        scheduled_tasks: &ScheduledTaskGroup,
         operation: MaintenanceOperation,
         interval: Option<Duration>,
     ) {
@@ -162,11 +200,18 @@ impl RocksDbMaintenanceService {
         };
         let store = Arc::clone(&self.store);
         let config = self.config.clone();
-        let shutdown = self.shutdown_token.clone();
-        if let Err(error) = worker_group.spawn_service(operation.task_name(), async move {
-            run_operation_loop(store, config, operation, interval, shutdown).await;
+        let mut task_config = ScheduledTaskConfig::fixed_delay(operation.task_name(), interval);
+        task_config.initial_delay = interval;
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(task_config, move || {
+            let store = Arc::clone(&store);
+            let config = config.clone();
+            async move {
+                if let Err(error) = run_operation(&store, &config, operation).await {
+                    warn!(error = %error, operation = ?operation, "rocksdb maintenance operation failed");
+                }
+            }
         }) {
-            error!(%error, operation = ?operation, "failed to spawn rocksdb maintenance task");
+            error!(%error, operation = ?operation, "failed to schedule rocksdb maintenance task");
         }
     }
 }
@@ -186,29 +231,6 @@ impl MaintenanceOperation {
             MaintenanceOperation::CompactDefaultCf => "rocksdb-maintenance-compact-default-cf",
             MaintenanceOperation::Checkpoint => "rocksdb-maintenance-checkpoint",
             MaintenanceOperation::Backup => "rocksdb-maintenance-backup",
-        }
-    }
-}
-
-async fn run_operation_loop(
-    store: Arc<RocksDbStore>,
-    config: RocksDbMaintenanceConfig,
-    operation: MaintenanceOperation,
-    interval: Duration,
-    shutdown: CancellationToken,
-) {
-    let mut ticker = tokio::time::interval(interval);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    ticker.tick().await;
-
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => break,
-            _ = ticker.tick() => {
-                if let Err(error) = run_operation(&store, &config, operation).await {
-                    warn!(error = %error, operation = ?operation, "rocksdb maintenance operation failed");
-                }
-            }
         }
     }
 }

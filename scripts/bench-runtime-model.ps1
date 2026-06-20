@@ -188,6 +188,20 @@ $jsonArtifacts += Write-JsonArtifact -Name "store-kv-compaction.json" -Metrics @
     required_metrics = @("compacted", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
 }
 
+$jsonArtifacts += Write-JsonArtifact -Name "store-rocksdb-maintenance.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-store --features rocksdb_store --bench store_rocksdb_maintenance_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/store-rocksdb-maintenance-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "store-local-file-scheduled.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-store --bench store_local_file_scheduled_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/store-local-file-scheduled-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "healthy")
+}
+
 $jsonArtifacts += Write-JsonArtifact -Name "store-stats-service.json" -Metrics @{
     status = "implemented-benchmark"
     expected_bench = "cargo bench -p rocketmq-store --bench store_stats_service_lifecycle_bench"
@@ -284,6 +298,20 @@ $jsonArtifacts += Write-JsonArtifact -Name "controller-broker-metadata.json" -Me
     expected_bench = "cargo bench -p rocketmq-controller --bench controller_broker_metadata_lifecycle_bench"
     artifact = "target/runtime-baseline/prototype/controller-broker-metadata-lifecycle-report.json"
     required_metrics = @("expired_broker_removed", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "healthy", "shutdown_report")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "controller-leadership-watch.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-controller --bench controller_leadership_watch_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/controller-leadership-watch-lifecycle-report.json"
+    required_metrics = @("scheduling_enabled", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "controller-openraft-scan.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-controller --bench controller_openraft_scan_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/controller-openraft-scan-lifecycle-report.json"
+    required_metrics = @("became_leader", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "healthy")
 }
 
 $manifest = [ordered]@{

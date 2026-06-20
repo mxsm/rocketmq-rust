@@ -41,6 +41,7 @@ pub mod bench_support {
     use rocketmq_common::common::filter::expression_type::ExpressionType;
     use rocketmq_rust::schedule::simple_scheduler::ScheduledShutdownReport;
     use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
     use serde::Serialize;
 
     pub use crate::client::client_channel_info::ClientChannelInfo;
@@ -103,6 +104,19 @@ pub mod bench_support {
         pub cleaned_response_received: bool,
         pub shutdown_elapsed_us: u128,
         pub shutdown_report: Option<rocketmq_runtime::ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct BrokerSchedulePersistenceLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub persisted_offset_file: bool,
+        pub shutdown_elapsed_us: u128,
         pub healthy: bool,
     }
 
@@ -429,6 +443,75 @@ pub mod bench_support {
             healthy,
         }
     }
+
+    pub async fn run_broker_schedule_persistence_lifecycle_probe(
+        root: PathBuf,
+    ) -> BrokerSchedulePersistenceLifecycleProbe {
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("broker schedule persistence benchmark root should be created");
+        let root_dir = root.to_string_lossy().into_owned();
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root_dir.clone().into(),
+            auth_config_path: root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root_dir.clone().into(),
+            flush_delay_offset_interval: 1,
+            message_delay_level: "1s".to_string(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let mut service = runtime.inner_for_test().schedule_message_service_unchecked().clone();
+
+        crate::schedule::schedule_message_service::ScheduleMessageService::start_persist_task_for_probe(
+            service.clone(),
+            Duration::ZERO,
+        )
+        .expect("broker schedule persist task should start");
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..100 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = service.schedule_snapshot();
+        }
+
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = service.task_count();
+        let persisted_offset_file = PathBuf::from(get_delay_offset_store_path(&root_dir)).exists();
+        let shutdown_started_at = Instant::now();
+        service.shutdown().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let healthy = scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && persisted_offset_file;
+
+        let _ = std::fs::remove_dir_all(root);
+        BrokerSchedulePersistenceLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            persisted_offset_file,
+            shutdown_elapsed_us,
+            healthy,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +542,21 @@ mod bench_support_tests {
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.cleaned_response_received, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_schedule_persistence_lifecycle_probe_reports_clean_shutdown() {
+        let root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-broker-schedule-persist-probe-{}",
+            rocketmq_common::TimeUtils::current_millis()
+        ));
+        let probe = super::bench_support::run_broker_schedule_persistence_lifecycle_probe(root).await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.persisted_offset_file, "{probe:?}");
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
         assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
         assert_eq!(probe.scheduled_failures, 0, "{probe:?}");

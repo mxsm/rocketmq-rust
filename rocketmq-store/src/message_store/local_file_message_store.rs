@@ -78,6 +78,9 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_rust::ArcMut;
 #[cfg(feature = "tieredstore")]
 use rocketmq_tieredstore::fetcher::TieredGetMessageResult;
@@ -341,6 +344,7 @@ pub struct LocalFileMessageStore {
     flush_consume_queue_service: FlushConsumeQueueService,
     scheduled_task_shutdown: CancellationToken,
     scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
+    scheduled_tasks: Option<ScheduledTaskGroup>,
     ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
@@ -574,6 +578,7 @@ impl LocalFileMessageStore {
             ),
             scheduled_task_shutdown: CancellationToken::new(),
             scheduled_task_group: None,
+            scheduled_tasks: None,
             ha_update_master_group: Arc::new(StdMutex::new(None)),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
@@ -1330,104 +1335,125 @@ impl LocalFileMessageStore {
                 return;
             }
         };
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
 
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("clean-commit-log-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let service = Arc::clone(&clean_commit_log_service_arc);
-                        if !run_blocking_scheduled_task("clean commit log", move || service.run()).await {
-                            break;
-                        }
-                    },
+        let clean_commit_log_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay(
+                "clean-commit-log-scheduler",
+                Duration::from_millis(clean_resource_interval.max(1)),
+            ),
+            move || {
+                let service = Arc::clone(&clean_commit_log_service_arc);
+                let active = Arc::clone(&clean_commit_log_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("clean commit log", move || service.run()).await {
+                        active.store(false, Ordering::Release);
+                    }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task clean commit log: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task clean commit log: {error}");
             return;
         }
 
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("store-self-check-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let message_store = message_store.clone();
-                        if !run_blocking_scheduled_task("store self check", move || message_store.check_self()).await {
-                            break;
-                        }
-                    },
+        let store_self_check_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("store-self-check-scheduler", Duration::from_secs(10 * 60)),
+            move || {
+                let message_store = message_store.clone();
+                let active = Arc::clone(&store_self_check_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("store self check", move || message_store.check_self()).await {
+                        active.store(false, Ordering::Release);
+                    }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task self check: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task self check: {error}");
             return;
         }
 
         // store check point flush
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("store-checkpoint-flush-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let checkpoint = Arc::clone(&store_checkpoint_arc);
-                        if !run_blocking_scheduled_task("store checkpoint flush", move || {
-                            let _ = checkpoint.flush();
-                        }).await {
-                            break;
-                        }
+        let checkpoint_flush_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("store-checkpoint-flush-scheduler", Duration::from_secs(1)),
+            move || {
+                let checkpoint = Arc::clone(&store_checkpoint_arc);
+                let active = Arc::clone(&checkpoint_flush_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("store checkpoint flush", move || {
+                        let _ = checkpoint.flush();
+                    })
+                    .await
+                    {
+                        active.store(false, Ordering::Release);
                     }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task checkpoint flush: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task checkpoint flush: {error}");
             return;
         }
 
         let correct_logic_offset_service_arc = self.correct_logic_offset_service.clone();
         let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
-        let shutdown_token = self.scheduled_task_shutdown.clone();
-        if let Err(error) = task_group.spawn_service("clean-consume-queue-scheduler", async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
-            loop {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let correct_service = Arc::clone(&correct_logic_offset_service_arc);
-                        let clean_service = Arc::clone(&clean_consume_queue_service_arc);
-                        if !run_blocking_scheduled_task("clean consume queue", move || {
-                            correct_service.run();
-                            clean_service.run();
-                        }).await {
-                            break;
-                        }
+        let clean_consume_queue_active = Arc::new(AtomicBool::new(true));
+        if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay(
+                "clean-consume-queue-scheduler",
+                Duration::from_millis(clean_resource_interval.max(1)),
+            ),
+            move || {
+                let correct_service = Arc::clone(&correct_logic_offset_service_arc);
+                let clean_service = Arc::clone(&clean_consume_queue_service_arc);
+                let active = Arc::clone(&clean_consume_queue_active);
+                async move {
+                    if !active.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if !run_blocking_scheduled_task("clean consume queue", move || {
+                        correct_service.run();
+                        clean_service.run();
+                    })
+                    .await
+                    {
+                        active.store(false, Ordering::Release);
                     }
                 }
-            }
-        }) {
+            },
+        ) {
             self.scheduled_task_shutdown.cancel();
-            error!("failed to spawn scheduled store task clean consume queue: {error}");
+            task_group.cancel();
+            error!("failed to schedule store task clean consume queue: {error}");
             return;
         }
 
+        self.scheduled_tasks = Some(scheduled_tasks);
         self.scheduled_task_group = Some(task_group);
     }
 
     async fn shutdown_schedule_tasks(&mut self) {
         self.scheduled_task_shutdown.cancel();
+        self.scheduled_tasks.take();
         if let Some(task_group) = self.scheduled_task_group.take() {
             let report = task_group.shutdown(Duration::from_secs(5)).await;
             if let Err(error) = crate::runtime::shutdown_report_result("LocalFileMessageStore scheduled tasks", report)
@@ -1440,6 +1466,27 @@ impl LocalFileMessageStore {
     #[cfg(test)]
     fn has_scheduled_task_group(&self) -> bool {
         self.scheduled_task_group.is_some()
+    }
+
+    pub(crate) fn scheduled_task_count(&self) -> usize {
+        let root_count = self
+            .scheduled_task_group
+            .as_ref()
+            .map(rocketmq_runtime::TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn scheduled_task_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     async fn shutdown_ha_update_master_tasks(&self) {
@@ -5321,6 +5368,22 @@ mod tests {
         store.start().await.expect("start store");
 
         assert!(store.has_scheduled_task_group());
+        let mut snapshots = store.scheduled_task_snapshot();
+        for _ in 0..100 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            snapshots = store.scheduled_task_snapshot();
+        }
+        assert_eq!(snapshots.len(), 4, "{snapshots:?}");
+        assert!(store.scheduled_task_count() >= 4);
+        assert!(snapshots.iter().map(|snapshot| snapshot.runs).sum::<u64>() > 0);
+        assert_eq!(snapshots.iter().map(|snapshot| snapshot.overlaps).sum::<u64>(), 0);
+        assert_eq!(snapshots.iter().map(|snapshot| snapshot.failures).sum::<u64>(), 0);
         assert!(store.store_stats_service.has_worker_handle());
         assert!(store
             .compaction_service
@@ -5336,6 +5399,7 @@ mod tests {
         store.shutdown().await;
 
         assert!(!store.has_scheduled_task_group());
+        assert_eq!(store.scheduled_task_count(), 0);
         assert!(!store.store_stats_service.has_worker_handle());
         assert!(store
             .compaction_service

@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::task;
-use tokio::time::interval;
 
 pub struct StatisticsBrief {
     top_percentile_meta: Vec<Vec<i64>>,

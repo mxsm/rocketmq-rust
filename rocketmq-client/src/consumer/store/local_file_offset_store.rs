@@ -27,13 +27,15 @@ use dashmap::DashMap;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_rust::ArcMut;
+use serde::Serialize;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
-use tokio::time::interval;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -44,9 +46,12 @@ use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::runtime::schedule_client_fixed_delay_task;
 use crate::runtime::spawn_client_task;
+use crate::runtime::ClientScheduledTaskHandle;
 
 const PERSIST_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const PERIODIC_PERSIST_INTERVAL: Duration = Duration::from_secs(5);
 
 static LOCAL_OFFSET_STORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     #[cfg(target_os = "windows")]
@@ -82,43 +87,128 @@ pub struct LocalFileOffsetStore {
 }
 
 enum PersistTaskHandle {
-    Tokio(JoinHandle<()>),
+    Tokio {
+        command_handle: JoinHandle<()>,
+        scheduled_handle: Option<ClientScheduledTaskHandle>,
+    },
     NotStarted,
 }
 
 impl PersistTaskHandle {
     fn is_finished(&self) -> bool {
         match self {
-            Self::Tokio(handle) => handle.is_finished(),
+            Self::Tokio {
+                command_handle,
+                scheduled_handle,
+            } => command_handle.is_finished() && scheduled_handle.as_ref().is_none_or(|handle| !handle.is_running()),
             Self::NotStarted => true,
         }
     }
 
-    async fn shutdown(self, timeout: Duration) -> bool {
+    async fn shutdown(self, shutdown_tx: &mpsc::UnboundedSender<PersistCommand>, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => {
-                let mut handle = handle;
-                match tokio::time::timeout(timeout, &mut handle).await {
-                    Ok(Ok(())) => true,
-                    Ok(Err(error)) if error.is_cancelled() => true,
-                    Ok(Err(error)) => {
-                        warn!(%error, "local offset store persist task exited with join error");
-                        true
-                    }
-                    Err(_) => {
-                        handle.abort();
-                        match handle.await {
-                            Ok(()) => {}
-                            Err(error) if error.is_cancelled() => {}
-                            Err(error) => warn!(%error, "local offset store persist task aborted with join error"),
-                        }
-                        false
+            Self::Tokio {
+                command_handle,
+                scheduled_handle,
+            } => {
+                let started_at = std::time::Instant::now();
+                let mut healthy = true;
+                if let Some(scheduled_handle) = scheduled_handle {
+                    let report = scheduled_handle.shutdown(timeout).await;
+                    if !report.is_healthy() {
+                        warn!(
+                            report = %report.to_json(),
+                            "local offset store periodic persist shutdown report is unhealthy"
+                        );
+                        healthy = false;
                     }
                 }
+
+                let _ = shutdown_tx.send(PersistCommand::Shutdown);
+                let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
+                Self::shutdown_command_task(command_handle, remaining).await && healthy
             }
-            Self::NotStarted => true,
+            Self::NotStarted => {
+                let _ = shutdown_tx.send(PersistCommand::Shutdown);
+                true
+            }
         }
     }
+
+    fn shutdown_now(self) {
+        if let Self::Tokio {
+            scheduled_handle: Some(scheduled_handle),
+            ..
+        } = self
+        {
+            let report = scheduled_handle.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "local offset store periodic persist shutdown_now report is unhealthy"
+                );
+            }
+        }
+    }
+
+    async fn shutdown_command_task(mut handle: JoinHandle<()>, timeout: Duration) -> bool {
+        match tokio::time::timeout(timeout, &mut handle).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) if error.is_cancelled() => true,
+            Ok(Err(error)) => {
+                warn!(%error, "local offset store persist task exited with join error");
+                true
+            }
+            Err(_) => {
+                handle.abort();
+                match handle.await {
+                    Ok(()) => {}
+                    Err(error) if error.is_cancelled() => {}
+                    Err(error) => warn!(%error, "local offset store persist task aborted with join error"),
+                }
+                false
+            }
+        }
+    }
+
+    fn task_count(&self) -> usize {
+        match self {
+            Self::Tokio {
+                command_handle,
+                scheduled_handle,
+            } => {
+                usize::from(!command_handle.is_finished())
+                    + scheduled_handle
+                        .as_ref()
+                        .map(ClientScheduledTaskHandle::task_count)
+                        .unwrap_or_default()
+            }
+            Self::NotStarted => 0,
+        }
+    }
+
+    fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        match self {
+            Self::Tokio {
+                scheduled_handle: Some(scheduled_handle),
+                ..
+            } => scheduled_handle.schedule_snapshot(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalFileOffsetStoreLifecycleProbe {
+    pub task_count_before_shutdown: usize,
+    pub task_count_after_shutdown: usize,
+    pub scheduled_runs: u64,
+    pub scheduled_skips: u64,
+    pub scheduled_overlaps: u64,
+    pub scheduled_failures: u64,
+    pub persisted_offset_file: bool,
+    pub shutdown_elapsed_us: u128,
+    pub healthy: bool,
 }
 
 impl LocalFileOffsetStore {
@@ -140,8 +230,13 @@ impl LocalFileOffsetStore {
         let dirty_flag_clone = dirty_flag.clone();
         let store_path_clone = store_path.clone();
 
-        let persist_handle =
-            Self::spawn_background_persist_task(offset_table_clone, dirty_flag_clone, store_path_clone, persist_rx);
+        let persist_handle = Self::spawn_background_persist_task_with_interval(
+            offset_table_clone,
+            dirty_flag_clone,
+            store_path_clone,
+            persist_rx,
+            PERIODIC_PERSIST_INTERVAL,
+        );
 
         Self {
             client_instance,
@@ -160,16 +255,80 @@ impl LocalFileOffsetStore {
         store_path: String,
         persist_rx: mpsc::UnboundedReceiver<PersistCommand>,
     ) -> PersistTaskHandle {
+        Self::spawn_background_persist_task_with_interval(
+            offset_table,
+            dirty_flag,
+            store_path,
+            persist_rx,
+            PERIODIC_PERSIST_INTERVAL,
+        )
+    }
+
+    fn spawn_background_persist_task_with_interval(
+        offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
+        dirty_flag: Arc<AtomicBool>,
+        store_path: String,
+        persist_rx: mpsc::UnboundedReceiver<PersistCommand>,
+        persist_interval: Duration,
+    ) -> PersistTaskHandle {
+        let persist_lock = Arc::new(TokioMutex::new(()));
+        let command_offset_table = offset_table.clone();
+        let command_dirty_flag = dirty_flag.clone();
+        let command_store_path = store_path.clone();
+        let command_persist_lock = persist_lock.clone();
         let task = async move {
-            Self::background_persist_task(offset_table, dirty_flag, store_path, persist_rx).await;
+            Self::background_persist_task(
+                command_offset_table,
+                command_dirty_flag,
+                command_store_path,
+                persist_rx,
+                command_persist_lock,
+            )
+            .await;
         };
 
-        match spawn_client_task("rocketmq-client-local-offset-store", task) {
-            Ok(handle) => PersistTaskHandle::Tokio(handle),
+        let command_handle = match spawn_client_task("rocketmq-client-local-offset-store", task) {
+            Ok(handle) => handle,
             Err(error) => {
                 error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
-                PersistTaskHandle::NotStarted
+                return PersistTaskHandle::NotStarted;
             }
+        };
+
+        let scheduled_offset_table = offset_table;
+        let scheduled_dirty_flag = dirty_flag;
+        let scheduled_store_path = store_path;
+        let scheduled_handle = match schedule_client_fixed_delay_task(
+            "rocketmq-client-local-offset-store-periodic",
+            persist_interval,
+            persist_interval,
+            PERSIST_TASK_SHUTDOWN_TIMEOUT,
+            move || {
+                let offset_table = scheduled_offset_table.clone();
+                let dirty_flag = scheduled_dirty_flag.clone();
+                let store_path = scheduled_store_path.clone();
+                let persist_lock = persist_lock.clone();
+                async move {
+                    if dirty_flag.swap(false, Ordering::AcqRel) {
+                        let _guard = persist_lock.lock().await;
+                        if let Err(error) = Self::do_persist(&offset_table, &store_path, None).await {
+                            error!("Background persist failed: {}", error);
+                            dirty_flag.store(true, Ordering::Release);
+                        }
+                    }
+                }
+            },
+        ) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                error!("Failed to spawn LocalFileOffsetStore periodic task: {}", error);
+                None
+            }
+        };
+
+        PersistTaskHandle::Tokio {
+            command_handle,
+            scheduled_handle,
         }
     }
 
@@ -178,9 +337,16 @@ impl LocalFileOffsetStore {
     }
 
     pub async fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
-        self.persist_tx.send(PersistCommand::Shutdown).ok();
         let handle = std::mem::replace(&mut self.persist_handle, PersistTaskHandle::NotStarted);
-        handle.shutdown(timeout).await
+        handle.shutdown(&self.persist_tx, timeout).await
+    }
+
+    fn persist_task_count(&self) -> usize {
+        self.persist_handle.task_count()
+    }
+
+    fn periodic_persist_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.persist_handle.schedule_snapshot()
     }
 
     async fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
@@ -254,50 +420,39 @@ impl LocalFileOffsetStore {
         dirty_flag: Arc<AtomicBool>,
         store_path: String,
         mut rx: mpsc::UnboundedReceiver<PersistCommand>,
+        persist_lock: Arc<TokioMutex<()>>,
     ) {
-        let mut ticker = interval(Duration::from_secs(5));
-
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    // Periodic full persist if dirty
-                    if dirty_flag.swap(false, Ordering::AcqRel) {
-                        if let Err(e) = Self::do_persist(&offset_table, &store_path, None).await {
-                            error!("Background persist failed: {}", e);
-                            dirty_flag.store(true, Ordering::Release);
-                        }
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                PersistCommand::PersistMQs(mqs, reply) => {
+                    let _guard = persist_lock.lock().await;
+                    let result = Self::do_persist(&offset_table, &store_path, Some(mqs)).await;
+                    if let Err(ref e) = result {
+                        error!("Persist MQs failed: {}", e);
+                    }
+                    if let Some(tx) = reply {
+                        tx.send(result).ok();
                     }
                 }
-                Some(cmd) = rx.recv() => {
-                    match cmd {
-                        PersistCommand::PersistMQs(mqs, reply) => {
-                            let result = Self::do_persist(&offset_table, &store_path, Some(mqs)).await;
-                            if let Err(ref e) = result {
-                                error!("Persist MQs failed: {}", e);
-                            }
-                            if let Some(tx) = reply {
-                                tx.send(result).ok();
-                            }
-                        }
-                        PersistCommand::PersistAll(reply) => {
-                            let result = Self::do_persist(&offset_table, &store_path, None).await;
-                            if let Err(ref e) = result {
-                                error!("Persist all failed: {}", e);
-                            }
-                            if let Some(tx) = reply {
-                                tx.send(result).ok();
-                            }
-                        }
-                        PersistCommand::Shutdown => {
-                            // Final persist before shutdown
-                            if dirty_flag.load(Ordering::Acquire) {
-                                if let Err(e) = Self::do_persist(&offset_table, &store_path, None).await {
-                                    error!("Final persist on shutdown failed: {}", e);
-                                }
-                            }
-                            break;
+                PersistCommand::PersistAll(reply) => {
+                    let _guard = persist_lock.lock().await;
+                    let result = Self::do_persist(&offset_table, &store_path, None).await;
+                    if let Err(ref e) = result {
+                        error!("Persist all failed: {}", e);
+                    }
+                    if let Some(tx) = reply {
+                        tx.send(result).ok();
+                    }
+                }
+                PersistCommand::Shutdown => {
+                    // Final persist before shutdown
+                    if dirty_flag.load(Ordering::Acquire) {
+                        let _guard = persist_lock.lock().await;
+                        if let Err(e) = Self::do_persist(&offset_table, &store_path, None).await {
+                            error!("Final persist on shutdown failed: {}", e);
                         }
                     }
+                    break;
                 }
             }
         }
@@ -505,9 +660,102 @@ impl Drop for LocalFileOffsetStore {
     fn drop(&mut self) {
         // Send shutdown command to background task
         self.persist_tx.send(PersistCommand::Shutdown).ok();
-        let _ = self.persist_handle.is_finished();
-        // Note: We can't await the handle in Drop (it's not async)
-        // The background task will complete its final persist and exit
+        let handle = std::mem::replace(&mut self.persist_handle, PersistTaskHandle::NotStarted);
+        handle.shutdown_now();
+        // Note: We can't await the command worker in Drop (it's not async).
+        // The worker receives Shutdown and performs the final persist best-effort.
+    }
+}
+
+#[doc(hidden)]
+pub async fn run_local_file_offset_store_lifecycle_probe() -> LocalFileOffsetStoreLifecycleProbe {
+    use crate::base::client_config::ClientConfig;
+
+    let root = std::env::temp_dir().join(format!(
+        "rocketmq-rust-local-offset-store-probe-{}",
+        rocketmq_common::TimeUtils::current_millis()
+    ));
+    let store_path = root.join("offsets.json").to_string_lossy().to_string();
+    if let Some(parent) = Path::new(&store_path).parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .expect("local offset probe directory should be created");
+    }
+
+    let client_instance = MQClientInstance::new_arc(
+        ClientConfig::default(),
+        0,
+        format!("local-offset-store-probe-{}", std::process::id()),
+        None,
+    );
+    let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
+    let dirty_flag = Arc::new(AtomicBool::new(false));
+    let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+    let persist_handle = LocalFileOffsetStore::spawn_background_persist_task_with_interval(
+        offset_table.clone(),
+        dirty_flag.clone(),
+        store_path.clone(),
+        persist_rx,
+        Duration::from_millis(1),
+    );
+    let mut store = LocalFileOffsetStore {
+        client_instance,
+        group_name: CheetahString::from_static_str("local_offset_store_probe_group"),
+        store_path: CheetahString::from(store_path.clone()),
+        offset_table,
+        dirty_flag,
+        persist_tx,
+        persist_handle,
+    };
+    let mq = MessageQueue::from_parts("local-offset-store-probe-topic", "broker-a", 0);
+    store.update_offset(&mq, 66, false).await;
+
+    let mut snapshots = store.periodic_persist_snapshot();
+    for _ in 0..100 {
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            && tokio::fs::try_exists(&store_path).await.unwrap_or(false)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        snapshots = store.periodic_persist_snapshot();
+    }
+
+    let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+    let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+    let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+    let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+    let task_count_before_shutdown = store.persist_task_count();
+    let persisted_offset_file = tokio::fs::try_exists(&store_path).await.unwrap_or(false);
+    let shutdown_started_at = std::time::Instant::now();
+    let shutdown_healthy = store.shutdown().await;
+    let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+    let task_count_after_shutdown = store.persist_task_count();
+    let healthy = shutdown_healthy
+        && scheduled_runs > 0
+        && scheduled_overlaps == 0
+        && scheduled_failures == 0
+        && persisted_offset_file
+        && task_count_before_shutdown > 0
+        && task_count_after_shutdown == 0;
+
+    let _ = tokio::fs::remove_file(&store_path).await;
+    let _ = tokio::fs::remove_file(format!("{store_path}.bak")).await;
+    let _ = tokio::fs::remove_file(format!("{store_path}.tmp")).await;
+    let _ = tokio::fs::remove_dir_all(root).await;
+
+    LocalFileOffsetStoreLifecycleProbe {
+        task_count_before_shutdown,
+        task_count_after_shutdown,
+        scheduled_runs,
+        scheduled_skips,
+        scheduled_overlaps,
+        scheduled_failures,
+        persisted_offset_file,
+        shutdown_elapsed_us,
+        healthy,
     }
 }
 
@@ -663,9 +911,24 @@ mod tests {
             let _drop_flag = DropFlag(dropped_in_task);
             pending::<()>().await;
         });
-        let handle = PersistTaskHandle::Tokio(handle);
+        let handle = PersistTaskHandle::Tokio {
+            command_handle: handle,
+            scheduled_handle: None,
+        };
+        let (persist_tx, _persist_rx) = mpsc::unbounded_channel();
 
-        assert!(!handle.shutdown(std::time::Duration::from_millis(20)).await);
+        assert!(!handle.shutdown(&persist_tx, std::time::Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn local_file_offset_store_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::run_local_file_offset_store_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.persisted_offset_file, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 }
