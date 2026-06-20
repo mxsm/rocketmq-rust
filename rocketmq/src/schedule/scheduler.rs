@@ -17,10 +17,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tokio::time::interval;
+use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::schedule::executor::ExecutorConfig;
@@ -32,6 +35,8 @@ use crate::schedule::SchedulerError;
 use crate::schedule::SchedulerResult;
 use crate::schedule::Task;
 use crate::DelayTrigger;
+
+const SCHEDULER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Scheduler configuration
 #[derive(Debug, Clone)]
@@ -110,6 +115,7 @@ pub struct TaskScheduler {
     executor_pool: Arc<ExecutorPool>,
     jobs: Arc<RwLock<HashMap<String, ScheduledJob>>>,
     running: Arc<RwLock<bool>>,
+    shutdown_notify: Arc<Notify>,
     scheduler_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -132,6 +138,7 @@ impl TaskScheduler {
             executor_pool,
             jobs: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(false)),
+            shutdown_notify: Arc::new(Notify::new()),
             scheduler_handles: Arc::new(RwLock::new(Vec::new())),
         }
     }
@@ -180,14 +187,16 @@ impl TaskScheduler {
             return Ok(());
         }
         *running = false;
+        drop(running);
 
         info!("Stopping task scheduler");
+        self.shutdown_notify.notify_waiters();
 
-        // Cancel all scheduler threads
-        let mut handles = self.scheduler_handles.write().await;
-        for handle in handles.drain(..) {
-            handle.abort();
-        }
+        let handles = {
+            let mut handles = self.scheduler_handles.write().await;
+            handles.drain(..).collect::<Vec<_>>()
+        };
+        Self::shutdown_scheduler_handles(handles).await;
 
         info!("Task scheduler stopped");
         Ok(())
@@ -407,6 +416,7 @@ impl TaskScheduler {
             executor_pool: self.executor_pool.clone(),
             jobs: self.jobs.clone(),
             running: self.running.clone(),
+            shutdown_notify: self.shutdown_notify.clone(),
         }
     }
 
@@ -419,6 +429,26 @@ impl TaskScheduler {
         let internal = self.clone_for_thread();
         internal.cleanup_loop().await;
     }
+
+    async fn shutdown_scheduler_handles(handles: Vec<tokio::task::JoinHandle<()>>) {
+        for mut handle in handles {
+            match timeout(SCHEDULER_SHUTDOWN_TIMEOUT, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if error.is_cancelled() => {}
+                Ok(Err(error)) => {
+                    warn!(?error, "Scheduler task exited with join error");
+                }
+                Err(_) => {
+                    handle.abort();
+                    if let Err(error) = handle.await {
+                        if !error.is_cancelled() {
+                            warn!(?error, "Scheduler task aborted with join error");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Internal scheduler for running the scheduling loop
@@ -428,6 +458,7 @@ struct TaskSchedulerInternal {
     executor_pool: Arc<ExecutorPool>,
     jobs: Arc<RwLock<HashMap<String, ScheduledJob>>>,
     running: Arc<RwLock<bool>>,
+    shutdown_notify: Arc<Notify>,
 }
 
 impl TaskSchedulerInternal {
@@ -436,8 +467,15 @@ impl TaskSchedulerInternal {
 
         let mut interval = interval(self.config.check_interval);
 
-        while *self.running.read().await {
-            interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = self.shutdown_notify.notified() => break,
+                _ = interval.tick() => {}
+            }
+
+            if !*self.running.read().await {
+                break;
+            }
 
             let now = SystemTime::now();
             let jobs_to_execute = self.get_jobs_to_execute(now).await;
@@ -459,8 +497,15 @@ impl TaskSchedulerInternal {
 
         let mut interval = interval(self.config.persistence_interval);
 
-        while *self.running.read().await {
-            interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = self.shutdown_notify.notified() => break,
+                _ = interval.tick() => {}
+            }
+
+            if !*self.running.read().await {
+                break;
+            }
 
             // Clean up old executions (keep last 24 hours)
             let cleanup_duration = Duration::from_secs(24 * 3600);
@@ -518,4 +563,33 @@ pub struct SchedulerStatus {
     pub total_jobs: usize,
     pub enabled_jobs: usize,
     pub running_tasks: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::time::Duration;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn stop_notifies_and_drains_scheduler_tasks() {
+        let scheduler = TaskScheduler::new(SchedulerConfig {
+            check_interval: Duration::from_secs(60),
+            max_scheduler_threads: 1,
+            enable_persistence: true,
+            persistence_interval: Duration::from_secs(60),
+            ..SchedulerConfig::default()
+        });
+
+        scheduler.start().await.expect("scheduler should start");
+        assert_eq!(scheduler.scheduler_handles.read().await.len(), 2);
+
+        tokio::time::timeout(Duration::from_millis(500), scheduler.stop())
+            .await
+            .expect("scheduler stop should not wait for long intervals")
+            .expect("scheduler should stop cleanly");
+
+        assert!(scheduler.scheduler_handles.read().await.is_empty());
+        assert!(!scheduler.get_status().await.running);
+    }
 }

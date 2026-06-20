@@ -153,8 +153,12 @@ impl BlockingExecutor {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let task_id = BlockingTaskId(self.next_task_id.fetch_add(1, Ordering::Relaxed));
         let name = name.into();
+        if kind == BlockingKind::LongRunning {
+            return Err(RuntimeError::UnsupportedBlockingKind { name, kind });
+        }
+
+        let task_id = BlockingTaskId(self.next_task_id.fetch_add(1, Ordering::Relaxed));
         self.tasks.insert(
             task_id,
             BlockingTaskMeta {

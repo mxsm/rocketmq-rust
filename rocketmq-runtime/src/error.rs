@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use crate::blocking::BlockingKind;
 use crate::blocking::BlockingTaskId;
 use crate::task_group::TaskGroupId;
 
@@ -41,6 +42,9 @@ pub enum RuntimeError {
 
     #[error("blocking queue timeout for {name}")]
     BlockingQueueTimeout { name: Arc<str> },
+
+    #[error("blocking kind {kind:?} is not supported by BlockingExecutor for {name}; use a dedicated thread")]
+    UnsupportedBlockingKind { name: Arc<str>, kind: BlockingKind },
 
     #[error("blocking task {name} ({task_id:?}) timed out and is still running")]
     BlockingTaskTimeoutStillRunning { name: Arc<str>, task_id: BlockingTaskId },

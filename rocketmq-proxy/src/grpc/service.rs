@@ -29,7 +29,6 @@ use tokio::sync::mpsc;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::time::MissedTickBehavior;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -164,6 +163,23 @@ impl RequestObservation {
 
     fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
+    }
+}
+
+struct TelemetryStreamState<P> {
+    service: ProxyGrpcService<P>,
+    context: ProxyContext,
+    principal: Option<AuthenticatedPrincipal>,
+    client_id: String,
+    _permit: OwnedSemaphorePermit,
+    outbound_rx: mpsc::UnboundedReceiver<v2::TelemetryCommand>,
+    inbound: tonic::Streaming<v2::TelemetryCommand>,
+    done: bool,
+}
+
+impl<P> Drop for TelemetryStreamState<P> {
+    fn drop(&mut self) {
+        self.service.sessions.unbind_telemetry_link(self.client_id.as_str());
     }
 }
 
@@ -1751,7 +1767,7 @@ where
             Ok(state) => state,
             Err(response) => return response,
         };
-        let mut inbound = inbound;
+        let inbound = inbound;
         let permit = match self
             .validate_client_context(&context)
             .and_then(|_| self.guards.try_client_manager())
@@ -1770,49 +1786,49 @@ where
             self.finish_stream_payload(&observation, &status).await;
             return Ok(Response::new(self.status_stream(Self::telemetry_status(status))));
         };
-        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
         self.sessions.bind_telemetry_link(client_id.clone(), outbound_tx);
         self.dispatch_due_prepared_transaction_recoveries_for_client(Some(client_id.as_str()));
-        let service = self.clone();
-        let (sender, receiver) = mpsc::channel(16);
-        tokio::spawn(async move {
-            let _permit = permit;
-            loop {
-                tokio::select! {
-                    outbound = outbound_rx.recv() => {
-                        match outbound {
-                            Some(command) => {
-                                if sender.send(Ok(command)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            None => break,
+
+        self.finish_stream_payload(&observation, &ProxyStatusMapper::ok()).await;
+        let state = TelemetryStreamState {
+            service: self.clone(),
+            context,
+            principal,
+            client_id,
+            _permit: permit,
+            outbound_rx,
+            inbound,
+            done: false,
+        };
+        let stream = stream::unfold(state, |mut state| async move {
+            if state.done {
+                return None;
+            }
+
+            tokio::select! {
+                outbound = state.outbound_rx.recv() => {
+                    outbound.map(|command| (Ok(command), state))
+                }
+                inbound_item = state.inbound.next() => {
+                    match inbound_item {
+                        Some(Ok(command)) => {
+                            let response = state
+                                .service
+                                .handle_telemetry_command(&state.context, state.principal.as_ref(), command)
+                                .await;
+                            Some((Ok(response), state))
                         }
-                    }
-                    inbound_item = inbound.next() => {
-                        match inbound_item {
-                            Some(Ok(command)) => {
-                                let response = service
-                                    .handle_telemetry_command(&context, principal.as_ref(), command)
-                                    .await;
-                                if sender.send(Ok(response)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Some(Err(error)) => {
-                                let _ = sender.send(Err(error)).await;
-                                break;
-                            }
-                            None => break,
+                        Some(Err(error)) => {
+                            state.done = true;
+                            Some((Err(error), state))
                         }
+                        None => None,
                     }
                 }
             }
-            service.sessions.unbind_telemetry_link(client_id.as_str());
         });
-
-        self.finish_stream_payload(&observation, &ProxyStatusMapper::ok()).await;
-        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn notify_client_termination(

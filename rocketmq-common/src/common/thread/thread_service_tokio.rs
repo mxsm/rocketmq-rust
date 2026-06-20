@@ -15,9 +15,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 
-use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -60,9 +58,9 @@ impl ServiceThreadTokio {
         } else {
             return;
         }
-        let join_handle = tokio::spawn(async move {
+        let join_handle = tokio::task::spawn_blocking(move || {
             info!("Starting service thread: {}", name);
-            let mut guard = runnable.lock().await;
+            let mut guard = runnable.blocking_lock();
             guard.run();
         });
         self.thread = Some(join_handle);
@@ -128,6 +126,8 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+    use std::time::Duration;
+    use std::time::Instant;
 
     struct MockTestRunnable;
     impl MockTestRunnable {
@@ -138,6 +138,17 @@ mod tests {
     impl Runnable for MockTestRunnable {
         fn run(&mut self) {
             println!("MockTestRunnable run================")
+        }
+    }
+
+    struct BlockingRunnable {
+        started: Arc<AtomicBool>,
+    }
+
+    impl Runnable for BlockingRunnable {
+        fn run(&mut self) {
+            self.started.store(true, Ordering::Release);
+            std::thread::sleep(Duration::from_millis(150));
         }
     }
 
@@ -156,6 +167,35 @@ mod tests {
         service_thread.shutdown_interrupt(false).await;
         assert!(!service_thread.started.load(Ordering::SeqCst));
         assert!(service_thread.stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_start_does_not_block_current_thread_runtime() {
+        let started = Arc::new(AtomicBool::new(false));
+        let mut service_thread = ServiceThreadTokio::new(
+            "BlockingServiceThread".to_string(),
+            Arc::new(Mutex::new(BlockingRunnable {
+                started: Arc::clone(&started),
+            })),
+        );
+
+        service_thread.start();
+        let elapsed = Instant::now();
+        tokio::task::yield_now().await;
+        assert!(
+            elapsed.elapsed() < Duration::from_millis(100),
+            "Runnable::run should execute on Tokio's blocking pool"
+        );
+
+        timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("blocking runnable should start");
+
+        service_thread.shutdown_interrupt(false).await;
     }
 
     #[tokio::test]

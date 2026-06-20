@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskKind;
@@ -106,6 +108,38 @@ async fn task_group_shutdown_now_aborts_without_async_wait() {
 }
 
 #[tokio::test]
+async fn task_group_shutdown_starts_children_concurrently() {
+    let context = RuntimeContext::from_current("task-group-child-shutdown-test");
+    let group = context.root_group().child("service");
+    let first_child = group.child("first-child");
+    let second_child = group.child("second-child");
+    let second_child_observer = second_child.clone();
+
+    first_child
+        .spawn_service("wait-for-sibling-shutdown", async move {
+            loop {
+                match second_child_observer.lifecycle_state() {
+                    rocketmq_runtime::TaskGroupLifecycleState::Closing
+                    | rocketmq_runtime::TaskGroupLifecycleState::Closed => break,
+                    rocketmq_runtime::TaskGroupLifecycleState::Open => tokio::task::yield_now().await,
+                }
+            }
+        })
+        .unwrap();
+
+    let report = group.shutdown(Duration::from_millis(500)).await;
+
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.children.len(), 2, "{}", report.to_json());
+    assert_eq!(report.timed_out, 0, "{}", report.to_json());
+    assert!(
+        report.children.iter().all(|child| child.timed_out == 0),
+        "{}",
+        report.to_json()
+    );
+}
+
+#[tokio::test]
 async fn scheduled_no_overlap_skips_while_previous_run_is_active() {
     let context = RuntimeContext::from_current("scheduled-test");
     let service = context.service_context("service");
@@ -152,6 +186,28 @@ async fn blocking_executor_limits_concurrency() {
     first.unwrap();
     second.unwrap();
     assert_eq!(max_active.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn blocking_executor_rejects_long_running_spawn_blocking() {
+    let context = RuntimeContext::from_current("blocking-long-running-test");
+
+    let error = context
+        .blocking()
+        .spawn("legacy-loop", BlockingKind::LongRunning, || ())
+        .await
+        .expect_err("long-running blocking work must use a dedicated thread");
+
+    assert!(matches!(
+        error,
+        RuntimeError::UnsupportedBlockingKind {
+            kind: BlockingKind::LongRunning,
+            ..
+        }
+    ));
+    let snapshot = context.blocking().snapshot();
+    assert_eq!(snapshot.blocking_still_running, 0);
+    assert!(snapshot.tasks.is_empty(), "{snapshot:?}");
 }
 
 async fn run_limited_blocking_task(

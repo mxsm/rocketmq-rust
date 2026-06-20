@@ -23,6 +23,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use dashmap::DashMap;
+use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use parking_lot::Mutex;
@@ -357,18 +358,29 @@ impl TaskGroup {
             self.inner.cancellation_token.cancel();
         }
 
-        let mut child_reports = Vec::with_capacity(children.len());
-        for child in children {
-            child_reports.push(child.shutdown(timeout).await);
-        }
+        let child_reports = async {
+            join_all(children.into_iter().map(|child| async move {
+                let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
+                child.shutdown(remaining).await
+            }))
+            .await
+        };
+        let tracked_shutdown = async {
+            let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
+            if tokio::time::timeout(remaining, self.inner.tracker.wait())
+                .await
+                .is_err()
+            {
+                self.abort_tracked_tasks();
+                let drain_timeout = timeout.min(Duration::from_secs(1));
+                let _ = tokio::time::timeout(drain_timeout, self.inner.tracker.wait()).await;
+                true
+            } else {
+                false
+            }
+        };
 
-        let mut timed_out = false;
-        if tokio::time::timeout(timeout, self.inner.tracker.wait()).await.is_err() {
-            timed_out = true;
-            self.abort_tracked_tasks();
-            let drain_timeout = timeout.min(Duration::from_secs(1));
-            let _ = tokio::time::timeout(drain_timeout, self.inner.tracker.wait()).await;
-        }
+        let (child_reports, timed_out) = tokio::join!(child_reports, tracked_shutdown);
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
         report.completed = self.inner.completed.load(Ordering::Relaxed);

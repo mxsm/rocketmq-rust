@@ -322,16 +322,36 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         // Wait for the task to complete
         let join_time = self.service.get_join_time();
         let result = if !self.is_daemon() {
-            let mut handle_guard = self.task_handle.write().await;
-            if let Some(handle) = handle_guard.take() {
+            let handle = {
+                let mut handle_guard = self.task_handle.write().await;
+                handle_guard.take()
+            };
+            if let Some(mut handle) = handle {
                 if interrupt {
                     handle.abort();
+                    if let Err(error) = handle.await {
+                        if !error.is_cancelled() {
+                            warn!("Service thread {} abort join failed: {}", service_name, error);
+                        }
+                    }
                     Ok(())
                 } else {
-                    match timeout(join_time, handle).await {
-                        Ok(_) => Ok(()),
+                    match timeout(join_time, &mut handle).await {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(error)) => {
+                            if !error.is_cancelled() {
+                                warn!("Service thread {} join failed: {}", service_name, error);
+                            }
+                            Ok(())
+                        }
                         Err(_) => {
                             warn!("Service thread {} shutdown timeout", service_name);
+                            handle.abort();
+                            if let Err(error) = handle.await {
+                                if !error.is_cancelled() {
+                                    warn!("Service thread {} abort after timeout failed: {}", service_name, error);
+                                }
+                            }
                             Ok(())
                         }
                     }
@@ -435,6 +455,11 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::future;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
     use tokio::time::sleep;
     use tokio::time::Duration;
 
@@ -546,6 +571,37 @@ mod tests {
 
     service_manager!(TestService);
 
+    struct PendingService {
+        dropped: Arc<AtomicBool>,
+    }
+
+    struct DropMarker {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    impl ServiceTask for PendingService {
+        fn get_service_name(&self) -> String {
+            "pending-service".to_string()
+        }
+
+        async fn run(&self, _context: &ServiceContext) {
+            let _marker = DropMarker {
+                dropped: Arc::clone(&self.dropped),
+            };
+            future::pending::<()>().await;
+        }
+
+        fn get_join_time(&self) -> Duration {
+            Duration::from_millis(10)
+        }
+    }
+
     #[tokio::test]
     async fn test_service_lifecycle() {
         let service = TestService::new("test-service".to_string(), Duration::from_millis(50));
@@ -607,6 +663,25 @@ mod tests {
         // Shutdown
         service_thread.shutdown().await.unwrap();
         assert!(!service_thread.is_started());
+    }
+
+    #[tokio::test]
+    async fn shutdown_timeout_aborts_service_task() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let service_thread = ServiceManager::new(PendingService {
+            dropped: Arc::clone(&dropped),
+        });
+
+        service_thread.start().await.unwrap();
+        service_thread.shutdown().await.unwrap();
+
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "service future should be dropped after shutdown timeout aborts the task"
+        );
+        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Stopped);
+        assert!(!service_thread.is_started());
+        assert!(service_thread.is_stopped());
     }
 
     #[tokio::test]

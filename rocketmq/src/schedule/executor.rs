@@ -107,11 +107,7 @@ impl TaskExecutor {
                 .await;
         });
 
-        // Store the handle
-        {
-            let mut running_tasks = self.running_tasks.write().await;
-            running_tasks.insert(execution_id.clone(), handle);
-        }
+        self.store_running_task_handle(execution_id.as_str(), handle).await;
 
         info!("Task scheduled for execution: {} ({})", task.name, execution_id);
         Ok(execution_id)
@@ -126,6 +122,11 @@ impl TaskExecutor {
 
         if let Some(handle) = handle {
             handle.abort();
+            match handle.await {
+                Ok(()) => {}
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => warn!("Cancelled task {} exited with join error: {}", execution_id, error),
+            }
 
             // Update execution record
             if let Some(mut execution) = self.get_execution(execution_id).await {
@@ -193,6 +194,17 @@ impl TaskExecutor {
         internal.run_task_internal(task, execution_id, scheduled_time).await;
     }
 
+    async fn store_running_task_handle(&self, execution_id: &str, handle: tokio::task::JoinHandle<()>) {
+        let mut running_tasks = self.running_tasks.write().await;
+        running_tasks.insert(execution_id.to_string(), handle);
+        if running_tasks
+            .get(execution_id)
+            .is_some_and(|handle| handle.is_finished())
+        {
+            running_tasks.remove(execution_id);
+        }
+    }
+
     pub async fn execute_task_with_delay(
         &self,
         task: Arc<Task>,
@@ -236,11 +248,7 @@ impl TaskExecutor {
                 .await;
         });
 
-        // Store the handle
-        {
-            let mut running_tasks = self.running_tasks.write().await;
-            running_tasks.insert(execution_id.clone(), handle);
-        }
+        self.store_running_task_handle(execution_id.as_str(), handle).await;
 
         info!(
             "Task scheduled for delayed execution: {} ({}) - delay: {:?}",
@@ -396,5 +404,84 @@ impl ExecutorPool {
         }
 
         combined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    use super::*;
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[tokio::test]
+    async fn store_running_task_handle_drops_already_finished_handle() {
+        let executor = TaskExecutor::new(ExecutorConfig::default());
+        let handle = tokio::spawn(async {});
+
+        while !handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+
+        executor.store_running_task_handle("finished-task", handle).await;
+
+        assert_eq!(executor.running_task_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_task_waits_until_future_is_dropped() {
+        let executor = TaskExecutor::new(ExecutorConfig::default());
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task = Arc::new(Task::new("pending-task", "pending-task", {
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            move |_context| {
+                let started = Arc::clone(&started);
+                let dropped = Arc::clone(&dropped);
+                async move {
+                    let _marker = DropMarker(dropped);
+                    started.store(true, Ordering::Release);
+                    future::pending::<TaskResult>().await
+                }
+            }
+        }));
+
+        let execution_id = executor
+            .execute_task(task, SystemTime::now())
+            .await
+            .expect("task should be scheduled");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("task should start");
+
+        executor
+            .cancel_task(execution_id.as_str())
+            .await
+            .expect("task should cancel");
+
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "cancel_task should wait until the aborted task future is dropped"
+        );
+        assert_eq!(executor.running_task_count().await, 0);
+        let execution = executor
+            .get_execution(execution_id.as_str())
+            .await
+            .expect("execution record should exist");
+        assert_eq!(execution.status, TaskStatus::Cancelled);
     }
 }
