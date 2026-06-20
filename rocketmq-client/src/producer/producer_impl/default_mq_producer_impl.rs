@@ -3057,7 +3057,12 @@ impl DefaultMQProducerImpl {
         REQUEST_FUTURE_HOLDER.shutdown(producer_group.as_str()).await;
 
         // 2. Stop fault strategy detector
-        self.mq_fault_strategy.shutdown();
+        if !self.mq_fault_strategy.shutdown_async().await {
+            tracing::warn!(
+                "producer [{}] fault detector task did not stop before timeout; aborted",
+                producer_group
+            );
+        }
 
         // 3. Shutdown client factory if requested
         if shutdown_factory {

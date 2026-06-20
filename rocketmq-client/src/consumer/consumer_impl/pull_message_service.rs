@@ -22,6 +22,9 @@ use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -30,7 +33,7 @@ use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::factory::mq_client_instance::MQClientInstance;
-use crate::runtime::spawn_detached_client_task;
+use crate::runtime::spawn_client_task;
 
 /// Default queue capacity for message requests
 const DEFAULT_QUEUE_CAPACITY: usize = 4096;
@@ -66,6 +69,15 @@ pub struct PullMessageService {
 
     /// Queue capacity
     queue_capacity: usize,
+
+    /// Main service loop task handle
+    main_task_handle: Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>,
+
+    /// Tracks delayed one-shot tasks submitted by execute_*_later APIs.
+    scheduled_task_tracker: TaskTracker,
+
+    /// Cancels delayed one-shot tasks during shutdown.
+    scheduled_task_shutdown: CancellationToken,
 }
 
 impl PullMessageService {
@@ -81,6 +93,9 @@ impl PullMessageService {
             tx_shutdown: None,
             stopped: Arc::new(AtomicBool::new(false)),
             queue_capacity,
+            main_task_handle: Arc::new(tokio::sync::Mutex::new(None)),
+            scheduled_task_tracker: TaskTracker::new(),
+            scheduled_task_shutdown: CancellationToken::new(),
         }
     }
 
@@ -112,11 +127,7 @@ impl PullMessageService {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(self.queue_capacity);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
 
-        self.tx = Some(tx);
-        self.tx_shutdown = Some(tx_shutdown);
-        self.stopped.store(false, Ordering::Release);
-
-        spawn_pull_message_task("rocketmq-client-pull-message-service", async move {
+        let handle = spawn_client_task("rocketmq-client-pull-message-service", async move {
             info!("{} service started", "PullMessageService");
 
             loop {
@@ -135,7 +146,13 @@ impl PullMessageService {
             }
 
             info!("{} service end", "PullMessageService");
-        });
+        })
+        .map_err(|error| RocketMQError::Internal(format!("failed to spawn PullMessageService main loop: {error}")))?;
+
+        self.tx = Some(tx);
+        self.tx_shutdown = Some(tx_shutdown);
+        self.stopped.store(false, Ordering::Release);
+        *self.main_task_handle.lock().await = Some(handle);
 
         Ok(())
     }
@@ -209,20 +226,24 @@ impl PullMessageService {
         let this = self.clone();
         let request = pull_request.clone();
 
-        // Use a one-shot scheduled task
-        spawn_pull_message_task("rocketmq-client-pull-request-delay", async move {
-            tokio::time::sleep(Duration::from_millis(time_delay)).await;
+        spawn_scheduled_pull_message_task(
+            "rocketmq-client-pull-request-delay",
+            &self.scheduled_task_tracker,
+            &self.scheduled_task_shutdown,
+            async move {
+                tokio::time::sleep(Duration::from_millis(time_delay)).await;
 
-            if this.is_stopped() {
-                return;
-            }
-
-            if let Some(tx) = &this.tx {
-                if let Err(e) = tx.send(Box::new(request)).await {
-                    warn!("Failed to send pull request: {:?}", e);
+                if this.is_stopped() {
+                    return;
                 }
-            }
-        });
+
+                if let Some(tx) = &this.tx {
+                    if let Err(e) = tx.send(Box::new(request)).await {
+                        warn!("Failed to send pull request: {:?}", e);
+                    }
+                }
+            },
+        );
     }
 
     /// Executes pull request immediately
@@ -257,20 +278,24 @@ impl PullMessageService {
         let this = self.clone();
         let request = pop_request.clone();
 
-        // Use a one-shot scheduled task
-        spawn_pull_message_task("rocketmq-client-pop-request-delay", async move {
-            tokio::time::sleep(Duration::from_millis(time_delay)).await;
+        spawn_scheduled_pull_message_task(
+            "rocketmq-client-pop-request-delay",
+            &self.scheduled_task_tracker,
+            &self.scheduled_task_shutdown,
+            async move {
+                tokio::time::sleep(Duration::from_millis(time_delay)).await;
 
-            if this.is_stopped() {
-                return;
-            }
-
-            if let Some(tx) = &this.tx {
-                if let Err(e) = tx.send(Box::new(request)).await {
-                    warn!("Failed to send pop request: {:?}", e);
+                if this.is_stopped() {
+                    return;
                 }
-            }
-        });
+
+                if let Some(tx) = &this.tx {
+                    if let Err(e) = tx.send(Box::new(request)).await {
+                        warn!("Failed to send pop request: {:?}", e);
+                    }
+                }
+            },
+        );
     }
 
     /// Executes pop request immediately
@@ -307,13 +332,18 @@ impl PullMessageService {
         }
 
         let stopped = self.stopped.clone();
-        spawn_pull_message_task("rocketmq-client-pull-task-delay", async move {
-            tokio::time::sleep(Duration::from_millis(time_delay)).await;
-            if stopped.load(Ordering::Acquire) {
-                return;
-            }
-            task();
-        });
+        spawn_scheduled_pull_message_task(
+            "rocketmq-client-pull-task-delay",
+            &self.scheduled_task_tracker,
+            &self.scheduled_task_shutdown,
+            async move {
+                tokio::time::sleep(Duration::from_millis(time_delay)).await;
+                if stopped.load(Ordering::Acquire) {
+                    return;
+                }
+                task();
+            },
+        );
     }
 
     /// Executes a generic task immediately (equivalent to Java's executeTask)
@@ -326,9 +356,14 @@ impl PullMessageService {
             return;
         }
 
-        spawn_pull_message_task("rocketmq-client-pull-task", async move {
-            task();
-        });
+        spawn_scheduled_pull_message_task(
+            "rocketmq-client-pull-task",
+            &self.scheduled_task_tracker,
+            &self.scheduled_task_shutdown,
+            async move {
+                task();
+            },
+        );
     }
 
     /// Gracefully shuts down the service
@@ -351,6 +386,7 @@ impl PullMessageService {
 
         // 1. Set stopped flag
         self.stopped.store(true, Ordering::Release);
+        self.scheduled_task_shutdown.cancel();
 
         // 2. Send shutdown signal
         if let Some(tx_shutdown) = &self.tx_shutdown {
@@ -360,17 +396,40 @@ impl PullMessageService {
         }
 
         // 3. Wait for main loop to exit (with timeout)
-        let wait_result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
-            // Wait for tx to be dropped (main loop exited)
-            while self.tx.as_ref().map(|tx| !tx.is_closed()).unwrap_or(false) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        let timeout = Duration::from_millis(timeout_ms);
+        let main_task = self.main_task_handle.lock().await.take();
+        if let Some(mut handle) = main_task {
+            match tokio::time::timeout(timeout, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if error.is_cancelled() => {}
+                Ok(Err(error)) => warn!("{} main loop exited with error: {:?}", self.get_service_name(), error),
+                Err(_) => {
+                    warn!(
+                        "{} shutdown timeout after {}ms, aborting main loop",
+                        self.get_service_name(),
+                        timeout_ms
+                    );
+                    handle.abort();
+                    if let Err(error) = handle.await {
+                        if !error.is_cancelled() {
+                            warn!(
+                                "{} main loop abort returned error: {:?}",
+                                self.get_service_name(),
+                                error
+                            );
+                        }
+                    }
+                }
             }
-        })
-        .await;
+        }
 
-        if wait_result.is_err() {
+        self.scheduled_task_tracker.close();
+        if tokio::time::timeout(timeout, self.scheduled_task_tracker.wait())
+            .await
+            .is_err()
+        {
             warn!(
-                "{} shutdown timeout after {}ms, forcing exit",
+                "{} scheduled task shutdown timeout after {}ms",
                 self.get_service_name(),
                 timeout_ms
             );
@@ -392,11 +451,28 @@ impl Default for PullMessageService {
     }
 }
 
-fn spawn_pull_message_task<F>(thread_name: &'static str, task: F)
-where
+fn spawn_scheduled_pull_message_task<F>(
+    thread_name: &'static str,
+    tracker: &TaskTracker,
+    shutdown_token: &CancellationToken,
+    task: F,
+) where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Err(error) = spawn_detached_client_task(thread_name, task) {
+    if shutdown_token.is_cancelled() {
+        return;
+    }
+
+    let shutdown_token = shutdown_token.clone();
+    let tracked_task = tracker.track_future(async move {
+        tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {},
+            _ = task => {},
+        }
+    });
+
+    if let Err(error) = spawn_client_task(thread_name, tracked_task) {
         error!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }
@@ -427,5 +503,39 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(50));
         assert!(ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn execute_task_is_tracked_until_completion() {
+        let service = PullMessageService::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = ran.clone();
+
+        service.execute_task(move || ran_clone.store(true, Ordering::Release));
+        service.scheduled_task_tracker.close();
+
+        tokio::time::timeout(Duration::from_secs(1), service.scheduled_task_tracker.wait())
+            .await
+            .expect("scheduled task tracker should finish completed immediate task");
+
+        assert!(ran.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_delayed_tasks_and_waits_for_tracker() {
+        let service = PullMessageService::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = ran.clone();
+
+        service.execute_task_later(move || ran_clone.store(true, Ordering::Release), 60_000);
+        tokio::task::yield_now().await;
+
+        service.shutdown(100).await.expect("shutdown should succeed");
+
+        tokio::time::timeout(Duration::from_secs(1), service.scheduled_task_tracker.wait())
+            .await
+            .expect("shutdown should release delayed task tracker");
+
+        assert!(!ran.load(Ordering::Acquire));
     }
 }

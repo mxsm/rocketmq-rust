@@ -22,6 +22,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
+use std::time::Duration;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
@@ -200,6 +201,16 @@ impl OffsetStore {
                 store.update_offset(mq, offset, false);
                 Ok(())
             }
+        }
+    }
+
+    /// Gracefully shuts down any background resources owned by the offset store.
+    pub async fn shutdown(&mut self, timeout: Duration) -> bool {
+        match self {
+            Self::Remote(_) => true,
+            Self::Local(store) => store.shutdown_with_timeout(timeout).await,
+            #[cfg(test)]
+            Self::Test(_) => true,
         }
     }
 }

@@ -13,14 +13,19 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
-use crate::runtime::spawn_detached_client_task;
+use crate::runtime::spawn_client_task;
+
+const DETECTOR_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct LatencyFaultToleranceImpl<R, S> {
     fault_item_table: DashMap<CheetahString, FaultItem>,
@@ -30,6 +35,38 @@ pub struct LatencyFaultToleranceImpl<R, S> {
     resolver: Option<R>,
     service_detector: Option<S>,
     cancel_token: CancellationToken,
+    detector_task: Mutex<Option<FaultDetectorTaskHandle>>,
+}
+
+struct FaultDetectorTaskHandle {
+    handle: JoinHandle<()>,
+}
+
+impl FaultDetectorTaskHandle {
+    fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
+    async fn shutdown(self, timeout: Duration) -> bool {
+        let mut handle = self.handle;
+        match tokio::time::timeout(timeout, &mut handle).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) if error.is_cancelled() => true,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "fault detector task exited with join error");
+                true
+            }
+            Err(_) => {
+                handle.abort();
+                match handle.await {
+                    Ok(()) => {}
+                    Err(error) if error.is_cancelled() => {}
+                    Err(error) => tracing::warn!(%error, "fault detector task aborted with join error"),
+                }
+                false
+            }
+        }
+    }
 }
 
 impl<R, S> LatencyFaultToleranceImpl<R, S> {
@@ -42,6 +79,7 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
             detect_interval: 2000,
             start_detector_enable: AtomicBool::new(false),
             cancel_token: CancellationToken::new(),
+            detector_task: Mutex::new(None),
         }
     }
 
@@ -56,6 +94,15 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
     #[cfg(test)]
     pub(crate) fn detector_config_for_test(&self) -> (u32, u32) {
         (self.detect_interval, self.detect_timeout)
+    }
+
+    pub async fn shutdown_detector(&self) -> bool {
+        self.cancel_token.cancel();
+        let handle = { self.detector_task.lock().take() };
+        match handle {
+            Some(handle) => handle.shutdown(DETECTOR_TASK_SHUTDOWN_TIMEOUT).await,
+            None => true,
+        }
     }
 }
 
@@ -120,7 +167,16 @@ where
 
     fn start_detector(this: ArcMut<Self>) {
         let token = this.cancel_token.clone();
-        spawn_detector_loop(this, token);
+        {
+            let guard = this.detector_task.lock();
+            if guard.as_ref().is_some_and(|handle| !handle.is_finished()) {
+                return;
+            }
+        }
+
+        if let Some(handle) = spawn_detector_loop(this.clone(), token) {
+            *this.detector_task.lock() = Some(handle);
+        }
     }
 
     fn shutdown(&self) {
@@ -225,13 +281,20 @@ where
     }
 }
 
-fn spawn_detector_loop<R, S>(this: ArcMut<LatencyFaultToleranceImpl<R, S>>, token: CancellationToken)
+fn spawn_detector_loop<R, S>(
+    this: ArcMut<LatencyFaultToleranceImpl<R, S>>,
+    token: CancellationToken,
+) -> Option<FaultDetectorTaskHandle>
 where
     R: Resolver,
     S: ServiceDetector,
 {
-    if let Err(error) = spawn_detached_client_task("rocketmq-client-fault-detector", run_detector_loop(this, token)) {
-        error!("Failed to spawn fault tolerance detector task: {}", error);
+    match spawn_client_task("rocketmq-client-fault-detector", run_detector_loop(this, token)) {
+        Ok(handle) => Some(FaultDetectorTaskHandle { handle }),
+        Err(error) => {
+            error!("Failed to spawn fault tolerance detector task: {}", error);
+            None
+        }
     }
 }
 
@@ -389,7 +452,19 @@ impl std::fmt::Display for FaultItem {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
 
     struct NoopResolver;
 
@@ -427,5 +502,45 @@ mod tests {
         detector.shutdown();
 
         std::thread::sleep(tokio::time::Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn detector_task_shutdown_waits_for_worker_completion() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let handle = FaultDetectorTaskHandle {
+            handle: tokio::spawn(async move {
+                completed_in_task.store(true, std::sync::atomic::Ordering::Release);
+            }),
+        };
+
+        assert!(handle.shutdown(Duration::from_secs(1)).await);
+        assert!(completed.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn detector_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let handle = FaultDetectorTaskHandle {
+            handle: tokio::spawn(async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                pending::<()>().await;
+            }),
+        };
+
+        assert!(!handle.shutdown(Duration::from_millis(20)).await);
+        assert!(dropped.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn shutdown_detector_waits_for_started_detector_task() {
+        let detector = ArcMut::new(LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new());
+
+        LatencyFaultTolerance::start_detector(detector.clone());
+
+        assert!(detector.detector_task.lock().is_some());
+        assert!(detector.shutdown_detector().await);
+        assert!(detector.detector_task.lock().is_none());
     }
 }

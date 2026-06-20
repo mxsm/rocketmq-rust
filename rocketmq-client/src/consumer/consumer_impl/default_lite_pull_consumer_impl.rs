@@ -48,6 +48,8 @@ use rocketmq_rust::WeakArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::info;
 use tracing::warn;
 
@@ -78,9 +80,10 @@ use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::MQClientManager;
 use crate::runtime::spawn_client_task;
-use crate::runtime::spawn_detached_client_task;
 
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
+const OFFSET_STORE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const REBALANCE_LISTENER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Subscription mode for lite pull consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +172,8 @@ async fn sleep_or_cancel(shutdown_signal: &Arc<AtomicBool>, cancelled: &Arc<Atom
 struct LitePullRebalanceListener {
     consumer_impl: WeakArcMut<DefaultLitePullConsumerImpl>,
     user_listener: Arc<StdRwLock<Option<ArcMessageQueueListener>>>,
+    task_tracker: TaskTracker,
+    shutdown_token: CancellationToken,
 }
 
 impl MessageQueueListener for LitePullRebalanceListener {
@@ -182,30 +187,43 @@ impl MessageQueueListener for LitePullRebalanceListener {
         let mq_all = mq_all.clone();
         let mq_assigned = mq_assigned.clone();
         let user_listener = self.user_listener.clone();
+        let shutdown_token = self.shutdown_token.clone();
+        if shutdown_token.is_cancelled() {
+            warn!("LitePull rebalance listener ignored change because shutdown has started");
+            return;
+        }
 
-        if let Err(error) = spawn_detached_client_task("rocketmq-client-lite-pull-rebalance-listener", async move {
-            if let Err(error) = consumer_impl
-                .update_assign_queue_and_start_pull_task(topic.as_str(), &mq_all, &mq_assigned)
-                .await
-            {
-                warn!(
-                    "LitePull rebalance assignment update failed. topic={}, error={}",
-                    topic, error
-                );
-            }
+        let task = self.task_tracker.track_future(async move {
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {},
+                _ = async move {
+                    if let Err(error) = consumer_impl
+                        .update_assign_queue_and_start_pull_task(topic.as_str(), &mq_all, &mq_assigned)
+                        .await
+                    {
+                        warn!(
+                            "LitePull rebalance assignment update failed. topic={}, error={}",
+                            topic, error
+                        );
+                    }
 
-            let listener = user_listener.read().ok().and_then(|listener| listener.clone());
-            if let Some(listener) = listener {
-                if let Err(error) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    listener.message_queue_changed(topic.as_str(), &mq_all, &mq_assigned);
-                })) {
-                    warn!(
-                        "LitePull user message queue listener panicked. topic={}, error={:?}",
-                        topic, error
-                    );
-                }
+                    let listener = user_listener.read().ok().and_then(|listener| listener.clone());
+                    if let Some(listener) = listener {
+                        if let Err(error) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            listener.message_queue_changed(topic.as_str(), &mq_all, &mq_assigned);
+                        })) {
+                            warn!(
+                                "LitePull user message queue listener panicked. topic={}, error={:?}",
+                                topic, error
+                            );
+                        }
+                    }
+                } => {},
             }
-        }) {
+        });
+
+        if let Err(error) = spawn_client_task("rocketmq-client-lite-pull-rebalance-listener", task) {
             warn!(
                 "LitePull rebalance listener ignored async assignment update because task spawn failed. error={}",
                 error
@@ -466,6 +484,8 @@ pub struct DefaultLitePullConsumerImpl {
     // Shutdown coordination
     shutdown_signal: Arc<AtomicBool>,
     topic_metadata_check_task_handle: Option<LitePullTaskHandle>,
+    rebalance_listener_tasks: TaskTracker,
+    rebalance_listener_shutdown: CancellationToken,
 
     // Self-reference (for callbacks)
     default_lite_pull_consumer_impl: Option<ArcMut<DefaultLitePullConsumerImpl>>,
@@ -505,6 +525,8 @@ impl DefaultLitePullConsumerImpl {
             user_message_queue_listener: Arc::new(StdRwLock::new(None)),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
             topic_metadata_check_task_handle: None,
+            rebalance_listener_tasks: TaskTracker::new(),
+            rebalance_listener_shutdown: CancellationToken::new(),
             default_lite_pull_consumer_impl: None,
         };
         let wrapper = ArcMut::downgrade(&this.rebalance_impl);
@@ -520,6 +542,8 @@ impl DefaultLitePullConsumerImpl {
         self.rebalance_impl.consumer_config.message_queue_listener = Some(Arc::new(LitePullRebalanceListener {
             consumer_impl: ArcMut::downgrade(&default_lite_pull_consumer_impl),
             user_listener: self.user_message_queue_listener.clone(),
+            task_tracker: self.rebalance_listener_tasks.clone(),
+            shutdown_token: self.rebalance_listener_shutdown.clone(),
         }));
         self.default_lite_pull_consumer_impl = Some(default_lite_pull_consumer_impl);
     }
@@ -1142,6 +1166,20 @@ impl DefaultLitePullConsumerImpl {
                 );
 
                 self.shutdown_signal.store(true, Ordering::Release);
+                self.rebalance_listener_shutdown.cancel();
+                self.rebalance_listener_tasks.close();
+                if tokio::time::timeout(
+                    REBALANCE_LISTENER_SHUTDOWN_TIMEOUT,
+                    self.rebalance_listener_tasks.wait(),
+                )
+                .await
+                .is_err()
+                {
+                    warn!(
+                        "LitePull rebalance listener tasks did not finish in time. group={}",
+                        self.consumer_config.consumer_group
+                    );
+                }
 
                 if let Some(handle) = self.topic_metadata_check_task_handle.take() {
                     handle.abort();
@@ -1160,6 +1198,18 @@ impl DefaultLitePullConsumerImpl {
                 drop(handles);
 
                 self.persist_consumer_offset().await;
+                if let Some(offset_store) = self.offset_store.as_mut() {
+                    if !offset_store
+                        .mut_from_ref()
+                        .shutdown(OFFSET_STORE_SHUTDOWN_TIMEOUT)
+                        .await
+                    {
+                        warn!(
+                            "lite pull consumer [{}] offset store did not stop before timeout",
+                            self.consumer_config.consumer_group
+                        );
+                    }
+                }
 
                 if let Some(client) = self.client_instance.as_mut() {
                     client.unregister_consumer(&self.consumer_config.consumer_group).await;
@@ -4088,10 +4138,17 @@ mod tests {
         let listener = LitePullRebalanceListener {
             consumer_impl: ArcMut::downgrade(&impl_),
             user_listener: impl_.user_message_queue_listener.clone(),
+            task_tracker: impl_.rebalance_listener_tasks.clone(),
+            shutdown_token: impl_.rebalance_listener_shutdown.clone(),
         };
         let mq = MessageQueue::from_parts("topic-a", "broker-a", 0);
         let all = HashSet::from([mq.clone()]);
         listener.message_queue_changed("topic-a", &all, &all);
+
+        impl_.rebalance_listener_tasks.close();
+        tokio::time::timeout(Duration::from_secs(1), impl_.rebalance_listener_tasks.wait())
+            .await
+            .expect("rebalance listener task should finish before timeout");
 
         tokio::time::timeout(Duration::from_secs(1), async {
             while calls.load(AtomicOrdering::SeqCst) == 0 {
@@ -4116,6 +4173,47 @@ mod tests {
         for handle in handles {
             handle.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn lite_pull_rebalance_listener_ignores_changes_after_shutdown_token_cancelled() {
+        let mut impl_ = ArcMut::new(DefaultLitePullConsumerImpl::new(
+            ArcMut::new(ClientConfig::default()),
+            ArcMut::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_cancelled_listener_group"),
+                ..Default::default()
+            }),
+        ));
+        let wrapper = impl_.clone();
+        impl_.set_default_lite_pull_consumer_impl(wrapper);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        {
+            let mut user_listener = impl_
+                .user_message_queue_listener
+                .write()
+                .expect("user listener lock should not be poisoned");
+            *user_listener = Some(Arc::new(CountingMessageQueueListener { calls: calls.clone() }));
+        }
+
+        impl_.rebalance_listener_shutdown.cancel();
+        let listener = LitePullRebalanceListener {
+            consumer_impl: ArcMut::downgrade(&impl_),
+            user_listener: impl_.user_message_queue_listener.clone(),
+            task_tracker: impl_.rebalance_listener_tasks.clone(),
+            shutdown_token: impl_.rebalance_listener_shutdown.clone(),
+        };
+        let mq = MessageQueue::from_parts("topic-a", "broker-a", 0);
+        let all = HashSet::from([mq.clone()]);
+        listener.message_queue_changed("topic-a", &all, &all);
+
+        impl_.rebalance_listener_tasks.close();
+        tokio::time::timeout(Duration::from_millis(100), impl_.rebalance_listener_tasks.wait())
+            .await
+            .expect("cancelled rebalance listener should not leave tracked tasks");
+
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 0);
+        assert!(!impl_.assignment().await.contains(&mq));
     }
 
     #[tokio::test]

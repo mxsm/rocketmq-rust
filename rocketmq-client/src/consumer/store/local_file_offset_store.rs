@@ -20,7 +20,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -46,6 +45,8 @@ use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::runtime::spawn_client_task;
+
+const PERSIST_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 static LOCAL_OFFSET_STORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     #[cfg(target_os = "windows")]
@@ -82,7 +83,6 @@ pub struct LocalFileOffsetStore {
 
 enum PersistTaskHandle {
     Tokio(JoinHandle<()>),
-    Thread(thread::JoinHandle<()>),
     NotStarted,
 }
 
@@ -90,7 +90,32 @@ impl PersistTaskHandle {
     fn is_finished(&self) -> bool {
         match self {
             Self::Tokio(handle) => handle.is_finished(),
-            Self::Thread(handle) => handle.is_finished(),
+            Self::NotStarted => true,
+        }
+    }
+
+    async fn shutdown(self, timeout: Duration) -> bool {
+        match self {
+            Self::Tokio(handle) => {
+                let mut handle = handle;
+                match tokio::time::timeout(timeout, &mut handle).await {
+                    Ok(Ok(())) => true,
+                    Ok(Err(error)) if error.is_cancelled() => true,
+                    Ok(Err(error)) => {
+                        warn!(%error, "local offset store persist task exited with join error");
+                        true
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        match handle.await {
+                            Ok(()) => {}
+                            Err(error) if error.is_cancelled() => {}
+                            Err(error) => warn!(%error, "local offset store persist task aborted with join error"),
+                        }
+                        false
+                    }
+                }
+            }
             Self::NotStarted => true,
         }
     }
@@ -146,6 +171,16 @@ impl LocalFileOffsetStore {
                 PersistTaskHandle::NotStarted
             }
         }
+    }
+
+    pub async fn shutdown(&mut self) -> bool {
+        self.shutdown_with_timeout(PERSIST_TASK_SHUTDOWN_TIMEOUT).await
+    }
+
+    pub async fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
+        self.persist_tx.send(PersistCommand::Shutdown).ok();
+        let handle = std::mem::replace(&mut self.persist_handle, PersistTaskHandle::NotStarted);
+        handle.shutdown(timeout).await
     }
 
     async fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
@@ -478,6 +513,7 @@ impl Drop for LocalFileOffsetStore {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -486,14 +522,26 @@ mod tests {
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
     use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_remoting::protocol::RemotingDeserializable;
+    use rocketmq_remoting::protocol::RemotingSerializable;
     use tokio::sync::mpsc;
 
+    use super::PersistTaskHandle;
     use crate::base::client_config::ClientConfig;
     use crate::consumer::store::controllable_offset::ControllableOffset;
     use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
+    use crate::consumer::store::offset_serialize::OffsetSerialize;
     use crate::consumer::store::offset_store::OffsetStoreTrait;
     use crate::consumer::store::read_offset_type::ReadOffsetType;
     use crate::factory::mq_client_instance::MQClientInstance;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[test]
     fn new_without_tokio_runtime_does_not_spawn_panic() {
@@ -556,5 +604,68 @@ mod tests {
         let _ = tokio::fs::remove_file(&store_path).await;
         let _ = tokio::fs::remove_file(format!("{store_path}.bak")).await;
         let _ = tokio::fs::remove_file(format!("{store_path}.tmp")).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_final_persist() {
+        let client_id = format!("local-offset-store-shutdown-test-{}", std::process::id());
+        let group = CheetahString::from(format!("local_offset_store_shutdown_group_{}", std::process::id()));
+        let client_instance = MQClientInstance::new_arc(ClientConfig::default(), 0, client_id, None);
+        let store_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("tmp")
+            .join("local_offset_store_shutdown");
+        let store_path = store_dir.join("offsets.json").to_string_lossy().to_string();
+        let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
+        let dirty_flag = Arc::new(AtomicBool::new(false));
+        let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+        let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
+            offset_table.clone(),
+            dirty_flag.clone(),
+            store_path.clone(),
+            persist_rx,
+        );
+        let mut store = LocalFileOffsetStore {
+            client_instance,
+            group_name: group,
+            store_path: CheetahString::from(store_path.clone()),
+            offset_table,
+            dirty_flag,
+            persist_tx,
+            persist_handle,
+        };
+        let mq = MessageQueue::from_parts("local-offset-store-shutdown-topic", "broker-a", 0);
+
+        if let Some(parent) = Path::new(&store_path).parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        store.update_offset(&mq, 88, false).await;
+
+        assert!(store.shutdown().await);
+        assert!(store.persist_handle.is_finished());
+
+        let content = tokio::fs::read(&store_path).await.unwrap();
+        let persisted = OffsetSerialize::decode(&content).expect("shutdown should persist offsets");
+        let mq_key = mq.serialize_json().expect("message queue should serialize");
+        assert_eq!(persisted.offset_table.get(&mq_key).copied(), Some(88));
+
+        let _ = tokio::fs::remove_file(&store_path).await;
+        let _ = tokio::fs::remove_file(format!("{store_path}.bak")).await;
+        let _ = tokio::fs::remove_file(format!("{store_path}.tmp")).await;
+    }
+
+    #[tokio::test]
+    async fn persist_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let handle = tokio::spawn(async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        });
+        let handle = PersistTaskHandle::Tokio(handle);
+
+        assert!(!handle.shutdown(std::time::Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
     }
 }

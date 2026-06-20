@@ -19,7 +19,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -70,18 +69,37 @@ pub struct ConsumeMessagePopOrderlyService {
 
 pub(crate) enum PopOrderlyTaskHandle {
     Tokio(tokio::task::JoinHandle<()>),
-    Thread(thread::JoinHandle<()>),
 }
 
 impl PopOrderlyTaskHandle {
-    fn shutdown(self) {
+    async fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => handle.abort(),
-            Self::Thread(handle) => {
-                if handle.is_finished() {
-                    let _ = handle.join();
+            Self::Tokio(handle) => {
+                let mut handle = handle;
+                match tokio::time::timeout(timeout, &mut handle).await {
+                    Ok(Ok(())) => true,
+                    Ok(Err(error)) if error.is_cancelled() => true,
+                    Ok(Err(error)) => {
+                        warn!(%error, "pop orderly lock refresh task exited with join error");
+                        true
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        match handle.await {
+                            Ok(()) => {}
+                            Err(error) if error.is_cancelled() => {}
+                            Err(error) => warn!(%error, "pop orderly lock refresh task aborted with join error"),
+                        }
+                        false
+                    }
                 }
             }
+        }
+    }
+
+    fn abort(self) {
+        match self {
+            Self::Tokio(handle) => handle.abort(),
         }
     }
 }
@@ -518,7 +536,13 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         self.concurrency_limiter.close();
 
         if let Some(task) = self.lock_refresh_task.take() {
-            task.shutdown();
+            let timeout = Duration::from_millis(await_terminate_millis);
+            if !task.shutdown(timeout).await {
+                warn!(
+                    "{} pop orderly lock refresh task did not stop within {}ms; aborted",
+                    self.consumer_group, await_terminate_millis
+                );
+            }
         }
 
         let timeout = Duration::from_millis(await_terminate_millis);
@@ -831,7 +855,16 @@ impl Hash for ConsumeRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::pending;
     use std::sync::Arc;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     fn listener() -> ArcMessageListenerOrderly {
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success))
@@ -901,6 +934,33 @@ mod tests {
         assert!(service.concurrency_limiter.is_closed());
     }
 
+    #[tokio::test]
+    async fn pop_orderly_task_shutdown_waits_for_worker_completion() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let handle = spawn_pop_orderly_task("rocketmq-client-pop-orderly-task-test", async move {
+            completed_in_task.store(true, Ordering::Release);
+        })
+        .expect("test task should spawn");
+
+        assert!(handle.shutdown(Duration::from_secs(1)).await);
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn pop_orderly_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let handle = spawn_pop_orderly_task("rocketmq-client-pop-orderly-task-test", async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!handle.shutdown(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
     #[test]
     fn start_without_tokio_runtime_does_not_spawn_panic() {
         let mut service = new_service(Some(new_default_impl()));
@@ -909,7 +969,7 @@ mod tests {
         service.start(this);
         service.stopped.store(true, Ordering::Release);
         if let Some(handle) = service.lock_refresh_task.take() {
-            handle.shutdown();
+            handle.abort();
         }
     }
 

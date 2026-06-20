@@ -16,7 +16,6 @@ use std::future::Future;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -74,18 +73,37 @@ pub struct ConsumeMessageConcurrentlyService {
 
 enum ConcurrentTaskHandle {
     Tokio(tokio::task::JoinHandle<()>),
-    Thread(thread::JoinHandle<()>),
 }
 
 impl ConcurrentTaskHandle {
-    fn shutdown(self) {
+    async fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => handle.abort(),
-            Self::Thread(handle) => {
-                if handle.is_finished() {
-                    let _ = handle.join();
+            Self::Tokio(handle) => {
+                let mut handle = handle;
+                match tokio::time::timeout(timeout, &mut handle).await {
+                    Ok(Ok(())) => true,
+                    Ok(Err(error)) if error.is_cancelled() => true,
+                    Ok(Err(error)) => {
+                        warn!(%error, "concurrent clean-expire task exited with join error");
+                        true
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        match handle.await {
+                            Ok(()) => {}
+                            Err(error) if error.is_cancelled() => {}
+                            Err(error) => warn!(%error, "concurrent clean-expire task aborted with join error"),
+                        }
+                        false
+                    }
                 }
             }
+        }
+    }
+
+    fn abort(self) {
+        match self {
+            Self::Tokio(handle) => handle.abort(),
         }
     }
 }
@@ -345,12 +363,19 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
         self.shutdown_token.cancel();
-        if let Some(handle) = self.clean_expire_task_handle.lock().take() {
-            handle.shutdown();
+        let shutdown_timeout = Duration::from_millis(await_terminate_millis);
+        let clean_expire_handle = { self.clean_expire_task_handle.lock().take() };
+        if let Some(handle) = clean_expire_handle {
+            if !handle.shutdown(shutdown_timeout).await {
+                warn!(
+                    "ConsumeMessageConcurrentlyService clean-expire task did not stop within {}ms; aborted",
+                    await_terminate_millis
+                );
+            }
         }
         let max = self.max_concurrency.load(Ordering::Acquire) as u32;
         match tokio::time::timeout(
-            Duration::from_millis(await_terminate_millis),
+            shutdown_timeout,
             Arc::clone(&self.consume_semaphore).acquire_many_owned(max),
         )
         .await
@@ -819,7 +844,18 @@ fn classify_concurrent_consume_return_type(
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     fn message_queue() -> MessageQueue {
         MessageQueue::from_parts("topic", "broker-a", 0)
@@ -995,6 +1031,33 @@ mod tests {
         assert!(service.clean_expire_task_handle.lock().is_none());
     }
 
+    #[tokio::test]
+    async fn concurrent_task_shutdown_waits_for_worker_completion() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let handle = spawn_concurrent_task("rocketmq-client-concurrent-task-test", async move {
+            completed_in_task.store(true, Ordering::Release);
+        })
+        .expect("test task should spawn");
+
+        assert!(handle.shutdown(Duration::from_secs(1)).await);
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn concurrent_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let handle = spawn_concurrent_task("rocketmq-client-concurrent-task-test", async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!handle.shutdown(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
     #[test]
     fn start_without_tokio_runtime_does_not_spawn_panic() {
         let mut service = new_service(None);
@@ -1005,7 +1068,7 @@ mod tests {
         service.shutdown_token.cancel();
         let handle = { service.clean_expire_task_handle.lock().take() };
         if let Some(handle) = handle {
-            handle.shutdown();
+            handle.abort();
         }
     }
 

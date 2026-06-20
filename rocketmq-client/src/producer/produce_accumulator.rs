@@ -20,12 +20,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::Mutex as ParkingMutex;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -33,12 +34,16 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
+use tokio::sync::watch;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::runtime::spawn_client_task;
+
+const GUARD_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
 pub struct ProduceAccumulator {
@@ -132,6 +137,11 @@ impl ProduceAccumulator {
     pub fn shutdown(&mut self) {
         self.guard_thread_for_sync_send.shutdown();
         self.guard_thread_for_async_send.shutdown();
+    }
+
+    pub async fn shutdown_async(&mut self) {
+        self.guard_thread_for_sync_send.shutdown_async().await;
+        self.guard_thread_for_async_send.shutdown_async().await;
     }
 
     pub(crate) fn try_add_message<T: MessageTrait>(&self, message: &T) -> bool {
@@ -501,9 +511,18 @@ fn build_message_batch(
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
     use std::sync::atomic::Ordering;
 
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[test]
     fn try_add_message_counts_body_size() {
@@ -618,8 +637,57 @@ mod tests {
         let mut accumulator = ProduceAccumulator::new("accumulator-no-runtime-test");
 
         accumulator.start();
+        assert!(accumulator.guard_thread_for_sync_send.task_handle.is_some());
+        assert!(accumulator.guard_thread_for_async_send.task_handle.is_some());
+
         accumulator.shutdown();
+        assert!(accumulator.guard_thread_for_sync_send.task_handle.is_none());
+        assert!(accumulator.guard_thread_for_async_send.task_handle.is_none());
         std::thread::sleep(Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn shutdown_async_stops_guard_tasks() {
+        let mut accumulator = ProduceAccumulator::new("accumulator-async-shutdown-test");
+
+        accumulator.start();
+        assert!(accumulator.guard_thread_for_sync_send.task_handle.is_some());
+        assert!(accumulator.guard_thread_for_async_send.task_handle.is_some());
+
+        accumulator.shutdown_async().await;
+
+        assert!(accumulator.guard_thread_for_sync_send.task_handle.is_none());
+        assert!(accumulator.guard_thread_for_async_send.task_handle.is_none());
+    }
+
+    #[tokio::test]
+    async fn guard_task_shutdown_waits_for_worker_completion() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let task = spawn_guard_task("rocketmq-client-batch-guard-test", shutdown_tx, async move {
+            let _ = shutdown_rx.changed().await;
+            completed_in_task.store(true, Ordering::Release);
+        })
+        .expect("test task should spawn");
+
+        assert!(task.shutdown_async(Duration::from_secs(1)).await);
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn guard_task_shutdown_aborts_after_timeout() {
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let task = spawn_guard_task("rocketmq-client-batch-guard-test", shutdown_tx, async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!task.shutdown_async(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[test]
@@ -871,33 +939,131 @@ struct GuardForSyncSendService {
 }
 
 enum GuardTaskHandle {
-    Tokio(tokio::task::JoinHandle<()>),
-    Thread(thread::JoinHandle<()>),
+    Tokio {
+        shutdown_tx: watch::Sender<bool>,
+        handle: JoinHandle<()>,
+        completion_rx: ParkingMutex<Option<std_mpsc::Receiver<()>>>,
+    },
 }
 
 impl GuardTaskHandle {
-    fn shutdown(self) {
+    fn is_finished(&self) -> bool {
         match self {
-            Self::Tokio(handle) => handle.abort(),
-            Self::Thread(handle) => {
-                if handle.is_finished() {
-                    let _ = handle.join();
+            Self::Tokio { handle, .. } => handle.is_finished(),
+        }
+    }
+
+    async fn shutdown_async(self, timeout: Duration) -> bool {
+        match self {
+            Self::Tokio {
+                shutdown_tx, handle, ..
+            } => {
+                let _ = shutdown_tx.send(true);
+                let mut handle = handle;
+                match tokio::time::timeout(timeout, &mut handle).await {
+                    Ok(Ok(())) => true,
+                    Ok(Err(error)) if error.is_cancelled() => true,
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "batch guard task exited with join error");
+                        true
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        match handle.await {
+                            Ok(()) => {}
+                            Err(error) if error.is_cancelled() => {}
+                            Err(error) => tracing::warn!(%error, "batch guard task aborted with join error"),
+                        }
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    fn shutdown_blocking(self, timeout: Duration) -> bool {
+        match self {
+            Self::Tokio {
+                shutdown_tx,
+                handle,
+                completion_rx,
+            } => {
+                let _ = shutdown_tx.send(true);
+                let completion_rx = completion_rx
+                    .into_inner()
+                    .expect("batch guard completion receiver should be present");
+                match completion_rx.recv_timeout(timeout) {
+                    Ok(()) => true,
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                        handle.abort();
+                        false
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                        if handle.is_finished() {
+                            true
+                        } else {
+                            handle.abort();
+                            false
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-fn spawn_guard_task<F>(thread_name: &'static str, task: F) -> Option<GuardTaskHandle>
+fn spawn_guard_task<F>(thread_name: &'static str, shutdown_tx: watch::Sender<bool>, task: F) -> Option<GuardTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    match spawn_client_task(thread_name, task) {
-        Ok(handle) => Some(GuardTaskHandle::Tokio(handle)),
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    match spawn_client_task(thread_name, async move {
+        let _completion_guard = CompletionSignal::new(completion_tx);
+        task.await;
+    }) {
+        Ok(handle) => Some(GuardTaskHandle::Tokio {
+            shutdown_tx,
+            handle,
+            completion_rx: ParkingMutex::new(Some(completion_rx)),
+        }),
         Err(error) => {
             tracing::error!("Failed to spawn {} background task: {}", thread_name, error);
             None
         }
+    }
+}
+
+struct CompletionSignal {
+    completion_tx: Option<std_mpsc::Sender<()>>,
+}
+
+impl CompletionSignal {
+    fn new(completion_tx: std_mpsc::Sender<()>) -> Self {
+        Self {
+            completion_tx: Some(completion_tx),
+        }
+    }
+}
+
+impl Drop for CompletionSignal {
+    fn drop(&mut self) {
+        if let Some(completion_tx) = self.completion_tx.take() {
+            let _ = completion_tx.send(());
+        }
+    }
+}
+
+async fn wait_guard_tick_or_shutdown(
+    shutdown_rx: &mut watch::Receiver<bool>,
+    interval: &mut tokio::time::Interval,
+) -> bool {
+    if *shutdown_rx.borrow() {
+        return false;
+    }
+
+    tokio::select! {
+        _ = interval.tick() => !*shutdown_rx.borrow(),
+        changed = shutdown_rx.changed() => changed.is_ok() && !*shutdown_rx.borrow(),
     }
 }
 
@@ -911,17 +1077,28 @@ impl GuardForSyncSendService {
     }
 
     pub fn start(&mut self, batches: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>, hold_ms: u32) {
+        if self.task_handle.as_ref().is_some_and(|handle| !handle.is_finished()) {
+            tracing::warn!("{} sync batch guard already started", self.service_name);
+            return;
+        }
+
         let service_name = self.service_name.clone();
         let stopped = self.stopped.clone();
         let sleep_time = std::cmp::max(1, hold_ms / 2) as u64;
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        self.stopped.store(false, Ordering::Release);
 
-        self.task_handle = spawn_guard_task("rocketmq-client-sync-batch-guard", async move {
+        self.task_handle = spawn_guard_task("rocketmq-client-sync-batch-guard", shutdown_tx, async move {
             tracing::info!("{} service started", service_name);
 
             let mut interval = tokio::time::interval(Duration::from_millis(sleep_time));
 
-            while !stopped.load(Ordering::Acquire) {
-                interval.tick().await;
+            loop {
+                if !wait_guard_tick_or_shutdown(&mut shutdown_rx, &mut interval).await
+                    || stopped.load(Ordering::Acquire)
+                {
+                    break;
+                }
 
                 // Process batches - DashMap provides concurrent iteration
                 // Collect empty batches to remove
@@ -950,7 +1127,24 @@ impl GuardForSyncSendService {
     pub fn shutdown(&mut self) {
         self.stopped.store(true, Ordering::Release);
         if let Some(handle) = self.task_handle.take() {
-            handle.shutdown();
+            if !handle.shutdown_blocking(GUARD_TASK_SHUTDOWN_TIMEOUT) {
+                tracing::warn!(
+                    "{} sync batch guard did not stop before timeout; aborted",
+                    self.service_name
+                );
+            }
+        }
+    }
+
+    pub async fn shutdown_async(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        if let Some(handle) = self.task_handle.take() {
+            if !handle.shutdown_async(GUARD_TASK_SHUTDOWN_TIMEOUT).await {
+                tracing::warn!(
+                    "{} sync batch guard did not stop before timeout; aborted",
+                    self.service_name
+                );
+            }
         }
     }
 }
@@ -978,17 +1172,28 @@ impl GuardForAsyncSendService {
         hold_size: usize,
         hold_ms: u32,
     ) {
+        if self.task_handle.as_ref().is_some_and(|handle| !handle.is_finished()) {
+            tracing::warn!("{} async batch guard already started", self.service_name);
+            return;
+        }
+
         let service_name = self.service_name.clone();
         let stopped = self.stopped.clone();
         let sleep_time = std::cmp::max(1, hold_ms / 2) as u64;
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        self.stopped.store(false, Ordering::Release);
 
-        self.task_handle = spawn_guard_task("rocketmq-client-async-batch-guard", async move {
+        self.task_handle = spawn_guard_task("rocketmq-client-async-batch-guard", shutdown_tx, async move {
             tracing::info!("{} service started", service_name);
 
             let mut interval = tokio::time::interval(Duration::from_millis(sleep_time));
 
-            while !stopped.load(Ordering::Acquire) {
-                interval.tick().await;
+            loop {
+                if !wait_guard_tick_or_shutdown(&mut shutdown_rx, &mut interval).await
+                    || stopped.load(Ordering::Acquire)
+                {
+                    break;
+                }
 
                 // Collect keys of ready batches (without holding locks during iteration)
                 let mut ready_keys = Vec::new();
@@ -1114,7 +1319,24 @@ impl GuardForAsyncSendService {
     pub fn shutdown(&mut self) {
         self.stopped.store(true, Ordering::Release);
         if let Some(handle) = self.task_handle.take() {
-            handle.shutdown();
+            if !handle.shutdown_blocking(GUARD_TASK_SHUTDOWN_TIMEOUT) {
+                tracing::warn!(
+                    "{} async batch guard did not stop before timeout; aborted",
+                    self.service_name
+                );
+            }
+        }
+    }
+
+    pub async fn shutdown_async(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        if let Some(handle) = self.task_handle.take() {
+            if !handle.shutdown_async(GUARD_TASK_SHUTDOWN_TIMEOUT).await {
+                tracing::warn!(
+                    "{} async batch guard did not stop before timeout; aborted",
+                    self.service_name
+                );
+            }
         }
     }
 }

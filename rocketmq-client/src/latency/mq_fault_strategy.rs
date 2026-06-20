@@ -80,6 +80,10 @@ impl MQFaultStrategy {
         self.latency_fault_tolerance.shutdown();
     }
 
+    pub async fn shutdown_async(&mut self) -> bool {
+        self.latency_fault_tolerance.shutdown_detector().await
+    }
+
     pub fn is_start_detector_enable(&self) -> bool {
         self.start_detector_enable.load(Ordering::Relaxed)
     }

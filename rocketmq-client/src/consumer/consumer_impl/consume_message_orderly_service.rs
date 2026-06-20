@@ -17,7 +17,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -82,18 +81,37 @@ pub struct ConsumeMessageOrderlyService {
 
 pub(crate) enum OrderlyTaskHandle {
     Tokio(JoinHandle<()>),
-    Thread(thread::JoinHandle<()>),
 }
 
 impl OrderlyTaskHandle {
-    fn shutdown(self) {
+    async fn shutdown(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio(handle) => handle.abort(),
-            Self::Thread(handle) => {
-                if handle.is_finished() {
-                    let _ = handle.join();
+            Self::Tokio(handle) => {
+                let mut handle = handle;
+                match tokio::time::timeout(timeout, &mut handle).await {
+                    Ok(Ok(())) => true,
+                    Ok(Err(error)) if error.is_cancelled() => true,
+                    Ok(Err(error)) => {
+                        warn!(%error, "orderly lock periodic task exited with join error");
+                        true
+                    }
+                    Err(_) => {
+                        handle.abort();
+                        match handle.await {
+                            Ok(()) => {}
+                            Err(error) if error.is_cancelled() => {}
+                            Err(error) => warn!(%error, "orderly lock periodic task aborted with join error"),
+                        }
+                        false
+                    }
                 }
             }
+        }
+    }
+
+    fn abort(self) {
+        match self {
+            Self::Tokio(handle) => handle.abort(),
         }
     }
 }
@@ -521,11 +539,16 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         self.concurrency_limiter.close();
 
         if MessageModel::Clustering == self.consumer_config.message_model {
-            let mut lock_handle_guard = self.lock_periodic_task_handle.lock();
-            if let Some(handle) = lock_handle_guard.take() {
-                handle.shutdown();
+            let handle = { self.lock_periodic_task_handle.lock().take() };
+            if let Some(handle) = handle {
+                let timeout = Duration::from_millis(await_terminate_millis);
+                if !handle.shutdown(timeout).await {
+                    warn!(
+                        "{} orderly lock periodic task did not stop within {}ms; aborted",
+                        self.consumer_group, await_terminate_millis
+                    );
+                }
             }
-            drop(lock_handle_guard);
         }
 
         let timeout = Duration::from_millis(await_terminate_millis);
@@ -1039,7 +1062,17 @@ impl ConsumeRequest {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     fn message_queue() -> MessageQueue {
         MessageQueue::from_parts("topic", "broker-a", 0)
@@ -1119,6 +1152,33 @@ mod tests {
         assert!(service.concurrency_limiter.is_closed());
     }
 
+    #[tokio::test]
+    async fn orderly_task_shutdown_waits_for_worker_completion() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_task = completed.clone();
+        let handle = spawn_orderly_task("rocketmq-client-orderly-task-test", async move {
+            completed_in_task.store(true, Ordering::Release);
+        })
+        .expect("test task should spawn");
+
+        assert!(handle.shutdown(Duration::from_secs(1)).await);
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn orderly_task_shutdown_aborts_after_timeout() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let dropped_in_task = dropped.clone();
+        let handle = spawn_orderly_task("rocketmq-client-orderly-task-test", async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            pending::<()>().await;
+        })
+        .expect("test task should spawn");
+
+        assert!(!handle.shutdown(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
     #[test]
     fn start_without_tokio_runtime_does_not_spawn_panic() {
         let config = ConsumerConfig {
@@ -1132,7 +1192,7 @@ mod tests {
         service.stopped.store(true, Ordering::Release);
         let handle = { service.lock_periodic_task_handle.lock().take() };
         if let Some(handle) = handle {
-            handle.shutdown();
+            handle.abort();
         }
     }
 
