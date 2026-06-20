@@ -64,6 +64,7 @@ cheetah-string = { workspace = true }
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
 futures   = "0.3"
+serde_json.workspace = true
 
 [[bin]]
 name = "rocketmq-namesrv-rust"
@@ -83,4 +84,8 @@ harness = false
 
 [[bench]]
 name    = "topic_table_hot_path_bench"
+harness = false
+
+[[bench]]
+name    = "namesrv_shutdown_drain_bench"
 harness = false

@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
@@ -60,6 +61,10 @@ pub(crate) fn shutdown_report_result(component: &'static str, report: ShutdownRe
     report
         .assert_no_task_leak()
         .map_err(|error| RocketMQError::storage_write_failed("store", format!("{component}: {error}")))
+}
+
+pub(crate) fn blocking_snapshot() -> Result<BlockingExecutorSnapshot, RocketMQError> {
+    Ok(blocking_executor()?.snapshot())
 }
 
 fn blocking_executor() -> Result<BlockingExecutor, RocketMQError> {

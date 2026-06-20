@@ -126,3 +126,7 @@ harness = false
 [[bench]]
 name    = "consumer_filter_benchmark"
 harness = false
+
+[[bench]]
+name    = "broker_runtime_lifecycle_bench"
+harness = false

@@ -139,3 +139,101 @@ pub const DEFAULT_PROXY_GRPC_PORT: u16 = 8081;
 
 /// Default remoting port used by the proxy runtime.
 pub const DEFAULT_PROXY_REMOTING_PORT: u16 = 8080;
+
+#[doc(hidden)]
+pub mod bench_support {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use rocketmq_runtime::RuntimeHandle;
+    use rocketmq_runtime::ShutdownReport;
+    use rocketmq_runtime::TaskGroup;
+    use serde::Serialize;
+    use tokio::sync::oneshot;
+
+    use crate::config::ProxyConfig;
+    use crate::grpc::ProxyGrpcService;
+    use crate::processor::DefaultMessagingProcessor;
+    use crate::service::LocalServiceManager;
+    use crate::service::ServiceManager;
+    use crate::session::ClientSessionRegistry;
+
+    #[derive(Clone, Debug, Serialize)]
+    pub struct ProxyHousekeepingLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub shutdown_elapsed_us: u128,
+        pub report: ShutdownReport,
+        pub healthy: bool,
+    }
+
+    pub async fn run_proxy_housekeeping_lifecycle_probe(shutdown_delay: Duration) -> ProxyHousekeepingLifecycleProbe {
+        let service = housekeeping_service();
+        let runtime = tokio::runtime::Handle::current();
+        let task_group = TaskGroup::root("rocketmq-proxy.bench.housekeeping", RuntimeHandle::new(runtime));
+        let (started_tx, started_rx) = oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let housekeeping = service.clone();
+
+        task_group
+            .spawn_service("proxy.grpc.housekeeping", async move {
+                let _ = started_tx.send(());
+                housekeeping
+                    .run_housekeeping_until(async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await;
+            })
+            .expect("proxy housekeeping benchmark task should spawn");
+
+        started_rx
+            .await
+            .expect("proxy housekeeping benchmark task should start");
+        let task_count_before_shutdown = task_group.task_count();
+        tokio::time::sleep(shutdown_delay).await;
+
+        let shutdown_started_at = Instant::now();
+        let _ = shutdown_tx.send(());
+        let report = task_group.shutdown(Duration::from_secs(5)).await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = task_group.task_count();
+        let finished_tasks = report.completed + report.cancelled;
+        let healthy = report.is_healthy()
+            && task_count_before_shutdown == 1
+            && task_count_after_shutdown == 0
+            && finished_tasks == 1;
+
+        ProxyHousekeepingLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            shutdown_elapsed_us,
+            report,
+            healthy,
+        }
+    }
+
+    fn housekeeping_service() -> ProxyGrpcService<DefaultMessagingProcessor> {
+        let manager: Arc<dyn ServiceManager> = Arc::new(LocalServiceManager::default());
+        let processor = Arc::new(DefaultMessagingProcessor::new(manager));
+        ProxyGrpcService::new(
+            Arc::new(ProxyConfig::default()),
+            processor,
+            ClientSessionRegistry::default(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod bench_support_tests {
+    use std::time::Duration;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn proxy_housekeeping_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_proxy_housekeeping_lifecycle_probe(Duration::ZERO).await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert!(probe.report.is_healthy(), "{}", probe.report.to_json());
+    }
+}

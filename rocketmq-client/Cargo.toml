@@ -95,6 +95,10 @@ harness = false
 name    = "client_hot_path_benchmark"
 harness = false
 
+[[bench]]
+name    = "client_runtime_spawn_benchmark"
+harness = false
+
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"

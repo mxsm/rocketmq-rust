@@ -590,6 +590,10 @@ impl BrokerRuntime {
         self.inner.message_store_config()
     }
 
+    pub(crate) fn scheduled_task_manager(&self) -> &ScheduledTaskManager {
+        &self.scheduled_task_manager
+    }
+
     #[cfg(test)]
     pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<GenericMessageStore>> {
         &mut self.inner
@@ -774,11 +778,15 @@ impl BrokerRuntime {
     }
 
     async fn shutdown_scheduled_tasks(&self) {
-        self.shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
+        let _ = self
+            .shutdown_scheduled_tasks_with_timeout(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
             .await;
     }
 
-    async fn shutdown_scheduled_tasks_with_timeout(&self, timeout: Duration) {
+    pub(crate) async fn shutdown_scheduled_tasks_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> rocketmq_rust::schedule::simple_scheduler::ScheduledShutdownReport {
         let report = self.scheduled_task_manager.shutdown_all(timeout).await;
         if !report.is_healthy() {
             warn!(
@@ -791,6 +799,7 @@ impl BrokerRuntime {
                 "Broker scheduled task shutdown report is unhealthy"
             );
         }
+        report
     }
 
     async fn shutdown_remoting_servers(&mut self) {

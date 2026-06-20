@@ -45,6 +45,14 @@ where
     spawn_client_task_on(task_name, None, task)
 }
 
+#[doc(hidden)]
+pub fn spawn_client_runtime_probe_task<F>(task_name: &'static str, task: F) -> io::Result<JoinHandle<()>>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    spawn_client_task(task_name, task)
+}
+
 pub(crate) fn spawn_client_task_on<F>(
     task_name: &'static str,
     executor: Option<&Handle>,
@@ -100,9 +108,18 @@ where
     }
 }
 
-#[cfg(test)]
 pub(crate) fn shared_fallback_snapshot() -> Option<ClientSharedFallbackSnapshot> {
+    client_runtime_fallback_snapshot()
+}
+
+#[doc(hidden)]
+pub fn client_runtime_fallback_snapshot() -> Option<ClientSharedFallbackSnapshot> {
     SHARED_FALLBACK.get().map(ClientSharedFallbackRegistry::snapshot)
+}
+
+#[doc(hidden)]
+pub fn reset_client_runtime_fallback_for_diagnostics(timeout: Duration) -> io::Result<Option<ShutdownReport>> {
+    shared_fallback_registry().reset(timeout)
 }
 
 pub(crate) fn shutdown_shared_fallback(timeout: Duration) -> io::Result<Option<ShutdownReport>> {
@@ -183,16 +200,18 @@ struct ClientSharedFallbackLease {
     runtime: Arc<ClientSharedFallbackRuntime>,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClientSharedFallbackLifecycleState {
+pub enum ClientSharedFallbackLifecycleState {
     Uninitialized,
     Idle,
     Active,
     ExplicitShutdown,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ClientSharedFallbackSnapshot {
+pub struct ClientSharedFallbackSnapshot {
     pub state: ClientSharedFallbackLifecycleState,
     pub acquire_count: usize,
     pub runtime_created: usize,
@@ -309,8 +328,7 @@ impl ClientSharedFallbackRegistry {
             .transpose()
     }
 
-    #[cfg(test)]
-    fn reset_for_test(&'static self, timeout: Duration) -> io::Result<Option<ShutdownReport>> {
+    fn reset(&'static self, timeout: Duration) -> io::Result<Option<ShutdownReport>> {
         if self.active_leases.load(Ordering::Acquire) != 0 {
             return Err(io::Error::other(
                 "cannot reset client fallback runtime while leases are active",
@@ -331,6 +349,11 @@ impl ClientSharedFallbackRegistry {
         drop(idle);
 
         runtime.map(|runtime| shutdown_runtime(runtime, timeout)).transpose()
+    }
+
+    #[cfg(test)]
+    fn reset_for_test(&'static self, timeout: Duration) -> io::Result<Option<ShutdownReport>> {
+        self.reset(timeout)
     }
 
     fn schedule_idle_shutdown(&'static self, generation: usize) {

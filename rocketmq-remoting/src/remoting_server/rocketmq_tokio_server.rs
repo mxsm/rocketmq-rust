@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_rust::wait_for_signal;
@@ -570,7 +571,27 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) {
-    run_with_tls_config(
+    let _ = run_with_report(
+        listener,
+        shutdown,
+        request_processor,
+        conn_disconnect_notify,
+        rpc_hooks,
+        channel_event_listener,
+    )
+    .await;
+}
+
+#[doc(hidden)]
+pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
+    listener: TcpListener,
+    shutdown: impl Future,
+    request_processor: RP,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Vec<Arc<dyn RPCHook>>,
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+) -> Option<ShutdownReport> {
+    run_with_tls_config_report(
         listener,
         shutdown,
         request_processor,
@@ -579,7 +600,7 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
         channel_event_listener,
         TlsServerRuntime::new(Default::default()),
     )
-    .await;
+    .await
 }
 
 async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
@@ -591,13 +612,34 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     tls_runtime: TlsServerRuntime,
 ) {
+    let _ = run_with_tls_config_report(
+        listener,
+        shutdown,
+        request_processor,
+        conn_disconnect_notify,
+        rpc_hooks,
+        channel_event_listener,
+        tls_runtime,
+    )
+    .await;
+}
+
+async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clone>(
+    listener: TcpListener,
+    shutdown: impl Future,
+    request_processor: RP,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Vec<Arc<dyn RPCHook>>,
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+    tls_runtime: TlsServerRuntime,
+) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     let task_group = match new_remoting_server_task_group() {
         Ok(task_group) => task_group,
         Err(error) => {
             error!(%error, "failed to start remoting server task group");
-            return;
+            return None;
         }
     };
     // Initialize the connection listener state
@@ -651,6 +693,7 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
     let _ = shutdown_complete_rx.recv().await;
     let report = task_group.shutdown(Duration::from_secs(30)).await;
     report.log_if_unhealthy();
+    Some(report)
 }
 
 fn new_remoting_server_task_group() -> rocketmq_error::RocketMQResult<TaskGroup> {
@@ -758,7 +801,7 @@ mod tests {
             .expect("test listener should bind");
         let addr = listener.local_addr().expect("listener should have local addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let server_task = tokio::spawn(run(
+        let server_task = tokio::spawn(run_with_report(
             listener,
             async {
                 let _ = shutdown_rx.await;
@@ -776,9 +819,11 @@ mod tests {
         drop(clients);
 
         let _ = shutdown_tx.send(());
-        tokio::time::timeout(Duration::from_secs(3), server_task)
+        let report = tokio::time::timeout(Duration::from_secs(3), server_task)
             .await
             .expect("server should shut down before timeout")
-            .expect("server task should not panic");
+            .expect("server task should not panic")
+            .expect("server should return shutdown report");
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

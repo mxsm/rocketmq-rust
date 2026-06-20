@@ -4327,6 +4327,7 @@ dependencies = [
  "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
@@ -4369,6 +4370,7 @@ dependencies = [
  "bytes",
  "cheetah-string",
  "config",
+ "criterion",
  "dashmap",
  "futures",
  "hex",
@@ -4386,6 +4388,7 @@ dependencies = [
  "rocketmq-rust",
  "rocketmq-store",
  "serde",
+ "serde_json",
  "sha1",
  "thiserror 2.0.18",
  "tokio",
@@ -4443,6 +4446,7 @@ dependencies = [
 name = "rocketmq-runtime"
 version = "1.0.0"
 dependencies = [
+ "criterion",
  "dashmap",
  "futures",
  "parking_lot",

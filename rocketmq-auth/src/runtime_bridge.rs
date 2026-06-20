@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -25,8 +27,28 @@ use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::TaskGroup;
+use serde::Serialize;
 
 static AUTH_SYNC_RUNTIME: OnceLock<Result<RuntimeOwner, String>> = OnceLock::new();
+static AUTH_SYNC_BRIDGE_CALLS: AtomicU64 = AtomicU64::new(0);
+static AUTH_SYNC_BRIDGE_MULTI_THREAD_BLOCK_IN_PLACE: AtomicU64 = AtomicU64::new(0);
+static AUTH_SYNC_BRIDGE_CURRENT_THREAD_HANDOFFS: AtomicU64 = AtomicU64::new(0);
+static AUTH_SYNC_BRIDGE_FALLBACK_RUNTIME_CALLS: AtomicU64 = AtomicU64::new(0);
+static AUTH_SYNC_RUNTIME_ACQUIRES: AtomicU64 = AtomicU64::new(0);
+static AUTH_SYNC_RUNTIME_CREATED: AtomicU64 = AtomicU64::new(0);
+static AUTH_SYNC_RUNTIME_REUSED: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub(crate) struct AuthSyncBridgeSnapshot {
+    pub sync_bridge_calls: u64,
+    pub multi_thread_block_in_place: u64,
+    pub current_thread_handoffs: u64,
+    pub fallback_runtime_calls: u64,
+    pub shared_runtime_acquires: u64,
+    pub shared_runtime_created: u64,
+    pub shared_runtime_reused: u64,
+    pub shared_runtime_available: bool,
+}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AuthBlockingExecutor {
@@ -81,11 +103,14 @@ where
     BuildError: FnOnce(String) -> E + Send,
     ThreadPanic: FnOnce() -> E + Send,
 {
+    AUTH_SYNC_BRIDGE_CALLS.fetch_add(1, Ordering::Relaxed);
     match tokio::runtime::Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            AUTH_SYNC_BRIDGE_MULTI_THREAD_BLOCK_IN_PLACE.fetch_add(1, Ordering::Relaxed);
             tokio::task::block_in_place(|| handle.block_on(future()))
         }
         Ok(_) => std::thread::scope(|scope| {
+            AUTH_SYNC_BRIDGE_CURRENT_THREAD_HANDOFFS.fetch_add(1, Ordering::Relaxed);
             scope
                 .spawn(|| {
                     let runtime = auth_sync_runtime().map_err(build_error)?;
@@ -95,14 +120,31 @@ where
                 .map_err(|_| thread_panic())?
         }),
         Err(_) => {
+            AUTH_SYNC_BRIDGE_FALLBACK_RUNTIME_CALLS.fetch_add(1, Ordering::Relaxed);
             let runtime = auth_sync_runtime().map_err(build_error)?;
             runtime.block_on(future())
         }
     }
 }
 
+pub(crate) fn auth_sync_bridge_snapshot() -> AuthSyncBridgeSnapshot {
+    AuthSyncBridgeSnapshot {
+        sync_bridge_calls: AUTH_SYNC_BRIDGE_CALLS.load(Ordering::Relaxed),
+        multi_thread_block_in_place: AUTH_SYNC_BRIDGE_MULTI_THREAD_BLOCK_IN_PLACE.load(Ordering::Relaxed),
+        current_thread_handoffs: AUTH_SYNC_BRIDGE_CURRENT_THREAD_HANDOFFS.load(Ordering::Relaxed),
+        fallback_runtime_calls: AUTH_SYNC_BRIDGE_FALLBACK_RUNTIME_CALLS.load(Ordering::Relaxed),
+        shared_runtime_acquires: AUTH_SYNC_RUNTIME_ACQUIRES.load(Ordering::Relaxed),
+        shared_runtime_created: AUTH_SYNC_RUNTIME_CREATED.load(Ordering::Relaxed),
+        shared_runtime_reused: AUTH_SYNC_RUNTIME_REUSED.load(Ordering::Relaxed),
+        shared_runtime_available: AUTH_SYNC_RUNTIME.get().is_some(),
+    }
+}
+
 fn auth_sync_runtime() -> Result<&'static RuntimeOwner, String> {
+    AUTH_SYNC_RUNTIME_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+    let created_before = AUTH_SYNC_RUNTIME_CREATED.load(Ordering::Acquire);
     match AUTH_SYNC_RUNTIME.get_or_init(|| {
+        AUTH_SYNC_RUNTIME_CREATED.fetch_add(1, Ordering::AcqRel);
         let parallelism = std::thread::available_parallelism()
             .map(|parallelism| parallelism.get())
             .unwrap_or(2);
@@ -116,7 +158,17 @@ fn auth_sync_runtime() -> Result<&'static RuntimeOwner, String> {
         })
         .map_err(|error| error.to_string())
     }) {
-        Ok(runtime) => Ok(runtime),
-        Err(error) => Err(error.clone()),
+        Ok(runtime) => {
+            if created_before > 0 && AUTH_SYNC_RUNTIME_CREATED.load(Ordering::Acquire) == created_before {
+                AUTH_SYNC_RUNTIME_REUSED.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(runtime)
+        }
+        Err(error) => {
+            if created_before > 0 && AUTH_SYNC_RUNTIME_CREATED.load(Ordering::Acquire) == created_before {
+                AUTH_SYNC_RUNTIME_REUSED.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error.clone())
+        }
     }
 }

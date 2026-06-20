@@ -166,6 +166,16 @@ pub use crate::hook::consume_message_context::ConsumeMessageContext;
 pub use crate::hook::consume_message_hook::ConsumeMessageHook;
 pub use crate::hook::consume_message_hook::ConsumeMessageHookArc;
 pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
+#[doc(hidden)]
+pub use crate::runtime::client_runtime_fallback_snapshot;
+#[doc(hidden)]
+pub use crate::runtime::reset_client_runtime_fallback_for_diagnostics;
+#[doc(hidden)]
+pub use crate::runtime::spawn_client_runtime_probe_task;
+#[doc(hidden)]
+pub use crate::runtime::ClientSharedFallbackLifecycleState;
+#[doc(hidden)]
+pub use crate::runtime::ClientSharedFallbackSnapshot;
 pub type MQClientAPIExt = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 pub type MqClientAdminImpl = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 pub use crate::latency::BrokerFilter;
