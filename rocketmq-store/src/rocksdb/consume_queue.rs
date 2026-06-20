@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::warn;
 
@@ -760,7 +759,8 @@ impl RocksDbConsumeQueueGroupCommitConfig {
 
 pub struct RocksDbConsumeQueueGroupCommitService {
     sender: mpsc::Sender<ConsumeQueueBatchWriteRequest>,
-    handle: JoinHandle<Result<(), RocketMQError>>,
+    task_group: rocketmq_runtime::TaskGroup,
+    task_error: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl RocksDbConsumeQueueGroupCommitService {
@@ -770,8 +770,21 @@ impl RocksDbConsumeQueueGroupCommitService {
     ) -> Result<Self, RocketMQError> {
         let config = config.validate()?;
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
-        let handle = tokio::spawn(run_group_commit_loop(store, receiver, config.batch_size));
-        Ok(Self { sender, handle })
+        let task_group = crate::rocksdb::runtime::task_group("rocksdb.consume_queue.group_commit")?;
+        let task_error = Arc::new(tokio::sync::Mutex::new(None));
+        let task_error_clone = task_error.clone();
+        task_group
+            .spawn_service("consume-queue-group-commit", async move {
+                if let Err(error) = run_group_commit_loop(store, receiver, config.batch_size).await {
+                    *task_error_clone.lock().await = Some(error.to_string());
+                }
+            })
+            .map_err(|error| RocketMQError::storage_write_failed("rocksdb", error.to_string()))?;
+        Ok(Self {
+            sender,
+            task_group,
+            task_error,
+        })
     }
 
     pub async fn submit(&self, request: ConsumeQueueBatchWriteRequest) -> Result<(), RocketMQError> {
@@ -781,11 +794,21 @@ impl RocksDbConsumeQueueGroupCommitService {
     }
 
     pub async fn shutdown(self) -> Result<(), RocketMQError> {
-        let Self { sender, handle } = self;
+        let Self {
+            sender,
+            task_group,
+            task_error,
+        } = self;
         drop(sender);
-        handle.await.map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("group commit worker failed: {error}"))
-        })?
+        let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
+        crate::rocksdb::runtime::shutdown_report_result("consume queue group commit shutdown", report)?;
+        if let Some(error) = task_error.lock().await.take() {
+            return Err(RocketMQError::storage_write_failed(
+                "rocksdb",
+                format!("group commit worker failed: {error}"),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -811,14 +834,11 @@ async fn run_group_commit_loop(
         }
 
         let store = Arc::clone(&store);
-        tokio::task::spawn_blocking(move || {
+        crate::rocksdb::runtime::spawn_io("rocksdb.consume_queue.group_commit", move || {
             let writer = RocksDbConsumeQueueBatchWriter::new(store.as_ref());
             writer.write(&request)
         })
-        .await
-        .map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("group commit write task failed: {error}"))
-        })??;
+        .await??;
     }
     Ok(())
 }

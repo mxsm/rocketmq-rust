@@ -55,6 +55,7 @@ use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrder
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task;
 
 static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
@@ -866,38 +867,39 @@ impl ConsumeRequest {
                 let listener = consume_message_orderly_service_inner.message_listener.clone();
                 let mq_for_spawn = self.message_queue.clone();
                 let consumer_group_for_span = self.consumer_group.clone();
-                let (consume_result, context, process_span) = tokio::task::spawn_blocking(move || {
-                    let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                        msgs_owned.first(),
-                        msgs_owned.len(),
-                        consumer_group_for_span.as_str(),
-                        &mq_for_spawn,
-                        "orderly",
-                    );
-                    let mut ctx = ConsumeOrderlyContext::new(mq_for_spawn);
-                    let vec: Vec<&MessageExt> = msgs_owned.iter().collect();
-                    let result = {
-                        let _entered = process_span.enter();
-                        listener.consume_message(&vec, &mut ctx)
-                    };
-                    (result, ctx, process_span)
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    (
-                        Err(rocketmq_error::RocketMQError::InvalidProperty(format!(
-                            "orderly consume task panicked: {e}"
-                        ))),
-                        ConsumeOrderlyContext::new(self.message_queue.clone()),
-                        crate::consumer::consumer_impl::observability::consumer_process_span(
-                            msgs.first().map(|msg| msg.as_ref()),
-                            msgs.len(),
-                            self.consumer_group.as_str(),
-                            &self.message_queue,
+                let (consume_result, context, process_span) =
+                    spawn_client_blocking_io("client.orderly.consume", move || {
+                        let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
+                            msgs_owned.first(),
+                            msgs_owned.len(),
+                            consumer_group_for_span.as_str(),
+                            &mq_for_spawn,
                             "orderly",
-                        ),
-                    )
-                });
+                        );
+                        let mut ctx = ConsumeOrderlyContext::new(mq_for_spawn);
+                        let vec: Vec<&MessageExt> = msgs_owned.iter().collect();
+                        let result = {
+                            let _entered = process_span.enter();
+                            listener.consume_message(&vec, &mut ctx)
+                        };
+                        (result, ctx, process_span)
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        (
+                            Err(rocketmq_error::RocketMQError::InvalidProperty(format!(
+                                "orderly consume task panicked: {e}"
+                            ))),
+                            ConsumeOrderlyContext::new(self.message_queue.clone()),
+                            crate::consumer::consumer_impl::observability::consumer_process_span(
+                                msgs.first().map(|msg| msg.as_ref()),
+                                msgs.len(),
+                                self.consumer_group.as_str(),
+                                &self.message_queue,
+                                "orderly",
+                            ),
+                        )
+                    });
                 drop(consume_lock);
                 match consume_result {
                     Ok(value) => {

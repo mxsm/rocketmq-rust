@@ -46,6 +46,7 @@ use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
 use crate::authorization::provider::AuthorizationError;
 use crate::config::AuthConfig;
+use crate::runtime_bridge::AuthBlockingExecutor;
 
 /// Local authorization metadata provider backed by an in-memory snapshot and an optional JSON
 /// snapshot file.
@@ -106,6 +107,7 @@ pub struct LocalAuthorizationMetadataProvider {
     /// Initialization state
     initialized: Arc<RwLock<bool>>,
     write_lock: Arc<tokio::sync::Mutex<()>>,
+    blocking: AuthBlockingExecutor,
 }
 
 /// Cached ACL entry with expiration
@@ -178,6 +180,7 @@ impl LocalAuthorizationMetadataProvider {
             cache_config: CacheConfig::default(),
             initialized: Arc::new(RwLock::new(false)),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            blocking: AuthBlockingExecutor::default(),
         }
     }
 
@@ -192,7 +195,10 @@ impl LocalAuthorizationMetadataProvider {
         };
         let path = path.clone();
         let snapshot = snapshot.clone();
-        tokio::task::spawn_blocking(move || write_acl_snapshot(&path, &snapshot))
+        self.blocking
+            .spawn_io("auth.authorization.write_acl_snapshot", move || {
+                write_acl_snapshot(&path, &snapshot)
+            })
             .await
             .map_err(|error| AuthorizationError::MetadataServiceError(format!("ACL snapshot task failed: {error}")))?
     }

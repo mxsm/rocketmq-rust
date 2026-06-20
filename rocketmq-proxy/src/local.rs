@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -75,6 +74,7 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
+use rocketmq_runtime::ActorRuntime;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -182,10 +182,10 @@ impl LocalBrokerFacadeClient {
             "rocketmq-proxy-local-{}",
             sanitize_thread_component(&config.broker_name)
         );
-        thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || run_local_broker_worker(config, receiver))
-            .expect("failed to spawn proxy local broker worker");
+        ActorRuntime::spawn_current_thread(thread_name, async move {
+            run_local_broker_worker(config, receiver).await;
+        })
+        .expect("failed to spawn proxy local broker worker");
         Self { sender, broker_name }
     }
 
@@ -567,138 +567,132 @@ pub fn local_service_manager_from_config(config: LocalConfig, strategy_name: imp
     local_components_from_config(config, strategy_name).0
 }
 
-fn run_local_broker_worker(config: LocalConfig, mut receiver: mpsc::UnboundedReceiver<LocalBrokerCommand>) {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build proxy local broker runtime");
-    runtime.block_on(async move {
-        let mut facade = ProxyBrokerFacade::new(build_broker_config(&config), build_message_store_config(&config));
-        let startup_error = if !facade.initialize().await {
-            Some("embedded broker initialization failed".to_owned())
-        } else {
-            facade.start().await;
-            None
-        };
+async fn run_local_broker_worker(config: LocalConfig, mut receiver: mpsc::UnboundedReceiver<LocalBrokerCommand>) {
+    let mut facade = ProxyBrokerFacade::new(build_broker_config(&config), build_message_store_config(&config));
+    let startup_error = if !facade.initialize().await {
+        Some("embedded broker initialization failed".to_owned())
+    } else {
+        facade.start().await;
+        None
+    };
 
-        while let Some(command) = receiver.recv().await {
-            match command {
-                LocalBrokerCommand::QueryRoute { topic, reply } => {
-                    let _ = reply.send(startup_error.as_ref().map_or_else(
-                        || facade.query_route(topic.name()).map_err(Into::into),
-                        |message| {
-                            Err(ProxyError::Transport {
-                                message: message.clone(),
-                            })
-                        },
-                    ));
-                }
-                LocalBrokerCommand::QueryTopicMessageType { topic, reply } => {
-                    let _ = reply.send(startup_error.as_ref().map_or_else(
-                        || {
-                            facade
-                                .query_topic_message_type(topic.name())
-                                .map(convert_topic_message_type)
-                                .map_err(Into::into)
-                        },
-                        |message| {
-                            Err(ProxyError::Transport {
-                                message: message.clone(),
-                            })
-                        },
-                    ));
-                }
-                LocalBrokerCommand::QuerySubscriptionGroup { group, reply } => {
-                    let _ = reply.send(startup_error.as_ref().map_or_else(
-                        || {
-                            facade
-                                .query_subscription_group(group.name())
-                                .map(|config| config.map(convert_subscription_group))
-                                .map_err(Into::into)
-                        },
-                        |message| {
-                            Err(ProxyError::Transport {
-                                message: message.clone(),
-                            })
-                        },
-                    ));
-                }
-                LocalBrokerCommand::QueryAssignment {
-                    topic,
-                    group,
-                    client_id,
-                    strategy_name,
-                    reply,
-                } => {
-                    let result = if let Some(message) = startup_error.as_ref() {
+    while let Some(command) = receiver.recv().await {
+        match command {
+            LocalBrokerCommand::QueryRoute { topic, reply } => {
+                let _ = reply.send(startup_error.as_ref().map_or_else(
+                    || facade.query_route(topic.name()).map_err(Into::into),
+                    |message| {
                         Err(ProxyError::Transport {
                             message: message.clone(),
                         })
-                    } else {
-                        query_assignment(&facade, topic, group, client_id, strategy_name).await
-                    };
-                    let _ = reply.send(result);
-                }
-                LocalBrokerCommand::SendMessage {
-                    request,
-                    client_id,
-                    request_id,
-                    reply,
-                } => {
-                    let result = if let Some(message) = startup_error.as_ref() {
+                    },
+                ));
+            }
+            LocalBrokerCommand::QueryTopicMessageType { topic, reply } => {
+                let _ = reply.send(startup_error.as_ref().map_or_else(
+                    || {
+                        facade
+                            .query_topic_message_type(topic.name())
+                            .map(convert_topic_message_type)
+                            .map_err(Into::into)
+                    },
+                    |message| {
                         Err(ProxyError::Transport {
                             message: message.clone(),
                         })
-                    } else {
-                        send_message(&facade, request, client_id, request_id).await
-                    };
-                    let _ = reply.send(result);
-                }
-                LocalBrokerCommand::RecallMessage {
-                    request,
-                    client_id,
-                    request_id,
-                    reply,
-                } => {
-                    let result = if let Some(message) = startup_error.as_ref() {
+                    },
+                ));
+            }
+            LocalBrokerCommand::QuerySubscriptionGroup { group, reply } => {
+                let _ = reply.send(startup_error.as_ref().map_or_else(
+                    || {
+                        facade
+                            .query_subscription_group(group.name())
+                            .map(|config| config.map(convert_subscription_group))
+                            .map_err(Into::into)
+                    },
+                    |message| {
                         Err(ProxyError::Transport {
                             message: message.clone(),
                         })
-                    } else {
-                        recall_message(&facade, request, client_id, request_id).await
-                    };
-                    let _ = reply.send(result);
-                }
-                LocalBrokerCommand::EndTransaction {
-                    request,
-                    client_id,
-                    request_id,
-                    reply,
-                } => {
-                    let result = if let Some(message) = startup_error.as_ref() {
-                        Err(ProxyError::Transport {
-                            message: message.clone(),
-                        })
-                    } else {
-                        end_transaction(&facade, request, client_id, request_id).await
-                    };
-                    let _ = reply.send(result);
-                }
-                LocalBrokerCommand::ProcessRemoting { request, reply } => {
-                    let result = if let Some(message) = startup_error.as_ref() {
-                        Err(ProxyError::Transport {
-                            message: message.clone(),
-                        })
-                    } else {
-                        facade.process_request(request).await.map_err(Into::into)
-                    };
-                    let _ = reply.send(result);
-                }
+                    },
+                ));
+            }
+            LocalBrokerCommand::QueryAssignment {
+                topic,
+                group,
+                client_id,
+                strategy_name,
+                reply,
+            } => {
+                let result = if let Some(message) = startup_error.as_ref() {
+                    Err(ProxyError::Transport {
+                        message: message.clone(),
+                    })
+                } else {
+                    query_assignment(&facade, topic, group, client_id, strategy_name).await
+                };
+                let _ = reply.send(result);
+            }
+            LocalBrokerCommand::SendMessage {
+                request,
+                client_id,
+                request_id,
+                reply,
+            } => {
+                let result = if let Some(message) = startup_error.as_ref() {
+                    Err(ProxyError::Transport {
+                        message: message.clone(),
+                    })
+                } else {
+                    send_message(&facade, request, client_id, request_id).await
+                };
+                let _ = reply.send(result);
+            }
+            LocalBrokerCommand::RecallMessage {
+                request,
+                client_id,
+                request_id,
+                reply,
+            } => {
+                let result = if let Some(message) = startup_error.as_ref() {
+                    Err(ProxyError::Transport {
+                        message: message.clone(),
+                    })
+                } else {
+                    recall_message(&facade, request, client_id, request_id).await
+                };
+                let _ = reply.send(result);
+            }
+            LocalBrokerCommand::EndTransaction {
+                request,
+                client_id,
+                request_id,
+                reply,
+            } => {
+                let result = if let Some(message) = startup_error.as_ref() {
+                    Err(ProxyError::Transport {
+                        message: message.clone(),
+                    })
+                } else {
+                    end_transaction(&facade, request, client_id, request_id).await
+                };
+                let _ = reply.send(result);
+            }
+            LocalBrokerCommand::ProcessRemoting { request, reply } => {
+                let result = if let Some(message) = startup_error.as_ref() {
+                    Err(ProxyError::Transport {
+                        message: message.clone(),
+                    })
+                } else {
+                    facade.process_request(request).await.map_err(Into::into)
+                };
+                let _ = reply.send(result);
             }
         }
+    }
 
-        facade.shutdown().await;
-    });
+    facade.shutdown().await;
 }
 
 async fn query_assignment(

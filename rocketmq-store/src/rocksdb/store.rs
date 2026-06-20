@@ -200,9 +200,8 @@ impl RocksDbStore {
     ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = tokio::task::spawn_blocking(move || prefix_scan_on_db(&db, &options))
-            .await
-            .map_err(|error| RocketMQError::storage_read_failed("rocksdb", format!("Iterator: {error}")))?;
+        let result =
+            crate::rocksdb::runtime::spawn_io("rocksdb.prefix_scan", move || prefix_scan_on_db(&db, &options)).await?;
         self.record_result(&result, RocksDbMetricsCollector::record_scan);
         result
     }
@@ -239,9 +238,8 @@ impl RocksDbStore {
     ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = tokio::task::spawn_blocking(move || range_scan_on_db(&db, &options))
-            .await
-            .map_err(|error| RocketMQError::storage_read_failed("rocksdb", format!("Iterator: {error}")))?;
+        let result =
+            crate::rocksdb::runtime::spawn_io("rocksdb.range_scan", move || range_scan_on_db(&db, &options)).await?;
         self.record_result(&result, RocksDbMetricsCollector::record_scan);
         result
     }
@@ -287,13 +285,12 @@ impl RocksDbStore {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
         let metrics = Arc::clone(&self.metrics);
-        let result = tokio::task::spawn_blocking(move || {
+        let result = crate::rocksdb::runtime::spawn_io("rocksdb.compact_range", move || {
             compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref())?;
             metrics.record_manual_compaction();
             Ok(())
         })
-        .await
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Compaction: {error}")))?;
+        .await?;
         if result.is_err() {
             self.metrics.record_error();
         }
@@ -309,31 +306,14 @@ impl RocksDbStore {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
         let metrics = Arc::clone(&self.metrics);
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn_blocking(move || {
-                if let Err(error) = compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref()) {
-                    warn!(error = %error, "failed to run RocksDB background compaction");
-                    metrics.record_error();
-                    return;
-                }
-                metrics.record_manual_compaction();
-            });
-        } else {
-            std::thread::Builder::new()
-                .name("rocksdb-manual-compaction".to_string())
-                .spawn(move || {
-                    if let Err(error) = compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref()) {
-                        warn!(error = %error, "failed to run RocksDB background compaction");
-                        metrics.record_error();
-                        return;
-                    }
-                    metrics.record_manual_compaction();
-                })
-                .map_err(|error| {
-                    RocketMQError::storage_write_failed("rocksdb", format!("Compaction: spawn failed: {error}"))
-                })?;
-        }
-        Ok(())
+        crate::rocksdb::runtime::spawn_detached_io("rocksdb.manual_compaction", move || {
+            if let Err(error) = compact_range_cf_on_db(&db, &cf, start.as_deref(), end.as_deref()) {
+                warn!(error = %error, "failed to run RocksDB background compaction");
+                metrics.record_error();
+                return;
+            }
+            metrics.record_manual_compaction();
+        })
     }
 
     pub fn manual_compaction_count(&self) -> u64 {
@@ -405,14 +385,13 @@ impl RocksDbStore {
     pub async fn create_checkpoint(&self, target_dir: PathBuf) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = tokio::task::spawn_blocking(move || {
+        let result = crate::rocksdb::runtime::spawn_io("rocksdb.create_checkpoint", move || {
             let checkpoint = ::rocksdb::checkpoint::Checkpoint::new(&db).map_rocksdb(RocksDbErrorKind::Checkpoint)?;
             checkpoint
                 .create_checkpoint(target_dir)
                 .map_rocksdb(RocksDbErrorKind::Checkpoint)
         })
-        .await
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Checkpoint: {error}")))?;
+        .await?;
         self.record_result(&result, RocksDbMetricsCollector::record_checkpoint);
         result
     }
@@ -420,7 +399,7 @@ impl RocksDbStore {
     pub async fn create_backup(&self, backup_dir: PathBuf) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let db = Arc::clone(&self.db);
-        let result = tokio::task::spawn_blocking(move || {
+        let result = crate::rocksdb::runtime::spawn_io("rocksdb.create_backup", move || {
             create_dir_all_for_rocksdb_operation(&backup_dir, RocksDbErrorKind::Backup)?;
             let env = ::rocksdb::Env::new().map_rocksdb(RocksDbErrorKind::Backup)?;
             let backup_options =
@@ -431,8 +410,7 @@ impl RocksDbStore {
                 .create_new_backup_flush(db.as_ref(), true)
                 .map_rocksdb(RocksDbErrorKind::Backup)
         })
-        .await
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Backup: {error}")))?;
+        .await?;
         self.record_result(&result, RocksDbMetricsCollector::record_backup);
         result
     }
@@ -442,7 +420,7 @@ impl RocksDbStore {
         db_dir: PathBuf,
         wal_dir: Option<PathBuf>,
     ) -> Result<(), RocketMQError> {
-        tokio::task::spawn_blocking(move || {
+        crate::rocksdb::runtime::spawn_io("rocksdb.restore_latest_backup", move || {
             create_dir_all_for_rocksdb_operation(&backup_dir, RocksDbErrorKind::Restore)?;
             create_dir_all_for_rocksdb_operation(&db_dir, RocksDbErrorKind::Restore)?;
             let wal_dir = wal_dir.unwrap_or_else(|| db_dir.clone());
@@ -459,8 +437,7 @@ impl RocksDbStore {
                 .restore_from_latest_backup(&db_dir, &wal_dir, &restore_options)
                 .map_rocksdb(RocksDbErrorKind::Restore)
         })
-        .await
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Restore: {error}")))?
+        .await?
     }
 
     pub fn close(&self) {

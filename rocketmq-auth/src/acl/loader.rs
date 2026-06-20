@@ -29,10 +29,12 @@ use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_access_data::DataVersion;
 use crate::migration::alc::plain_access_data::PlainAccessData;
+use crate::runtime_bridge::AuthBlockingExecutor;
 
 #[derive(Clone, Debug)]
 pub struct FileAclConfigLoader {
     roots: Vec<PathBuf>,
+    blocking: AuthBlockingExecutor,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +49,7 @@ impl FileAclConfigLoader {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             roots: vec![root.into()],
+            blocking: AuthBlockingExecutor::default(),
         }
     }
 
@@ -57,6 +60,7 @@ impl FileAclConfigLoader {
     {
         Self {
             roots: roots.into_iter().map(Into::into).collect(),
+            blocking: AuthBlockingExecutor::default(),
         }
     }
 
@@ -76,7 +80,8 @@ impl FileAclConfigLoader {
 
     pub async fn discover_files(&self) -> RocketMQResult<Vec<PathBuf>> {
         let roots = self.roots.clone();
-        tokio::task::spawn_blocking(move || discover_acl_files(&roots))
+        self.blocking
+            .spawn_io("auth.acl.discover_files", move || discover_acl_files(&roots))
             .await
             .map_err(|error| RocketMQError::Internal(format!("acl file discovery task failed: {error}")))?
     }
