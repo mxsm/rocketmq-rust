@@ -16,10 +16,16 @@ use std::cmp;
 use std::future::Future;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::bail;
 use anyhow::Context;
+use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
@@ -167,6 +173,8 @@ impl FuturesExecutorServiceBuilder {
 
 pub struct ScheduledExecutorService {
     inner: tokio::runtime::Runtime,
+    context: RuntimeContext,
+    scheduled_tasks: ScheduledTaskGroup,
 }
 
 impl Default for ScheduledExecutorService {
@@ -180,13 +188,12 @@ impl ScheduledExecutorService {
     }
 
     pub fn try_new() -> anyhow::Result<ScheduledExecutorService> {
-        Ok(ScheduledExecutorService {
-            inner: tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(num_cpus::get())
-                .enable_all()
-                .build()
-                .context("failed to create ScheduledExecutorService runtime")?,
-        })
+        let inner = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_cpus::get())
+            .enable_all()
+            .build()
+            .context("failed to create ScheduledExecutorService runtime")?;
+        Self::from_runtime(inner)
     }
 
     pub fn new_with_config(
@@ -211,46 +218,62 @@ impl ScheduledExecutorService {
         } else {
             "rocketmq-thread-".to_string()
         };
-        Ok(ScheduledExecutorService {
-            inner: tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(thread_num)
-                .thread_keep_alive(keep_alive)
-                .max_blocking_threads(max_blocking_threads)
-                .thread_name_fn(move || {
-                    static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                    let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
-                    format!("{thread_prefix_inner}{id}")
-                })
-                .enable_all()
-                .build()
-                .context("failed to create configured ScheduledExecutorService runtime")?,
-        })
+        let inner = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(thread_num)
+            .thread_keep_alive(keep_alive)
+            .max_blocking_threads(max_blocking_threads)
+            .thread_name_fn(move || {
+                static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                format!("{thread_prefix_inner}{id}")
+            })
+            .enable_all()
+            .build()
+            .context("failed to create configured ScheduledExecutorService runtime")?;
+        Self::from_runtime(inner)
     }
 
-    pub fn schedule_at_fixed_rate<F>(&self, mut task: F, initial_delay: Option<Duration>, period: Duration)
+    pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
     where
         F: FnMut() + Send + 'static,
     {
-        self.inner.spawn(async move {
-            // initial delay
+        static SCHEDULE_ID: AtomicUsize = AtomicUsize::new(0);
 
-            if let Some(initial_delay_inner) = initial_delay {
-                tokio::time::sleep(initial_delay_inner).await;
-            }
+        let task = Arc::new(Mutex::new(task));
+        let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
+            format!(
+                "rocketmq.common.schedule_at_fixed_rate.{}",
+                SCHEDULE_ID.fetch_add(1, Ordering::Relaxed)
+            ),
+            period,
+        );
+        config.initial_delay = initial_delay.unwrap_or(Duration::ZERO);
 
-            loop {
-                // record current execution time
-                let current_execution_time = tokio::time::Instant::now();
-                // execute task
-                task();
-                // Calculate the time of the next execution
-                let next_execution_time = current_execution_time + period;
-
-                // Wait until the next execution
-                let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                tokio::time::sleep(delay).await;
+        let schedule_result = self.scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+            let task = task.clone();
+            async move {
+                if let Ok(mut task) = task.lock() {
+                    task();
+                }
             }
         });
+        if let Err(error) = schedule_result {
+            tracing::warn!(%error, "failed to schedule fixed-rate task");
+        }
+    }
+
+    fn from_runtime(inner: tokio::runtime::Runtime) -> anyhow::Result<ScheduledExecutorService> {
+        let context = RuntimeContext::new(
+            RuntimeHandle::new(inner.handle().clone()),
+            "rocketmq.common.scheduled-executor",
+        )
+        .map_err(|error| anyhow::anyhow!("failed to create scheduled executor context: {error}"))?;
+        let scheduled_tasks = ScheduledTaskGroup::new(context.root_group().child("scheduled"));
+        Ok(ScheduledExecutorService {
+            inner,
+            context,
+            scheduled_tasks,
+        })
     }
 }
 
@@ -305,20 +328,31 @@ mod runtime_config_tests {
 
 impl ScheduledExecutorService {
     pub fn shutdown(self) {
-        self.inner.shutdown_background();
+        self.shutdown_timeout(Duration::from_secs(30));
     }
 
     pub fn shutdown_timeout(self, timeout: Duration) {
-        self.inner.shutdown_timeout(timeout);
+        let ScheduledExecutorService {
+            inner,
+            context,
+            scheduled_tasks: _,
+        } = self;
+        let report = inner.block_on(context.shutdown_tasks(timeout));
+        report.log_if_unhealthy();
+        inner.shutdown_timeout(timeout);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use super::FuturesExecutorServiceBuilder;
+    use super::ScheduledExecutorService;
 
     #[test]
     fn futures_executor_builder_create_returns_executor() {
@@ -331,5 +365,36 @@ mod tests {
         });
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
+    }
+
+    #[test]
+    fn scheduled_executor_fixed_rate_does_not_overlap() {
+        let executor =
+            ScheduledExecutorService::try_new_with_config(2, Some("schedule-test-"), Duration::from_secs(1), 2)
+                .expect("scheduled executor should be created");
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let active_task = active.clone();
+        let max_active_task = max_active.clone();
+        let runs_task = runs.clone();
+
+        executor.schedule_at_fixed_rate(
+            move || {
+                let current = active_task.fetch_add(1, Ordering::SeqCst) + 1;
+                max_active_task.fetch_max(current, Ordering::SeqCst);
+                runs_task.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(30));
+                active_task.fetch_sub(1, Ordering::SeqCst);
+            },
+            Some(Duration::ZERO),
+            Duration::from_millis(5),
+        );
+
+        std::thread::sleep(Duration::from_millis(120));
+        executor.shutdown_timeout(Duration::from_secs(1));
+
+        assert!(runs.load(Ordering::SeqCst) > 0);
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
     }
 }

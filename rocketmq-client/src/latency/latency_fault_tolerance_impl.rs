@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
+use crate::runtime::spawn_detached_client_task;
 
 pub struct LatencyFaultToleranceImpl<R, S> {
     fault_item_table: DashMap<CheetahString, FaultItem>,
@@ -198,7 +199,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
-use tracing::warn;
 
 async fn run_detector_loop<R, S>(this: ArcMut<LatencyFaultToleranceImpl<R, S>>, token: CancellationToken)
 where
@@ -230,31 +230,8 @@ where
     R: Resolver,
     S: ServiceDetector,
 {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            let task = handle.spawn(run_detector_loop(this, token));
-            drop(task);
-        }
-        Err(error) => {
-            warn!(
-                "No Tokio runtime available while starting fault tolerance detector; using a dedicated detector \
-                 thread. error={}",
-                error
-            );
-            let thread = std::thread::Builder::new().name("rocketmq-client-fault-detector".to_string());
-            if let Err(error) = thread.spawn(move || {
-                let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                    Ok(runtime) => runtime,
-                    Err(error) => {
-                        error!("Failed to create fault tolerance detector runtime: {}", error);
-                        return;
-                    }
-                };
-                runtime.block_on(run_detector_loop(this, token));
-            }) {
-                error!("Failed to spawn fault tolerance detector thread: {}", error);
-            }
-        }
+    if let Err(error) = spawn_detached_client_task("rocketmq-client-fault-detector", run_detector_loop(this, token)) {
+        error!("Failed to spawn fault tolerance detector task: {}", error);
     }
 }
 

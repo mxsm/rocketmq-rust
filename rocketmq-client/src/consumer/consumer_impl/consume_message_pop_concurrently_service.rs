@@ -18,7 +18,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -52,24 +51,14 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::spawn_detached_client_task;
 
 fn spawn_detached_pop_concurrent_task<F>(thread_name: &'static str, task: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        drop(handle.spawn(task));
-        return;
-    }
-
-    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => runtime.block_on(task),
-            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
-        }
-    }) {
-        Ok(handle) => drop(handle),
-        Err(error) => warn!("Failed to spawn {} background thread: {}", thread_name, error),
+    if let Err(error) = spawn_detached_client_task(thread_name, task) {
+        warn!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }
 

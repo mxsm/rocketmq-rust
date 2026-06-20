@@ -16,9 +16,9 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
+use crate::runtime::spawn_detached_client_task;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_remoting::protocol::body::consume_status::ConsumeStatus;
 use tracing::warn;
@@ -242,21 +242,8 @@ fn spawn_stats_task<F>(thread_name: &'static str, task: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        drop(handle.spawn(task));
-        return;
-    }
-
-    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => {
-            if let Err(error) = thread::Builder::new()
-                .name(thread_name.to_string())
-                .spawn(move || runtime.block_on(task))
-            {
-                warn!("Failed to spawn {} background thread: {}", thread_name, error);
-            }
-        }
-        Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
+    if let Err(error) = spawn_detached_client_task(thread_name, task) {
+        warn!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }
 
@@ -279,6 +266,8 @@ async fn sleep_or_shutdown(shutdown_signal: &Arc<AtomicBool>, delay: Duration) -
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
 
     fn make_manager() -> ConsumerStatsManager {

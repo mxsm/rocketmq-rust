@@ -16,7 +16,6 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
@@ -31,6 +30,7 @@ use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::runtime::spawn_detached_client_task;
 
 /// Default queue capacity for message requests
 const DEFAULT_QUEUE_CAPACITY: usize = 4096;
@@ -396,19 +396,8 @@ fn spawn_pull_message_task<F>(thread_name: &'static str, task: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        drop(handle.spawn(task));
-        return;
-    }
-
-    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => runtime.block_on(task),
-            Err(error) => error!("Failed to build {} runtime: {}", thread_name, error),
-        }
-    }) {
-        Ok(_handle) => {}
-        Err(error) => error!("Failed to spawn {} background thread: {}", thread_name, error),
+    if let Err(error) = spawn_detached_client_task(thread_name, task) {
+        error!("Failed to spawn {} background task: {}", thread_name, error);
     }
 }
 

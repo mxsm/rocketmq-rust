@@ -49,6 +49,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
+use crate::runtime::spawn_client_task;
 
 pub struct ConsumeMessageConcurrentlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -92,19 +93,10 @@ fn spawn_concurrent_task<F>(thread_name: &'static str, task: F) -> Option<Concur
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Some(ConcurrentTaskHandle::Tokio(handle.spawn(task)));
-    }
-
-    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => runtime.block_on(task),
-            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
-        }
-    }) {
-        Ok(handle) => Some(ConcurrentTaskHandle::Thread(handle)),
+    match spawn_client_task(thread_name, task) {
+        Ok(handle) => Some(ConcurrentTaskHandle::Tokio(handle)),
         Err(error) => {
-            warn!("Failed to spawn {} background thread: {}", thread_name, error);
+            warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
         }
     }

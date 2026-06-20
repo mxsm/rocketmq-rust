@@ -19,7 +19,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -47,6 +46,8 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
+use crate::runtime::spawn_client_task_on;
+use crate::runtime::spawn_detached_client_task;
 use cheetah_string::CheetahString;
 
 use crate::base::validators::Validators;
@@ -2796,10 +2797,8 @@ impl MQClientAPIImpl {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        if let Some(executor) = async_sender_executor {
-            drop(executor.spawn(task));
-        } else {
-            Self::spawn_api_background_task("rocketmq-client-async-send", task);
+        if let Err(error) = spawn_client_task_on("rocketmq-client-async-send", async_sender_executor.as_ref(), task) {
+            warn!("Failed to spawn rocketmq-client-async-send task: {}", error);
         }
     }
 
@@ -2807,21 +2806,8 @@ impl MQClientAPIImpl {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            drop(handle.spawn(task));
-            return;
-        }
-
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => {
-                if let Err(error) = thread::Builder::new()
-                    .name(thread_name.to_string())
-                    .spawn(move || runtime.block_on(task))
-                {
-                    warn!("Failed to spawn {} background thread: {}", thread_name, error);
-                }
-            }
-            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
+        if let Err(error) = spawn_detached_client_task(thread_name, task) {
+            warn!("Failed to spawn {} background task: {}", thread_name, error);
         }
     }
 
@@ -7103,7 +7089,7 @@ mod tests {
         let thread_name = rx
             .recv_timeout(Duration::from_secs(2))
             .expect("async send task should run on fallback runtime");
-        assert_eq!(thread_name, "rocketmq-client-async-send");
+        assert_eq!(thread_name, "rocketmq-client-fallback");
     }
 
     #[test]

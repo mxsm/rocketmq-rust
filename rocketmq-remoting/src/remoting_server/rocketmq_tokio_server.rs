@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
@@ -271,6 +274,9 @@ struct ConnectionListener<RP> {
 
     /// TLS mode and acceptor state for newly accepted connections.
     tls_runtime: TlsServerRuntime,
+
+    /// Tracks remoting event and connection tasks for shutdown diagnostics.
+    task_group: TaskGroup,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -306,29 +312,34 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
 
         // Spawn event dispatcher task if listener configured
         if let Some(listener) = self.channel_event_listener.take() {
-            tokio::spawn(async move {
-                while let Some(event) = event_rx.recv().await {
-                    let addr = event.remote_addr();
-                    let addr_str = addr.to_string();
+            let spawn_result =
+                self.task_group
+                    .spawn("rocketmq.remoting.event_dispatcher", TaskKind::Service, async move {
+                        while let Some(event) = event_rx.recv().await {
+                            let addr = event.remote_addr();
+                            let addr_str = addr.to_string();
 
-                    // HOT PATH: Match on event type and dispatch to listener
-                    match event.type_() {
-                        ConnectionNetEvent::CONNECTED(_) => {
-                            listener.on_channel_connect(&addr_str, event.channel());
+                            // HOT PATH: Match on event type and dispatch to listener
+                            match event.type_() {
+                                ConnectionNetEvent::CONNECTED(_) => {
+                                    listener.on_channel_connect(&addr_str, event.channel());
+                                }
+                                ConnectionNetEvent::DISCONNECTED => {
+                                    listener.on_channel_close(&addr_str, event.channel());
+                                }
+                                ConnectionNetEvent::EXCEPTION => {
+                                    listener.on_channel_exception(&addr_str, event.channel());
+                                }
+                                ConnectionNetEvent::IDLE => {
+                                    listener.on_channel_idle(&addr_str, event.channel());
+                                }
+                            }
                         }
-                        ConnectionNetEvent::DISCONNECTED => {
-                            listener.on_channel_close(&addr_str, event.channel());
-                        }
-                        ConnectionNetEvent::EXCEPTION => {
-                            listener.on_channel_exception(&addr_str, event.channel());
-                        }
-                        ConnectionNetEvent::IDLE => {
-                            listener.on_channel_idle(&addr_str, event.channel());
-                        }
-                    }
-                }
-                info!("Event dispatcher task terminated");
-            });
+                        info!("Event dispatcher task terminated");
+                    });
+            if let Err(error) = spawn_result {
+                error!("Failed to spawn remoting event dispatcher: {}", error);
+            }
         }
 
         // Main accept loop
@@ -355,9 +366,10 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             let shutdown_complete_tx = self.shutdown_complete_tx.clone();
             let conn_disconnect_notify = self.conn_disconnect_notify.clone();
             let event_tx_clone = event_tx.clone();
+            let task_group = self.task_group.clone();
 
             // Spawn dedicated task for this connection
-            tokio::spawn(async move {
+            if let Err(error) = task_group.spawn("rocketmq.remoting.connection", TaskKind::Worker, async move {
                 let Some(connection) = tls_runtime.into_connection(socket, remote_addr).await else {
                     drop(permit);
                     return;
@@ -410,7 +422,9 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
 
                 // IMPORTANT: Permit released when `permit` drops here
                 drop(permit);
-            });
+            }) {
+                error!(remote_addr = %remote_addr, error = %error, "failed to spawn remoting connection task");
+            }
         }
     }
 
@@ -568,6 +582,10 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
 ) {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
+    let task_group = TaskGroup::root(
+        "rocketmq.remoting.server",
+        RuntimeHandle::new(tokio::runtime::Handle::current()),
+    );
     // Initialize the connection listener state
     let handler = RemotingGeneralHandler {
         request_processor,
@@ -584,6 +602,7 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
         channel_event_listener,
         cmd_handler: ArcMut::new(handler),
         tls_runtime,
+        task_group: task_group.clone(),
     };
 
     tokio::select! {
@@ -612,6 +631,8 @@ async fn run_with_tls_config<RP: RequestProcessor + Sync + 'static + Clone>(
     drop(shutdown_complete_tx);
 
     let _ = shutdown_complete_rx.recv().await;
+    let report = task_group.shutdown(Duration::from_secs(30)).await;
+    report.log_if_unhealthy();
 }
 
 #[derive(Debug)]
@@ -659,6 +680,8 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::server::config::ServerConfig;
+    use tokio::net::TcpStream;
+    use tokio::sync::oneshot;
 
     use super::*;
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
@@ -688,5 +711,36 @@ mod tests {
         server
             .run_with_shutdown(DefaultRemotingRequestProcessor, None, future::pending::<()>())
             .await;
+    }
+
+    #[tokio::test]
+    async fn run_shutdown_drains_connection_tasks() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener should have local addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_task = tokio::spawn(run(
+            listener,
+            async {
+                let _ = shutdown_rx.await;
+            },
+            DefaultRemotingRequestProcessor,
+            None,
+            Vec::new(),
+            None,
+        ));
+
+        let mut clients = Vec::new();
+        for _ in 0..4 {
+            clients.push(TcpStream::connect(addr).await.expect("client should connect"));
+        }
+        drop(clients);
+
+        let _ = shutdown_tx.send(());
+        tokio::time::timeout(Duration::from_secs(3), server_task)
+            .await
+            .expect("server should shut down before timeout")
+            .expect("server task should not panic");
     }
 }

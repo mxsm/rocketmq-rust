@@ -50,6 +50,7 @@ use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
+use crate::runtime::spawn_client_task;
 
 pub struct ConsumeMessagePopOrderlyService {
     pub(crate) default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
@@ -88,19 +89,10 @@ fn spawn_pop_orderly_task<F>(thread_name: &'static str, task: F) -> Option<PopOr
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Some(PopOrderlyTaskHandle::Tokio(handle.spawn(task)));
-    }
-
-    match thread::Builder::new().name(thread_name.to_string()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(runtime) => runtime.block_on(task),
-            Err(error) => warn!("Failed to build {} runtime: {}", thread_name, error),
-        }
-    }) {
-        Ok(handle) => Some(PopOrderlyTaskHandle::Thread(handle)),
+    match spawn_client_task(thread_name, task) {
+        Ok(handle) => Some(PopOrderlyTaskHandle::Tokio(handle)),
         Err(error) => {
-            warn!("Failed to spawn {} background thread: {}", thread_name, error);
+            warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
         }
     }

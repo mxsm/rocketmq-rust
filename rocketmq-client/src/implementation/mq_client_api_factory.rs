@@ -29,6 +29,7 @@ use tokio::time::Instant;
 
 use crate::common::nameserver_access_config::NameserverAccessConfig;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+use crate::runtime::spawn_client_task;
 
 pub struct MQClientAPIFactory {
     nameserver_access_config: NameserverAccessConfig,
@@ -215,29 +216,16 @@ fn validate_nameserver_access_config(config: &NameserverAccessConfig) -> RocketM
 
 fn spawn_namesrv_refresh_task<F>(
     thread_name: &'static str,
-    stop_signal: Arc<AtomicBool>,
+    _stop_signal: Arc<AtomicBool>,
     task: F,
 ) -> Option<NamesrvRefreshTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Some(NamesrvRefreshTaskHandle::Tokio(handle.spawn(task)));
-    }
-
-    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => match thread::Builder::new()
-            .name(thread_name.to_string())
-            .spawn(move || runtime.block_on(task))
-        {
-            Ok(handle) => Some(NamesrvRefreshTaskHandle::Thread { stop_signal, handle }),
-            Err(error) => {
-                tracing::warn!("Failed to spawn {} background thread: {}", thread_name, error);
-                None
-            }
-        },
+    match spawn_client_task(thread_name, task) {
+        Ok(handle) => Some(NamesrvRefreshTaskHandle::Tokio(handle)),
         Err(error) => {
-            tracing::warn!("Failed to build {} runtime: {}", thread_name, error);
+            tracing::warn!("Failed to spawn {} background task: {}", thread_name, error);
             None
         }
     }

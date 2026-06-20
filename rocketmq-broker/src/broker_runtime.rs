@@ -56,7 +56,6 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -387,7 +386,6 @@ fn prepare_rocksdb_config_path_for_json_migration(path: &Path) -> bool {
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
     inner: ArcMut<BrokerRuntimeInner<GenericMessageStore>>,
-    broker_runtime: Option<RocketMQRuntime>,
     shutdown_hook: Option<BrokerShutdownHook>,
     proxy_request_processor: Option<DefaultServerProcessor>,
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
@@ -400,9 +398,6 @@ impl Drop for BrokerRuntime {
         // ticker loops cannot spin at full speed and block the runtime from completing
         // shutdown when the broker is dropped (e.g. during test panic unwind).
         self.scheduled_task_manager.abort_all();
-        if let Some(broker_runtime) = self.broker_runtime.take() {
-            broker_runtime.shutdown();
-        }
     }
 }
 
@@ -414,7 +409,6 @@ impl BrokerRuntime {
     ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let store_host = broker_address.parse::<SocketAddr>().expect("parse store_host failed");
-        let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
         let scheduled_task_manager = ScheduledTaskManager::default();
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
@@ -573,7 +567,6 @@ impl BrokerRuntime {
         inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService::new(inner.clone()));
         Self {
             inner,
-            broker_runtime: Some(runtime),
             shutdown_hook: None,
             proxy_request_processor: None,
             consumer_ids_change_listener,
@@ -622,10 +615,6 @@ impl BrokerRuntime {
         self.inner.broker_outer_api.shutdown();
 
         self.scheduled_task_manager.abort_all();
-
-        if let Some(runtime) = self.broker_runtime.take() {
-            runtime.shutdown();
-        }
 
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
             client_housekeeping_service.shutdown();
@@ -1611,19 +1600,17 @@ impl BrokerRuntime {
             self.update_namesrv_addr().await;
             info!("Set user specified name remoting_server address: {}", namesrv_address);
             let mut broker_runtime = self.inner.clone();
-            self.broker_runtime.as_ref().unwrap().get_handle().spawn(async move {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                loop {
-                    if broker_runtime.shutdown.load(Ordering::Acquire) {
-                        break;
+            self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
+                Duration::from_secs(10),
+                Duration::from_secs(60),
+                async move |ctx| {
+                    if ctx.is_cancelled() || broker_runtime.shutdown.load(Ordering::Acquire) {
+                        return Ok(());
                     }
-                    let current_execution_time = tokio::time::Instant::now();
                     broker_runtime.update_namesrv_addr_inner().await;
-                    let next_execution_time = current_execution_time + Duration::from_secs(60);
-                    let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
-                }
-            });
+                    Ok(())
+                },
+            );
         }
     }
 

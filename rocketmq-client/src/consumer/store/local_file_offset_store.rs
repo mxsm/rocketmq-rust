@@ -45,6 +45,7 @@ use crate::consumer::store::offset_serialize_wrapper::OffsetSerializeWrapper;
 use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::runtime::spawn_client_task;
 
 static LOCAL_OFFSET_STORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     #[cfg(target_os = "windows")]
@@ -138,21 +139,10 @@ impl LocalFileOffsetStore {
             Self::background_persist_task(offset_table, dirty_flag, store_path, persist_rx).await;
         };
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return PersistTaskHandle::Tokio(handle.spawn(task));
-        }
-
-        match thread::Builder::new()
-            .name("rocketmq-client-local-offset-store".to_string())
-            .spawn(
-                move || match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-                    Ok(runtime) => runtime.block_on(task),
-                    Err(error) => error!("Failed to build LocalFileOffsetStore runtime: {}", error),
-                },
-            ) {
-            Ok(handle) => PersistTaskHandle::Thread(handle),
+        match spawn_client_task("rocketmq-client-local-offset-store", task) {
+            Ok(handle) => PersistTaskHandle::Tokio(handle),
             Err(error) => {
-                error!("Failed to spawn LocalFileOffsetStore background thread: {}", error);
+                error!("Failed to spawn LocalFileOffsetStore background task: {}", error);
                 PersistTaskHandle::NotStarted
             }
         }

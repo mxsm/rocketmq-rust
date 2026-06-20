@@ -48,6 +48,7 @@ use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
+use crate::runtime::spawn_client_task;
 use crate::trace::trace_constants::TraceConstants;
 use crate::trace::trace_context::TraceContext;
 use crate::trace::trace_data_encoder::TraceDataEncoder;
@@ -510,22 +511,9 @@ fn spawn_trace_task<F>(thread_name: &'static str, task: F) -> RocketMQResult<Tra
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return Ok(TraceTaskHandle::Tokio(handle.spawn(task)));
-    }
-
-    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => thread::Builder::new()
-            .name(thread_name.to_string())
-            .spawn(move || runtime.block_on(task))
-            .map(TraceTaskHandle::Thread)
-            .map_err(|error| {
-                RocketMQError::Internal(format!("failed to spawn {thread_name} background thread: {error}"))
-            }),
-        Err(error) => Err(RocketMQError::Internal(format!(
-            "failed to build {thread_name} runtime: {error}"
-        ))),
-    }
+    spawn_client_task(thread_name, task)
+        .map(TraceTaskHandle::Tokio)
+        .map_err(|error| RocketMQError::Internal(format!("failed to spawn {thread_name} task: {error}")))
 }
 
 // Main worker loop that processes trace contexts in batches.
@@ -802,7 +790,7 @@ mod tests {
         let thread_name = rx
             .recv_timeout(Duration::from_secs(2))
             .expect("trace task should run on fallback runtime");
-        assert_eq!(thread_name, "rocketmq-client-trace-test");
+        assert_eq!(thread_name, "rocketmq-client-fallback");
         handle.abort();
     }
 

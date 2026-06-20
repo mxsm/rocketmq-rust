@@ -19,7 +19,6 @@ use std::future::Future;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -95,6 +94,7 @@ use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
+use crate::runtime::spawn_client_task_on;
 use tokio::task::JoinHandle;
 
 type Topic = CheetahString;
@@ -161,20 +161,7 @@ fn spawn_producer_task<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Some(executor) = executor {
-        drop(executor.spawn(task));
-        return Ok(());
-    }
-
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        drop(handle.spawn(task));
-        return Ok(());
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    thread::Builder::new()
-        .name(thread_name.to_string())
-        .spawn(move || runtime.block_on(task))?;
+    drop(spawn_client_task_on(thread_name, executor, task)?);
     Ok(())
 }
 
@@ -3504,7 +3491,7 @@ mod tests {
         let thread_name = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("fallback producer task should complete");
-        assert_eq!(thread_name, "rocketmq-client-producer-test");
+        assert_eq!(thread_name, "rocketmq-client-fallback");
     }
 
     struct PanicTransactionListener;

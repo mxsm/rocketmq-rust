@@ -403,7 +403,7 @@ impl NameServerRuntime {
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
         let mut name_server_runtime_inner = self.inner.clone();
 
-        self.scheduled_task_manager.add_fixed_rate_task_async(
+        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
             Duration::from_secs(5), // Initial delay
             Duration::from_millis(scan_not_active_broker_interval),
             async move |_ctx| {

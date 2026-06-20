@@ -54,6 +54,7 @@ use crate::authentication::strategy::StatefulAuthenticationStrategy;
 use crate::authentication::strategy::StatelessAuthenticationStrategy;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::config::AuthConfig;
+use crate::runtime_bridge::block_on_sync_bridge;
 
 /// Global instance cache for authentication components
 ///
@@ -376,58 +377,48 @@ fn new_initialized_default_provider(
     config: AuthConfig,
     metadata_service: Option<Arc<dyn Any + Send + Sync>>,
 ) -> RocketMQResult<DefaultAuthenticationProvider> {
-    std::thread::spawn(move || {
-        let mut provider = DefaultAuthenticationProvider::new();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| {
-                RocketMQError::auth_config_invalid(
-                    "authenticationProvider",
-                    format!("Failed to create initialization runtime: {error}"),
-                )
-            })?;
-        runtime
-            .block_on(provider.initialize(config, metadata_service))
-            .map_err(|error| RocketMQError::auth_config_invalid("authenticationProvider", error.to_string()))?;
-        Ok(provider)
-    })
-    .join()
-    .map_err(|_| {
-        RocketMQError::auth_config_invalid(
-            "authenticationProvider",
-            "DefaultAuthenticationProvider initialization panicked",
-        )
-    })?
+    let mut provider = DefaultAuthenticationProvider::new();
+    block_on_sync_bridge(
+        || provider.initialize(config, metadata_service),
+        |error| {
+            RocketMQError::auth_config_invalid(
+                "authenticationProvider",
+                format!("Failed to create initialization runtime: {error}"),
+            )
+        },
+        || {
+            RocketMQError::auth_config_invalid(
+                "authenticationProvider",
+                "DefaultAuthenticationProvider initialization panicked",
+            )
+        },
+    )
+    .map_err(|error| RocketMQError::auth_config_invalid("authenticationProvider", error.to_string()))?;
+    Ok(provider)
 }
 
 fn new_initialized_local_metadata_provider(
     config: AuthConfig,
     metadata_service: Option<Arc<dyn Any + Send + Sync>>,
 ) -> RocketMQResult<LocalAuthenticationMetadataProvider> {
-    std::thread::spawn(move || {
-        let mut provider = LocalAuthenticationMetadataProvider::new();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| {
-                RocketMQError::auth_config_invalid(
-                    "authenticationMetadataProvider",
-                    format!("Failed to create initialization runtime: {error}"),
-                )
-            })?;
-        runtime
-            .block_on(provider.initialize(config, metadata_service))
-            .map_err(|error| RocketMQError::auth_config_invalid("authenticationMetadataProvider", error.to_string()))?;
-        Ok(provider)
-    })
-    .join()
-    .map_err(|_| {
-        RocketMQError::auth_config_invalid(
-            "authenticationMetadataProvider",
-            "LocalAuthenticationMetadataProvider initialization panicked",
-        )
-    })?
+    let mut provider = LocalAuthenticationMetadataProvider::new();
+    block_on_sync_bridge(
+        || provider.initialize(config, metadata_service),
+        |error| {
+            RocketMQError::auth_config_invalid(
+                "authenticationMetadataProvider",
+                format!("Failed to create initialization runtime: {error}"),
+            )
+        },
+        || {
+            RocketMQError::auth_config_invalid(
+                "authenticationMetadataProvider",
+                "LocalAuthenticationMetadataProvider initialization panicked",
+            )
+        },
+    )
+    .map_err(|error| RocketMQError::auth_config_invalid("authenticationMetadataProvider", error.to_string()))?;
+    Ok(provider)
 }
 
 fn is_blank_or_supported(configured: &str, supported: &[&str]) -> bool {
