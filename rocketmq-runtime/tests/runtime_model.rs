@@ -21,6 +21,14 @@ use tokio::sync::oneshot;
 use tokio::sync::Barrier;
 use tokio::sync::Notify;
 
+struct DropCounter(Arc<AtomicUsize>);
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Release);
+    }
+}
+
 #[tokio::test]
 async fn task_group_shutdown_waits_for_completed_tasks() {
     let context = RuntimeContext::from_current("task-group-complete-test");
@@ -112,6 +120,64 @@ async fn task_group_spawn_service_with_handle_remains_tracked() {
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
     assert_eq!(report.completed, 1);
+}
+
+#[tokio::test]
+async fn task_group_wait_task_observes_completion_without_shutdown() {
+    let context = RuntimeContext::from_current("task-group-wait-task-test");
+    let group = context.root_group().child("service");
+    let release = Arc::new(Notify::new());
+    let release_task = release.clone();
+
+    let task_id = group
+        .spawn_service("waited-task", async move {
+            release_task.notified().await;
+        })
+        .unwrap();
+
+    assert!(!group.wait_task(task_id, Duration::from_millis(1)).await);
+    assert_eq!(group.task_count(), 1);
+    release.notify_one();
+    assert!(group.wait_task(task_id, Duration::from_secs(1)).await);
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.completed, 1);
+}
+
+#[tokio::test]
+async fn task_group_abort_task_removes_metadata_and_reports_abort() {
+    let context = RuntimeContext::from_current("task-group-abort-task-test");
+    let group = context.root_group().child("service");
+    let started = Arc::new(Notify::new());
+    let started_task = started.clone();
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let dropped_task = dropped.clone();
+
+    let task_id = group
+        .spawn_service("abortable-task", async move {
+            let _drop_counter = DropCounter(dropped_task);
+            started_task.notify_one();
+            std::future::pending::<()>().await;
+        })
+        .unwrap();
+
+    started.notified().await;
+    assert_eq!(group.task_count(), 1);
+
+    assert!(group.abort_task_and_wait(task_id, Duration::from_secs(1)).await);
+    assert_eq!(group.task_count(), 0);
+    assert_eq!(
+        dropped.load(Ordering::Acquire),
+        1,
+        "abort_task_and_wait should wait until the task future is dropped"
+    );
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.aborted, 1);
+    assert_eq!(report.completed, 0);
+    assert_eq!(report.leaked, 0);
 }
 
 #[tokio::test]
@@ -260,6 +326,35 @@ async fn task_group_rejects_child_creation_after_shutdown() {
         rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
     );
     assert!(late_child.spawn_service("late-task", async {}).is_err());
+}
+
+#[tokio::test]
+async fn task_group_children_with_same_name_keep_distinct_identity() {
+    let context = RuntimeContext::from_current("task-group-duplicate-child-name-test");
+    let group = context.root_group().child("service");
+    let first_child = group.child("duplicate-worker");
+    let second_child = group.child("duplicate-worker");
+
+    assert_ne!(first_child.id(), second_child.id());
+    assert_eq!(first_child.parent_id(), Some(group.id()));
+    assert_eq!(second_child.parent_id(), Some(group.id()));
+    assert_eq!(first_child.name(), second_child.name());
+
+    first_child.spawn_service("first-task", async {}).unwrap();
+    second_child.spawn_service("second-task", async {}).unwrap();
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let report = group.shutdown(Duration::from_secs(1)).await;
+
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.children.len(), 2, "{}", report.to_json());
+    assert!(report.children.iter().all(|child| child.name == "duplicate-worker"));
+    assert_eq!(
+        report.children.iter().map(|child| child.completed).sum::<usize>(),
+        2,
+        "{}",
+        report.to_json()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

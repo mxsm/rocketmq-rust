@@ -60,6 +60,7 @@ pub mod bench_support {
 
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQResult;
+    use rocketmq_runtime::RuntimeHandle;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
 
@@ -212,11 +213,13 @@ pub mod bench_support {
                 .build()
                 .expect("auth sync bridge multi-thread probe runtime should build");
             runtime.block_on(async move {
-                tokio::spawn(async move {
-                    run_sync_bridge_calls(call_count);
-                })
-                .await
-                .expect("auth sync bridge multi-thread probe task should join");
+                let runtime_handle = RuntimeHandle::new(tokio::runtime::Handle::current());
+                runtime_handle
+                    .spawn(async move {
+                        run_sync_bridge_calls(call_count);
+                    })
+                    .await
+                    .expect("auth sync bridge multi-thread probe task should join");
             });
         })
     }
@@ -335,6 +338,18 @@ accounts:
                 shared_runtime_reused: self.shared_runtime_reused.saturating_sub(before.shared_runtime_reused),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn auth_sync_bridge_multi_thread_probe_is_healthy() {
+        let probe = crate::bench_support::run_auth_sync_bridge_multi_thread_probe(8);
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.delta.multi_thread_block_in_place, 8);
+        assert_eq!(probe.delta.current_thread_handoffs, 0);
+        assert_eq!(probe.delta.shared_runtime_acquires, 0);
     }
 }
 

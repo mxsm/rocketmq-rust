@@ -63,10 +63,13 @@ pub mod simple_scheduler {
     use anyhow::anyhow;
     use anyhow::Result;
     use parking_lot::RwLock;
+    use rocketmq_runtime::RuntimeHandle;
+    use rocketmq_runtime::ShutdownReport;
+    use rocketmq_runtime::TaskGroup;
+    use rocketmq_runtime::TaskId as RuntimeTaskId;
+    use rocketmq_runtime::TaskKind;
     use tokio::sync::oneshot;
     use tokio::sync::Semaphore;
-    use tokio::task::JoinHandle;
-    use tokio::task::JoinSet;
     use tokio::time::Duration;
     use tokio::time::Instant;
     use tokio::time::{self};
@@ -90,17 +93,23 @@ pub mod simple_scheduler {
 
     pub struct TaskInfo {
         cancel_token: CancellationToken,
-        handle: JoinHandle<()>,
+        runtime_task_id: RuntimeTaskId,
+        task_group: TaskGroup,
         done: oneshot::Receiver<()>,
     }
 
-    fn spawn_scheduled_task<F>(operation: &'static str, future: F) -> Result<JoinHandle<()>>
+    fn spawn_scheduled_task<F>(
+        task_group: &TaskGroup,
+        operation: &'static str,
+        task_name: String,
+        future: F,
+    ) -> Result<RuntimeTaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|error| anyhow!("{operation} requires a Tokio runtime: {error}"))?;
-        Ok(handle.spawn(future))
+        task_group
+            .spawn_service(task_name, future)
+            .map_err(|error| anyhow!("{operation} failed to spawn scheduled task driver: {error}"))
     }
 
     #[derive(Debug, Clone)]
@@ -129,12 +138,12 @@ pub mod simple_scheduler {
             self.panicked == 0 && self.timed_out == 0
         }
 
-        fn record_join_result(&mut self, result: std::result::Result<(), tokio::task::JoinError>) {
-            match result {
-                Ok(()) => self.completed += 1,
-                Err(error) if error.is_cancelled() => self.aborted += 1,
-                Err(_) => self.panicked += 1,
-            }
+        fn record_completed_driver(&mut self) {
+            self.completed += 1;
+        }
+
+        fn record_aborted_driver(&mut self) {
+            self.aborted += 1;
         }
     }
 
@@ -142,6 +151,8 @@ pub mod simple_scheduler {
     pub struct ScheduledTaskManager {
         tasks: Arc<RwLock<HashMap<TaskId, TaskInfo>>>,
         counter: Arc<AtomicU64>,
+        task_group: Arc<RwLock<Option<TaskGroup>>>,
+        last_task_group_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
     }
 
     impl Default for ScheduledTaskManager {
@@ -155,11 +166,26 @@ pub mod simple_scheduler {
             Self {
                 tasks: Arc::new(RwLock::new(HashMap::new())),
                 counter: Arc::new(AtomicU64::new(0)),
+                task_group: Arc::new(RwLock::new(None)),
+                last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
             }
         }
 
         fn next_id(&self) -> TaskId {
             self.counter.fetch_add(1, Ordering::Relaxed)
+        }
+
+        fn task_group(&self, operation: &'static str) -> Result<TaskGroup> {
+            let mut task_group = self.task_group.write();
+            if let Some(task_group) = task_group.as_ref() {
+                return Ok(task_group.clone());
+            }
+
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|error| anyhow!("{operation} requires a Tokio runtime: {error}"))?;
+            let new_group = TaskGroup::root("rocketmq.simple-scheduled-task-manager", RuntimeHandle::new(handle));
+            *task_group = Some(new_group.clone());
+            Ok(new_group)
         }
 
         /// Adds a fixed-rate scheduled task to the task manager.
@@ -279,138 +305,142 @@ pub mod simple_scheduler {
             let id = self.next_id();
             let token = CancellationToken::new();
             let token_child = token.clone();
+            let task_group = self.task_group("ScheduledTaskManager::add_scheduled_task")?;
 
             let task_fn = ArcMut::new(task_fn);
 
             let (done_tx, done) = oneshot::channel();
-            let handle = spawn_scheduled_task("ScheduledTaskManager::add_scheduled_task", {
-                let mut task_fn = task_fn;
-                async move {
-                    match mode {
-                        ScheduleMode::FixedRate => {
-                            let start = Instant::now() + initial_delay;
-                            let mut ticker = time::interval_at(start, period);
-                            let mut sub_tasks = JoinSet::new();
+            let driver_group = task_group.clone();
+            let run_group = task_group.clone();
+            let runtime_task_id = spawn_scheduled_task(
+                &driver_group,
+                "ScheduledTaskManager::add_scheduled_task",
+                format!("scheduled-task-manager.driver.{id}"),
+                {
+                    let mut task_fn = task_fn;
+                    async move {
+                        match mode {
+                            ScheduleMode::FixedRate => {
+                                let start = Instant::now() + initial_delay;
+                                let mut ticker = time::interval_at(start, period);
 
-                            loop {
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-                                    result = sub_tasks.join_next(), if !sub_tasks.is_empty() => {
-                                        if let Some(Err(e)) = result {
-                                            error!("FixedRate task {} subtask failed to join: {:?}", id, e);
+                                loop {
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            break;
                                         }
-                                    }
-                                    _ = ticker.tick() => {
-                                        // Allow concurrent execution: One subtask per tick
-                                        let mut task_fn = task_fn.clone();
-                                        let child = token_child.clone();
-                                        sub_tasks.spawn(async move {
-                                            // 1) Lock out &mut F, call once to get a future
-                                            let fut = {
-                                                (task_fn)(child)
-                                            };
-                                            // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
-                                            if let Err(e) = fut.await {
-                                                error!("FixedRate task {} failed: {:?}", id, e);
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                            // Cancellation stops new ticks; in-flight runs are drained by joining them.
-                            // If a run does not finish, shutdown_all's timeout aborts this driver.
-                            while sub_tasks.join_next().await.is_some() {}
-                        }
-
-                        ScheduleMode::FixedDelay => {
-                            if !initial_delay.is_zero() {
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        return;
-                                    }
-                                    _ = time::sleep(initial_delay) => {}
-                                }
-                            }
-
-                            loop {
-                                if token_child.is_cancelled() {
-                                    info!("Task {} cancelled gracefully", id);
-                                    break;
-                                }
-
-                                let fut = { (task_fn)(token_child.clone()) };
-                                if let Err(e) = fut.await {
-                                    error!("FixedDelay task {} failed: {:?}", id, e);
-                                }
-
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-                                    _ = time::sleep(period) => {}
-                                }
-                            }
-                        }
-
-                        ScheduleMode::FixedRateNoOverlap => {
-                            let start = Instant::now() + initial_delay;
-                            let mut ticker = time::interval_at(start, period);
-
-                            // Permission=1, controls non-overlapping execution
-                            let gate = Arc::new(Semaphore::new(1));
-                            let mut sub_tasks = JoinSet::new();
-
-                            loop {
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-                                    result = sub_tasks.join_next(), if !sub_tasks.is_empty() => {
-                                        if let Some(Err(e)) = result {
-                                            error!("FixedRateNoOverlap task {} subtask failed to join: {:?}", id, e);
-                                        }
-                                    }
-                                    _ = ticker.tick() => {
-                                        // Try to acquire permission. If unable to acquire, skip the current tick.
-                                        if let Ok(permit) = gate.clone().try_acquire_owned() {
+                                        _ = ticker.tick() => {
+                                            // Allow concurrent execution: One subtask per tick
                                             let mut task_fn = task_fn.clone();
                                             let child = token_child.clone();
-                                            sub_tasks.spawn(async move {
-                                                // Release the lock immediately after generating the future
+                                            if let Err(error) = run_group.spawn(
+                                                format!("scheduled-task-manager.run.{id}"),
+                                                TaskKind::ScheduledRun,
+                                                async move {
+                                                // 1) Lock out &mut F, call once to get a future
                                                 let fut = {
                                                     (task_fn)(child)
                                                 };
+                                                // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
                                                 if let Err(e) = fut.await {
-                                                    error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
+                                                    error!("FixedRate task {} failed: {:?}", id, e);
                                                 }
-                                                drop(permit); // Release the permit after completion
-                                            });
-                                        } else {
-                                            info!("Task {} skipped due to overlap", id);
+                                            }) {
+                                                error!("FixedRate task {} failed to spawn run: {:?}", id, error);
+                                            }
                                         }
                                     }
                                 }
                             }
-                            // Cancellation stops new ticks; in-flight runs are drained by joining them.
-                            // If a run does not finish, shutdown_all's timeout aborts this driver.
-                            while sub_tasks.join_next().await.is_some() {}
+
+                            ScheduleMode::FixedDelay => {
+                                if !initial_delay.is_zero() {
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            return;
+                                        }
+                                        _ = time::sleep(initial_delay) => {}
+                                    }
+                                }
+
+                                loop {
+                                    if token_child.is_cancelled() {
+                                        info!("Task {} cancelled gracefully", id);
+                                        break;
+                                    }
+
+                                    let fut = { (task_fn)(token_child.clone()) };
+                                    if let Err(e) = fut.await {
+                                        error!("FixedDelay task {} failed: {:?}", id, e);
+                                    }
+
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            break;
+                                        }
+                                        _ = time::sleep(period) => {}
+                                    }
+                                }
+                            }
+
+                            ScheduleMode::FixedRateNoOverlap => {
+                                let start = Instant::now() + initial_delay;
+                                let mut ticker = time::interval_at(start, period);
+
+                                // Permission=1, controls non-overlapping execution
+                                let gate = Arc::new(Semaphore::new(1));
+
+                                loop {
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            break;
+                                        }
+                                        _ = ticker.tick() => {
+                                            // Try to acquire permission. If unable to acquire, skip the current tick.
+                                            if let Ok(permit) = gate.clone().try_acquire_owned() {
+                                                let mut task_fn = task_fn.clone();
+                                                let child = token_child.clone();
+                                                if let Err(error) = run_group.spawn(
+                                                    format!("scheduled-task-manager.no-overlap-run.{id}"),
+                                                    TaskKind::ScheduledRun,
+                                                    async move {
+                                                    // Release the lock immediately after generating the future
+                                                    let fut = {
+                                                        (task_fn)(child)
+                                                    };
+                                                    if let Err(e) = fut.await {
+                                                        error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
+                                                    }
+                                                    drop(permit); // Release the permit after completion
+                                                }) {
+                                                    error!(
+                                                        "FixedRateNoOverlap task {} failed to spawn run: {:?}",
+                                                        id, error
+                                                    );
+                                                }
+                                            } else {
+                                                info!("Task {} skipped due to overlap", id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
+                        drop(done_tx);
                     }
-                    drop(done_tx);
-                }
-            })?;
+                },
+            )?;
 
             self.tasks.write().insert(
                 id,
                 TaskInfo {
                     cancel_token: token,
-                    handle,
+                    runtime_task_id,
+                    task_group,
                     done,
                 },
             );
@@ -422,14 +452,14 @@ pub mod simple_scheduler {
         pub fn cancel_task(&self, id: TaskId) {
             if let Some(info) = self.tasks.write().remove(&id) {
                 info.cancel_token.cancel();
-                info.handle.abort();
+                info.task_group.abort_task(info.runtime_task_id);
             }
         }
 
         /// Roughly abort
         pub fn abort_task(&self, id: TaskId) {
             if let Some(info) = self.tasks.write().remove(&id) {
-                info.handle.abort();
+                info.task_group.abort_task(info.runtime_task_id);
             }
         }
 
@@ -438,7 +468,7 @@ pub mod simple_scheduler {
             let mut tasks = self.tasks.write();
             for (_, info) in tasks.drain() {
                 info.cancel_token.cancel();
-                info.handle.abort();
+                info.task_group.abort_task(info.runtime_task_id);
             }
         }
 
@@ -446,7 +476,7 @@ pub mod simple_scheduler {
         pub fn abort_all(&self) {
             let mut tasks = self.tasks.write();
             for (_, info) in tasks.drain() {
-                info.handle.abort();
+                info.task_group.abort_task(info.runtime_task_id);
             }
         }
 
@@ -455,7 +485,9 @@ pub mod simple_scheduler {
                 let mut tasks = self.tasks.write();
                 tasks.drain().collect::<Vec<_>>()
             };
-            Self::shutdown_entries(tasks, timeout).await
+            let report = Self::shutdown_entries(tasks, timeout).await;
+            self.shutdown_task_group(timeout).await;
+            report
         }
 
         pub async fn shutdown_tasks<I>(&self, task_ids: I, timeout: Duration) -> ScheduledShutdownReport
@@ -481,43 +513,31 @@ pub mod simple_scheduler {
                 info.cancel_token.cancel();
             }
 
-            let mut handles = HashMap::with_capacity(tasks.len());
-            let mut completions = JoinSet::new();
-            for (id, info) in tasks {
-                handles.insert(id, info.handle);
-                completions.spawn(async move {
-                    let _ = info.done.await;
-                    id
-                });
-            }
+            for (_, mut info) in tasks {
+                if Self::driver_done(&mut info.done) {
+                    report.record_completed_driver();
+                    continue;
+                }
 
-            while !handles.is_empty() {
                 let remaining = timeout.checked_sub(started.elapsed()).unwrap_or(Duration::ZERO);
-                if remaining.is_zero() {
-                    break;
+                if !remaining.is_zero() && time::timeout(remaining, &mut info.done).await.is_ok() {
+                    report.record_completed_driver();
+                    continue;
                 }
 
-                match time::timeout(remaining, completions.join_next()).await {
-                    Ok(Some(Ok(id))) => {
-                        if let Some(handle) = handles.remove(&id) {
-                            report.record_join_result(handle.await);
-                        }
-                    }
-                    Ok(Some(Err(error))) => {
-                        error!("Scheduled shutdown completion waiter failed: {:?}", error);
-                    }
-                    Ok(None) | Err(_) => break,
+                if Self::driver_done(&mut info.done) {
+                    report.record_completed_driver();
+                    continue;
                 }
-            }
 
-            if !handles.is_empty() {
-                report.timed_out += handles.len();
-                completions.abort_all();
-                while completions.join_next().await.is_some() {}
-
-                for (_, handle) in handles {
-                    handle.abort();
-                    report.record_join_result(handle.await);
+                report.timed_out += 1;
+                let abort_wait = timeout.min(Duration::from_secs(1));
+                if info
+                    .task_group
+                    .abort_task_and_wait(info.runtime_task_id, abort_wait)
+                    .await
+                {
+                    report.record_aborted_driver();
                 }
             }
 
@@ -525,8 +545,33 @@ pub mod simple_scheduler {
             report
         }
 
+        fn driver_done(done: &mut oneshot::Receiver<()>) -> bool {
+            !matches!(done.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+        }
+
         pub fn task_count(&self) -> usize {
             self.tasks.read().len()
+        }
+
+        pub fn driver_task_count(&self) -> usize {
+            self.task_group
+                .read()
+                .as_ref()
+                .map(TaskGroup::task_count)
+                .unwrap_or_default()
+        }
+
+        pub fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
+            self.last_task_group_shutdown_report.read().clone()
+        }
+
+        async fn shutdown_task_group(&self, timeout: Duration) {
+            let task_group = self.task_group.write().take();
+            if let Some(task_group) = task_group {
+                let report = task_group.shutdown(timeout).await;
+                report.log_if_unhealthy();
+                *self.last_task_group_shutdown_report.write() = Some(report);
+            }
         }
     }
 
@@ -648,138 +693,142 @@ pub mod simple_scheduler {
             let id = self.next_id();
             let token = CancellationToken::new();
             let token_child = token.clone();
+            let task_group = self.task_group("ScheduledTaskManager::add_scheduled_task_async")?;
 
             let task_fn = ArcMut::new(task_fn);
 
             let (done_tx, done) = oneshot::channel();
-            let handle = spawn_scheduled_task("ScheduledTaskManager::add_scheduled_task_async", {
-                let mut task_fn = task_fn;
-                async move {
-                    match mode {
-                        ScheduleMode::FixedRate => {
-                            let start = Instant::now() + initial_delay;
-                            let mut ticker = time::interval_at(start, period);
-                            let mut sub_tasks = JoinSet::new();
+            let driver_group = task_group.clone();
+            let run_group = task_group.clone();
+            let runtime_task_id = spawn_scheduled_task(
+                &driver_group,
+                "ScheduledTaskManager::add_scheduled_task_async",
+                format!("scheduled-task-manager.async-driver.{id}"),
+                {
+                    let mut task_fn = task_fn;
+                    async move {
+                        match mode {
+                            ScheduleMode::FixedRate => {
+                                let start = Instant::now() + initial_delay;
+                                let mut ticker = time::interval_at(start, period);
 
-                            loop {
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-                                    result = sub_tasks.join_next(), if !sub_tasks.is_empty() => {
-                                        if let Some(Err(e)) = result {
-                                            error!("FixedRate task {} subtask failed to join: {:?}", id, e);
+                                loop {
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            break;
                                         }
-                                    }
-                                    _ = ticker.tick() => {
-                                        // Allow concurrent execution: One subtask per tick
-                                        let mut task_fn = task_fn.clone();
-                                        let child = token_child.clone();
-                                        sub_tasks.spawn(async move {
-                                            // 1) Lock out &mut F, call once to get a future
-                                            let fut = {
-                                                task_fn(child)
-                                            };
-                                            // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
-                                            if let Err(e) = fut.await {
-                                                error!("FixedRate task {} failed: {:?}", id, e);
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                            // Cancellation stops new ticks; in-flight runs are drained by joining them.
-                            // If a run does not finish, shutdown_all's timeout aborts this driver.
-                            while sub_tasks.join_next().await.is_some() {}
-                        }
-
-                        ScheduleMode::FixedDelay => {
-                            if !initial_delay.is_zero() {
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        return;
-                                    }
-                                    _ = time::sleep(initial_delay) => {}
-                                }
-                            }
-
-                            loop {
-                                if token_child.is_cancelled() {
-                                    info!("Task {} cancelled gracefully", id);
-                                    break;
-                                }
-
-                                let fut = { (task_fn)(token_child.clone()) };
-                                if let Err(e) = fut.await {
-                                    error!("FixedDelay task {} failed: {:?}", id, e);
-                                }
-
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-                                    _ = time::sleep(period) => {}
-                                }
-                            }
-                        }
-
-                        ScheduleMode::FixedRateNoOverlap => {
-                            let start = Instant::now() + initial_delay;
-                            let mut ticker = time::interval_at(start, period);
-
-                            // Permission=1, controls non-overlapping execution
-                            let gate = Arc::new(Semaphore::new(1));
-                            let mut sub_tasks = JoinSet::new();
-
-                            loop {
-                                tokio::select! {
-                                    _ = token_child.cancelled() => {
-                                        info!("Task {} cancelled gracefully", id);
-                                        break;
-                                    }
-                                    result = sub_tasks.join_next(), if !sub_tasks.is_empty() => {
-                                        if let Some(Err(e)) = result {
-                                            error!("FixedRateNoOverlap task {} subtask failed to join: {:?}", id, e);
-                                        }
-                                    }
-                                    _ = ticker.tick() => {
-                                        // Try to acquire permission. If unable to acquire, skip the current tick.
-                                        if let Ok(permit) = gate.clone().try_acquire_owned() {
+                                        _ = ticker.tick() => {
+                                            // Allow concurrent execution: One subtask per tick
                                             let mut task_fn = task_fn.clone();
                                             let child = token_child.clone();
-                                            sub_tasks.spawn(async move {
-                                                // Release the lock immediately after generating the future
+                                            if let Err(error) = run_group.spawn(
+                                                format!("scheduled-task-manager.async-run.{id}"),
+                                                TaskKind::ScheduledRun,
+                                                async move {
+                                                // 1) Lock out &mut F, call once to get a future
                                                 let fut = {
-                                                    (task_fn)(child)
+                                                    task_fn(child)
                                                 };
+                                                // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
                                                 if let Err(e) = fut.await {
-                                                    error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
+                                                    error!("FixedRate task {} failed: {:?}", id, e);
                                                 }
-                                                drop(permit); // Release the permit after completion
-                                            });
-                                        } else {
-                                            info!("Task {} skipped due to overlap", id);
+                                            }) {
+                                                error!("FixedRate task {} failed to spawn async run: {:?}", id, error);
+                                            }
                                         }
                                     }
                                 }
                             }
-                            // Cancellation stops new ticks; in-flight runs are drained by joining them.
-                            // If a run does not finish, shutdown_all's timeout aborts this driver.
-                            while sub_tasks.join_next().await.is_some() {}
+
+                            ScheduleMode::FixedDelay => {
+                                if !initial_delay.is_zero() {
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            return;
+                                        }
+                                        _ = time::sleep(initial_delay) => {}
+                                    }
+                                }
+
+                                loop {
+                                    if token_child.is_cancelled() {
+                                        info!("Task {} cancelled gracefully", id);
+                                        break;
+                                    }
+
+                                    let fut = { (task_fn)(token_child.clone()) };
+                                    if let Err(e) = fut.await {
+                                        error!("FixedDelay task {} failed: {:?}", id, e);
+                                    }
+
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            break;
+                                        }
+                                        _ = time::sleep(period) => {}
+                                    }
+                                }
+                            }
+
+                            ScheduleMode::FixedRateNoOverlap => {
+                                let start = Instant::now() + initial_delay;
+                                let mut ticker = time::interval_at(start, period);
+
+                                // Permission=1, controls non-overlapping execution
+                                let gate = Arc::new(Semaphore::new(1));
+
+                                loop {
+                                    tokio::select! {
+                                        _ = token_child.cancelled() => {
+                                            info!("Task {} cancelled gracefully", id);
+                                            break;
+                                        }
+                                        _ = ticker.tick() => {
+                                            // Try to acquire permission. If unable to acquire, skip the current tick.
+                                            if let Ok(permit) = gate.clone().try_acquire_owned() {
+                                                let mut task_fn = task_fn.clone();
+                                                let child = token_child.clone();
+                                                if let Err(error) = run_group.spawn(
+                                                    format!("scheduled-task-manager.async-no-overlap-run.{id}"),
+                                                    TaskKind::ScheduledRun,
+                                                    async move {
+                                                    // Release the lock immediately after generating the future
+                                                    let fut = {
+                                                        (task_fn)(child)
+                                                    };
+                                                    if let Err(e) = fut.await {
+                                                        error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
+                                                    }
+                                                    drop(permit); // Release the permit after completion
+                                                }) {
+                                                    error!(
+                                                        "FixedRateNoOverlap task {} failed to spawn async run: {:?}",
+                                                        id, error
+                                                    );
+                                                }
+                                            } else {
+                                                info!("Task {} skipped due to overlap", id);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
+                        drop(done_tx);
                     }
-                    drop(done_tx);
-                }
-            })?;
+                },
+            )?;
 
             self.tasks.write().insert(
                 id,
                 TaskInfo {
                     cancel_token: token,
-                    handle,
+                    runtime_task_id,
+                    task_group,
                     done,
                 },
             );
@@ -866,6 +915,7 @@ mod tests {
             .expect("fixed-rate scheduled task should start");
 
         assert_eq!(manager.task_count(), 1);
+        assert_eq!(manager.driver_task_count(), 1);
         manager.cancel_task(task_id);
     }
 
@@ -931,6 +981,7 @@ mod tests {
         }
 
         assert_eq!(manager.task_count(), 3);
+        assert_eq!(manager.driver_task_count(), 3);
         manager.cancel_all();
         assert_eq!(manager.task_count(), 0);
     }
@@ -952,11 +1003,17 @@ mod tests {
         let report = manager.shutdown_all(Duration::from_secs(1)).await;
 
         assert_eq!(manager.task_count(), 0);
+        assert_eq!(manager.driver_task_count(), 0);
         assert_eq!(report.task_count, 3);
         assert_eq!(report.completed, 3);
         assert_eq!(report.aborted, 0);
         assert_eq!(report.timed_out, 0);
         assert!(report.is_healthy());
+        let task_group_report = manager
+            .last_task_group_shutdown_report()
+            .expect("task group shutdown report should be recorded");
+        assert!(task_group_report.is_healthy(), "{}", task_group_report.to_json());
+        assert_eq!(task_group_report.leaked, 0);
     }
 
     #[tokio::test]
@@ -986,11 +1043,18 @@ mod tests {
         assert_eq!(report.timed_out, 0);
         assert!(report.is_healthy());
         assert_eq!(manager.task_count(), 1);
+        assert_eq!(manager.driver_task_count(), 1);
+        assert!(manager.last_task_group_shutdown_report().is_none());
 
         let report = manager.shutdown_all(Duration::from_secs(1)).await;
         assert_eq!(report.task_count, 1);
         assert!(report.is_healthy());
         assert_eq!(manager.task_count(), 0);
+        let task_group_report = manager
+            .last_task_group_shutdown_report()
+            .expect("task group shutdown report should be recorded");
+        assert!(task_group_report.is_healthy(), "{}", task_group_report.to_json());
+        assert_eq!(task_group_report.leaked, 0);
     }
 
     #[tokio::test]

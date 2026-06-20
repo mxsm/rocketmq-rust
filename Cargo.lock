@@ -4468,6 +4468,7 @@ dependencies = [
  "cron",
  "parking_lot",
  "rocketmq-error",
+ "rocketmq-runtime",
  "serde",
  "serde_json",
  "tokio",

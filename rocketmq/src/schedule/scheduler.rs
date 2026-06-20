@@ -13,20 +13,18 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use tokio::runtime::Handle;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskGroup;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
-use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::schedule::executor::ExecutorConfig;
@@ -119,19 +117,18 @@ pub struct TaskScheduler {
     jobs: Arc<RwLock<HashMap<String, ScheduledJob>>>,
     running: Arc<RwLock<bool>>,
     shutdown_notify: Arc<Notify>,
-    scheduler_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
+    scheduler_group: Arc<RwLock<Option<TaskGroup>>>,
+    last_scheduler_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
 }
 
-fn current_scheduler_handle(operation: &'static str) -> SchedulerResult<Handle> {
+fn current_scheduler_handle(operation: &'static str) -> SchedulerResult<RuntimeHandle> {
     tokio::runtime::Handle::try_current()
+        .map(RuntimeHandle::new)
         .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))
 }
 
-fn spawn_scheduler_task<F>(runtime: &Handle, future: F) -> JoinHandle<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    runtime.spawn(future)
+fn scheduler_runtime_error(operation: &'static str, error: rocketmq_runtime::RuntimeError) -> SchedulerError {
+    SchedulerError::SystemError(format!("{operation} failed: {error}"))
 }
 
 impl Default for TaskScheduler {
@@ -154,45 +151,55 @@ impl TaskScheduler {
             jobs: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(false)),
             shutdown_notify: Arc::new(Notify::new()),
-            scheduler_handles: Arc::new(RwLock::new(Vec::new())),
+            scheduler_group: Arc::new(RwLock::new(None)),
+            last_scheduler_shutdown_report: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Start the scheduler
     pub async fn start(&self) -> SchedulerResult<()> {
-        let mut running = self.running.write().await;
-        if *running {
-            return Err(SchedulerError::SystemError("Scheduler is already running".to_string()));
+        {
+            let mut running = self.running.write().await;
+            if *running {
+                return Err(SchedulerError::SystemError("Scheduler is already running".to_string()));
+            }
+            *running = true;
         }
-        *running = true;
 
         info!("Starting task scheduler");
         let runtime = match current_scheduler_handle("TaskScheduler::start") {
             Ok(runtime) => runtime,
             Err(error) => {
-                *running = false;
+                *self.running.write().await = false;
                 return Err(error);
             }
         };
+        let scheduler_group = TaskGroup::root("rocketmq.task-scheduler", runtime);
+        *self.scheduler_group.write().await = Some(scheduler_group.clone());
+        *self.last_scheduler_shutdown_report.write().await = None;
 
-        // Start scheduler threads
-        let mut handles = self.scheduler_handles.write().await;
-
+        // Start scheduler loops under a TaskGroup so shutdown has a reportable lifecycle.
         for i in 0..self.config.max_scheduler_threads {
             let scheduler = self.clone_for_thread();
-            let handle = spawn_scheduler_task(&runtime, async move {
+            if let Err(error) = scheduler_group.spawn_service(format!("task-scheduler.loop.{i}"), async move {
                 scheduler.scheduler_loop(i).await;
-            });
-            handles.push(handle);
+            }) {
+                return self
+                    .abort_failed_start(scheduler_group, scheduler_runtime_error("TaskScheduler::start", error))
+                    .await;
+            }
         }
 
         // Start cleanup thread
         if self.config.enable_persistence {
             let scheduler = self.clone_for_thread();
-            let handle = spawn_scheduler_task(&runtime, async move {
+            if let Err(error) = scheduler_group.spawn_service("task-scheduler.cleanup", async move {
                 scheduler.cleanup_loop().await;
-            });
-            handles.push(handle);
+            }) {
+                return self
+                    .abort_failed_start(scheduler_group, scheduler_runtime_error("TaskScheduler::start", error))
+                    .await;
+            }
         }
 
         info!(
@@ -215,11 +222,7 @@ impl TaskScheduler {
         self.shutdown_notify.notify_waiters();
 
         if was_running {
-            let handles = {
-                let mut handles = self.scheduler_handles.write().await;
-                handles.drain(..).collect::<Vec<_>>()
-            };
-            Self::shutdown_scheduler_handles(handles).await;
+            self.shutdown_scheduler_group().await;
         }
 
         let cancelled = self.executor_pool.shutdown_all(SCHEDULER_SHUTDOWN_TIMEOUT).await;
@@ -229,6 +232,21 @@ impl TaskScheduler {
 
         info!("Task scheduler stopped");
         Ok(())
+    }
+
+    /// Return the most recent TaskGroup shutdown report for scheduler loops.
+    pub async fn last_scheduler_shutdown_report(&self) -> Option<ShutdownReport> {
+        self.last_scheduler_shutdown_report.read().await.clone()
+    }
+
+    /// Return the number of scheduler-loop tasks currently tracked by the scheduler TaskGroup.
+    pub async fn scheduler_task_count(&self) -> usize {
+        self.scheduler_group
+            .read()
+            .await
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default()
     }
 
     /// Schedule a new job
@@ -459,23 +477,21 @@ impl TaskScheduler {
         internal.cleanup_loop().await;
     }
 
-    async fn shutdown_scheduler_handles(handles: Vec<tokio::task::JoinHandle<()>>) {
-        for mut handle in handles {
-            match timeout(SCHEDULER_SHUTDOWN_TIMEOUT, &mut handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if error.is_cancelled() => {}
-                Ok(Err(error)) => {
-                    warn!(?error, "Scheduler task exited with join error");
-                }
-                Err(_) => {
-                    handle.abort();
-                    if let Err(error) = handle.await {
-                        if !error.is_cancelled() {
-                            warn!(?error, "Scheduler task aborted with join error");
-                        }
-                    }
-                }
-            }
+    async fn abort_failed_start(&self, scheduler_group: TaskGroup, error: SchedulerError) -> SchedulerResult<()> {
+        *self.running.write().await = false;
+        self.shutdown_notify.notify_waiters();
+        self.scheduler_group.write().await.take();
+        let report = scheduler_group.shutdown(SCHEDULER_SHUTDOWN_TIMEOUT).await;
+        report.log_if_unhealthy();
+        *self.last_scheduler_shutdown_report.write().await = Some(report);
+        Err(error)
+    }
+
+    async fn shutdown_scheduler_group(&self) {
+        if let Some(scheduler_group) = self.scheduler_group.write().await.take() {
+            let report = scheduler_group.shutdown(SCHEDULER_SHUTDOWN_TIMEOUT).await;
+            report.log_if_unhealthy();
+            *self.last_scheduler_shutdown_report.write().await = Some(report);
         }
     }
 }
@@ -636,14 +652,20 @@ mod tests {
         });
 
         scheduler.start().await.expect("scheduler should start");
-        assert_eq!(scheduler.scheduler_handles.read().await.len(), 2);
+        assert_eq!(scheduler.scheduler_task_count().await, 2);
 
         tokio::time::timeout(Duration::from_millis(500), scheduler.stop())
             .await
             .expect("scheduler stop should not wait for long intervals")
             .expect("scheduler should stop cleanly");
 
-        assert!(scheduler.scheduler_handles.read().await.is_empty());
+        assert!(scheduler.scheduler_group.read().await.is_none());
+        let report = scheduler
+            .last_scheduler_shutdown_report()
+            .await
+            .expect("scheduler shutdown report should exist");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.cancelled, 2);
         assert!(!scheduler.get_status().await.running);
     }
 

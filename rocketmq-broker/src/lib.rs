@@ -65,6 +65,7 @@ pub mod bench_support {
         pub scheduled_shutdown_report: BrokerScheduledShutdownProbe,
         pub remoting_shutdown_elapsed_us: u128,
         pub remoting_shutdown_report: Option<BrokerRemotingShutdownProbe>,
+        pub request_processor_shutdown_report: Option<rocketmq_runtime::ShutdownReport>,
         pub basic_shutdown_elapsed_us: u128,
         pub healthy: bool,
     }
@@ -277,28 +278,30 @@ pub mod bench_support {
         let scheduled_task_count_after_shutdown = runtime.scheduled_task_manager().task_count();
         let scheduled_task_drop_count = dropped.load(Ordering::Acquire);
 
+        let remoting_probe_installed = runtime.install_remoting_server_report_probe();
+        let request_processor_probe_installed = runtime.install_request_processor_task_probe();
         let basic_started_at = Instant::now();
-        tokio::time::timeout(Duration::from_secs(5), runtime.shutdown_basic_service())
-            .await
-            .expect("broker basic service shutdown should be bounded");
+        let basic_shutdown_report =
+            tokio::time::timeout(Duration::from_secs(5), runtime.shutdown_basic_service_with_report())
+                .await
+                .expect("broker basic service shutdown should be bounded");
         let basic_shutdown_elapsed_us = basic_started_at.elapsed().as_micros();
 
         let scheduled_shutdown_report = BrokerScheduledShutdownProbe::from(scheduled_shutdown_report);
-        let remoting_probe_installed = runtime.install_remoting_server_report_probe();
-        let remoting_started_at = Instant::now();
-        let remoting_shutdown_report = if remoting_probe_installed {
-            runtime
-                .shutdown_remoting_servers()
-                .await
-                .map(BrokerRemotingShutdownProbe::from)
-        } else {
-            None
-        };
-        let remoting_shutdown_elapsed_us = remoting_started_at.elapsed().as_micros();
+        let basic_shutdown_healthy = basic_shutdown_report.is_healthy();
+        let remoting_shutdown_report = basic_shutdown_report.remoting.map(BrokerRemotingShutdownProbe::from);
+        let request_processor_shutdown_report = basic_shutdown_report.request_processor;
+        let remoting_shutdown_elapsed_us = basic_shutdown_elapsed_us;
         let healthy = scheduled_shutdown_report.healthy
+            && basic_shutdown_healthy
+            && remoting_probe_installed
             && remoting_shutdown_report
                 .as_ref()
                 .is_some_and(|report| report.healthy && report.server_report_count == 1)
+            && request_processor_probe_installed
+            && request_processor_shutdown_report
+                .as_ref()
+                .is_some_and(rocketmq_runtime::ShutdownReport::is_healthy)
             && scheduled_task_count_before_shutdown == pending_task_count
             && scheduled_task_count_after_shutdown == 0
             && scheduled_task_drop_count == pending_task_count;
@@ -313,6 +316,7 @@ pub mod bench_support {
             scheduled_shutdown_report,
             remoting_shutdown_elapsed_us,
             remoting_shutdown_report,
+            request_processor_shutdown_report,
             basic_shutdown_elapsed_us,
             healthy,
         }
@@ -630,6 +634,16 @@ mod bench_support_tests {
         assert!(remoting_report.healthy, "{probe:?}");
         assert_eq!(remoting_report.server_report_count, 1, "{probe:?}");
         assert!(remoting_report.server_reports_healthy, "{probe:?}");
+        let request_processor_report = probe
+            .request_processor_shutdown_report
+            .as_ref()
+            .expect("broker runtime lifecycle probe should include request processor shutdown report");
+        assert!(
+            request_processor_report.is_healthy(),
+            "{}",
+            request_processor_report.to_json()
+        );
+        assert_eq!(request_processor_report.leaked, 0, "{probe:?}");
     }
 }
 

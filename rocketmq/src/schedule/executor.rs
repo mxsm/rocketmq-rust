@@ -18,9 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
@@ -67,18 +70,36 @@ pub struct ExecutionMetrics {
 pub struct TaskExecutor {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
-    running_tasks: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    running_tasks: Arc<RwLock<HashMap<String, RunningTask>>>,
     metrics: Arc<RwLock<ExecutionMetrics>>,
     executions: Arc<RwLock<HashMap<String, TaskExecution>>>,
+    task_group: Arc<RwLock<Option<TaskGroup>>>,
+    last_task_group_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
 }
 
-fn spawn_executor_task<F>(operation: &'static str, future: F) -> Result<JoinHandle<()>, SchedulerError>
+struct RunningTask {
+    task_id: TaskId,
+    task_group: TaskGroup,
+}
+
+fn new_executor_task_group(operation: &'static str) -> Result<TaskGroup, SchedulerError> {
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))?;
+    Ok(TaskGroup::root("rocketmq.task-executor", RuntimeHandle::new(handle)))
+}
+
+fn spawn_executor_task<F>(
+    task_group: &TaskGroup,
+    operation: &'static str,
+    task_name: String,
+    future: F,
+) -> Result<TaskId, SchedulerError>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))?;
-    Ok(handle.spawn(future))
+    task_group
+        .spawn_service(task_name, future)
+        .map_err(|error| SchedulerError::SystemError(format!("{operation} failed to spawn task execution: {error}")))
 }
 
 impl TaskExecutor {
@@ -91,6 +112,8 @@ impl TaskExecutor {
             running_tasks: Arc::new(RwLock::new(HashMap::new())),
             metrics: Arc::new(RwLock::new(ExecutionMetrics::default())),
             executions: Arc::new(RwLock::new(HashMap::new())),
+            task_group: Arc::new(RwLock::new(None)),
+            last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -110,15 +133,22 @@ impl TaskExecutor {
         let executor = self.clone_for_task();
         let task_clone = task.clone();
         let execution_id_clone = execution_id.clone();
+        let task_group = self.task_group("TaskExecutor::execute_task").await?;
 
         // Spawn the task execution
-        let handle = spawn_executor_task("TaskExecutor::execute_task", async move {
-            executor
-                .run_task_internal(task_clone, execution_id_clone, scheduled_time)
-                .await;
-        })?;
+        let task_id = spawn_executor_task(
+            &task_group,
+            "TaskExecutor::execute_task",
+            format!("task-executor.execution.{execution_id}"),
+            async move {
+                executor
+                    .run_task_internal(task_clone, execution_id_clone, scheduled_time)
+                    .await;
+            },
+        )?;
 
-        self.store_running_task_handle(execution_id.as_str(), handle).await;
+        self.store_running_task(execution_id.as_str(), RunningTask { task_id, task_group })
+            .await;
 
         info!("Task scheduled for execution: {} ({})", task.name, execution_id);
         Ok(execution_id)
@@ -131,12 +161,13 @@ impl TaskExecutor {
             running_tasks.remove(execution_id)
         };
 
-        if let Some(handle) = handle {
-            handle.abort();
-            match handle.await {
-                Ok(()) => {}
-                Err(error) if error.is_cancelled() => {}
-                Err(error) => warn!("Cancelled task {} exited with join error: {}", execution_id, error),
+        if let Some(running_task) = handle {
+            if !running_task
+                .task_group
+                .abort_task_and_wait(running_task.task_id, self.config.default_timeout)
+                .await
+            {
+                warn!("Cancelled task {} did not finish before timeout", execution_id);
             }
 
             self.mark_execution_cancelled(execution_id).await;
@@ -156,18 +187,19 @@ impl TaskExecutor {
         };
 
         let mut cancelled = 0;
-        for (execution_id, mut handle) in handles {
-            handle.abort();
-            match timeout(join_timeout, &mut handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if error.is_cancelled() => {}
-                Ok(Err(error)) => warn!("Shutdown task {} exited with join error: {}", execution_id, error),
-                Err(_) => warn!("Shutdown task {} timed out after abort", execution_id),
+        for (execution_id, running_task) in handles {
+            if !running_task
+                .task_group
+                .abort_task_and_wait(running_task.task_id, join_timeout)
+                .await
+            {
+                warn!("Shutdown task {} timed out after abort", execution_id);
             }
             self.mark_execution_cancelled(execution_id.as_str()).await;
             cancelled += 1;
         }
 
+        self.shutdown_task_group(join_timeout).await;
         cancelled
     }
 
@@ -193,6 +225,19 @@ impl TaskExecutor {
     pub async fn running_task_count(&self) -> usize {
         let running_tasks = self.running_tasks.read().await;
         running_tasks.len()
+    }
+
+    pub async fn task_group_task_count(&self) -> usize {
+        self.task_group
+            .read()
+            .await
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default()
+    }
+
+    pub async fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
+        self.last_task_group_shutdown_report.read().await.clone()
     }
 
     /// Clean up completed executions older than the specified duration
@@ -223,12 +268,23 @@ impl TaskExecutor {
         internal.run_task_internal(task, execution_id, scheduled_time).await;
     }
 
-    async fn store_running_task_handle(&self, execution_id: &str, handle: tokio::task::JoinHandle<()>) {
+    async fn task_group(&self, operation: &'static str) -> Result<TaskGroup, SchedulerError> {
+        let mut task_group = self.task_group.write().await;
+        if let Some(task_group) = task_group.as_ref() {
+            return Ok(task_group.clone());
+        }
+
+        let new_group = new_executor_task_group(operation)?;
+        *task_group = Some(new_group.clone());
+        Ok(new_group)
+    }
+
+    async fn store_running_task(&self, execution_id: &str, running_task: RunningTask) {
         let mut running_tasks = self.running_tasks.write().await;
-        running_tasks.insert(execution_id.to_string(), handle);
+        running_tasks.insert(execution_id.to_string(), running_task);
         if running_tasks
             .get(execution_id)
-            .is_some_and(|handle| handle.is_finished())
+            .is_some_and(|running_task| !running_task.task_group.contains_task(running_task.task_id))
         {
             running_tasks.remove(execution_id);
         }
@@ -239,6 +295,15 @@ impl TaskExecutor {
             execution.cancel();
             let mut executions = self.executions.write().await;
             executions.insert(execution_id.to_string(), execution);
+        }
+    }
+
+    async fn shutdown_task_group(&self, timeout: Duration) {
+        let task_group = self.task_group.write().await.take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(timeout).await;
+            report.log_if_unhealthy();
+            *self.last_task_group_shutdown_report.write().await = Some(report);
         }
     }
 
@@ -269,23 +334,30 @@ impl TaskExecutor {
         let executor = self.clone_for_task();
         let task_clone = task.clone();
         let execution_id_clone = execution_id.clone();
+        let task_group = self.task_group("TaskExecutor::execute_task_with_delay").await?;
 
         // Spawn the delayed task execution
-        let handle = spawn_executor_task("TaskExecutor::execute_task_with_delay", async move {
-            // Wait until actual execution time
-            let now = SystemTime::now();
-            if actual_execution_time > now {
-                if let Ok(delay_duration) = actual_execution_time.duration_since(now) {
-                    tokio::time::sleep(delay_duration).await;
+        let task_id = spawn_executor_task(
+            &task_group,
+            "TaskExecutor::execute_task_with_delay",
+            format!("task-executor.delayed-execution.{execution_id}"),
+            async move {
+                // Wait until actual execution time
+                let now = SystemTime::now();
+                if actual_execution_time > now {
+                    if let Ok(delay_duration) = actual_execution_time.duration_since(now) {
+                        tokio::time::sleep(delay_duration).await;
+                    }
                 }
-            }
 
-            executor
-                .run_task_internal(task_clone, execution_id_clone, actual_execution_time)
-                .await;
-        })?;
+                executor
+                    .run_task_internal(task_clone, execution_id_clone, actual_execution_time)
+                    .await;
+            },
+        )?;
 
-        self.store_running_task_handle(execution_id.as_str(), handle).await;
+        self.store_running_task(execution_id.as_str(), RunningTask { task_id, task_group })
+            .await;
 
         info!(
             "Task scheduled for delayed execution: {} ({}) - delay: {:?}",
@@ -302,7 +374,7 @@ impl TaskExecutor {
 struct TaskExecutorInternal {
     config: ExecutorConfig,
     semaphore: Arc<Semaphore>,
-    running_tasks: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    running_tasks: Arc<RwLock<HashMap<String, RunningTask>>>,
     metrics: Arc<RwLock<ExecutionMetrics>>,
     executions: Arc<RwLock<HashMap<String, TaskExecution>>>,
 }
@@ -470,9 +542,9 @@ mod tests {
     }
 
     #[test]
-    fn executor_task_spawn_without_tokio_runtime_returns_error() {
-        let error = match spawn_executor_task("test-executor-spawn", async {}) {
-            Ok(_) => panic!("spawn_executor_task should fail without an ambient Tokio runtime"),
+    fn executor_task_group_without_tokio_runtime_returns_error() {
+        let error = match new_executor_task_group("test-executor-spawn") {
+            Ok(_) => panic!("new_executor_task_group should fail without an ambient Tokio runtime"),
             Err(error) => error,
         };
 
@@ -483,15 +555,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_running_task_handle_drops_already_finished_handle() {
+    async fn store_running_task_drops_already_finished_task() {
         let executor = TaskExecutor::new(ExecutorConfig::default());
-        let handle = tokio::spawn(async {});
+        let task_group = executor
+            .task_group("test-store-running-task-handle")
+            .await
+            .expect("task group should be available");
+        let task_id = spawn_executor_task(
+            &task_group,
+            "test-store-running-task-handle",
+            "finished-task".to_string(),
+            async {},
+        )
+        .expect("task should spawn");
 
-        while !handle.is_finished() {
+        while task_group.contains_task(task_id) {
             tokio::task::yield_now().await;
         }
 
-        executor.store_running_task_handle("finished-task", handle).await;
+        executor
+            .store_running_task("finished-task", RunningTask { task_id, task_group })
+            .await;
 
         assert_eq!(executor.running_task_count().await, 0);
     }
@@ -519,6 +603,7 @@ mod tests {
             .execute_task(task, SystemTime::now())
             .await
             .expect("task should be scheduled");
+        assert_eq!(executor.task_group_task_count().await, 1);
         tokio::time::timeout(Duration::from_secs(1), async {
             while !started.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
@@ -537,6 +622,7 @@ mod tests {
             "cancel_task should wait until the aborted task future is dropped"
         );
         assert_eq!(executor.running_task_count().await, 0);
+        assert_eq!(executor.task_group_task_count().await, 0);
         let execution = executor
             .get_execution(execution_id.as_str())
             .await
@@ -567,6 +653,7 @@ mod tests {
             .execute_task(task, SystemTime::now())
             .await
             .expect("task should be scheduled");
+        assert_eq!(executor.task_group_task_count().await, 1);
         tokio::time::timeout(Duration::from_secs(1), async {
             while !started.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
@@ -582,6 +669,13 @@ mod tests {
             "shutdown_all should wait until the aborted task future is dropped"
         );
         assert_eq!(executor.running_task_count().await, 0);
+        assert_eq!(executor.task_group_task_count().await, 0);
+        let report = executor
+            .last_task_group_shutdown_report()
+            .await
+            .expect("task group shutdown report should be recorded");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.aborted, 1);
         let execution = executor
             .get_execution(execution_id.as_str())
             .await

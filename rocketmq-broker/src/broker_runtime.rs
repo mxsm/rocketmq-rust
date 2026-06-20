@@ -428,6 +428,21 @@ impl BrokerRemotingServerShutdownReport {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BrokerBasicServiceShutdownReport {
+    pub(crate) remoting: Option<BrokerRemotingServerShutdownReport>,
+    pub(crate) request_processor: Option<ShutdownReport>,
+}
+
+impl BrokerBasicServiceShutdownReport {
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.remoting
+            .as_ref()
+            .is_none_or(BrokerRemotingServerShutdownReport::is_healthy)
+            && self.request_processor.as_ref().is_none_or(ShutdownReport::is_healthy)
+    }
+}
+
 impl Drop for BrokerRuntime {
     fn drop(&mut self) {
         // Abort all scheduled tasks spawned on the current tokio runtime so that their
@@ -675,7 +690,12 @@ impl BrokerRuntime {
     }
 
     pub(crate) async fn shutdown_basic_service(&mut self) {
+        let _ = self.shutdown_basic_service_with_report().await;
+    }
+
+    pub(crate) async fn shutdown_basic_service_with_report(&mut self) -> BrokerBasicServiceShutdownReport {
         self.inner.shutdown.store(true, Ordering::SeqCst);
+        let mut shutdown_report = BrokerBasicServiceShutdownReport::default();
 
         self.unregister_broker().await;
 
@@ -683,8 +703,8 @@ impl BrokerRuntime {
             hook.before_shutdown();
         }
 
-        let _ = self.shutdown_remoting_servers().await;
-        self.shutdown_request_processor_tasks().await;
+        shutdown_report.remoting = self.shutdown_remoting_servers().await;
+        shutdown_report.request_processor = self.shutdown_request_processor_tasks().await;
 
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
@@ -805,6 +825,8 @@ impl BrokerRuntime {
                 warn!("Timed out shutting down message store");
             }
         }
+
+        shutdown_report
     }
 
     async fn shutdown_scheduled_tasks(&self) {
@@ -920,10 +942,37 @@ impl BrokerRuntime {
         true
     }
 
-    async fn shutdown_request_processor_tasks(&mut self) {
-        let Some(task_group) = self.request_processor_task_group.take() else {
-            return;
+    #[doc(hidden)]
+    pub(crate) fn install_request_processor_task_probe(&mut self) -> bool {
+        if self.request_processor_task_group.is_some() {
+            return false;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "failed to install broker request processor task probe outside Tokio runtime"
+                );
+                return false;
+            }
         };
+        let task_group = TaskGroup::root("rocketmq-broker.request-processor.probe", runtime);
+        let shutdown_token = task_group.cancellation_token();
+        if let Err(error) = task_group.spawn_service("broker.request-processor.probe", async move {
+            shutdown_token.cancelled().await;
+        }) {
+            warn!(?error, "failed to spawn broker request processor task probe");
+            return false;
+        }
+
+        self.request_processor_task_group = Some(task_group);
+        true
+    }
+
+    async fn shutdown_request_processor_tasks(&mut self) -> Option<ShutdownReport> {
+        let task_group = self.request_processor_task_group.take()?;
 
         let report = task_group.shutdown(Duration::from_secs(35)).await;
         if !report.is_healthy() {
@@ -932,6 +981,7 @@ impl BrokerRuntime {
                 "Broker request processor shutdown report is unhealthy"
             );
         }
+        Some(report)
     }
 }
 

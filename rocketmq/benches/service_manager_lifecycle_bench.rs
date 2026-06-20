@@ -74,12 +74,13 @@ fn write_service_manager_report_artifact() {
 fn bench_service_manager_lifecycle(criterion: &mut Criterion) {
     write_service_manager_report_artifact();
 
-    criterion.bench_function("rocketmq_service_manager_lifecycle/join_handle_shutdown", |bencher| {
+    criterion.bench_function("rocketmq_service_manager_lifecycle/task_group_shutdown", |bencher| {
         bencher.iter(|| {
             let output = run_lifecycle_probe();
             assert!(output.healthy, "{output:?}");
             black_box(output.task_count_before_shutdown);
             black_box(output.task_count_after_shutdown);
+            black_box(output.task_group_count_after_shutdown);
             black_box(output.shutdown_elapsed_us);
         });
     });

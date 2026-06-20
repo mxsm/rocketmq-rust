@@ -699,14 +699,18 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         tls_runtime,
         ..
     } = listener;
-    if let Some(report) = tls_runtime.shutdown_gracefully(Duration::from_secs(3)).await {
+    let tls_report = tls_runtime.shutdown_gracefully(Duration::from_secs(3)).await;
+    if let Some(report) = tls_report.as_ref() {
         report.log_if_unhealthy();
     }
     drop(notify_shutdown);
     drop(shutdown_complete_tx);
 
     let _ = shutdown_complete_rx.recv().await;
-    let report = task_group.shutdown(Duration::from_secs(30)).await;
+    let mut report = task_group.shutdown(Duration::from_secs(30)).await;
+    if let Some(tls_report) = tls_report {
+        report.children.push(tls_report);
+    }
     report.log_if_unhealthy();
     Some(report)
 }
@@ -766,6 +770,12 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_common::common::server::config::ServerConfig;
+    #[cfg(feature = "tls")]
+    use rocketmq_common::common::tls_config::TlsConfig;
+    #[cfg(feature = "tls")]
+    use rocketmq_common::common::tls_config::TlsMode;
+    #[cfg(feature = "tls")]
+    use rocketmq_common::common::tls_config::TlsServerConfig;
     use tokio::net::TcpStream;
     use tokio::sync::oneshot;
 
@@ -856,5 +866,51 @@ mod tests {
             .expect("server task should not panic")
             .expect("server should return shutdown report");
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn run_shutdown_report_includes_tls_reload_task() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let tls_runtime = TlsServerRuntime::new(TlsConfig {
+            test_mode_enable: true,
+            server: TlsServerConfig {
+                mode: TlsMode::Permissive,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let report = run_with_tls_config_report(
+            listener,
+            async {
+                let _ = shutdown_rx.await;
+            },
+            DefaultRemotingRequestProcessor,
+            None,
+            Vec::new(),
+            None,
+            tls_runtime,
+        );
+        let server_task = tokio::spawn(report);
+
+        let _ = shutdown_tx.send(());
+        let report = tokio::time::timeout(Duration::from_secs(3), server_task)
+            .await
+            .expect("server should shut down before timeout")
+            .expect("server task should not panic")
+            .expect("server should return shutdown report");
+
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let tls_report = report
+            .children
+            .iter()
+            .find(|child| child.name == "rocketmq-remoting.tls")
+            .expect("remoting shutdown report should include tls reload task group");
+        assert!(tls_report.is_healthy(), "{}", tls_report.to_json());
+        assert_eq!(tls_report.leaked, 0, "{}", tls_report.to_json());
     }
 }

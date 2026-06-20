@@ -167,6 +167,34 @@ $jsonArtifacts += Write-JsonArtifact -Name "scheduler.json" -Metrics @{
     required_metrics = @("run_count", "skip_count", "overlap_count", "shutdown_wait_ms")
 }
 
+$jsonArtifacts += Write-JsonArtifact -Name "rocketmq-scheduler-lifecycle.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-rust --bench scheduler_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/rocketmq-scheduler-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "shutdown_elapsed_us", "cancelled", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "rocketmq-service-manager-lifecycle.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-rust --bench service_manager_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/rocketmq-service-manager-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "task_group_count_before_shutdown", "task_group_count_after_shutdown", "task_group_completed", "task_group_cancelled", "shutdown_elapsed_us", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "rocketmq-scheduled-task-manager-lifecycle.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-rust --bench scheduler_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/rocketmq-scheduled-task-manager-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "driver_task_count_before_shutdown", "driver_task_count_after_shutdown", "shutdown_elapsed_us", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "rocketmq-task-executor-lifecycle.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-rust --bench scheduler_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/rocketmq-task-executor-lifecycle-report.json"
+    required_metrics = @("running_task_count_before_shutdown", "task_group_count_before_shutdown", "task_group_count_after_shutdown", "cancelled_by_shutdown", "shutdown_elapsed_us", "healthy")
+}
+
 $jsonArtifacts += Write-JsonArtifact -Name "blocking-executor.json" -Metrics @{
     status = "implemented-benchmark"
     expected_bench = "cargo bench -p rocketmq-runtime --bench blocking_executor_bench"

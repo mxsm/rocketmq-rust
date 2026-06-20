@@ -33,6 +33,7 @@ tokio          = { workspace = true }
 tokio-util     = { workspace = true }
 tracing        = { workspace = true }
 rocketmq-error = { workspace = true }
+rocketmq-runtime = { workspace = true }
 anyhow         = { workspace = true }
 parking_lot    = { workspace = true }
 serde          = { workspace = true }
@@ -49,6 +50,10 @@ serde_json         = { workspace = true }
 
 [[bench]]
 name    = "service_manager_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "scheduler_lifecycle_bench"
 harness = false
 
 [[example]]
