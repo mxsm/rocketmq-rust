@@ -68,10 +68,11 @@ use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbea
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::CommandCustomHeader;
 use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::info;
@@ -88,8 +89,9 @@ pub struct OpenRaftController {
     config: ArcMut<ControllerConfig>,
     /// Raft node manager
     node: Option<Arc<RaftNodeManager>>,
-    /// gRPC server task handle
-    handle: Option<JoinHandle<()>>,
+    /// gRPC server and scheduling task groups
+    task_group: Arc<Mutex<Option<TaskGroup>>>,
+    scan_task_group: Arc<Mutex<Option<TaskGroup>>>,
     /// Shutdown signal sender for gRPC server
     shutdown_tx: Option<oneshot::Sender<()>>,
 
@@ -97,7 +99,6 @@ pub struct OpenRaftController {
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
     first_received_heartbeat_time: Arc<AtomicU64>,
-    scan_task_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl OpenRaftController {
@@ -113,13 +114,73 @@ impl OpenRaftController {
         Self {
             config,
             node: None,
-            handle: None,
+            task_group: Arc::new(Mutex::new(None)),
+            scan_task_group: Arc::new(Mutex::new(None)),
             shutdown_tx: None,
             heartbeat_manager,
             lifecycle_listeners: Arc::new(RwLock::new(Vec::new())),
             scheduling: Arc::new(AtomicBool::new(false)),
             first_received_heartbeat_time: Arc::new(AtomicU64::new(0)),
-            scan_task_handle: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn ensure_task_group(&self) -> RocketMQResult<TaskGroup> {
+        let mut guard = self.task_group.lock();
+        if let Some(task_group) = guard.as_ref() {
+            return Ok(task_group.clone());
+        }
+
+        let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+            rocketmq_error::RocketMQError::Internal(format!("No Tokio runtime for OpenRaft controller tasks: {error}"))
+        })?;
+        let task_group = TaskGroup::root("rocketmq-controller.openraft", RuntimeHandle::new(handle));
+        *guard = Some(task_group.clone());
+        Ok(task_group)
+    }
+
+    fn start_scan_task_group(&self) -> RocketMQResult<TaskGroup> {
+        let mut guard = self.scan_task_group.lock();
+        if let Some(task_group) = guard.take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "OpenRaft scan task shutdown report is unhealthy before restart"
+                );
+            }
+        }
+
+        let task_group = self
+            .ensure_task_group()?
+            .child("controller.openraft.scan-not-active-broker");
+        *guard = Some(task_group.clone());
+        Ok(task_group)
+    }
+
+    fn stop_scan_task_group(&self) {
+        if let Some(task_group) = self.scan_task_group.lock().take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                tracing::warn!(
+                    report = %report.to_json(),
+                    "OpenRaft scan task shutdown report is unhealthy"
+                );
+            }
+        }
+    }
+
+    async fn shutdown_task_group(&self) {
+        let task_group = self.task_group.lock().take();
+        let Some(task_group) = task_group else {
+            return;
+        };
+
+        let report = task_group.shutdown(Duration::from_secs(10)).await;
+        if !report.is_healthy() {
+            tracing::warn!(
+                report = %report.to_json(),
+                "OpenRaft controller task shutdown report is unhealthy"
+            );
         }
     }
 
@@ -426,27 +487,37 @@ impl Controller for OpenRaftController {
                 "Failed to bind OpenRaft gRPC server for node {node_id} on {addr}: {error}"
             ))
         })?;
+        let task_group = self.ensure_task_group()?;
+        let shutdown_token = task_group.cancellation_token();
 
-        let handle = tokio::spawn(async move {
-            info!("gRPC server starting for node {} on {}", node_id, addr);
+        task_group
+            .spawn_service("controller.openraft.grpc-server", async move {
+                info!("gRPC server starting for node {} on {}", node_id, addr);
 
-            let result = Server::builder()
-                .add_service(OpenRaftServiceServer::new(service))
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
-                    shutdown_rx.await.ok();
-                    info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
-                })
-                .await;
+                let result = Server::builder()
+                    .add_service(OpenRaftServiceServer::new(service))
+                    .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                        tokio::select! {
+                            _ = shutdown_rx => {}
+                            _ = shutdown_token.cancelled() => {}
+                        }
+                        info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
+                    })
+                    .await;
 
-            if let Err(e) = result {
-                eprintln!("gRPC server error for node {}: {}", node_id, e);
-            } else {
-                info!("gRPC server for node {} stopped gracefully", node_id);
-            }
-        });
+                if let Err(e) = result {
+                    eprintln!("gRPC server error for node {}: {}", node_id, e);
+                } else {
+                    info!("gRPC server for node {} stopped gracefully", node_id);
+                }
+            })
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "Failed to spawn OpenRaft gRPC server task for node {node_id}: {error}"
+                ))
+            })?;
 
         self.node = Some(node);
-        self.handle = Some(handle);
         self.shutdown_tx = Some(shutdown_tx);
 
         info!("OpenRaft controller started successfully");
@@ -457,9 +528,7 @@ impl Controller for OpenRaftController {
         info!("Shutting down OpenRaft controller");
 
         self.scheduling.store(false, Ordering::Release);
-        if let Some(handle) = self.scan_task_handle.lock().take() {
-            handle.abort();
-        }
+        self.stop_scan_task_group();
 
         // Take and send shutdown signal to gRPC server
         if let Some(tx) = self.shutdown_tx.take() {
@@ -479,20 +548,7 @@ impl Controller for OpenRaftController {
             }
         }
 
-        // Wait for server task to complete (with timeout)
-        if let Some(handle) = self.handle.take() {
-            let timeout = tokio::time::Duration::from_secs(10);
-            let mut handle = handle;
-            match tokio::time::timeout(timeout, &mut handle).await {
-                Ok(Ok(_)) => info!("Server task completed successfully"),
-                Ok(Err(e)) => eprintln!("Server task panicked: {}", e),
-                Err(_) => {
-                    eprintln!("Timeout waiting for server task to complete");
-                    handle.abort();
-                    let _ = handle.await;
-                }
-            }
-        }
+        self.shutdown_task_group().await;
 
         info!("OpenRaft controller shutdown completed");
         Ok(())
@@ -511,58 +567,73 @@ impl Controller for OpenRaftController {
         let listeners = self.lifecycle_listeners.clone();
         let scheduling = self.scheduling.clone();
         let first_received_heartbeat_time = self.first_received_heartbeat_time.clone();
-        let handle = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(2000)).await;
-            let mut interval =
-                tokio::time::interval(Duration::from_millis(config.scan_not_active_broker_interval.max(1)));
-
-            loop {
-                interval.tick().await;
-                if !scheduling.load(Ordering::Acquire) {
-                    break;
+        let scan_task_group = self.start_scan_task_group()?;
+        let shutdown_token = scan_task_group.cancellation_token();
+        scan_task_group
+            .spawn_service("controller.openraft.scan-not-active-broker", async move {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        return;
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(2000)) => {}
                 }
+                let mut interval =
+                    tokio::time::interval(Duration::from_millis(config.scan_not_active_broker_interval.max(1)));
 
-                use openraft::async_runtime::WatchReceiver;
-                let metrics = node.raft().metrics().borrow_watched().clone();
-                if metrics.current_leader != Some(config.node_id) {
-                    continue;
-                }
+                loop {
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            break;
+                        }
+                        _ = interval.tick() => {}
+                    }
+                    if !scheduling.load(Ordering::Acquire) {
+                        break;
+                    }
 
-                let first_heartbeat = first_received_heartbeat_time.load(Ordering::Acquire);
-                let now_millis = current_millis();
-                if first_heartbeat == 0 || now_millis < first_heartbeat.saturating_add(config.raft_scan_wait_timeout_ms)
-                {
-                    continue;
-                }
+                    use openraft::async_runtime::WatchReceiver;
+                    let metrics = node.raft().metrics().borrow_watched().clone();
+                    if metrics.current_leader != Some(config.node_id) {
+                        continue;
+                    }
 
-                match Self::scan_not_active_broker_once(node.clone(), now_millis).await {
-                    Ok(inactive_brokers) => {
-                        for broker_identity in inactive_brokers {
-                            for listener in listeners.read().iter() {
-                                listener.on_broker_inactive(
-                                    Some(broker_identity.cluster_name.as_str()),
-                                    broker_identity.broker_name.as_str(),
-                                    broker_identity.broker_id.map(|broker_id| broker_id as i64),
-                                );
+                    let first_heartbeat = first_received_heartbeat_time.load(Ordering::Acquire);
+                    let now_millis = current_millis();
+                    if first_heartbeat == 0
+                        || now_millis < first_heartbeat.saturating_add(config.raft_scan_wait_timeout_ms)
+                    {
+                        continue;
+                    }
+
+                    match Self::scan_not_active_broker_once(node.clone(), now_millis).await {
+                        Ok(inactive_brokers) => {
+                            for broker_identity in inactive_brokers {
+                                for listener in listeners.read().iter() {
+                                    listener.on_broker_inactive(
+                                        Some(broker_identity.cluster_name.as_str()),
+                                        broker_identity.broker_name.as_str(),
+                                        broker_identity.broker_id.map(|broker_id| broker_id as i64),
+                                    );
+                                }
                             }
                         }
-                    }
-                    Err(error) => {
-                        tracing::warn!("Failed to run replicated broker inactive scan: {}", error);
+                        Err(error) => {
+                            tracing::warn!("Failed to run replicated broker inactive scan: {}", error);
+                        }
                     }
                 }
-            }
-        });
-
-        *self.scan_task_handle.lock() = Some(handle);
+            })
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "Failed to spawn OpenRaft active broker scan task: {error}"
+                ))
+            })?;
         Ok(())
     }
 
     async fn stop_scheduling(&self) -> RocketMQResult<()> {
         self.scheduling.store(false, Ordering::Release);
-        if let Some(handle) = self.scan_task_handle.lock().take() {
-            handle.abort();
-        }
+        self.stop_scan_task_group();
         Ok(())
     }
 

@@ -21,8 +21,9 @@ use std::time::Duration;
 use dashmap::DashMap;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
-use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -69,8 +70,8 @@ pub struct DefaultBrokerHeartbeatManager {
     /// Registered lifecycle listeners (initialized before start, immutable afterward)
     lifecycle_listeners: Vec<Arc<dyn BrokerLifecycleListener>>,
 
-    /// Background scan task handle
-    scan_task_handle: Option<JoinHandle<()>>,
+    /// Background scan task group
+    scan_task_group: Option<TaskGroup>,
 
     /// Scan interval in milliseconds
     scan_interval_ms: u64,
@@ -88,7 +89,7 @@ impl DefaultBrokerHeartbeatManager {
             config,
             broker_live_table: Arc::new(DashMap::with_capacity(256)),
             lifecycle_listeners: Vec::new(),
-            scan_task_handle: None,
+            scan_task_group: None,
             scan_interval_ms,
         }
     }
@@ -155,7 +156,7 @@ impl DefaultBrokerHeartbeatManager {
     }
 
     /// Notify listeners that a broker is inactive
-    async fn notify_broker_inactive(
+    fn notify_broker_inactive(
         listeners: Arc<Vec<Arc<dyn BrokerLifecycleListener>>>,
         cluster_name: &str,
         broker_name: &str,
@@ -238,28 +239,61 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
     }
 
     fn start(&mut self) {
+        if self.scan_task_group.is_some() {
+            warn!("DefaultBrokerHeartbeatManager background scan already started");
+            return;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    ?error,
+                    "failed to start DefaultBrokerHeartbeatManager outside Tokio runtime"
+                );
+                return;
+            }
+        };
+
         let broker_live_table = self.broker_live_table.clone();
         let listeners = Arc::new(self.lifecycle_listeners.clone());
         let scan_interval_ms = self.scan_interval_ms;
+        let task_group = TaskGroup::root("rocketmq-controller.heartbeat", runtime);
+        let shutdown_token = task_group.cancellation_token();
 
-        let handle = tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("controller.heartbeat.scan-not-active-broker", async move {
             let mut interval = tokio::time::interval(Duration::from_millis(scan_interval_ms));
             // Skip the first tick (fires immediately)
             interval.tick().await;
 
             loop {
-                interval.tick().await;
-                Self::scan_not_active_broker(broker_live_table.clone(), listeners.clone()).await;
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        return;
+                    }
+                    _ = interval.tick() => {
+                        Self::scan_not_active_broker(broker_live_table.clone(), listeners.clone()).await;
+                    }
+                }
             }
-        });
+        }) {
+            warn!(?error, "failed to spawn DefaultBrokerHeartbeatManager scan task");
+            return;
+        }
 
-        self.scan_task_handle = Some(handle);
+        self.scan_task_group = Some(task_group);
         info!("DefaultBrokerHeartbeatManager background scan started");
     }
 
     fn shutdown(&mut self) {
-        if let Some(handle) = self.scan_task_handle.take() {
-            handle.abort();
+        if let Some(task_group) = self.scan_task_group.take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "DefaultBrokerHeartbeatManager shutdown report is unhealthy"
+                );
+            }
             info!("DefaultBrokerHeartbeatManager background scan stopped");
         }
     }
@@ -301,9 +335,7 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
 
             if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
                 let listeners = Arc::new(self.lifecycle_listeners.clone());
-                tokio::spawn(async move {
-                    Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id).await;
-                });
+                Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id);
             }
         }
     }

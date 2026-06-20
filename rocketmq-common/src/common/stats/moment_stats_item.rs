@@ -18,9 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use tokio::task;
+use parking_lot::Mutex;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use tokio::time;
 use tracing::info;
+use tracing::warn;
 
 use crate::TimeUtils::current_millis;
 use crate::UtilAll::compute_next_minutes_time_millis;
@@ -30,6 +33,7 @@ pub struct MomentStatsItem {
     value: Arc<AtomicI64>,
     stats_name: String,
     stats_key: String,
+    task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
 
 impl MomentStatsItem {
@@ -38,24 +42,78 @@ impl MomentStatsItem {
             value: Arc::new(AtomicI64::new(0)),
             stats_name,
             stats_key,
+            task_group: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn init(self: Arc<Self>) {
-        let self_clone = self;
-        tokio::spawn(async move {
+        if self.task_group.lock().is_some() {
+            warn!(
+                "[{}] [{}] MomentStatsItem already initialized",
+                self.stats_name, self.stats_key
+            );
+            return;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(
+                    "[{}] [{}] failed to initialize MomentStatsItem outside Tokio runtime: {}",
+                    self.stats_name, self.stats_key, error
+                );
+                return;
+            }
+        };
+        let task_group = TaskGroup::root(
+            format!("rocketmq-common.moment-stats.{}.{}", self.stats_name, self.stats_key),
+            runtime,
+        );
+        let shutdown_token = task_group.cancellation_token();
+        let self_clone = self.clone();
+        if let Err(error) = task_group.spawn_service("common.moment-stats.print", async move {
             let initial_delay = Duration::from_millis(
                 (compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs(),
             );
-            time::sleep(initial_delay).await;
-            let interval = time::interval(Duration::from_secs(300));
-            tokio::pin!(interval);
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    return;
+                }
+                _ = time::sleep(initial_delay) => {}
+            }
+            let mut interval = time::interval(Duration::from_secs(300));
             loop {
-                interval.as_mut().tick().await;
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {
+                        break;
+                    }
+                    _ = interval.tick() => {}
+                }
                 self_clone.print_at_minutes();
                 self_clone.value.store(0, Ordering::Relaxed);
             }
-        });
+        }) {
+            warn!(
+                "[{}] [{}] failed to spawn MomentStatsItem task: {}",
+                self.stats_name, self.stats_key, error
+            );
+            return;
+        }
+        *self.task_group.lock() = Some(task_group);
+    }
+
+    pub fn shutdown(&self) {
+        if let Some(task_group) = self.task_group.lock().take() {
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "[{}] [{}] MomentStatsItem shutdown report is unhealthy",
+                    self.stats_name,
+                    self.stats_key
+                );
+            }
+        }
     }
 
     pub fn print_at_minutes(&self) {

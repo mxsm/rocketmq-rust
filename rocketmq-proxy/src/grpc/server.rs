@@ -21,6 +21,9 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+
 use crate::config::ProxyConfig;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
@@ -44,21 +47,29 @@ where
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let shutdown_signal = shutdown_tx.clone();
     let housekeeping_service = service.clone();
-    tokio::spawn(async move {
-        let mut shutdown_rx = shutdown_rx;
-        housekeeping_service
-            .run_housekeeping_until(async move {
-                loop {
-                    if *shutdown_rx.borrow() {
-                        break;
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| ProxyError::Transport {
+        message: format!("proxy gRPC server has no Tokio runtime for housekeeping task: {error}"),
+    })?;
+    let task_group = TaskGroup::root("rocketmq-proxy.grpc-server", RuntimeHandle::new(runtime));
+    task_group
+        .spawn_service("proxy.grpc.housekeeping", async move {
+            let mut shutdown_rx = shutdown_rx;
+            housekeeping_service
+                .run_housekeeping_until(async move {
+                    loop {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                        if shutdown_rx.changed().await.is_err() {
+                            break;
+                        }
                     }
-                    if shutdown_rx.changed().await.is_err() {
-                        break;
-                    }
-                }
-            })
-            .await;
-    });
+                })
+                .await;
+        })
+        .map_err(|error| ProxyError::Transport {
+            message: format!("proxy gRPC server failed to spawn housekeeping task: {error}"),
+        })?;
     let service = MessagingServiceServer::new(service)
         .max_decoding_message_size(config.grpc.max_decoding_message_size)
         .max_encoding_message_size(config.grpc.max_encoding_message_size);
@@ -73,6 +84,13 @@ where
         })
         .await;
     let _ = shutdown_tx.send(true);
+    let report = task_group.shutdown(std::time::Duration::from_secs(10)).await;
+    if !report.is_healthy() {
+        tracing::warn!(
+            report = %report.to_json(),
+            "Proxy gRPC server task shutdown report is unhealthy"
+        );
+    }
 
     result.map_err(|error| ProxyError::Transport {
         message: format!("proxy gRPC server failed: {error}"),

@@ -220,7 +220,7 @@ impl BrokerOuterAPI {
         compressed: bool,
         heartbeat_timeout_millis: Option<i64>,
         _broker_identity: BrokerIdentity,
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        _broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     ) -> Vec<RegisterBrokerResult> {
         let mut name_server_address_list = self.remoting_client.get_available_name_srv_list();
         if name_server_address_list.is_empty() {
@@ -247,33 +247,22 @@ impl BrokerOuterAPI {
                 compressed,
             );
 
-            let mut handle_vec = Vec::with_capacity(name_server_address_list.len());
-            for namesrv_addr in name_server_address_list.iter() {
+            let broker_outer_api = self;
+            let futures = name_server_address_list.iter().map(|namesrv_addr| {
                 let cloned_body = register_request.body.clone();
                 let cloned_header = register_request.header.clone();
                 let addr = namesrv_addr.clone();
-                let broker_runtime_inner_ = broker_runtime_inner.clone();
-                let join_handle = tokio::spawn(async move {
-                    broker_runtime_inner_
-                        .broker_outer_api()
+                async move {
+                    broker_outer_api
                         .register_broker(&addr, oneway, timeout_mills, cloned_header, cloned_body)
                         .await
-                });
-                handle_vec.push(join_handle);
-            }
-            while let Some(handle) = handle_vec.pop() {
-                let result = tokio::join!(handle);
-                match result.0 {
-                    Ok(value) => {
-                        if let Some(v) = value {
-                            register_broker_result_list.push(v);
-                        } else {
-                            error!("Register broker to name remoting_server error");
-                        }
-                    }
-                    Err(e) => {
-                        error!("Register broker to name remoting_server error, error={}", e);
-                    }
+                }
+            });
+            for value in futures::future::join_all(futures).await {
+                if let Some(v) = value {
+                    register_broker_result_list.push(v);
+                } else {
+                    error!("Register broker to name remoting_server error");
                 }
             }
         }
@@ -351,18 +340,13 @@ impl BrokerOuterAPI {
     ) {
         let request = Self::create_request(broker_name, topic_config);
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
-        let mut handle_vec = Vec::with_capacity(name_server_address_list.len());
-        for namesrv_addr in name_server_address_list.iter() {
+        let futures = name_server_address_list.iter().map(|namesrv_addr| {
             let cloned_request = request.clone();
             let addr = namesrv_addr.clone();
             let client = self.remoting_client.clone();
-            let join_handle =
-                tokio::spawn(async move { client.invoke_request(Some(&addr), cloned_request, timeout_mills).await });
-            handle_vec.push(join_handle);
-        }
-        while let Some(handle) = handle_vec.pop() {
-            let _result = tokio::join!(handle);
-        }
+            async move { client.invoke_request(Some(&addr), cloned_request, timeout_mills).await }
+        });
+        let _ = futures::future::join_all(futures).await;
     }
 
     pub fn shutdown(&mut self) {
@@ -408,23 +392,20 @@ impl BrokerOuterAPI {
         };
 
         // Parallel heartbeat to all NameServers
-        let handles: Vec<_> = name_server_address_list
-            .iter()
-            .map(|namesrv_addr| {
-                let addr = namesrv_addr.clone();
-                let header = request_header.clone();
-                let client = self.remoting_client.clone();
+        let futures = name_server_address_list.iter().map(|namesrv_addr| {
+            let addr = namesrv_addr.clone();
+            let header = request_header.clone();
+            let client = self.remoting_client.clone();
 
-                tokio::spawn(async move {
-                    let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, header);
+            async move {
+                let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, header);
 
-                    client.invoke_request_oneway(&addr, request, timeout_millis).await;
-                    debug!("Send heartbeat to name server {} success", addr);
-                })
-            })
-            .collect();
+                client.invoke_request_oneway(&addr, request, timeout_millis).await;
+                debug!("Send heartbeat to name server {} success", addr);
+            }
+        });
 
-        let _ = futures::future::join_all(handles).await;
+        futures::future::join_all(futures).await;
     }
 
     /// Send heartbeat with data version to name servers
@@ -461,25 +442,22 @@ impl BrokerOuterAPI {
             }
         };
 
-        let handles: Vec<_> = name_server_address_list
-            .iter()
-            .map(|namesrv_addr| {
-                let addr = namesrv_addr.clone();
-                let header = request_header.clone();
-                let body_clone = body.clone();
-                let client = self.remoting_client.clone();
+        let futures = name_server_address_list.iter().map(|namesrv_addr| {
+            let addr = namesrv_addr.clone();
+            let header = request_header.clone();
+            let body_clone = body.clone();
+            let client = self.remoting_client.clone();
 
-                tokio::spawn(async move {
-                    let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
-                    request.set_body_mut_ref(bytes::Bytes::from(body_clone));
+            async move {
+                let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
+                request.set_body_mut_ref(bytes::Bytes::from(body_clone));
 
-                    client.invoke_request_oneway(&addr, request, timeout_millis).await;
-                    debug!("Send heartbeat via data version to {} success", addr);
-                })
-            })
-            .collect();
+                client.invoke_request_oneway(&addr, request, timeout_millis).await;
+                debug!("Send heartbeat via data version to {} success", addr);
+            }
+        });
 
-        let _ = futures::future::join_all(handles).await;
+        futures::future::join_all(futures).await;
     }
 
     /// Check if broker needs to register to name servers
@@ -521,63 +499,60 @@ impl BrokerOuterAPI {
             .data_version()
             .clone();
 
-        let handles: Vec<_> = name_server_address_list
-            .iter()
-            .map(|namesrv_addr| {
-                let addr = namesrv_addr.clone();
-                let header = QueryDataVersionRequestHeader {
-                    cluster_name: cluster_name.clone(),
-                    broker_addr: broker_addr.clone(),
-                    broker_name: broker_name.clone(),
-                    broker_id,
-                };
-                let body = data_version_body.clone();
-                let client = self.remoting_client.clone();
-                let local_version = local_data_version.clone();
+        let futures = name_server_address_list.iter().map(|namesrv_addr| {
+            let addr = namesrv_addr.clone();
+            let header = QueryDataVersionRequestHeader {
+                cluster_name: cluster_name.clone(),
+                broker_addr: broker_addr.clone(),
+                broker_name: broker_name.clone(),
+                broker_id,
+            };
+            let body = data_version_body.clone();
+            let client = self.remoting_client.clone();
+            let local_version = local_data_version.clone();
 
-                tokio::spawn(async move {
-                    let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
-                    request.set_body_mut_ref(bytes::Bytes::from(body));
+            async move {
+                let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
+                request.set_body_mut_ref(bytes::Bytes::from(body));
 
-                    match client.invoke_request(Some(&addr), request, timeout_millis).await {
-                        Ok(response) => match ResponseCode::from(response.code()) {
-                            ResponseCode::Success => {
-                                if let Ok(response_header) =
-                                    response.decode_command_custom_header::<QueryDataVersionResponseHeader>()
-                                {
-                                    // If name server explicitly indicates changed
-                                    if response_header.changed() {
-                                        return Some(true);
-                                    }
-
-                                    // Compare data versions
-                                    if let Some(body) = response.body() {
-                                        if let Ok(ns_data_version) = DataVersion::decode(body.as_ref()) {
-                                            return Some(local_version != ns_data_version);
-                                        }
-                                    }
-
-                                    Some(false)
-                                } else {
-                                    Some(true)
+                match client.invoke_request(Some(&addr), request, timeout_millis).await {
+                    Ok(response) => match ResponseCode::from(response.code()) {
+                        ResponseCode::Success => {
+                            if let Ok(response_header) =
+                                response.decode_command_custom_header::<QueryDataVersionResponseHeader>()
+                            {
+                                // If name server explicitly indicates changed
+                                if response_header.changed() {
+                                    return Some(true);
                                 }
-                            }
-                            _ => {
-                                warn!("Query data version from {} failed: {:?}", addr, response.code());
+
+                                // Compare data versions
+                                if let Some(body) = response.body() {
+                                    if let Ok(ns_data_version) = DataVersion::decode(body.as_ref()) {
+                                        return Some(local_version != ns_data_version);
+                                    }
+                                }
+
+                                Some(false)
+                            } else {
                                 Some(true)
                             }
-                        },
-                        Err(e) => {
-                            error!("Query data version from {} error: {}", addr, e);
+                        }
+                        _ => {
+                            warn!("Query data version from {} failed: {:?}", addr, response.code());
                             Some(true)
                         }
+                    },
+                    Err(e) => {
+                        error!("Query data version from {} error: {}", addr, e);
+                        Some(true)
                     }
-                })
-            })
-            .collect();
+                }
+            }
+        });
 
-        let results = futures::future::join_all(handles).await;
-        results.into_iter().filter_map(|r| r.ok().flatten()).collect()
+        let results = futures::future::join_all(futures).await;
+        results.into_iter().flatten().collect()
     }
 
     /// Get maximum offset of a message queue
@@ -1234,13 +1209,10 @@ impl BrokerOuterAPI {
             heartbeat_timeout_mills: heartbeat_timeout_millis,
             election_priority,
         };
-        let client = self.remoting_client.clone();
-        tokio::spawn(async move {
-            let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, request_header);
-            client
-                .invoke_request_oneway(&controller_address, request, timeout_millis)
-                .await;
-        });
+        let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, request_header);
+        self.remoting_client
+            .invoke_request_oneway(&controller_address, request, timeout_millis)
+            .await;
     }
 
     pub async fn send_heartbeat_to_controller_sync(

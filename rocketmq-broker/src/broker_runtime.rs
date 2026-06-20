@@ -393,6 +393,7 @@ pub(crate) struct BrokerRuntime {
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     scheduled_task_manager: ScheduledTaskManager,
     remoting_server_task_group: Option<TaskGroup>,
+    request_processor_task_group: Option<TaskGroup>,
 }
 
 impl Drop for BrokerRuntime {
@@ -575,6 +576,7 @@ impl BrokerRuntime {
             consumer_ids_change_listener,
             scheduled_task_manager,
             remoting_server_task_group: None,
+            request_processor_task_group: None,
         }
     }
 
@@ -647,6 +649,7 @@ impl BrokerRuntime {
         }
 
         self.shutdown_remoting_servers().await;
+        self.shutdown_request_processor_tasks().await;
 
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
@@ -715,6 +718,9 @@ impl BrokerRuntime {
         if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_mut() {
             transactional_message_check_service.shutdown().await;
         }
+        if let Some(transactional_message_check_listener) = self.inner.transactional_message_check_listener.as_ref() {
+            transactional_message_check_listener.shutdown().await;
+        }
         if let Some(transaction_metrics_flush_service) = self.inner.transaction_metrics_flush_service.as_mut() {
             transaction_metrics_flush_service.shutdown();
         }
@@ -780,6 +786,20 @@ impl BrokerRuntime {
             warn!(
                 report = %report.to_json(),
                 "Broker remoting server shutdown report is unhealthy"
+            );
+        }
+    }
+
+    async fn shutdown_request_processor_tasks(&mut self) {
+        let Some(task_group) = self.request_processor_task_group.take() else {
+            return;
+        };
+
+        let report = task_group.shutdown(Duration::from_secs(35)).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "Broker request processor shutdown report is unhealthy"
             );
         }
     }
@@ -1258,6 +1278,26 @@ impl BrokerRuntime {
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
         let mut broker_request_processor = BrokerRequestProcessor::new();
+        let request_processor_task_group =
+            self.request_processor_task_group
+                .clone()
+                .or_else(|| match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => Some(TaskGroup::root(
+                        "rocketmq-broker.request-processor",
+                        RuntimeHandle::new(handle),
+                    )),
+                    Err(error) => {
+                        warn!(
+                            ?error,
+                            "failed to initialize broker request processor task group outside Tokio runtime"
+                        );
+                        None
+                    }
+                });
+        if let Some(task_group) = request_processor_task_group.clone() {
+            broker_request_processor.set_request_task_group(task_group);
+        }
+        self.request_processor_task_group = request_processor_task_group;
         if let Some(auth_runtime) = &self.inner.auth_runtime {
             broker_request_processor.set_auth_runtime(auth_runtime.clone());
         }
@@ -3969,26 +4009,32 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .as_ref()
             .map(|message_store| message_store.get_confirm_offset());
 
-        for controller_address in controller_targets {
-            if self.shutdown.load(Ordering::Acquire) {
-                return;
+        let futures = controller_targets.into_iter().map(|controller_address| {
+            let cluster_name = cluster_name.clone();
+            let broker_addr = broker_addr.clone();
+            let broker_name = broker_name.clone();
+            async move {
+                if self.shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                self.broker_outer_api
+                    .send_heartbeat_to_controller(
+                        controller_address,
+                        cluster_name,
+                        broker_addr,
+                        broker_name,
+                        broker_id,
+                        self.broker_config.send_heartbeat_timeout_millis,
+                        epoch,
+                        max_offset,
+                        confirm_offset,
+                        Some(self.broker_config.controller_heartbeat_timeout_mills),
+                        Some(self.broker_config.broker_election_priority),
+                    )
+                    .await;
             }
-            self.broker_outer_api
-                .send_heartbeat_to_controller(
-                    controller_address,
-                    cluster_name.clone(),
-                    broker_addr.clone(),
-                    broker_name.clone(),
-                    broker_id,
-                    self.broker_config.send_heartbeat_timeout_millis,
-                    epoch,
-                    max_offset,
-                    confirm_offset,
-                    Some(self.broker_config.controller_heartbeat_timeout_mills),
-                    Some(self.broker_config.broker_election_priority),
-                )
-                .await;
-        }
+        });
+        futures::future::join_all(futures).await;
     }
 
     async fn send_heartbeat_to_controller_leader(

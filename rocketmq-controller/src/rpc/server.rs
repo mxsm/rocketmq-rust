@@ -17,6 +17,10 @@ use std::sync::Arc;
 
 use futures::stream::StreamExt;
 use futures::SinkExt;
+use parking_lot::Mutex;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -26,6 +30,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::error::ControllerError;
 use crate::error::Result;
 use crate::processor::ProcessorManager;
 use crate::rpc::codec::RpcCodec;
@@ -46,6 +51,9 @@ pub struct RpcServer {
 
     /// Server state
     state: Arc<RwLock<ServerState>>,
+
+    /// Accept and connection task group
+    task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
 
 /// Server state
@@ -68,6 +76,7 @@ impl RpcServer {
             listen_addr,
             processor_manager,
             state: Arc::new(RwLock::new(ServerState::Stopped)),
+            task_group: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -92,39 +101,60 @@ impl RpcServer {
         // Clone Arc for the task
         let processor_manager = self.processor_manager.clone();
         let state = self.state.clone();
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|error| ControllerError::Internal(format!("No Tokio runtime for RPC server tasks: {error}")))?;
+        let task_group = TaskGroup::root("rocketmq-controller.rpc-server", RuntimeHandle::new(runtime));
+        let shutdown_token = task_group.cancellation_token();
+        let task_group_for_accept = task_group.clone();
 
         // Spawn accept loop
-        tokio::spawn(async move {
-            loop {
-                // Check if we should stop
-                {
-                    let current_state = state.read().await;
-                    if *current_state == ServerState::ShuttingDown {
-                        info!("RPC server accept loop stopping");
-                        break;
+        task_group
+            .spawn_service("controller.rpc-server.accept", async move {
+                loop {
+                    // Check if we should stop
+                    {
+                        let current_state = state.read().await;
+                        if *current_state == ServerState::ShuttingDown {
+                            info!("RPC server accept loop stopping");
+                            break;
+                        }
                     }
-                }
 
-                // Accept new connection
-                match listener.accept().await {
-                    Ok((stream, addr)) => {
-                        debug!("Accepted connection from {}", addr);
+                    // Accept new connection
+                    let accepted = tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            info!("RPC server accept loop stopping");
+                            break;
+                        }
+                        accepted = listener.accept() => accepted,
+                    };
+                    match accepted {
+                        Ok((stream, addr)) => {
+                            debug!("Accepted connection from {}", addr);
 
-                        // Spawn handler for this connection
-                        let processor_manager = processor_manager.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = Self::handle_connection(stream, addr, processor_manager).await {
-                                error!("Error handling connection from {}: {}", addr, e);
+                            // Spawn handler for this connection
+                            let processor_manager = processor_manager.clone();
+                            if let Err(error) = task_group_for_accept.spawn(
+                                "controller.rpc-server.connection",
+                                TaskKind::Worker,
+                                async move {
+                                    if let Err(e) = Self::handle_connection(stream, addr, processor_manager).await {
+                                        error!("Error handling connection from {}: {}", addr, e);
+                                    }
+                                },
+                            ) {
+                                warn!(?error, "failed to spawn RPC connection handler");
                             }
-                        });
-                    }
-                    Err(e) => {
-                        error!("Failed to accept connection: {}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+                        Err(e) => {
+                            error!("Failed to accept connection: {}", e);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
                     }
                 }
-            }
-        });
+            })
+            .map_err(|error| ControllerError::Internal(format!("Failed to spawn RPC accept loop: {error}")))?;
+        *self.task_group.lock() = Some(task_group);
 
         Ok(())
     }
@@ -212,8 +242,16 @@ impl RpcServer {
             *state = ServerState::ShuttingDown;
         }
 
-        // Wait a bit for accept loop to stop
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(std::time::Duration::from_secs(10)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "RPC server task shutdown report is unhealthy"
+                );
+            }
+        }
 
         // Update state
         {
