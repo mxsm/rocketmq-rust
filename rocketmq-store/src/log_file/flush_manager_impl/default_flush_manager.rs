@@ -567,7 +567,7 @@ async fn flush_mapped_file_queue(
     mapped_file_queue: ArcMut<MappedFileQueue>,
     flush_least_pages: i32,
 ) -> Option<FlushMappedFileQueueResult> {
-    match tokio::task::spawn_blocking(move || {
+    match crate::runtime::spawn_io("commitlog-flush", move || {
         let flush_ok = mapped_file_queue.flush(flush_least_pages);
         FlushMappedFileQueueResult {
             flush_ok,
@@ -595,7 +595,7 @@ async fn commit_mapped_file_queue(
     mapped_file_queue: ArcMut<MappedFileQueue>,
     commit_least_pages: i32,
 ) -> Option<CommitMappedFileQueueResult> {
-    match tokio::task::spawn_blocking(move || {
+    match crate::runtime::spawn_io("commitlog-commit", move || {
         let commit_ok = mapped_file_queue.commit(commit_least_pages);
         CommitMappedFileQueueResult {
             commit_ok,

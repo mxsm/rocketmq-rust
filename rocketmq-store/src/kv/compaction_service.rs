@@ -15,7 +15,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -27,7 +26,7 @@ pub struct CompactionService {
     compaction_store: Arc<CompactionStore>,
     schedule_interval: Duration,
     shutdown_token: CancellationToken,
-    worker_handle: Option<JoinHandle<()>>,
+    worker_group: Option<rocketmq_runtime::TaskGroup>,
     loaded: bool,
 }
 
@@ -37,7 +36,7 @@ impl CompactionService {
             compaction_store,
             schedule_interval: Duration::from_millis(schedule_interval_ms.max(1) as u64),
             shutdown_token: CancellationToken::new(),
-            worker_handle: None,
+            worker_group: None,
             loaded: false,
         }
     }
@@ -49,7 +48,7 @@ impl CompactionService {
     }
 
     pub fn start(&mut self) {
-        if self.worker_handle.is_some() {
+        if self.worker_group.is_some() {
             return;
         }
 
@@ -57,8 +56,15 @@ impl CompactionService {
         let shutdown = self.shutdown_token.clone();
         let compaction_store = self.compaction_store.clone();
         let schedule_interval = self.schedule_interval;
+        let worker_group = match crate::runtime::task_group("rocketmq-store.kv.compaction") {
+            Ok(worker_group) => worker_group,
+            Err(error) => {
+                error!("failed to create compaction service task group: {error}");
+                return;
+            }
+        };
 
-        self.worker_handle = Some(tokio::spawn(async move {
+        if let Err(error) = worker_group.spawn_service("kv-compaction-service", async move {
             let mut interval = tokio::time::interval(schedule_interval);
             interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             interval.tick().await;
@@ -76,13 +82,19 @@ impl CompactionService {
                     }
                 }
             }
-        }));
+        }) {
+            error!("failed to spawn compaction service task: {error}");
+            return;
+        }
+
+        self.worker_group = Some(worker_group);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
         self.shutdown_token.cancel();
-        if let Some(worker_handle) = self.worker_handle.take() {
-            if let Err(error) = worker_handle.await {
+        if let Some(worker_group) = self.worker_group.take() {
+            let report = worker_group.shutdown(Duration::from_secs(5)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("CompactionService", report) {
                 error!("compaction service task failed during shutdown: {error}");
             }
         }
@@ -95,7 +107,7 @@ impl CompactionService {
     }
 
     pub fn has_worker_handle(&self) -> bool {
-        self.worker_handle.is_some()
+        self.worker_group.is_some()
     }
 }
 

@@ -36,7 +36,6 @@ use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::is_it_time_to_do;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -252,7 +251,7 @@ pub struct TimerMessageStore {
     enqueue_suspended: AtomicBool,
     process_lock: AsyncMutex<()>,
     scheduler_shutdown: Mutex<CancellationToken>,
-    scheduler_handle: Mutex<Option<JoinHandle<()>>>,
+    scheduler_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
     enqueue_tps_counter: TpsCounter,
     dequeue_tps_counter: TpsCounter,
 }
@@ -312,8 +311,8 @@ impl TimerMessageStore {
     }
 
     pub fn start(self: &Arc<Self>) {
-        let mut scheduler_handle = self.scheduler_handle.lock();
-        if scheduler_handle.is_some() {
+        let mut scheduler_group_guard = self.scheduler_group.lock();
+        if scheduler_group_guard.is_some() {
             return;
         }
 
@@ -324,7 +323,14 @@ impl TimerMessageStore {
             .message_store_config
             .timer_precision_ms
             .max(MIN_SCHEDULER_INTERVAL_MS);
-        *scheduler_handle = Some(tokio::spawn(async move {
+        let scheduler_group = match crate::runtime::task_group("rocketmq-store.timer.scheduler") {
+            Ok(scheduler_group) => scheduler_group,
+            Err(error) => {
+                error!("TimerMessageStore scheduler not started: {error}");
+                return;
+            }
+        };
+        if let Err(error) = scheduler_group.spawn_service("timer-message-scheduler", async move {
             let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
             interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
@@ -335,7 +341,12 @@ impl TimerMessageStore {
                     }
                 }
             }
-        }));
+        }) {
+            self.scheduler_shutdown.lock().cancel();
+            error!("failed to spawn TimerMessageStore scheduler: {error}");
+            return;
+        }
+        *scheduler_group_guard = Some(scheduler_group);
     }
 
     pub fn is_reject(&self, deliver_ms: u64) -> bool {
@@ -473,7 +484,7 @@ impl TimerMessageStore {
             enqueue_suspended: AtomicBool::new(false),
             process_lock: AsyncMutex::new(()),
             scheduler_shutdown: Mutex::new(CancellationToken::new()),
-            scheduler_handle: Mutex::new(None),
+            scheduler_group: Mutex::new(None),
             enqueue_tps_counter: TpsCounter::default(),
             dequeue_tps_counter: TpsCounter::default(),
         }
@@ -495,20 +506,19 @@ impl TimerMessageStore {
 
     pub fn shutdown(&self) {
         self.scheduler_shutdown.lock().cancel();
-        if let Some(handle) = self.scheduler_handle.lock().take() {
-            handle.abort();
+        if let Some(scheduler_group) = self.scheduler_group.lock().take() {
+            scheduler_group.cancel();
         }
         self.shutdown_storage();
     }
 
     pub async fn shutdown_gracefully(&self) {
         self.scheduler_shutdown.lock().cancel();
-        let handle = self.scheduler_handle.lock().take();
-        if let Some(handle) = handle {
-            if let Err(error) = handle.await {
-                if !error.is_cancelled() {
-                    warn!("TimerMessageStore scheduler failed during shutdown: {error}");
-                }
+        let scheduler_group = self.scheduler_group.lock().take();
+        if let Some(scheduler_group) = scheduler_group {
+            let report = scheduler_group.shutdown(Duration::from_secs(5)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("TimerMessageStore scheduler", report) {
+                warn!("TimerMessageStore scheduler failed during shutdown: {error}");
             }
         }
         self.shutdown_storage();
@@ -516,7 +526,7 @@ impl TimerMessageStore {
 
     #[cfg(test)]
     pub(crate) fn has_scheduler_handle(&self) -> bool {
-        self.scheduler_handle.lock().is_some()
+        self.scheduler_group.lock().is_some()
     }
 
     fn shutdown_storage(&self) {
@@ -1634,11 +1644,11 @@ mod tests {
 
         assert!(timer_message_store.load());
         timer_message_store.start();
-        assert!(timer_message_store.scheduler_handle.lock().is_some());
+        assert!(timer_message_store.has_scheduler_handle());
 
         timer_message_store.shutdown_gracefully().await;
 
-        assert!(timer_message_store.scheduler_handle.lock().is_none());
+        assert!(!timer_message_store.has_scheduler_handle());
     }
 
     #[test]

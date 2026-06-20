@@ -134,8 +134,7 @@ pub struct DefaultHAConnection {
     ha_service: ArcMut<DefaultHAService>,
     socket_stream: Option<TcpStream>,
     client_address: String,
-    read_service_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    write_service_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    task_group: Arc<Mutex<Option<rocketmq_runtime::TaskGroup>>>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
@@ -181,8 +180,7 @@ impl DefaultHAConnection {
             ha_service,
             socket_stream,
             client_address,
-            read_service_handle: Arc::new(Mutex::new(None)),
-            write_service_handle: Arc::new(Mutex::new(None)),
+            task_group: Arc::new(Mutex::new(None)),
             current_state: Arc::new(RwLock::new(HAConnectionState::Transfer)),
             slave_request_offset: Arc::new(AtomicI64::new(-1)),
             slave_ack_offset: Arc::new(AtomicI64::new(-1)),
@@ -266,17 +264,30 @@ impl HAConnection for DefaultHAConnection {
         )
         .await?;
 
-        let read_handle = tokio::spawn(async move {
-            read_service.run(read_shutdown_rx).await;
-        });
+        let task_group = crate::runtime::task_group("rocketmq-store.ha.connection")
+            .map_err(|error| HAConnectionError::Service(error.to_string()))?;
+        task_group
+            .spawn_service("ha-read-socket-service", async move {
+                read_service.run(read_shutdown_rx).await;
+            })
+            .map_err(|error| HAConnectionError::Service(error.to_string()))?;
 
-        let write_handle = tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("ha-write-socket-service", async move {
             write_service.run(write_shutdown_rx).await;
-        });
+        }) {
+            if let Some(tx) = self.shutdown_tx.lock().await.take() {
+                let _ = tx.send(());
+            }
+            let report = task_group.shutdown(Duration::from_secs(3)).await;
+            if let Err(shutdown_error) =
+                crate::runtime::shutdown_report_result("DefaultHAConnection partial start", report)
+            {
+                warn!("DefaultHAConnection partial start cleanup reported an error: {shutdown_error}");
+            }
+            return Err(HAConnectionError::Service(error.to_string()));
+        }
 
-        // Start services
-        *self.read_service_handle.lock().await = Some(read_handle);
-        *self.write_service_handle.lock().await = Some(write_handle);
+        *self.task_group.lock().await = Some(task_group);
 
         info!("HAConnection started for {}", self.client_address);
         Ok(())
@@ -291,12 +302,11 @@ impl HAConnection for DefaultHAConnection {
         }
 
         // Wait for services to stop
-        if let Some(handle) = self.read_service_handle.lock().await.take() {
-            let _ = handle.await;
-        }
-
-        if let Some(handle) = self.write_service_handle.lock().await.take() {
-            let _ = handle.await;
+        if let Some(task_group) = self.task_group.lock().await.take() {
+            let report = task_group.shutdown(Duration::from_secs(3)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("DefaultHAConnection", report) {
+                warn!("DefaultHAConnection task shutdown reported an error: {error}");
+            }
         }
 
         // Shutdown flow monitor

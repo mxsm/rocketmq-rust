@@ -343,7 +343,7 @@ pub struct LocalFileMessageStore {
     ha_service: Option<GeneralHAService>,
     flush_consume_queue_service: FlushConsumeQueueService,
     scheduled_task_shutdown: CancellationToken,
-    scheduled_task_handles: Vec<JoinHandle<()>>,
+    scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
     ha_update_master_handles: Arc<StdMutex<Vec<JoinHandle<()>>>>,
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
@@ -543,8 +543,7 @@ impl LocalFileMessageStore {
                 reput_from_offset: None,
                 dispatch_tx: None,
                 inner: None,
-                reader_handle: None,
-                dispatcher_handle: None,
+                task_group: None,
             },
             clean_commit_log_service: Arc::new(CleanCommitLogService::new(
                 message_store_config.clone(),
@@ -577,7 +576,7 @@ impl LocalFileMessageStore {
                 store_checkpoint,
             ),
             scheduled_task_shutdown: CancellationToken::new(),
-            scheduled_task_handles: Vec::new(),
+            scheduled_task_group: None,
             ha_update_master_handles: Arc::new(StdMutex::new(Vec::new())),
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
@@ -1310,7 +1309,7 @@ impl LocalFileMessageStore {
     }
 
     fn add_schedule_task(&mut self) {
-        if !self.scheduled_task_handles.is_empty() {
+        if self.scheduled_task_group.is_some() {
             return;
         }
 
@@ -1327,12 +1326,19 @@ impl LocalFileMessageStore {
         };
 
         self.scheduled_task_shutdown = CancellationToken::new();
+        let task_group = match crate::runtime::task_group("rocketmq-store.local-file.scheduled") {
+            Ok(task_group) => task_group,
+            Err(error) => {
+                error!("scheduled store tasks not started: {error}");
+                return;
+            }
+        };
 
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
         let shutdown_token = self.scheduled_task_shutdown.clone();
-        self.scheduled_task_handles.push(tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("clean-commit-log-scheduler", async move {
             let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
             loop {
                 tokio::select! {
@@ -1345,10 +1351,14 @@ impl LocalFileMessageStore {
                     },
                 }
             }
-        }));
+        }) {
+            self.scheduled_task_shutdown.cancel();
+            error!("failed to spawn scheduled store task clean commit log: {error}");
+            return;
+        }
 
         let shutdown_token = self.scheduled_task_shutdown.clone();
-        self.scheduled_task_handles.push(tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("store-self-check-scheduler", async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10 * 60));
             loop {
                 tokio::select! {
@@ -1361,11 +1371,15 @@ impl LocalFileMessageStore {
                     },
                 }
             }
-        }));
+        }) {
+            self.scheduled_task_shutdown.cancel();
+            error!("failed to spawn scheduled store task self check: {error}");
+            return;
+        }
 
         // store check point flush
         let shutdown_token = self.scheduled_task_shutdown.clone();
-        self.scheduled_task_handles.push(tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("store-checkpoint-flush-scheduler", async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 tokio::select! {
@@ -1380,12 +1394,16 @@ impl LocalFileMessageStore {
                     }
                 }
             }
-        }));
+        }) {
+            self.scheduled_task_shutdown.cancel();
+            error!("failed to spawn scheduled store task checkpoint flush: {error}");
+            return;
+        }
 
         let correct_logic_offset_service_arc = self.correct_logic_offset_service.clone();
         let clean_consume_queue_service_arc = self.clean_consume_queue_service.clone();
         let shutdown_token = self.scheduled_task_shutdown.clone();
-        self.scheduled_task_handles.push(tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("clean-consume-queue-scheduler", async move {
             let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval.max(1)));
             loop {
                 tokio::select! {
@@ -1402,18 +1420,29 @@ impl LocalFileMessageStore {
                     }
                 }
             }
-        }));
+        }) {
+            self.scheduled_task_shutdown.cancel();
+            error!("failed to spawn scheduled store task clean consume queue: {error}");
+            return;
+        }
+
+        self.scheduled_task_group = Some(task_group);
     }
 
     async fn shutdown_schedule_tasks(&mut self) {
         self.scheduled_task_shutdown.cancel();
-        for handle in self.scheduled_task_handles.drain(..) {
-            if let Err(error) = handle.await {
-                if !error.is_cancelled() {
-                    error!("scheduled store task failed during shutdown: {error}");
-                }
+        if let Some(task_group) = self.scheduled_task_group.take() {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("LocalFileMessageStore scheduled tasks", report)
+            {
+                error!("scheduled store task failed during shutdown: {error}");
             }
         }
+    }
+
+    #[cfg(test)]
+    fn has_scheduled_task_group(&self) -> bool {
+        self.scheduled_task_group.is_some()
     }
 
     async fn shutdown_ha_update_master_tasks(&self) {
@@ -3368,8 +3397,7 @@ struct ReputMessageService {
     reput_from_offset: Option<Arc<AtomicI64>>,
     dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
     inner: Option<ReputMessageServiceInner>,
-    reader_handle: Option<tokio::task::JoinHandle<()>>,
-    dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
+    task_group: Option<rocketmq_runtime::TaskGroup>,
 }
 
 impl ReputMessageService {
@@ -3398,6 +3426,18 @@ impl ReputMessageService {
         notify_message_arrive_in_batch: bool,
         message_store: ArcMut<LocalFileMessageStore>,
     ) {
+        if self.task_group.is_some() {
+            return;
+        }
+
+        let task_group = match crate::runtime::task_group("rocketmq-store.local-file.reput") {
+            Ok(task_group) => task_group,
+            Err(error) => {
+                error!("ReputMessageService not started: {error}");
+                return;
+            }
+        };
+
         // Create channel for decoupling read and dispatch
         let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
@@ -3423,7 +3463,7 @@ impl ReputMessageService {
 
         // Task 1: Read messages from CommitLog and send to channel
         let shutdown_reader = shutdown.clone();
-        let reader_handle = tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("reput-reader", async move {
             let mut fallback_interval = tokio::time::interval(Duration::from_millis(1));
             fallback_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
@@ -3486,11 +3526,16 @@ impl ReputMessageService {
                     }
                 }
             }
-        });
+        }) {
+            self.shutdown_token.cancel();
+            self.dispatch_tx.take();
+            error!("failed to spawn ReputMessageService reader: {error}");
+            return;
+        }
 
         // Task 2: Receive from channel and dispatch
         let shutdown_dispatcher = shutdown;
-        let dispatcher_handle = tokio::spawn(async move {
+        if let Err(error) = task_group.spawn_service("reput-dispatcher", async move {
             loop {
                 tokio::select! {
                     Some(mut batch) = dispatch_rx.recv() => {
@@ -3518,11 +3563,16 @@ impl ReputMessageService {
                     }
                 }
             }
-        });
+        }) {
+            self.shutdown_token.cancel();
+            self.dispatch_tx.take();
+            task_group.cancel();
+            error!("failed to spawn ReputMessageService dispatcher: {error}");
+            self.task_group = Some(task_group);
+            return;
+        }
 
-        // Store task handles for graceful shutdown
-        self.reader_handle = Some(reader_handle);
-        self.dispatcher_handle = Some(dispatcher_handle);
+        self.task_group = Some(task_group);
     }
 
     pub async fn run_once(
@@ -3578,25 +3628,23 @@ impl ReputMessageService {
 
         // Step 2: Notify tasks to shutdown
         self.shutdown_token.cancel();
+        self.dispatch_tx.take();
 
         // Step 3: Wait for tasks to complete with timeout (3 seconds)
-        if let Some(handle) = self.reader_handle.take() {
-            match tokio::time::timeout(Duration::from_secs(3), handle).await {
-                Ok(Ok(())) => info!("Reader task shut down successfully"),
-                Ok(Err(e)) => warn!("Reader task panicked during shutdown: {:?}", e),
-                Err(_) => warn!("Reader task shutdown timeout after 3s"),
-            }
-        }
-
-        if let Some(handle) = self.dispatcher_handle.take() {
-            match tokio::time::timeout(Duration::from_secs(3), handle).await {
-                Ok(Ok(())) => info!("Dispatcher task shut down successfully"),
-                Ok(Err(e)) => warn!("Dispatcher task panicked during shutdown: {:?}", e),
-                Err(_) => warn!("Dispatcher task shutdown timeout after 3s"),
+        if let Some(task_group) = self.task_group.take() {
+            let report = task_group.shutdown(Duration::from_secs(3)).await;
+            match crate::runtime::shutdown_report_result("ReputMessageService", report) {
+                Ok(()) => info!("ReputMessageService tasks shut down successfully"),
+                Err(error) => warn!("ReputMessageService task shutdown reported an error: {error}"),
             }
         }
 
         info!("ReputMessageService shutdown complete");
+    }
+
+    #[cfg(test)]
+    fn has_task_group(&self) -> bool {
+        self.task_group.is_some()
     }
 
     #[inline]
@@ -3903,7 +3951,7 @@ async fn run_blocking_scheduled_task<F>(task_name: &'static str, task: F) -> boo
 where
     F: FnOnce() + Send + 'static,
 {
-    match tokio::task::spawn_blocking(task).await {
+    match crate::runtime::spawn_io(task_name, task).await {
         Ok(()) => true,
         Err(error) => {
             error!("scheduled store task {task_name} failed: {error}");
@@ -5247,13 +5295,13 @@ mod tests {
         store.init().await.expect("init store");
         store.start().await.expect("start store");
 
+        assert!(store.has_scheduled_task_group());
         assert!(store.store_stats_service.has_worker_handle());
         assert!(store
             .compaction_service
             .as_ref()
             .is_some_and(CompactionService::has_worker_handle));
-        assert!(store.reput_message_service.reader_handle.is_some());
-        assert!(store.reput_message_service.dispatcher_handle.is_some());
+        assert!(store.reput_message_service.has_task_group());
         assert!(store
             .timer_message_store
             .as_ref()
@@ -5262,13 +5310,13 @@ mod tests {
 
         store.shutdown().await;
 
+        assert!(!store.has_scheduled_task_group());
         assert!(!store.store_stats_service.has_worker_handle());
         assert!(store
             .compaction_service
             .as_ref()
             .is_some_and(|service| !service.has_worker_handle()));
-        assert!(store.reput_message_service.reader_handle.is_none());
-        assert!(store.reput_message_service.dispatcher_handle.is_none());
+        assert!(!store.reput_message_service.has_task_group());
         assert!(!store
             .timer_message_store
             .as_ref()

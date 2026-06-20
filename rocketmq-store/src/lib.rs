@@ -30,6 +30,7 @@ pub mod pop;
 pub mod queue;
 #[cfg(feature = "rocksdb_store")]
 pub mod rocksdb;
+pub(crate) mod runtime;
 pub(crate) mod services;
 pub mod stats;
 pub mod store;
