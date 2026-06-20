@@ -30,7 +30,6 @@ use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::TimeUtils::current_millis;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::warn;
 
@@ -103,7 +102,7 @@ pub struct StoreStatsService {
     last_print_timestamp: AtomicU64,
     stopped: AtomicBool,
     shutdown_notify: Notify,
-    worker_handle: Mutex<Option<JoinHandle<()>>>,
+    worker_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
     broker_identity: Option<BrokerIdentity>,
 }
 
@@ -134,21 +133,30 @@ impl StoreStatsService {
             last_print_timestamp: AtomicU64::new(current_millis()),
             stopped: AtomicBool::new(true),
             shutdown_notify: Notify::new(),
-            worker_handle: Mutex::new(None),
+            worker_group: Mutex::new(None),
             broker_identity,
         }
     }
 
     pub fn start(self: &Arc<Self>) {
-        let mut worker_handle = self.worker_handle.lock();
-        if worker_handle.is_some() {
+        let mut worker_group_guard = self.worker_group.lock();
+        if worker_group_guard.is_some() {
             return;
         }
 
         self.stopped.store(false, Ordering::Release);
         let service = Arc::clone(self);
         let service_name = service.get_service_name();
-        let handle = tokio::spawn(async move {
+        let worker_group = match crate::runtime::task_group("rocketmq-store.stats") {
+            Ok(worker_group) => worker_group,
+            Err(error) => {
+                self.stopped.store(true, Ordering::Release);
+                warn!("failed to create StoreStatsService task group: {error}");
+                return;
+            }
+        };
+        let task_name = service_name.clone();
+        if let Err(error) = worker_group.spawn_service(task_name, async move {
             info!("{} service started", service_name);
             let mut interval = tokio::time::interval(Duration::from_millis(FREQUENCY_OF_SAMPLING));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -167,34 +175,37 @@ impl StoreStatsService {
             }
 
             info!("{} service end", service.get_service_name());
-        });
-        *worker_handle = Some(handle);
+        }) {
+            self.stopped.store(true, Ordering::Release);
+            warn!("failed to spawn StoreStatsService task: {error}");
+            return;
+        }
+        *worker_group_guard = Some(worker_group);
     }
 
     pub fn shutdown(&self) {
         self.stopped.store(true, Ordering::Release);
         self.shutdown_notify.notify_waiters();
-        if let Some(handle) = self.worker_handle.lock().take() {
-            handle.abort();
+        if let Some(worker_group) = self.worker_group.lock().take() {
+            worker_group.cancel();
         }
     }
 
     pub async fn shutdown_gracefully(&self) {
         self.stopped.store(true, Ordering::Release);
         self.shutdown_notify.notify_waiters();
-        let handle = self.worker_handle.lock().take();
-        if let Some(handle) = handle {
-            if let Err(error) = handle.await {
-                if !error.is_cancelled() {
-                    warn!("StoreStatsService task failed during shutdown: {error}");
-                }
+        let worker_group = self.worker_group.lock().take();
+        if let Some(worker_group) = worker_group {
+            let report = worker_group.shutdown(Duration::from_secs(5)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("StoreStatsService", report) {
+                warn!("StoreStatsService task failed during shutdown: {error}");
             }
         }
     }
 
     #[cfg(test)]
     pub(crate) fn has_worker_handle(&self) -> bool {
-        self.worker_handle.lock().is_some()
+        self.worker_group.lock().is_some()
     }
 
     #[inline]
@@ -618,8 +629,9 @@ impl StoreStatsService {
 impl Drop for StoreStatsService {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
-        if let Some(handle) = self.worker_handle.get_mut().take() {
-            handle.abort();
+        self.shutdown_notify.notify_waiters();
+        if let Some(worker_group) = self.worker_group.get_mut().take() {
+            worker_group.cancel();
         }
     }
 }
@@ -907,17 +919,17 @@ mod call_snapshot_tests {
 
         stats.start();
         stats.start();
-        assert!(stats.worker_handle.lock().is_some());
+        assert!(stats.has_worker_handle());
         assert!(!stats.stopped.load(Ordering::Acquire));
 
         task::yield_now().await;
         stats.shutdown_gracefully().await;
         stats.shutdown_gracefully().await;
-        assert!(stats.worker_handle.lock().is_none());
+        assert!(!stats.has_worker_handle());
         assert!(stats.stopped.load(Ordering::Acquire));
 
         stats.start();
-        assert!(stats.worker_handle.lock().is_some());
+        assert!(stats.has_worker_handle());
         stats.shutdown_gracefully().await;
     }
 }

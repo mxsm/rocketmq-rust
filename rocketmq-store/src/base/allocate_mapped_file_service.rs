@@ -721,7 +721,11 @@ impl AllocateMappedFileService {
         // Wait for worker to complete
         let handle = self.worker_handle.lock().take();
         if let Some(handle) = handle {
-            let _ = tokio::task::spawn_blocking(move || handle.join()).await;
+            match crate::runtime::spawn_io("allocate-mapped-file-worker-join", move || handle.join()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_panic)) => error!("AllocateMappedFileService worker panicked during shutdown"),
+                Err(error) => error!("AllocateMappedFileService worker join task failed: {error}"),
+            }
         }
 
         // Clean up pre-allocated files

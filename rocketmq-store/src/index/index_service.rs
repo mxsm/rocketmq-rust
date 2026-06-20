@@ -488,12 +488,15 @@ impl IndexService {
 
             index_file = Some(new_index_file);
 
-            // Spawn async flush task for previous file
-            if prev_index_file.is_some() {
+            if let Some(prev_index_file) = prev_index_file {
                 let index_service = self.clone();
-                tokio::task::spawn_blocking(move || {
-                    index_service.flush(prev_index_file);
-                });
+                let fallback_index_file = prev_index_file.clone();
+                if let Err(error) = crate::runtime::spawn_detached_io("index-file-flush", move || {
+                    index_service.flush(Some(prev_index_file));
+                }) {
+                    warn!("failed to spawn index file flush task, flushing inline: {error}");
+                    self.flush(Some(fallback_index_file));
+                }
             }
         }
         index_file

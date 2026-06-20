@@ -31,7 +31,6 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -491,7 +490,7 @@ struct AcceptSocketService {
     is_auto_switch: bool,
     shutdown_token: CancellationToken,
     default_ha_service: ArcMut<DefaultHAService>,
-    worker_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    worker_group: Arc<Mutex<Option<rocketmq_runtime::TaskGroup>>>,
 }
 
 impl AcceptSocketService {
@@ -508,7 +507,7 @@ impl AcceptSocketService {
             is_auto_switch,
             shutdown_token: CancellationToken::new(),
             default_ha_service,
-            worker_handle: Arc::new(Mutex::new(None)),
+            worker_group: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -530,8 +529,8 @@ impl AcceptSocketService {
     }
 
     pub async fn start(&mut self) -> HAResult<()> {
-        let mut worker_handle = self.worker_handle.lock().await;
-        if worker_handle.is_some() {
+        let mut worker_group_guard = self.worker_group.lock().await;
+        if worker_group_guard.is_some() {
             warn!("AcceptSocketService is already started");
             return Ok(());
         }
@@ -544,70 +543,69 @@ impl AcceptSocketService {
         let is_auto_switch = self.is_auto_switch;
         let message_store_config = self.message_store_config.clone();
         let default_ha_service = self.default_ha_service.clone();
-        *worker_handle = Some(tokio::spawn(async move {
-            let message_store_config = message_store_config;
-            let default_ha_service = default_ha_service;
-            loop {
-                select! {
-                    _ = shutdown_token.cancelled() => {
-                        info!("AcceptSocketService is shutting down");
-                        break;
-                    }
-                // Accept new connections
-                    accept_result = listener.accept() => {
-                        match accept_result {
-                            Ok((stream, addr)) => {
-                                info!("HAService receive new connection, {}", addr);
-                                match AcceptSocketService::build_connection(
-                                    default_ha_service.clone(),
-                                    message_store_config.clone(),
-                                    stream,
-                                    addr,
-                                    is_auto_switch,
-                                )
-                                .await
-                                {
-                                    Ok(mut general_conn) => {
-                                        let conn_weak = ArcMut::downgrade(&general_conn);
-                                        if let Err(e) = general_conn.start(conn_weak).await {
-                                            error!("Error starting HAService: {}", e);
-                                        } else {
-                                            info!("HAService accept new connection, {}", addr);
-                                            default_ha_service.add_connection(general_conn).await;
+        let worker_group = crate::runtime::task_group("rocketmq-store.ha.accept")
+            .map_err(|error| HAError::Service(error.to_string()))?;
+        worker_group
+            .spawn_service("ha-accept-socket-service", async move {
+                let message_store_config = message_store_config;
+                let default_ha_service = default_ha_service;
+                loop {
+                    select! {
+                        _ = shutdown_token.cancelled() => {
+                            info!("AcceptSocketService is shutting down");
+                            break;
+                        }
+                    // Accept new connections
+                        accept_result = listener.accept() => {
+                            match accept_result {
+                                Ok((stream, addr)) => {
+                                    info!("HAService receive new connection, {}", addr);
+                                    match AcceptSocketService::build_connection(
+                                        default_ha_service.clone(),
+                                        message_store_config.clone(),
+                                        stream,
+                                        addr,
+                                        is_auto_switch,
+                                    )
+                                    .await
+                                    {
+                                        Ok(mut general_conn) => {
+                                            let conn_weak = ArcMut::downgrade(&general_conn);
+                                            if let Err(e) = general_conn.start(conn_weak).await {
+                                                error!("Error starting HAService: {}", e);
+                                            } else {
+                                                info!("HAService accept new connection, {}", addr);
+                                                default_ha_service.add_connection(general_conn).await;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Error creating HAConnection: {}", e);
                                         }
                                     }
-                                    Err(e) => {
-                                        error!("Error creating HAConnection: {}", e);
-                                    }
                                 }
-                            }
-                            Err(e) => {
-                                error!("Failed to accept connection: {}", e);
-                                // Add a small delay to prevent busy-waiting on persistent errors
-                                sleep(Duration::from_millis(100)).await;
+                                Err(e) => {
+                                    error!("Failed to accept connection: {}", e);
+                                    // Add a small delay to prevent busy-waiting on persistent errors
+                                    sleep(Duration::from_millis(100)).await;
+                                }
                             }
                         }
                     }
                 }
-            }
-        }));
+            })
+            .map_err(|error| HAError::Service(error.to_string()))?;
+        *worker_group_guard = Some(worker_group);
         Ok(())
     }
 
     pub async fn shutdown(&self) {
         info!("Shutting down AcceptSocketService");
         self.shutdown_token.cancel();
-        let worker_handle = self.worker_handle.lock().await.take();
-        if let Some(handle) = worker_handle {
-            match timeout(Duration::from_secs(3), handle).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) if error.is_cancelled() => {}
-                Ok(Err(error)) => {
-                    error!("AcceptSocketService failed during shutdown: {error}");
-                }
-                Err(_) => {
-                    warn!("Timed out waiting for AcceptSocketService to stop");
-                }
+        let worker_group = self.worker_group.lock().await.take();
+        if let Some(worker_group) = worker_group {
+            let report = worker_group.shutdown(Duration::from_secs(3)).await;
+            if let Err(error) = crate::runtime::shutdown_report_result("AcceptSocketService", report) {
+                warn!("AcceptSocketService failed during shutdown: {error}");
             }
         }
     }
@@ -711,11 +709,11 @@ mod tests {
         accept_service.socket_address_listen = SocketAddr::from(([127u8, 0u8, 0u8, 1u8], 0));
 
         accept_service.start().await.expect("start accept socket service");
-        assert!(accept_service.worker_handle.lock().await.is_some());
+        assert!(accept_service.worker_group.lock().await.is_some());
 
         accept_service.shutdown().await;
 
-        assert!(accept_service.worker_handle.lock().await.is_none());
+        assert!(accept_service.worker_group.lock().await.is_none());
         let _ = std::fs::remove_dir_all(temp_root);
     }
 
