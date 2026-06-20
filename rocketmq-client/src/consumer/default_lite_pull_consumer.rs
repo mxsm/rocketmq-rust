@@ -1073,8 +1073,13 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         }
 
         // Shutdown trace dispatcher
-        if let Some(dispatcher) = self.trace_dispatcher.write().await.take() {
-            dispatcher.shutdown();
+        let dispatcher = { self.trace_dispatcher.write().await.take() };
+        if let Some(dispatcher) = dispatcher {
+            if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
+                async_dispatcher.shutdown_async().await;
+            } else {
+                dispatcher.shutdown();
+            }
         }
     }
 

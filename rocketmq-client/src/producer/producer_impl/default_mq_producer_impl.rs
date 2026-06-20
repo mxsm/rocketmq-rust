@@ -60,6 +60,8 @@ use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
@@ -96,10 +98,11 @@ use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::runtime::spawn_client_blocking_io;
 use crate::runtime::spawn_client_task_on;
-use tokio::task::JoinHandle;
 
 type Topic = CheetahString;
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
+const PRODUCER_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const PRODUCER_TASK_FORCE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Producer state machine (atomic)
 #[repr(u8)]
@@ -128,26 +131,6 @@ impl ProducerState {
     }
 }
 
-/// Producer runtime state (only exists when Running)
-struct ProducerRuntime {
-    /// Background task handles
-    background_tasks: Vec<JoinHandle<()>>,
-    /// Shutdown signal sender
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
-}
-
-impl ProducerRuntime {
-    async fn shutdown(mut self) {
-        // Send shutdown signal
-        let _ = self.shutdown_tx.send(());
-
-        // Wait for all background tasks to complete
-        for handle in self.background_tasks.drain(..) {
-            let _ = handle.await;
-        }
-    }
-}
-
 #[derive(Clone)]
 struct TransactionCheckEnv {
     request_slots: Arc<Semaphore>,
@@ -157,12 +140,31 @@ struct TransactionCheckEnv {
 fn spawn_producer_task<F>(
     executor: Option<&tokio::runtime::Handle>,
     thread_name: &'static str,
+    tracker: &TaskTracker,
+    shutdown_token: &CancellationToken,
     task: F,
 ) -> std::io::Result<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    drop(spawn_client_task_on(thread_name, executor, task)?);
+    if shutdown_token.is_cancelled() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "producer is shutting down",
+        ));
+    }
+
+    let shutdown_token = shutdown_token.clone();
+    let tracked_task = tracker.track_future(async move {
+        let mut task = Box::pin(task);
+        tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {}
+            _ = &mut task => {}
+        }
+    });
+
+    drop(spawn_client_task_on(thread_name, executor, tracked_task)?);
     Ok(())
 }
 
@@ -272,9 +274,6 @@ pub struct DefaultMQProducerImpl {
     state: AtomicU8,             // ProducerState
     service_state: ServiceState, // Keep for compatibility
 
-    // ===== Runtime (created/destroyed on demand) =====
-    runtime: tokio::sync::RwLock<Option<ProducerRuntime>>,
-
     // ===== Read-only hot data (immutable after init, zero-cost sharing) =====
     send_message_hook_list: Arc<[Arc<dyn SendMessageHook>]>,
     end_transaction_hook_list: Arc<[Arc<dyn EndTransactionHook>]>,
@@ -298,6 +297,8 @@ pub struct DefaultMQProducerImpl {
     transaction_listener: Option<ArcTransactionListener>,
     transaction_executor_service: Option<tokio::runtime::Handle>,
     transaction_check_env: Option<TransactionCheckEnv>,
+    producer_task_tracker: TaskTracker,
+    producer_task_shutdown: CancellationToken,
 }
 
 #[allow(unused_must_use)]
@@ -324,7 +325,6 @@ impl DefaultMQProducerImpl {
             producer_config: Arc::new(producer_config),
             state: AtomicU8::new(ProducerState::Created as u8),
             service_state: ServiceState::CreateJust,
-            runtime: tokio::sync::RwLock::new(None),
             topic_publish_info_table,
             send_message_hook_list: Arc::new([]),
             end_transaction_hook_list: Arc::new([]),
@@ -341,6 +341,8 @@ impl DefaultMQProducerImpl {
             transaction_listener: None,
             transaction_executor_service: None,
             transaction_check_env: None,
+            producer_task_tracker: TaskTracker::new(),
+            producer_task_shutdown: CancellationToken::new(),
         }
     }
 
@@ -739,6 +741,8 @@ impl DefaultMQProducerImpl {
         if let Err(error) = spawn_producer_task(
             self.producer_config.async_sender_executor(),
             "rocketmq-client-producer-oneway-batch",
+            &self.producer_task_tracker,
+            &self.producer_task_shutdown,
             task,
         ) {
             warn!("Failed to spawn batch oneway send task: {}", error);
@@ -1142,6 +1146,8 @@ impl DefaultMQProducerImpl {
         if let Err(error) = spawn_producer_task(
             self.producer_config.async_sender_executor(),
             "rocketmq-client-producer-async-send",
+            &self.producer_task_tracker,
+            &self.producer_task_shutdown,
             task,
         ) {
             Self::notify_callback_exception(
@@ -2834,6 +2840,8 @@ impl MQProducerInner for DefaultMQProducerImpl {
         if let Err(error) = spawn_producer_task(
             executor_service.as_ref(),
             "rocketmq-client-producer-transaction-check",
+            &self.producer_task_tracker,
+            &self.producer_task_shutdown,
             task,
         ) {
             warn!(
@@ -2990,6 +2998,32 @@ impl DefaultMQProducerImpl {
         self.shutdown_with_factory(true).await
     }
 
+    async fn shutdown_producer_tasks(&self) {
+        self.producer_task_tracker.close();
+        if tokio::time::timeout(PRODUCER_TASK_SHUTDOWN_TIMEOUT, self.producer_task_tracker.wait())
+            .await
+            .is_ok()
+        {
+            return;
+        }
+
+        tracing::warn!(
+            timeout_ms = PRODUCER_TASK_SHUTDOWN_TIMEOUT.as_millis(),
+            "producer background send tasks did not stop before graceful timeout; cancelling"
+        );
+        self.producer_task_shutdown.cancel();
+
+        if tokio::time::timeout(PRODUCER_TASK_FORCE_SHUTDOWN_TIMEOUT, self.producer_task_tracker.wait())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                timeout_ms = PRODUCER_TASK_FORCE_SHUTDOWN_TIMEOUT.as_millis(),
+                "producer background send tasks did not stop after cancellation"
+            );
+        }
+    }
+
     /// Shutdown the producer with option to shutdown factory
     pub async fn shutdown_with_factory(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
         // Atomic CAS state transition
@@ -3000,13 +3034,10 @@ impl DefaultMQProducerImpl {
             Ordering::SeqCst,
         ) {
             Ok(_) => {
+                self.shutdown_producer_tasks().await;
+
                 // Perform shutdown
                 self.do_shutdown_internal(shutdown_factory).await?;
-
-                // Shutdown runtime if exists
-                if let Some(runtime) = self.runtime.write().await.take() {
-                    runtime.shutdown().await;
-                }
 
                 // Update states
                 self.service_state = ServiceState::ShutdownAlready;
@@ -3467,6 +3498,7 @@ impl Resolver for DefaultResolver {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
@@ -3491,18 +3523,76 @@ mod tests {
     #[test]
     fn spawn_producer_task_without_tokio_runtime_runs_on_fallback_thread() {
         let (tx, rx) = std::sync::mpsc::channel();
+        let tracker = TaskTracker::new();
+        let shutdown_token = CancellationToken::new();
 
-        spawn_producer_task(None, "rocketmq-client-producer-test", async move {
-            let current_thread = std::thread::current();
-            let thread_name = current_thread.name().unwrap_or_default().to_string();
-            tx.send(thread_name).expect("test receiver should still be open");
-        })
+        spawn_producer_task(
+            None,
+            "rocketmq-client-producer-test",
+            &tracker,
+            &shutdown_token,
+            async move {
+                let current_thread = std::thread::current();
+                let thread_name = current_thread.name().unwrap_or_default().to_string();
+                tx.send(thread_name).expect("test receiver should still be open");
+            },
+        )
         .expect("producer task should spawn without an ambient Tokio runtime");
 
         let thread_name = rx
             .recv_timeout(Duration::from_secs(1))
             .expect("fallback producer task should complete");
         assert_eq!(thread_name, "rocketmq-client-fallback");
+    }
+
+    #[tokio::test]
+    async fn tracked_producer_task_cancellation_stops_pending_task() {
+        struct DropFlag(Arc<AtomicBool>);
+
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let tracker = TaskTracker::new();
+        let shutdown_token = CancellationToken::new();
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started_in_task = started.clone();
+        let dropped_in_task = dropped.clone();
+
+        spawn_producer_task(
+            None,
+            "rocketmq-client-producer-tracked-test",
+            &tracker,
+            &shutdown_token,
+            async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                started_in_task.store(true, Ordering::Release);
+                std::future::pending::<()>().await;
+            },
+        )
+        .expect("producer task should spawn on current Tokio runtime");
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("producer task should start before cancellation");
+
+        tracker.close();
+        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
+            .await
+            .is_err());
+
+        shutdown_token.cancel();
+        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
+            .await
+            .expect("producer task should stop after cancellation");
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     struct PanicTransactionListener;

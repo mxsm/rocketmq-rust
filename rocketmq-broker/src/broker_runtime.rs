@@ -1312,6 +1312,9 @@ impl BrokerRuntime {
                     }
                 });
         if let Some(task_group) = request_processor_task_group.clone() {
+            pull_message_processor
+                .mut_from_ref()
+                .set_wakeup_task_group(task_group.clone());
             broker_request_processor.set_request_task_group(task_group);
         }
         self.request_processor_task_group = request_processor_task_group;

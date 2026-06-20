@@ -1661,7 +1661,11 @@ impl MQProducer for DefaultMQProducer {
         }
 
         if let Some(ref trace_dispatcher) = self.producer_config.trace_dispatcher {
-            trace_dispatcher.shutdown();
+            if let Some(async_dispatcher) = trace_dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
+                async_dispatcher.shutdown_async().await;
+            } else {
+                trace_dispatcher.shutdown();
+            }
         }
     }
 

@@ -47,6 +47,10 @@ impl FaultDetectorTaskHandle {
         self.handle.is_finished()
     }
 
+    fn abort(self) {
+        self.handle.abort();
+    }
+
     async fn shutdown(self, timeout: Duration) -> bool {
         let mut handle = self.handle;
         match tokio::time::timeout(timeout, &mut handle).await {
@@ -181,6 +185,9 @@ where
 
     fn shutdown(&self) {
         self.cancel_token.cancel();
+        if let Some(handle) = self.detector_task.lock().take() {
+            handle.abort();
+        }
     }
 
     async fn detect_by_one_round(&self) {
@@ -502,6 +509,40 @@ mod tests {
         detector.shutdown();
 
         std::thread::sleep(tokio::time::Duration::from_millis(20));
+    }
+
+    #[tokio::test]
+    async fn sync_shutdown_aborts_and_drains_detector_task() {
+        let detector = LatencyFaultToleranceImpl::<NoopResolver, NoopServiceDetector>::new();
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started_in_task = started.clone();
+        let dropped_in_task = dropped.clone();
+        let handle = tokio::spawn(async move {
+            let _drop_flag = DropFlag(dropped_in_task);
+            started_in_task.store(true, std::sync::atomic::Ordering::Release);
+            pending::<()>().await;
+        });
+        *detector.detector_task.lock() = Some(FaultDetectorTaskHandle { handle });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detector task should start before shutdown");
+
+        detector.shutdown();
+
+        assert!(detector.detector_task.lock().is_none());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("sync shutdown should abort the detector task");
     }
 
     #[tokio::test]

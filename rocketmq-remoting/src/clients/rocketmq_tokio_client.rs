@@ -22,6 +22,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_rust::ArcMut;
@@ -362,6 +363,23 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             max_connections, max_idle_duration, cleanup_interval
         );
         cleanup_task
+    }
+
+    /// Enable advanced connection pool and return an error if cleanup cannot be spawned.
+    pub fn try_enable_connection_pool(
+        &mut self,
+        max_connections: usize,
+        max_idle_duration: Duration,
+        cleanup_interval: Duration,
+    ) -> RuntimeResult<ConnectionPoolCleanupTask> {
+        let pool = ConnectionPool::new(max_connections, max_idle_duration);
+        let cleanup_task = pool.try_start_cleanup_task(cleanup_interval)?;
+        self.connection_pool = Some(pool);
+        info!(
+            "Connection pool enabled: max={}, idle_timeout={:?}, cleanup_interval={:?}",
+            max_connections, max_idle_duration, cleanup_interval
+        );
+        Ok(cleanup_task)
     }
 
     /// Get connection pool statistics (if enabled).

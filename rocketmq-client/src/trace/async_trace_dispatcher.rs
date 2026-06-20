@@ -116,6 +116,40 @@ impl TraceTaskHandle {
         }
     }
 
+    async fn shutdown_async(self, timeout: Duration) -> bool {
+        match self {
+            Self::Tokio { mut handle, .. } => match tokio::time::timeout(timeout, &mut handle).await {
+                Ok(Ok(())) => true,
+                Ok(Err(error)) if error.is_cancelled() => true,
+                Ok(Err(error)) => {
+                    warn!(%error, "trace worker exited with join error");
+                    true
+                }
+                Err(_) => {
+                    handle.abort();
+                    match handle.await {
+                        Ok(()) => {}
+                        Err(error) if error.is_cancelled() => {}
+                        Err(error) => warn!(%error, "trace worker aborted with join error"),
+                    }
+                    false
+                }
+            },
+            Self::Thread(handle) => {
+                let deadline = tokio::time::Instant::now() + timeout;
+                loop {
+                    if handle.is_finished() {
+                        return handle.join().is_ok();
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return false;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
+    }
+
     fn shutdown(self, timeout: Duration) -> bool {
         match self {
             Self::Tokio { handle, completion_rx } => match completion_rx.recv_timeout(timeout) {
@@ -299,6 +333,54 @@ impl AsyncTraceDispatcher {
 
     pub fn trace_topic_name(&self) -> &str {
         self.config.trace_topic_name.as_str()
+    }
+
+    /// Asynchronously flushes pending trace contexts without blocking a Tokio worker thread.
+    pub async fn flush_async(&self) -> RocketMQResult<()> {
+        if !self.state.is_started.load(Ordering::SeqCst) {
+            return Err(RocketMQError::not_initialized("Dispatcher not started"));
+        }
+
+        info!("Flushing trace data...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        info!("Flush completed");
+        Ok(())
+    }
+
+    /// Asynchronously shuts down the dispatcher without blocking the current Tokio worker.
+    pub async fn shutdown_async(&self) {
+        if !self.state.is_started.load(Ordering::SeqCst) {
+            warn!("AsyncTraceDispatcher not started");
+            return;
+        }
+
+        self.state.is_stopped.store(true, Ordering::SeqCst);
+
+        info!("Shutting down AsyncTraceDispatcher...");
+
+        if let Err(error) = self.flush_async().await {
+            error!("Flush failed during shutdown: {:?}", error);
+        }
+
+        let handle = { self.worker_handle.lock().take() };
+        if let Some(handle) = handle {
+            let stopped = handle.shutdown_async(TRACE_WORKER_SHUTDOWN_TIMEOUT).await;
+            if !stopped {
+                warn!(
+                    timeout_ms = TRACE_WORKER_SHUTDOWN_TIMEOUT.as_millis(),
+                    "Trace worker did not stop before timeout and was aborted"
+                );
+            }
+        }
+
+        if self.trace_producer.read().is_some() {
+            info!("Trace producer shut down");
+        }
+
+        self.state.is_started.store(false, Ordering::SeqCst);
+        *self.trace_producer.write() = None;
+
+        info!("AsyncTraceDispatcher stopped");
     }
 
     pub fn register_shutdown_hook(&self) {}
@@ -852,6 +934,42 @@ mod tests {
             .expect("trace task should start");
 
         assert!(!handle.shutdown(Duration::from_millis(20)));
+    }
+
+    #[tokio::test]
+    async fn trace_task_shutdown_async_aborts_worker_after_timeout() {
+        struct DropFlag(Arc<AtomicBool>);
+
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let started_in_task = started.clone();
+        let dropped_in_task = dropped.clone();
+        let (_completion_tx, completion_rx) = std_mpsc::channel();
+        let handle = TraceTaskHandle::Tokio {
+            handle: tokio::spawn(async move {
+                let _drop_flag = DropFlag(dropped_in_task);
+                started_in_task.store(true, Ordering::Release);
+                std::future::pending::<()>().await;
+            }),
+            completion_rx,
+        };
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("trace task should start before shutdown");
+
+        assert!(!handle.shutdown_async(Duration::from_millis(20)).await);
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[test]

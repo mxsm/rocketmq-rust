@@ -122,8 +122,24 @@ impl LitePullTaskHandle {
 
     async fn wait(self, timeout: Duration) -> bool {
         match self {
-            Self::Tokio { handle, .. } => tokio::time::timeout(timeout, handle).await.is_ok(),
-            Self::Thread { handle, .. } => {
+            Self::Tokio { mut handle, .. } => match tokio::time::timeout(timeout, &mut handle).await {
+                Ok(Ok(())) => true,
+                Ok(Err(error)) if error.is_cancelled() => true,
+                Ok(Err(error)) => {
+                    warn!(%error, "lite pull task exited with join error");
+                    true
+                }
+                Err(_) => {
+                    handle.abort();
+                    match handle.await {
+                        Ok(()) => {}
+                        Err(error) if error.is_cancelled() => {}
+                        Err(error) => warn!(%error, "lite pull task aborted with join error"),
+                    }
+                    false
+                }
+            },
+            Self::Thread { handle, cancelled } => {
                 let deadline = tokio::time::Instant::now() + timeout;
                 loop {
                     if handle.is_finished() {
@@ -131,6 +147,7 @@ impl LitePullTaskHandle {
                         return true;
                     }
                     if tokio::time::Instant::now() >= deadline {
+                        cancelled.store(true, Ordering::Release);
                         return false;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2993,6 +3010,46 @@ mod tests {
             .expect("fallback lite pull task should complete");
         assert_eq!(thread_name, "rocketmq-client-fallback");
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn lite_pull_task_wait_aborts_tokio_task_after_timeout() {
+        struct DropFlag(Arc<AtomicBool>);
+
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, AtomicOrdering::SeqCst);
+            }
+        }
+
+        let task_started = Arc::new(AtomicBool::new(false));
+        let task_aborted = Arc::new(AtomicBool::new(false));
+        let task_started_inner = task_started.clone();
+        let task_aborted_inner = task_aborted.clone();
+
+        let handle = tokio::spawn(async move {
+            let _drop_flag = DropFlag(task_aborted_inner);
+            task_started_inner.store(true, AtomicOrdering::SeqCst);
+            std::future::pending::<()>().await;
+        });
+        let task_handle = LitePullTaskHandle::Tokio {
+            handle,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+
+        for _ in 0..20 {
+            if task_started.load(AtomicOrdering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(task_started.load(AtomicOrdering::SeqCst));
+
+        assert!(!task_handle.wait(Duration::from_millis(20)).await);
+        assert!(
+            task_aborted.load(AtomicOrdering::SeqCst),
+            "timed-out lite pull task should be aborted before wait returns"
+        );
     }
 
     struct SlowAfterConsumeHook {
