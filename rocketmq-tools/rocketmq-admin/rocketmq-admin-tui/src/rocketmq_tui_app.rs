@@ -8,7 +8,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
 use tokio_stream::StreamExt;
 
 use crate::action::Action;
@@ -32,7 +32,7 @@ pub struct RocketmqTuiApp {
 
 struct RunningCommandTask {
     execution_id: u64,
-    handle: JoinHandle<()>,
+    abort_handle: AbortHandle,
 }
 
 impl Default for RocketmqTuiApp {
@@ -514,36 +514,32 @@ impl RocketmqTuiApp {
         let facade = self.admin_facade.clone();
         let tx = self.action_tx.clone();
         let progress_tx = tx.clone();
-        let handle = tokio::task::spawn_blocking(move || {
-            let result = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| anyhow::anyhow!("failed to create command runtime: {error}"))
-                .and_then(|runtime| {
-                    runtime.block_on(execute_command_with_progress(
-                        &facade,
-                        &command,
-                        &form,
-                        move |message| {
-                            let _ = progress_tx.send(Action::ProgressUpdated { execution_id, message });
-                        },
-                    ))
-                });
+        let command_id_for_task = command_id.clone();
+        let command_task = tokio::task::spawn_local(async move {
+            let result = execute_command_with_progress(&facade, &command, &form, move |message| {
+                let _ = progress_tx.send(Action::ProgressUpdated { execution_id, message });
+            })
+            .await;
             let action = match result {
                 Ok(result) => Action::CommandSucceeded {
                     execution_id,
-                    command_id,
+                    command_id: command_id_for_task,
                     result,
                 },
                 Err(error) => Action::CommandFailed {
                     execution_id,
-                    command_id,
+                    command_id: command_id_for_task,
                     error: error.to_string(),
                 },
             };
             let _ = tx.send(action);
         });
-        self.running_task = Some(RunningCommandTask { execution_id, handle });
+        let abort_handle = command_task.abort_handle();
+        drop(command_task);
+        self.running_task = Some(RunningCommandTask {
+            execution_id,
+            abort_handle,
+        });
     }
 
     fn is_current_running_execution(&self, execution_id: u64) -> bool {
@@ -558,7 +554,7 @@ impl RocketmqTuiApp {
 
     fn abort_running_task(&mut self) {
         if let Some(task) = self.running_task.take() {
-            task.handle.abort();
+            task.abort_handle.abort();
         }
     }
 
@@ -703,14 +699,16 @@ mod tests {
 
         local.block_on(&tokio::runtime::Builder::new_current_thread().build().unwrap(), async {
             let aborted = Rc::new(Cell::new(false));
-            let handle = tokio::task::spawn_local(AbortProbe {
+            let command_task = tokio::task::spawn_local(AbortProbe {
                 aborted: aborted.clone(),
             });
+            let abort_handle = command_task.abort_handle();
+            drop(command_task);
 
             let mut app = RocketmqTuiApp::new();
             app.running_task = Some(RunningCommandTask {
                 execution_id: 7,
-                handle,
+                abort_handle,
             });
             app.state.execution = CommandExecutionState::Running {
                 execution_id: 7,
@@ -721,9 +719,16 @@ mod tests {
                 execution_id: 7,
                 command_id: "message.consume".to_string(),
             });
-            tokio::task::yield_now().await;
 
-            assert!(aborted.get());
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            while !aborted.get() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "abort probe task was not dropped"
+                );
+                tokio::task::yield_now().await;
+            }
+
             assert!(app.running_task.is_none());
         });
     }

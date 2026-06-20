@@ -38,13 +38,13 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
+use rocketmq_runtime::TaskId;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 
 static SHARED_FALLBACK: OnceLock<ClientSharedFallbackRegistry> = OnceLock::new();
 static CLIENT_BLOCKING: OnceLock<BlockingExecutor> = OnceLock::new();
 
-pub(crate) fn spawn_client_task<F>(task_name: &'static str, task: F) -> io::Result<JoinHandle<()>>
+pub(crate) fn spawn_client_task<F>(task_name: &'static str, task: F) -> io::Result<ClientRuntimeTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -52,7 +52,7 @@ where
 }
 
 #[doc(hidden)]
-pub fn spawn_client_runtime_probe_task<F>(task_name: &'static str, task: F) -> io::Result<JoinHandle<()>>
+pub fn spawn_client_runtime_probe_task<F>(task_name: &'static str, task: F) -> io::Result<ClientRuntimeTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -63,19 +63,12 @@ pub(crate) fn spawn_client_task_on<F>(
     task_name: &'static str,
     executor: Option<&Handle>,
     task: F,
-) -> io::Result<JoinHandle<()>>
+) -> io::Result<ClientRuntimeTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    if let Some(executor) = executor {
-        return Ok(executor.spawn(task));
-    }
-
-    if let Ok(handle) = Handle::try_current() {
-        return Ok(handle.spawn(task));
-    }
-
-    shared_fallback()?.spawn(task_name, task)
+    let (task_group, fallback_lease) = client_task_group_on(task_name, executor)?;
+    spawn_client_task_in_group(task_name, task_group, fallback_lease, task)
 }
 
 pub(crate) fn spawn_detached_client_task<F>(task_name: &'static str, task: F) -> io::Result<()>
@@ -86,10 +79,56 @@ where
     Ok(())
 }
 
+#[doc(hidden)]
+pub struct ClientRuntimeTaskHandle {
+    task_group: TaskGroup,
+    task_id: TaskId,
+    completion_rx: Mutex<Option<std_mpsc::Receiver<()>>>,
+}
+
+impl ClientRuntimeTaskHandle {
+    pub fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+
+    pub fn task_count(&self) -> usize {
+        self.task_group.task_count()
+    }
+
+    pub fn is_finished(&self) -> bool {
+        let mut completion_rx = self.completion_rx.lock();
+        let Some(receiver) = completion_rx.as_ref() else {
+            return true;
+        };
+
+        match receiver.try_recv() {
+            Ok(()) | Err(std_mpsc::TryRecvError::Disconnected) => {
+                completion_rx.take();
+                true
+            }
+            Err(std_mpsc::TryRecvError::Empty) => false,
+        }
+    }
+
+    pub fn wait_finished(&self, timeout: Duration) -> bool {
+        let mut completion_rx = self.completion_rx.lock();
+        let Some(receiver) = completion_rx.take() else {
+            return true;
+        };
+
+        match receiver.recv_timeout(timeout) {
+            Ok(()) | Err(std_mpsc::RecvTimeoutError::Disconnected) => true,
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                *completion_rx = Some(receiver);
+                false
+            }
+        }
+    }
+}
+
 pub(crate) struct ClientTrackedTaskHandle {
     task_group: TaskGroup,
     completion_rx: Mutex<Option<std_mpsc::Receiver<()>>>,
-    join_handle: JoinHandle<()>,
 }
 
 impl ClientTrackedTaskHandle {
@@ -98,7 +137,18 @@ impl ClientTrackedTaskHandle {
     }
 
     pub(crate) fn is_finished(&self) -> bool {
-        self.join_handle.is_finished()
+        let mut completion_rx = self.completion_rx.lock();
+        let Some(receiver) = completion_rx.as_ref() else {
+            return true;
+        };
+
+        match receiver.try_recv() {
+            Ok(()) | Err(std_mpsc::TryRecvError::Disconnected) => {
+                completion_rx.take();
+                true
+            }
+            Err(std_mpsc::TryRecvError::Empty) => false,
+        }
     }
 
     pub(crate) async fn shutdown(self, timeout: Duration) -> ShutdownReport {
@@ -106,14 +156,12 @@ impl ClientTrackedTaskHandle {
     }
 
     pub(crate) fn shutdown_blocking(self, timeout: Duration) -> (ShutdownReport, bool) {
-        let completion_rx = self
-            .completion_rx
-            .into_inner()
-            .expect("client tracked task completion receiver should be present");
-        let completed = match completion_rx.recv_timeout(timeout) {
-            Ok(()) => true,
-            Err(std_mpsc::RecvTimeoutError::Timeout) => false,
-            Err(std_mpsc::RecvTimeoutError::Disconnected) => self.join_handle.is_finished(),
+        let completed = match self.completion_rx.into_inner() {
+            Some(completion_rx) => match completion_rx.recv_timeout(timeout) {
+                Ok(()) | Err(std_mpsc::RecvTimeoutError::Disconnected) => true,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => false,
+            },
+            None => true,
         };
 
         let report = self.task_group.shutdown_now();
@@ -131,8 +179,8 @@ where
 {
     let (task_group, fallback_lease) = client_task_group(task_name)?;
     let (completion_tx, completion_rx) = std_mpsc::channel();
-    let (_, join_handle) = task_group
-        .spawn_service_with_handle(task_name, async move {
+    task_group
+        .spawn_service(task_name, async move {
             let _fallback_lease = fallback_lease;
             let _completion = ClientTrackedTaskCompletion::new(completion_tx);
             task.await;
@@ -142,7 +190,6 @@ where
     Ok(ClientTrackedTaskHandle {
         task_group,
         completion_rx: Mutex::new(Some(completion_rx)),
-        join_handle,
     })
 }
 
@@ -248,6 +295,18 @@ where
     })
 }
 
+fn client_task_group_on(
+    task_name: &'static str,
+    executor: Option<&Handle>,
+) -> io::Result<(TaskGroup, Option<ClientSharedFallbackLease>)> {
+    if let Some(executor) = executor {
+        let group = TaskGroup::root(task_name, RuntimeHandle::new(executor.clone()));
+        return Ok((group, None));
+    }
+
+    client_task_group(task_name)
+}
+
 fn client_task_group(task_name: &'static str) -> io::Result<(TaskGroup, Option<ClientSharedFallbackLease>)> {
     if let Ok(handle) = Handle::try_current() {
         let group = TaskGroup::root(task_name, RuntimeHandle::new(handle));
@@ -257,6 +316,41 @@ fn client_task_group(task_name: &'static str) -> io::Result<(TaskGroup, Option<C
     let lease = shared_fallback()?;
     let group = lease.runtime.owner.context().root_group().child(task_name);
     Ok((group, Some(lease)))
+}
+
+fn spawn_client_task_in_group<F>(
+    task_name: &'static str,
+    task_group: TaskGroup,
+    fallback_lease: Option<ClientSharedFallbackLease>,
+    task: F,
+) -> io::Result<ClientRuntimeTaskHandle>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let fallback_guard = fallback_lease.map(|lease| {
+        let registry = lease.registry;
+        registry.submitted_tasks.fetch_add(1, Ordering::Relaxed);
+        registry.active_tasks.fetch_add(1, Ordering::Relaxed);
+        ActiveTaskGuard {
+            registry,
+            task_name,
+            _lease: lease,
+        }
+    });
+    let (completion_tx, completion_rx) = std_mpsc::channel();
+    let task_id = task_group
+        .spawn_service(task_name, async move {
+            let _fallback_guard = fallback_guard;
+            let _completion = ClientTrackedTaskCompletion::new(completion_tx);
+            task.await;
+        })
+        .map_err(io::Error::other)?;
+
+    Ok(ClientRuntimeTaskHandle {
+        task_group,
+        task_id,
+        completion_rx: Mutex::new(Some(completion_rx)),
+    })
 }
 
 pub(crate) async fn spawn_client_blocking_io<F, R>(task_name: &'static str, task: F) -> io::Result<R>
@@ -645,34 +739,12 @@ impl ClientSharedFallbackRuntime {
 }
 
 impl ClientSharedFallbackLease {
-    fn spawn<F>(self, task_name: &'static str, task: F) -> io::Result<JoinHandle<()>>
+    fn spawn<F>(self, task_name: &'static str, task: F) -> io::Result<ClientRuntimeTaskHandle>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let registry = self.registry;
-        registry.submitted_tasks.fetch_add(1, Ordering::Relaxed);
-        registry.active_tasks.fetch_add(1, Ordering::Relaxed);
-        let runtime = self.runtime.clone();
-        let result = runtime
-            .owner
-            .context()
-            .root_group()
-            .spawn_service_with_handle(task_name, async move {
-                let _guard = ActiveTaskGuard {
-                    registry,
-                    task_name,
-                    _lease: self,
-                };
-                task.await;
-            });
-
-        match result {
-            Ok((_task_id, handle)) => Ok(handle),
-            Err(error) => {
-                registry.active_tasks.fetch_sub(1, Ordering::Relaxed);
-                Err(io::Error::other(error))
-            }
-        }
+        let task_group = self.runtime.owner.context().root_group().clone();
+        spawn_client_task_in_group(task_name, task_group, Some(self), task)
     }
 }
 

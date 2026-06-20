@@ -2153,11 +2153,15 @@ impl MQClientAPIImpl {
     }
 
     pub async fn update_name_server_address_list(&self, addrs: &str) {
+        self.update_name_server_address_list_sync(addrs);
+    }
+
+    pub(crate) fn update_name_server_address_list_sync(&self, addrs: &str) {
         let addr_vec = addrs
             .split(";")
             .map(CheetahString::from_slice)
             .collect::<Vec<CheetahString>>();
-        self.remoting_client.update_name_server_address_list(addr_vec).await;
+        self.remoting_client.update_name_server_address_list_sync(addr_vec);
     }
 
     pub async fn invoke(

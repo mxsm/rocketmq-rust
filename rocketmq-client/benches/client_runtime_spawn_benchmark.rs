@@ -28,6 +28,7 @@ use criterion::Criterion;
 use rocketmq_client_rust::client_runtime_fallback_snapshot;
 use rocketmq_client_rust::reset_client_runtime_fallback_for_diagnostics;
 use rocketmq_client_rust::spawn_client_runtime_probe_task;
+use rocketmq_client_rust::ClientRuntimeTaskHandle;
 use rocketmq_client_rust::ClientSharedFallbackSnapshot;
 use rocketmq_runtime::ShutdownReport;
 
@@ -54,14 +55,14 @@ fn run_fallback_spawn(task_count: usize) -> ClientRuntimeSpawnOutput {
 
     let (tx, rx) = mpsc::channel();
     let started_at = Instant::now();
-    let mut handles = Vec::with_capacity(task_count);
+    let mut task_handles = Vec::with_capacity(task_count);
     for task_index in 0..task_count {
         let tx = tx.clone();
-        let handle = spawn_client_runtime_probe_task("rocketmq-client-runtime-spawn-bench", async move {
+        let task_handle = spawn_client_runtime_probe_task("rocketmq-client-runtime-spawn-bench", async move {
             tx.send(task_index).expect("benchmark receiver should stay alive");
         })
         .expect("client fallback task should spawn");
-        handles.push(handle);
+        task_handles.push(task_handle);
     }
     drop(tx);
 
@@ -69,7 +70,7 @@ fn run_fallback_spawn(task_count: usize) -> ClientRuntimeSpawnOutput {
         rx.recv_timeout(Duration::from_secs(5))
             .expect("client fallback task should complete");
     }
-    wait_for_handles_finished(&handles);
+    wait_for_tasks_finished(&task_handles);
     wait_for_fallback_idle();
     let elapsed = started_at.elapsed();
     let snapshot = client_runtime_fallback_snapshot().expect("client fallback runtime should exist after spawn");
@@ -117,15 +118,12 @@ fn wait_for_fallback_idle() {
     }
 }
 
-fn wait_for_handles_finished(handles: &[tokio::task::JoinHandle<()>]) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if handles.iter().all(tokio::task::JoinHandle::is_finished) {
-            return;
-        }
-
-        assert!(Instant::now() < deadline, "client fallback handles did not finish");
-        std::thread::sleep(Duration::from_millis(1));
+fn wait_for_tasks_finished(task_handles: &[ClientRuntimeTaskHandle]) {
+    for task_handle in task_handles {
+        assert!(
+            task_handle.wait_finished(Duration::from_secs(5)),
+            "client fallback task did not finish"
+        );
     }
 }
 

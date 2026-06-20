@@ -35,7 +35,7 @@ use serde::Serialize;
 struct TokioExecutorProbe {
     task_count: usize,
     completed: usize,
-    spawn_join_elapsed_us: u128,
+    spawn_wait_elapsed_us: u128,
     shutdown_elapsed_us: u128,
     healthy: bool,
 }
@@ -73,19 +73,22 @@ fn run_tokio_executor_probe(task_count: usize) -> TokioExecutorProbe {
 
     let completed = Arc::new(AtomicUsize::new(0));
     let started_at = Instant::now();
-    let mut handles = Vec::with_capacity(task_count);
+    let mut task_ids = Vec::with_capacity(task_count);
     for _ in 0..task_count {
         let completed = completed.clone();
-        handles.push(executor.spawn(async move {
+        task_ids.push(executor.spawn(async move {
             completed.fetch_add(1, Ordering::Relaxed);
         }));
     }
-    executor.block_on(async move {
-        for handle in handles {
-            handle.await.expect("tokio executor task should join");
+    executor.block_on(async {
+        for task_id in task_ids {
+            assert!(
+                executor.wait_task(task_id, Duration::from_secs(1)).await,
+                "tokio executor task should finish"
+            );
         }
     });
-    let spawn_join_elapsed_us = started_at.elapsed().as_micros();
+    let spawn_wait_elapsed_us = started_at.elapsed().as_micros();
     let completed = completed.load(Ordering::Relaxed);
 
     let shutdown_started_at = Instant::now();
@@ -95,7 +98,7 @@ fn run_tokio_executor_probe(task_count: usize) -> TokioExecutorProbe {
     TokioExecutorProbe {
         task_count,
         completed,
-        spawn_join_elapsed_us,
+        spawn_wait_elapsed_us,
         shutdown_elapsed_us,
         healthy: completed == task_count,
     }
@@ -184,13 +187,13 @@ fn bench_common_executor_lifecycle(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("common_executor_lifecycle");
     for task_count in [32usize, 128] {
         group.bench_with_input(
-            BenchmarkId::new("tokio_executor_spawn_join_shutdown", task_count),
+            BenchmarkId::new("tokio_executor_spawn_wait_shutdown", task_count),
             &task_count,
             |bencher, task_count| {
                 bencher.iter(|| {
                     let output = run_tokio_executor_probe(black_box(*task_count));
                     assert!(output.healthy, "{output:?}");
-                    black_box(output.spawn_join_elapsed_us);
+                    black_box(output.spawn_wait_elapsed_us);
                     black_box(output.shutdown_elapsed_us);
                 });
             },

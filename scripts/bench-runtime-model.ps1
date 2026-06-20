@@ -248,7 +248,7 @@ $jsonArtifacts += Write-JsonArtifact -Name "common-executor.json" -Metrics @{
     status = "implemented-benchmark"
     expected_bench = "cargo bench -p rocketmq-common --bench common_executor_lifecycle_bench"
     artifact = "target/runtime-baseline/prototype/common-executor-lifecycle-report.json"
-    required_metrics = @("task_count", "completed", "spawn_join_elapsed_us", "shutdown_elapsed_us", "runs", "max_active", "healthy")
+    required_metrics = @("task_count", "completed", "spawn_wait_elapsed_us", "shutdown_elapsed_us", "runs", "max_active", "healthy")
 }
 
 $jsonArtifacts += Write-JsonArtifact -Name "common-completable-future.json" -Metrics @{

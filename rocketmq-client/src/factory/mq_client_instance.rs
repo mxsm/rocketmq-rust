@@ -107,12 +107,6 @@ fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigReques
     request_header
 }
 
-fn update_name_server_address_list_sync(api_impl: ArcMut<MQClientAPIImpl>, addr: String) {
-    futures::executor::block_on(async move {
-        api_impl.update_name_server_address_list(&addr).await;
-    });
-}
-
 async fn run_connection_net_event_listener(
     mut rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
     weak_instance: WeakArcMut<MQClientInstance>,
@@ -330,9 +324,7 @@ impl MQClientInstance {
         ));
 
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
-            let api_impl = mq_client_api_impl.clone();
-            let addr = namesrv_addr.to_string();
-            update_name_server_address_list_sync(api_impl, addr);
+            mq_client_api_impl.update_name_server_address_list_sync(namesrv_addr);
         }
 
         instance.mq_client_api_impl = Some(mq_client_api_impl);

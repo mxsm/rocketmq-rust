@@ -16,6 +16,7 @@ $workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $auditRoot = Join-Path $workspaceRoot $OutputDirectory
 $baselineRoot = Join-Path $workspaceRoot $BaselineDirectory
 $script:testScopeCache = @{}
+$script:benchmarkScopeCache = @{}
 
 function New-DirectoryIfMissing {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -172,6 +173,84 @@ function Test-LineInTestScope {
     return $false
 }
 
+function Get-SourceBenchmarkScopeRanges {
+    param([Parameter(Mandatory = $true)][string]$RelativePath)
+
+    if ($script:benchmarkScopeCache.ContainsKey($RelativePath)) {
+        return @($script:benchmarkScopeCache[$RelativePath])
+    }
+
+    $ranges = New-Object System.Collections.Generic.List[object]
+    $absolutePath = Join-Path $workspaceRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $absolutePath)) {
+        $script:benchmarkScopeCache[$RelativePath] = @()
+        return @()
+    }
+
+    $lines = @(Get-Content -LiteralPath $absolutePath -Encoding utf8)
+    $activeStart = $null
+    $activeDepth = 0
+    $activeSawBrace = $false
+
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $line = $lines[$index]
+        $lineNumber = $index + 1
+
+        if ($null -ne $activeStart) {
+            if ($line.Contains("{")) {
+                $activeSawBrace = $true
+            }
+            if ($activeSawBrace) {
+                $activeDepth += Get-BraceDelta -Line $line
+                if ($activeDepth -le 0) {
+                    Add-TestScopeRange -Ranges $ranges -Start $activeStart -End $lineNumber
+                    $activeStart = $null
+                    $activeDepth = 0
+                    $activeSawBrace = $false
+                }
+            }
+            continue
+        }
+
+        if ($line -match "\b(pub(\([^)]*\))?\s+)?mod\s+bench_support\b" -and $line -notmatch ";\s*$") {
+            $activeStart = $lineNumber
+            $activeDepth = 0
+            $activeSawBrace = $false
+            if ($line.Contains("{")) {
+                $activeSawBrace = $true
+                $activeDepth += Get-BraceDelta -Line $line
+                if ($activeDepth -le 0) {
+                    Add-TestScopeRange -Ranges $ranges -Start $activeStart -End $lineNumber
+                    $activeStart = $null
+                    $activeSawBrace = $false
+                }
+            }
+        }
+    }
+
+    if ($null -ne $activeStart) {
+        Add-TestScopeRange -Ranges $ranges -Start $activeStart -End $lines.Count
+    }
+
+    $result = @($ranges.ToArray())
+    $script:benchmarkScopeCache[$RelativePath] = $result
+    return $result
+}
+
+function Test-LineInBenchmarkScope {
+    param(
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [Parameter(Mandatory = $true)][int]$Line
+    )
+
+    foreach ($range in (Get-SourceBenchmarkScopeRanges -RelativePath $RelativePath)) {
+        if ($Line -ge $range.Start -and $Line -le $range.End) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-RuntimeAuditScope {
     param(
         [Parameter(Mandatory = $true)][string]$RelativePath,
@@ -180,6 +259,9 @@ function Get-RuntimeAuditScope {
 
     $normalized = $RelativePath.Replace("\", "/")
     if ($normalized -match "(^|/)benches/") {
+        return "benchmark"
+    }
+    if (Test-LineInBenchmarkScope -RelativePath $normalized -Line $Line) {
         return "benchmark"
     }
     if ($normalized -match "(^|/)tests/") {
@@ -343,6 +425,359 @@ function Write-BaselineJson {
     $payload | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 $Path
 }
 
+function Get-RuntimeSpawnDisposition {
+    param([Parameter(Mandatory = $true)]$Match)
+
+    $path = $Match.Path.Replace("\", "/")
+    $text = $Match.Text
+
+    if ($path -match "^rocketmq-runtime/src/") {
+        return [pscustomobject]@{
+            Disposition = "runtime-primitive"
+            ActionRequired = $false
+            Reason = "Allowed only inside rocketmq-runtime primitives; production callers should use TaskGroup, ScheduledTaskGroup, RuntimeOwner, or RuntimeHandle wrappers."
+        }
+    }
+
+    if ($path -eq "rocketmq-client/src/runtime.rs" -and $text -match "thread::Builder::new") {
+        return [pscustomobject]@{
+            Disposition = "dedicated-idle-reaper-thread"
+            ActionRequired = $false
+            Reason = "Allowed dedicated OS thread for fallback runtime idle shutdown; it does not occupy Tokio worker or blocking pools."
+        }
+    }
+
+    if ($path -match "^rocketmq-common/src/common/thread/thread_service_(tokio|std)\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "dedicated-service-thread"
+            ActionRequired = $false
+            Reason = "Allowed ServiceThread compatibility abstraction; long blocking loops should remain isolated from Tokio blocking pools."
+        }
+    }
+
+    if ($path -eq "rocketmq-store/src/base/allocate_mapped_file_service.rs") {
+        return [pscustomobject]@{
+            Disposition = "dedicated-store-allocation-thread"
+            ActionRequired = $false
+            Reason = "Allowed store file allocation loop; mmap allocation and warmup are isolated on a dedicated OS thread."
+        }
+    }
+
+    if ($path -eq "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs" -and $text -match "thread::Builder::new") {
+        return [pscustomobject]@{
+            Disposition = "tooling-entrypoint-stack-thread"
+            ActionRequired = $false
+            Reason = "Allowed CLI entrypoint host thread for explicit stack sizing; the application runtime is created at the process boundary."
+        }
+    }
+
+    if ($path -match "^rocketmq-tools/") {
+        return [pscustomobject]@{
+            Disposition = "tooling-follow-up"
+            ActionRequired = $true
+            Reason = "Tooling applications are lower risk than broker/client runtime paths, but should still avoid exposed Tokio JoinHandle or ad hoc runtime creation where practical."
+        }
+    }
+
+    return [pscustomobject]@{
+        Disposition = "unclassified-follow-up"
+        ActionRequired = $true
+        Reason = "Manual review required before this site can be treated as compliant with the runtime model."
+    }
+}
+
+function Add-RuntimeSpawnDisposition {
+    param([Parameter(Mandatory = $true)][array]$Matches)
+
+    $classified = @()
+    foreach ($match in $Matches) {
+        $disposition = Get-RuntimeSpawnDisposition -Match $match
+        $classified += [pscustomobject]@{
+            Scope = $match.Scope
+            Crate = $match.Crate
+            Path = $match.Path
+            Line = $match.Line
+            Text = $match.Text
+            Disposition = $disposition.Disposition
+            ActionRequired = [bool]$disposition.ActionRequired
+            Reason = $disposition.Reason
+        }
+    }
+    return @($classified)
+}
+
+function Write-RuntimeSpawnDispositionReport {
+    param(
+        [Parameter(Mandatory = $true)][array]$Matches,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Production Runtime Spawn Disposition")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Total matches: $($Matches.Count)")
+    $lines.Add("Action required: $(@($Matches | Where-Object { $_.ActionRequired }).Count)")
+    $lines.Add("Allowed or documented: $(@($Matches | Where-Object { -not $_.ActionRequired }).Count)")
+    $lines.Add("")
+
+    if ($Matches.Count -gt 0) {
+        $lines.Add("| Crate | File | Line | Disposition | Action required | Reason | Code |")
+        $lines.Add("|---|---|---:|---|---|---|---|")
+        foreach ($match in $Matches) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $reason = $match.Reason.Replace("|", "\|")
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $($match.Disposition) | $($match.ActionRequired) | $reason | $code |")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
+}
+
+function Get-RuntimeCreationDisposition {
+    param([Parameter(Mandatory = $true)]$Match)
+
+    $path = $Match.Path.Replace("\", "/")
+    $text = $Match.Text
+
+    if ($path -match "^rocketmq-runtime/src/") {
+        return [pscustomobject]@{
+            Disposition = "runtime-primitive"
+            ActionRequired = $false
+            Reason = "Allowed inside rocketmq-runtime ownership, context, handle, legacy, and actor primitives."
+        }
+    }
+
+    if ($path -eq "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs") {
+        return [pscustomobject]@{
+            Disposition = "tooling-entrypoint-runtime"
+            ActionRequired = $false
+            Reason = "Allowed CLI process entrypoint runtime; application entry points own Tokio runtimes."
+        }
+    }
+
+    if ($path -eq "rocketmq-auth/src/runtime_bridge.rs" -or
+        ($path -match "^rocketmq-auth/src/(authentication|authorization)/" -and $text -match "block_on_sync_bridge|block_on_authentication_provider|block_on_base_authorization")) {
+        return [pscustomobject]@{
+            Disposition = "auth-sync-bridge"
+            ActionRequired = $false
+            Reason = "Documented compatibility sync bridge with counters and shared fallback runtime policy."
+        }
+    }
+
+    if ($path -eq "rocketmq-common/src/utils/http_tiny_client.rs") {
+        return [pscustomobject]@{
+            Disposition = "common-http-sync-bridge"
+            ActionRequired = $false
+            Reason = "Documented blocking HTTP compatibility bridge backed by shared runtime owner."
+        }
+    }
+
+    if ($path -eq "rocketmq-common/src/thread_pool.rs") {
+        return [pscustomobject]@{
+            Disposition = "common-runtime-owner-facade"
+            ActionRequired = $false
+            Reason = "Common executor facade delegates runtime ownership and block_on through RuntimeOwner."
+        }
+    }
+
+    if ($path -eq "rocketmq-client/src/runtime.rs") {
+        return [pscustomobject]@{
+            Disposition = "client-fallback-runtime"
+            ActionRequired = $false
+            Reason = "Documented client shared fallback runtime and shutdown bridge."
+        }
+    }
+
+    if ($path -eq "rocketmq-client/src/factory/mq_client_instance.rs" -and $text -match "futures::executor::block_on") {
+        return [pscustomobject]@{
+            Disposition = "client-sync-block-on-follow-up"
+            ActionRequired = $true
+            Reason = "Synchronous factory path still uses futures::executor::block_on and needs a focused compatibility review."
+        }
+    }
+
+    if ($path -eq "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/service/dashboard_service.rs" -and
+        $text -match "Handle::try_current") {
+        return [pscustomobject]@{
+            Disposition = "dashboard-current-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Dashboard web backend binds to the Axum application runtime before spawning the history collector."
+        }
+    }
+
+    if ($path -eq "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/topic/service.rs" -and
+        $text -match "runtime\.block_on") {
+        return [pscustomobject]@{
+            Disposition = "dashboard-transaction-sync-bridge"
+            ActionRequired = $false
+            Reason = "Tauri topic transaction send runs inside spawn_blocking and uses the shared RuntimeOwner compatibility bridge."
+        }
+    }
+
+    if ($path -match "^rocketmq-dashboard/") {
+        return [pscustomobject]@{
+            Disposition = "dashboard-standalone-follow-up"
+            ActionRequired = $true
+            Reason = "Standalone dashboard projects are outside root workspace validation and need separate runtime-model review."
+        }
+    }
+
+    if ($path -match "^rocketmq-auth/src/runtime\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "auth-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Auth runtime binds to the current Tokio runtime before creating TaskGroup-backed services."
+        }
+    }
+
+    if ($path -match "^rocketmq-common/src/common/(stats|statistics)/") {
+        return [pscustomobject]@{
+            Disposition = "common-scheduler-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Common scheduled stats components bind to the current runtime before using ScheduledTaskGroup."
+        }
+    }
+
+    if ($path -match "^rocketmq/src/") {
+        return [pscustomobject]@{
+            Disposition = "rocketmq-runtime-boundary"
+            ActionRequired = $false
+            Reason = "RocketMQ scheduler/service abstractions bind to the current runtime before TaskGroup-backed lifecycle management."
+        }
+    }
+
+    if ($path -match "^rocketmq-namesrv/") {
+        return [pscustomobject]@{
+            Disposition = "namesrv-runtime-boundary"
+            ActionRequired = $false
+            Reason = "NameSrv bootstrap binds to the application runtime at startup."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/") {
+        return [pscustomobject]@{
+            Disposition = "broker-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Broker runtime and migrated services bind to the application runtime at startup/lifecycle boundaries."
+        }
+    }
+
+    if ($path -match "^rocketmq-controller/") {
+        return [pscustomobject]@{
+            Disposition = "controller-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Controller services bind to the current runtime before TaskGroup/ScheduledTaskGroup-managed lifecycle."
+        }
+    }
+
+    if ($path -match "^rocketmq-store/src/(runtime|rocksdb/runtime)\.rs$" -or $path -match "^rocketmq-tieredstore/src/runtime\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "store-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Store runtime adapter binds to the current runtime for store-managed async services."
+        }
+    }
+
+    if ($path -match "^rocketmq-remoting/src/clients/blocking_client\.rs$") {
+        return [pscustomobject]@{
+            Disposition = "remoting-blocking-client-compat"
+            ActionRequired = $false
+            Reason = "Documented blocking remoting client compatibility wrapper around async client operations."
+        }
+    }
+
+    if ($path -match "^rocketmq-remoting/") {
+        return [pscustomobject]@{
+            Disposition = "remoting-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Remoting client/server/TLS components bind to the current runtime before TaskGroup-backed lifecycle management."
+        }
+    }
+
+    if ($path -match "^rocketmq-proxy/") {
+        return [pscustomobject]@{
+            Disposition = "proxy-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Proxy entrypoint and gRPC services bind to the application runtime."
+        }
+    }
+
+    if ($path -match "^rocketmq-observability/") {
+        return [pscustomobject]@{
+            Disposition = "observability-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Observability exporter setup binds metrics/exporter runtime handles during startup."
+        }
+    }
+
+    if ($path -match "^rocketmq-tools/") {
+        return [pscustomobject]@{
+            Disposition = "tooling-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Admin tooling binds to the current runtime or process entrypoint runtime."
+        }
+    }
+
+    return [pscustomobject]@{
+        Disposition = "unclassified-follow-up"
+        ActionRequired = $true
+        Reason = "Manual review required before this runtime creation site can be treated as compliant."
+    }
+}
+
+function Add-RuntimeCreationDisposition {
+    param([Parameter(Mandatory = $true)][array]$Matches)
+
+    $classified = @()
+    foreach ($match in $Matches) {
+        $disposition = Get-RuntimeCreationDisposition -Match $match
+        $classified += [pscustomobject]@{
+            Scope = $match.Scope
+            Crate = $match.Crate
+            Path = $match.Path
+            Line = $match.Line
+            Text = $match.Text
+            Disposition = $disposition.Disposition
+            ActionRequired = [bool]$disposition.ActionRequired
+            Reason = $disposition.Reason
+        }
+    }
+    return @($classified)
+}
+
+function Write-RuntimeCreationDispositionReport {
+    param(
+        [Parameter(Mandatory = $true)][array]$Matches,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Production Runtime Creation Disposition")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Total matches: $($Matches.Count)")
+    $lines.Add("Action required: $(@($Matches | Where-Object { $_.ActionRequired }).Count)")
+    $lines.Add("Allowed or documented: $(@($Matches | Where-Object { -not $_.ActionRequired }).Count)")
+    $lines.Add("")
+
+    if ($Matches.Count -gt 0) {
+        $lines.Add("| Crate | File | Line | Disposition | Action required | Reason | Code |")
+        $lines.Add("|---|---|---:|---|---|---|---|")
+        foreach ($match in $Matches) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $reason = $match.Reason.Replace("|", "\|")
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $($match.Disposition) | $($match.ActionRequired) | $reason | $code |")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
+}
+
 New-DirectoryIfMissing -Path $auditRoot
 if (-not $SkipBaseline) {
     New-DirectoryIfMissing -Path $baselineRoot
@@ -370,6 +805,16 @@ foreach ($entry in $patterns.GetEnumerator()) {
         -Path (Join-Path $auditRoot "production-$($entry.Key).md")
 }
 
+$productionRuntimeSpawnDisposition = Add-RuntimeSpawnDisposition -Matches (Get-ProductionMatches -Matches $allMatches["runtime-spawn-sites"])
+Write-RuntimeSpawnDispositionReport `
+    -Matches $productionRuntimeSpawnDisposition `
+    -Path (Join-Path $auditRoot "production-runtime-spawn-disposition.md")
+
+$productionRuntimeCreationDisposition = Add-RuntimeCreationDisposition -Matches (Get-ProductionMatches -Matches $allMatches["runtime-creation-sites"])
+Write-RuntimeCreationDispositionReport `
+    -Matches $productionRuntimeCreationDisposition `
+    -Path (Join-Path $auditRoot "production-runtime-creation-disposition.md")
+
 $classificationLines = @(
     "# Runtime Task Classification",
     "",
@@ -386,8 +831,11 @@ $classificationLines = @(
     "| detached task | DetachedTaskPolicy or eliminate | runtime-spawn-sites.md |",
     "",
     "Each audit row includes a Scope column. Scope is production, test, benchmark, or example.",
+    "Benchmark scope includes benches/ paths and inline modules named bench_support.",
     "Test scope includes tests/ paths and best-effort source ranges under #[cfg(test)] or #[tokio::test].",
     "Production-only reports are emitted as production-*.md so migration planning can ignore test harness noise.",
+    '`production-runtime-spawn-disposition.md` separates allowed runtime primitives and dedicated OS threads from remaining follow-up items.',
+    '`production-runtime-creation-disposition.md` separates entrypoint runtimes, runtime primitives, documented compatibility bridges, and remaining follow-up items.',
     "Comment-only Rust lines are omitted so documentation examples do not count as runtime sites.",
     "",
     "Manual review is still required before migrating each site."
@@ -426,6 +874,27 @@ foreach ($crate in $crates) {
     }
 }
 
+$spawnDispositionByKind = [ordered]@{}
+foreach ($disposition in ($productionRuntimeSpawnDisposition | Select-Object -ExpandProperty Disposition -Unique | Sort-Object)) {
+    $spawnDispositionByKind[$disposition] = @($productionRuntimeSpawnDisposition | Where-Object { $_.Disposition -eq $disposition }).Count
+}
+$summary.production_runtime_spawn_disposition = [ordered]@{
+    total = $productionRuntimeSpawnDisposition.Count
+    action_required = @($productionRuntimeSpawnDisposition | Where-Object { $_.ActionRequired }).Count
+    allowed_or_documented = @($productionRuntimeSpawnDisposition | Where-Object { -not $_.ActionRequired }).Count
+    by_disposition = $spawnDispositionByKind
+}
+$creationDispositionByKind = [ordered]@{}
+foreach ($disposition in ($productionRuntimeCreationDisposition | Select-Object -ExpandProperty Disposition -Unique | Sort-Object)) {
+    $creationDispositionByKind[$disposition] = @($productionRuntimeCreationDisposition | Where-Object { $_.Disposition -eq $disposition }).Count
+}
+$summary.production_runtime_creation_disposition = [ordered]@{
+    total = $productionRuntimeCreationDisposition.Count
+    action_required = @($productionRuntimeCreationDisposition | Where-Object { $_.ActionRequired }).Count
+    allowed_or_documented = @($productionRuntimeCreationDisposition | Where-Object { -not $_.ActionRequired }).Count
+    by_disposition = $creationDispositionByKind
+}
+
 $summary | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 (Join-Path $auditRoot "summary.json")
 
 $riskSummaryLines = New-Object System.Collections.Generic.List[string]
@@ -440,6 +909,9 @@ foreach ($key in $patterns.Keys) {
         "| $key | $($allMatches[$key].Count) | $(Get-CountForScope -Matches $allMatches[$key] -Scope "production") | $(Get-CountForScope -Matches $allMatches[$key] -Scope "test") | $(Get-CountForScope -Matches $allMatches[$key] -Scope "benchmark") | $(Get-CountForScope -Matches $allMatches[$key] -Scope "example") |"
     )
 }
+$riskSummaryLines.Add("")
+$riskSummaryLines.Add("Runtime spawn disposition: $(@($productionRuntimeSpawnDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionRuntimeSpawnDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
+$riskSummaryLines.Add("Runtime creation disposition: $(@($productionRuntimeCreationDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionRuntimeCreationDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines -join [Environment]::NewLine | Out-File -Encoding utf8 (Join-Path $auditRoot "production-risk-summary.md")
 
 if (-not $SkipBaseline) {

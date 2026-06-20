@@ -26,11 +26,14 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
+use rocketmq_runtime::TaskKind;
 use tokio::runtime::Handle;
-use tokio::task::JoinHandle;
 
 pub struct TokioExecutorService {
     inner: RuntimeOwner,
+    task_group: TaskGroup,
 }
 
 impl Default for TokioExecutorService {
@@ -99,17 +102,36 @@ impl TokioExecutorService {
 
     fn from_config(config: RuntimeConfig) -> anyhow::Result<TokioExecutorService> {
         let inner = RuntimeOwner::new(config)?;
-        Ok(TokioExecutorService { inner })
+        let task_group = inner.context().root_group().child("tokio-executor");
+        Ok(TokioExecutorService { inner, task_group })
     }
 }
 
 impl TokioExecutorService {
-    pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+    pub fn spawn<F>(&self, future: F) -> TaskId
     where
-        F: Future + Send + 'static,
-        F::Output: Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
-        self.inner.context().runtime().spawn(future)
+        static TASK_ID: AtomicUsize = AtomicUsize::new(0);
+
+        self.task_group
+            .spawn(
+                format!(
+                    "rocketmq.common.tokio-executor.task.{}",
+                    TASK_ID.fetch_add(1, Ordering::Relaxed)
+                ),
+                TaskKind::Worker,
+                future,
+            )
+            .expect("TokioExecutorService task group should be open")
+    }
+
+    pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
+        self.task_group.wait_task(task_id, timeout).await
+    }
+
+    pub fn task_count(&self) -> usize {
+        self.task_group.task_count()
     }
 
     pub fn get_handle(&self) -> &Handle {
@@ -372,11 +394,13 @@ mod tests {
                 .expect("tokio executor should be created");
         let (tx, rx) = mpsc::channel();
 
-        executor.spawn(async move {
+        let task_id = executor.spawn(async move {
             tx.send(42).expect("test receiver should be alive");
         });
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
+        assert!(executor.block_on(executor.wait_task(task_id, Duration::from_secs(1))));
+        assert_eq!(executor.task_count(), 0);
         executor.shutdown_timeout(Duration::from_secs(1));
     }
 

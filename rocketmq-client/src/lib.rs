@@ -209,6 +209,8 @@ pub use crate::runtime::reset_client_runtime_fallback_for_diagnostics;
 #[doc(hidden)]
 pub use crate::runtime::spawn_client_runtime_probe_task;
 #[doc(hidden)]
+pub use crate::runtime::ClientRuntimeTaskHandle;
+#[doc(hidden)]
 pub use crate::runtime::ClientSharedFallbackLifecycleState;
 #[doc(hidden)]
 pub use crate::runtime::ClientSharedFallbackSnapshot;

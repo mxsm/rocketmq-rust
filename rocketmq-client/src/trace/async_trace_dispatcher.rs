@@ -20,9 +20,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -38,6 +41,7 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_rust::ArcMut;
 use serde::Serialize;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -59,6 +63,7 @@ use crate::trace::trace_transfer_bean::TraceTransferBean;
 
 // Configuration for the async trace dispatcher.
 const TRACE_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const TRACE_WORKER_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 struct TraceDispatcherConfig {
@@ -98,6 +103,29 @@ impl DispatcherState {
             namespace_v2: RwLock::new(None),
         }
     }
+}
+
+enum TraceFlushResponder {
+    Blocking(std_mpsc::Sender<RocketMQResult<()>>),
+    Async(oneshot::Sender<RocketMQResult<()>>),
+}
+
+impl TraceFlushResponder {
+    fn send(self, result: RocketMQResult<()>) {
+        match self {
+            Self::Blocking(sender) => {
+                let _ = sender.send(result);
+            }
+            Self::Async(sender) => {
+                let _ = sender.send(result);
+            }
+        }
+    }
+}
+
+enum TraceWorkerCommand {
+    Trace(TraceContext),
+    Flush(TraceFlushResponder),
 }
 
 enum TraceTaskHandle {
@@ -179,10 +207,10 @@ pub struct TraceWorkerLifecycleProbe {
 ///
 /// # Implementation
 ///
-/// Uses a `tokio::mpsc::channel` with a capacity of 2048 for queuing trace contexts.
-/// A single worker task periodically flushes batches based on count or time thresholds.
-/// The worker is submitted through the client runtime helper, which uses the
-/// current Tokio runtime when available and the shared client fallback runtime otherwise.
+/// Uses a `tokio::mpsc::channel` with a capacity of 2048 for queuing trace contexts and flush
+/// commands. A single worker task periodically flushes batches based on count, time thresholds, or
+/// explicit flush requests. The worker is submitted through the client runtime helper, which uses
+/// the current Tokio runtime when available and the shared client fallback runtime otherwise.
 ///
 /// # Discard Policy
 ///
@@ -192,8 +220,8 @@ pub struct AsyncTraceDispatcher {
     config: TraceDispatcherConfig,
     state: Arc<DispatcherState>,
     use_tls: AtomicBool,
-    tx: mpsc::Sender<TraceContext>,
-    rx: Mutex<Option<mpsc::Receiver<TraceContext>>>,
+    tx: mpsc::Sender<TraceWorkerCommand>,
+    rx: Mutex<Option<mpsc::Receiver<TraceWorkerCommand>>>,
     worker_handle: Mutex<Option<TraceTaskHandle>>,
     trace_producer: RwLock<Option<Arc<tokio::sync::Mutex<DefaultMQProducer>>>>,
     instance_counter: Arc<AtomicUsize>,
@@ -338,7 +366,26 @@ impl AsyncTraceDispatcher {
         }
 
         info!("Flushing trace data...");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (sender, receiver) = oneshot::channel();
+        self.tx
+            .send(TraceWorkerCommand::Flush(TraceFlushResponder::Async(sender)))
+            .await
+            .map_err(|_| RocketMQError::Internal("Trace dispatcher worker is stopped".to_string()))?;
+
+        match tokio::time::timeout(TRACE_WORKER_FLUSH_TIMEOUT, receiver).await {
+            Ok(Ok(result)) => result?,
+            Ok(Err(_)) => {
+                return Err(RocketMQError::Internal(
+                    "Trace dispatcher worker dropped flush acknowledgement".to_string(),
+                ));
+            }
+            Err(_) => {
+                return Err(RocketMQError::Internal(format!(
+                    "Trace dispatcher flush timed out after {:?}",
+                    TRACE_WORKER_FLUSH_TIMEOUT
+                )));
+            }
+        }
         info!("Flush completed");
         Ok(())
     }
@@ -350,13 +397,13 @@ impl AsyncTraceDispatcher {
             return;
         }
 
-        self.state.is_stopped.store(true, Ordering::SeqCst);
-
         info!("Shutting down AsyncTraceDispatcher...");
 
         if let Err(error) = self.flush_async().await {
             error!("Flush failed during shutdown: {:?}", error);
         }
+
+        self.state.is_stopped.store(true, Ordering::SeqCst);
 
         let handle = { self.worker_handle.lock().take() };
         if let Some(handle) = handle {
@@ -501,7 +548,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         };
 
         // Try to send without blocking
-        match self.tx.try_send(trace_ctx.clone()) {
+        match self.tx.try_send(TraceWorkerCommand::Trace(trace_ctx.clone())) {
             Ok(_) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // Queue full, discard and increment counter
@@ -519,11 +566,10 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         }
     }
 
-    /// Flushes pending trace contexts by allowing the worker task to process them.
+    /// Flushes pending trace contexts by requesting an acknowledgement from the worker task.
     ///
-    /// Blocks the calling thread briefly to give the worker task time to process
-    /// pending contexts. This is a best-effort operation and does not guarantee
-    /// all contexts are sent.
+    /// Blocks the calling thread until the worker processes the flush command or
+    /// the flush timeout elapses.
     ///
     /// # Errors
     ///
@@ -535,8 +581,25 @@ impl TraceDispatcher for AsyncTraceDispatcher {
 
         info!("Flushing trace data...");
 
-        // Allows the worker task time to process queued items
-        std::thread::sleep(Duration::from_millis(100));
+        let (sender, receiver) = std_mpsc::channel();
+        self.tx
+            .try_send(TraceWorkerCommand::Flush(TraceFlushResponder::Blocking(sender)))
+            .map_err(|error| RocketMQError::Internal(format!("Trace dispatcher flush queue failed: {error}")))?;
+
+        match receiver.recv_timeout(TRACE_WORKER_FLUSH_TIMEOUT) {
+            Ok(result) => result?,
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                return Err(RocketMQError::Internal(format!(
+                    "Trace dispatcher flush timed out after {:?}",
+                    TRACE_WORKER_FLUSH_TIMEOUT
+                )));
+            }
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(RocketMQError::Internal(
+                    "Trace dispatcher worker dropped flush acknowledgement".to_string(),
+                ));
+            }
+        }
 
         info!("Flush completed");
         Ok(())
@@ -553,15 +616,15 @@ impl TraceDispatcher for AsyncTraceDispatcher {
             return;
         }
 
-        // Set stopped flag
-        self.state.is_stopped.store(true, Ordering::SeqCst);
-
         info!("Shutting down AsyncTraceDispatcher...");
 
         // Flush remaining data
         if let Err(e) = self.flush() {
             error!("Flush failed during shutdown: {:?}", e);
         }
+
+        // Set stopped flag
+        self.state.is_stopped.store(true, Ordering::SeqCst);
 
         if let Some(handle) = self.worker_handle.lock().take() {
             let stopped = handle.shutdown(TRACE_WORKER_SHUTDOWN_TIMEOUT);
@@ -630,7 +693,7 @@ where
 // Main worker loop that processes trace contexts in batches.
 // Receives contexts from the channel and flushes when batch size or time threshold is reached.
 async fn worker_loop(
-    mut rx: mpsc::Receiver<TraceContext>,
+    mut rx: mpsc::Receiver<TraceWorkerCommand>,
     state: Arc<DispatcherState>,
     producer: Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     config: TraceDispatcherConfig,
@@ -663,7 +726,9 @@ async fn worker_loop(
                         || last_flush.elapsed() >= config.flush_interval;
 
                     if should_flush {
-                        flush_buffer(&mut buffer, &state, &producer, &config).await;
+                        if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
+                            error!("flush_buffer failed: {:?}", error);
+                        }
                         last_flush = Instant::now();
                     }
                 }
@@ -678,20 +743,29 @@ async fn worker_loop(
             // Receive trace context or detect channel close
             result = rx.recv() => {
                 match result {
-                    Some(ctx) => {
+                    Some(TraceWorkerCommand::Trace(ctx)) => {
                         buffer.push(ctx);
 
                         // Flush immediately if batch is full
                         if buffer.len() >= config.batch_num {
-                            flush_buffer(&mut buffer, &state, &producer, &config).await;
+                            if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
+                                error!("flush_buffer failed: {:?}", error);
+                            }
                             last_flush = Instant::now();
                         }
+                    }
+                    Some(TraceWorkerCommand::Flush(responder)) => {
+                        let result = flush_buffer(&mut buffer, &state, &producer, &config).await;
+                        last_flush = Instant::now();
+                        responder.send(result);
                     }
                     None => {
                         // Channel closed
                         info!("Worker loop exiting (channel closed)");
                         if !buffer.is_empty() {
-                            flush_buffer(&mut buffer, &state, &producer, &config).await;
+                            if let Err(error) = flush_buffer(&mut buffer, &state, &producer, &config).await {
+                                error!("flush_buffer failed before worker exit: {:?}", error);
+                            }
                         }
                         break;
                     }
@@ -709,17 +783,26 @@ async fn flush_buffer(
     state: &Arc<DispatcherState>,
     producer: &Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     config: &TraceDispatcherConfig,
-) {
+) -> RocketMQResult<()> {
     if buffer.is_empty() {
-        return;
+        record_flush_completion(state);
+        return Ok(());
     }
 
     // Take ownership of buffer contents (zero-copy swap)
     let contexts = std::mem::take(buffer);
 
-    if let Err(error) = send_trace_data(contexts, state, producer, config).await {
-        error!("send_trace_data failed: {:?}", error);
-    }
+    send_trace_data(contexts, state, producer, config).await?;
+    record_flush_completion(state);
+    Ok(())
+}
+
+fn record_flush_completion(state: &DispatcherState) {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default();
+    state.last_flush_time.store(timestamp_ms, Ordering::Release);
 }
 
 // Processes and sends trace data in batches.
@@ -1125,6 +1208,29 @@ mod tests {
 
         assert!(!dispatcher.is_started());
         assert!(!dispatcher.is_stopped());
+    }
+
+    #[tokio::test]
+    async fn flush_buffer_empty_records_completion_time() {
+        let state = Arc::new(DispatcherState::new());
+        let producer = Arc::new(tokio::sync::Mutex::new(DefaultMQProducer::builder().build()));
+        let config = TraceDispatcherConfig {
+            group: "Test".to_string(),
+            type_: Type::Produce,
+            batch_num: 5,
+            max_msg_size: 128_000,
+            flush_interval: Duration::from_millis(100),
+            trace_topic_name: "TRACE".to_string(),
+            rpc_hook: None,
+        };
+        let mut buffer = Vec::new();
+
+        assert_eq!(state.last_flush_time.load(Ordering::Acquire), 0);
+        flush_buffer(&mut buffer, &state, &producer, &config)
+            .await
+            .expect("empty flush should complete");
+
+        assert!(state.last_flush_time.load(Ordering::Acquire) > 0);
     }
 
     #[tokio::test]

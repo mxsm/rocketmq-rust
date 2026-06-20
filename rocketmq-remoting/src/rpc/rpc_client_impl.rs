@@ -54,6 +54,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RpcClientError;
+use rocketmq_runtime::TaskId;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::trace;
@@ -115,7 +116,7 @@ impl ResponseConfig {
 ///         Ok(response) => println!("Success: {:?}", response),
 ///         Err(err) => eprintln!("Failed: {}", err),
 ///     }
-/// }).await;
+/// });
 /// ```
 pub struct RpcClientImpl {
     /// Client metadata for broker address resolution
@@ -490,14 +491,9 @@ impl RpcClientImpl {
     ///         Ok(response) => process_response(response),
     ///         Err(err) => log_error(err),
     ///     }
-    /// }).await;
+    /// });
     /// ```
-    pub fn invoke_with_callback<H, F>(
-        &self,
-        request: RpcRequest<H>,
-        timeout_millis: u64,
-        callback: F,
-    ) -> tokio::task::JoinHandle<()>
+    pub fn invoke_with_callback<H, F>(&self, request: RpcRequest<H>, timeout_millis: u64, callback: F) -> TaskId
     where
         H: CommandCustomHeader + TopicRequestHeaderTrait + Send + 'static,
         F: FnOnce(RocketMQResult<RpcResponse>) + Send + 'static,
@@ -508,7 +504,7 @@ impl RpcClientImpl {
         let hooks = self.client_hook_list.clone();
 
         remoting_client
-            .spawn_worker_task_with_handle("remoting.rpc.callback", async move {
+            .spawn_worker_task("remoting.rpc.callback", async move {
                 // Create a temporary client instance for the async task
                 let temp_client = RpcClientImpl {
                     client_metadata,
@@ -593,14 +589,18 @@ mod tests {
         );
         let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let handle = rpc_client.invoke_with_callback(request, 3000, move |result| {
+        let task_id = rpc_client.invoke_with_callback(request, 3000, move |result| {
             let _ = tx.send(result.is_err());
         });
 
-        handle.await.expect("callback task should join");
-        assert!(rx.await.expect("callback result should be sent"));
-
         let worker_task_group = remoting_client.worker_task_group().expect("worker task group");
+        assert!(
+            worker_task_group
+                .wait_task(task_id, std::time::Duration::from_secs(1))
+                .await,
+            "callback task should finish"
+        );
+        assert!(rx.await.expect("callback result should be sent"));
         assert_eq!(
             worker_task_group.lifecycle_state(),
             rocketmq_runtime::TaskGroupLifecycleState::Open
