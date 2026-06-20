@@ -435,6 +435,14 @@ impl ChannelInner {
     /// - ~40-60% higher throughput than tokio::mpsc
     /// - Better performance under contention
     pub fn new(connection: Connection, response_table: ArcMut<HashMap<i32, ResponseFuture>>) -> Self {
+        Self::try_new(connection, response_table).expect("ChannelInner send task requires a Tokio runtime")
+    }
+
+    /// Creates a new `ChannelInner` and reports runtime/task startup failures.
+    pub fn try_new(
+        connection: Connection,
+        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+    ) -> rocketmq_error::RocketMQResult<Self> {
         const QUEUE_CAPACITY: usize = 1024;
 
         // Use flume bounded channel for better performance
@@ -442,22 +450,30 @@ impl ChannelInner {
         let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(QUEUE_CAPACITY);
 
         let connection = ArcMut::new(connection);
-        let task_group = TaskGroup::root(
-            "rocketmq-remoting.channel",
-            RuntimeHandle::new(tokio::runtime::Handle::current()),
-        );
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            RocketMQError::network_connection_failed(
+                "channel",
+                format!("ChannelInner send task requires a Tokio runtime: {error}"),
+            )
+        })?;
+        let task_group = TaskGroup::root("rocketmq-remoting.channel", RuntimeHandle::new(runtime));
         task_group
             .spawn_service(
                 "remoting.channel.send",
                 handle_send(connection.clone(), outbound_queue_rx, response_table.clone()),
             )
-            .expect("channel send task must spawn");
-        Self {
+            .map_err(|error| {
+                RocketMQError::network_connection_failed(
+                    "channel",
+                    format!("failed to spawn ChannelInner send task: {error}"),
+                )
+            })?;
+        Ok(Self {
             outbound_queue_tx,
             connection,
             response_table,
             send_task_group: task_group,
-        }
+        })
     }
 }
 
@@ -670,5 +686,38 @@ impl ChannelInner {
     #[deprecated(since = "0.1.0", note = "Use `is_healthy()` instead")]
     pub fn is_ok(&self) -> bool {
         self.connection.is_healthy()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
+
+    #[test]
+    fn try_new_without_tokio_runtime_returns_error() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (stream, _client_stream) = runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = TcpStream::connect(addr);
+            let server = listener.accept();
+            let (client_stream, server_stream) = tokio::join!(client, server);
+            (server_stream.unwrap().0, client_stream.unwrap())
+        });
+        drop(runtime);
+
+        let error = match ChannelInner::try_new(
+            Connection::new(stream),
+            ArcMut::new(HashMap::<i32, ResponseFuture>::new()),
+        ) {
+            Ok(_) => panic!("try_new should report missing Tokio runtime instead of panicking"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("ChannelInner send task requires a Tokio runtime"));
     }
 }

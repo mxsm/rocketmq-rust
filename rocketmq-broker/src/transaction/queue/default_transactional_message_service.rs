@@ -85,15 +85,16 @@ where
     pub async fn set_transactional_op_batch_service_start(
         &mut self,
         weak_this: WeakArcMut<DefaultTransactionalMessageService<MS>>,
-    ) {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let transactional_op_batch_service = TransactionalOpBatchService::new(
             self.transactional_message_bridge
                 .broker_runtime_inner
                 .broker_config_arc(),
             weak_this,
         );
-        transactional_op_batch_service.start().await;
+        transactional_op_batch_service.start().await?;
         self.transactional_op_batch_service = Some(transactional_op_batch_service);
+        Ok(())
     }
 
     fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {

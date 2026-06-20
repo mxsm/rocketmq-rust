@@ -302,7 +302,13 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
 
     fn shutdown(&mut self) {
         if let Some(task_group) = self.scan_task_group.take() {
-            task_group.cancel();
+            let report = task_group.shutdown_now();
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "DefaultBrokerHeartbeatManager immediate shutdown report is unhealthy"
+                );
+            }
             info!("DefaultBrokerHeartbeatManager background scan stopped");
         }
     }
@@ -457,5 +463,28 @@ mod tests {
         let config = ArcMut::new(ControllerConfig::test_config());
         let manager = DefaultBrokerHeartbeatManager::new(config.clone());
         assert_eq!(manager.scan_interval_ms, config.scan_not_active_broker_interval);
+    }
+
+    #[test]
+    fn start_without_tokio_runtime_does_not_leave_scan_task_group() {
+        let config = ArcMut::new(ControllerConfig::test_config());
+        let mut manager = DefaultBrokerHeartbeatManager::new(config);
+
+        manager.start();
+
+        assert!(manager.scan_task_group.is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_shutdown_clears_scan_task_group() {
+        let config = ArcMut::new(ControllerConfig::test_config());
+        let mut manager = DefaultBrokerHeartbeatManager::new(config).with_scan_interval_ms(1);
+
+        manager.start();
+        assert!(manager.scan_task_group.is_some());
+
+        manager.shutdown();
+
+        assert!(manager.scan_task_group.is_none());
     }
 }

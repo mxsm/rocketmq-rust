@@ -21,6 +21,7 @@ use crate::state::AppState;
 use crate::state::WebAdminFacade;
 use chrono::Utc;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -147,8 +148,8 @@ pub fn spawn_dashboard_history_collector(
     admin_facade: WebAdminFacade,
     history_store: DashboardHistoryStore,
     interval_secs: u64,
-) {
-    tokio::spawn(async move {
+) -> anyhow::Result<()> {
+    spawn_dashboard_task("dashboard-history-collector", async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
         loop {
             interval.tick().await;
@@ -159,7 +160,17 @@ pub fn spawn_dashboard_history_collector(
                 }
             }
         }
-    });
+    })
+}
+
+fn spawn_dashboard_task<F>(task_name: &'static str, task: F) -> anyhow::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|error| anyhow::anyhow!("{task_name} requires a Tokio runtime: {error}"))?;
+    drop(handle.spawn(task));
+    Ok(())
 }
 
 async fn collect_history_sample(
@@ -184,11 +195,23 @@ async fn collect_history_sample(
 #[cfg(test)]
 mod tests {
     use super::DashboardHistoryStore;
+    use super::spawn_dashboard_task;
     use crate::model::DashboardHistoryQuery;
     use crate::model::DashboardOverview;
     use crate::model::DashboardTopicCurrent;
     use crate::model::TopicCurrentMetric;
     use chrono::Utc;
+
+    #[test]
+    fn spawn_dashboard_task_without_tokio_runtime_returns_error() {
+        let error = spawn_dashboard_task("dashboard-test-task", async {})
+            .expect_err("dashboard task spawn should fail without a Tokio runtime");
+
+        assert!(
+            error.to_string().contains("requires a Tokio runtime"),
+            "unexpected error: {error}"
+        );
+    }
 
     #[tokio::test]
     async fn history_store_returns_broker_and_topic_points() {

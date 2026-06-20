@@ -124,7 +124,7 @@ where
         } else {
             Connection::new(stream)
         };
-        let channel_inner = ArcMut::new(ChannelInner::new(connection, cmd_handler.response_table.clone()));
+        let channel_inner = ArcMut::new(ChannelInner::try_new(connection, cmd_handler.response_table.clone())?);
         let channel = Channel::new(channel_inner, local_addr, remote_address);
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {

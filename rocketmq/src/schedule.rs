@@ -60,6 +60,7 @@ pub mod simple_scheduler {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
+    use anyhow::anyhow;
     use anyhow::Result;
     use parking_lot::RwLock;
     use tokio::sync::oneshot;
@@ -91,6 +92,15 @@ pub mod simple_scheduler {
         cancel_token: CancellationToken,
         handle: JoinHandle<()>,
         done: oneshot::Receiver<()>,
+    }
+
+    fn spawn_scheduled_task<F>(operation: &'static str, future: F) -> Result<JoinHandle<()>>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|error| anyhow!("{operation} requires a Tokio runtime: {error}"))?;
+        Ok(handle.spawn(future))
     }
 
     #[derive(Debug, Clone)]
@@ -166,7 +176,12 @@ pub mod simple_scheduler {
         ///
         /// # Notes
         /// - Tasks are executed at fixed intervals, even if previous executions overlap.
-        pub fn add_fixed_rate_task<F, Fut>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
+        pub fn add_fixed_rate_task<F, Fut>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> Result<TaskId>
         where
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
@@ -188,7 +203,12 @@ pub mod simple_scheduler {
         ///
         /// # Notes
         /// - Tasks are executed serially, with a delay after each task completes.
-        pub fn add_fixed_delay_task<F, Fut>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
+        pub fn add_fixed_delay_task<F, Fut>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> Result<TaskId>
         where
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
@@ -215,7 +235,7 @@ pub mod simple_scheduler {
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
-        ) -> TaskId
+        ) -> Result<TaskId>
         where
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
@@ -251,7 +271,7 @@ pub mod simple_scheduler {
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
-        ) -> TaskId
+        ) -> Result<TaskId>
         where
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
@@ -263,7 +283,7 @@ pub mod simple_scheduler {
             let task_fn = ArcMut::new(task_fn);
 
             let (done_tx, done) = oneshot::channel();
-            let handle = tokio::spawn({
+            let handle = spawn_scheduled_task("ScheduledTaskManager::add_scheduled_task", {
                 let mut task_fn = task_fn;
                 async move {
                     match mode {
@@ -384,7 +404,7 @@ pub mod simple_scheduler {
                     }
                     drop(done_tx);
                 }
-            });
+            })?;
 
             self.tasks.write().insert(
                 id,
@@ -395,7 +415,7 @@ pub mod simple_scheduler {
                 },
             );
 
-            id
+            Ok(id)
         }
 
         /// Cancel and stop a scheduled task driver.
@@ -525,7 +545,12 @@ pub mod simple_scheduler {
         /// # Notes
         /// - Tasks are executed at fixed intervals, even if previous executions overlap.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_rate_task_async<F>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
+        pub fn add_fixed_rate_task_async<F>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> Result<TaskId>
         where
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
@@ -547,7 +572,12 @@ pub mod simple_scheduler {
         /// # Notes
         /// - Tasks are executed serially, with a delay after each task completes.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_delay_task_async<F>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
+        pub fn add_fixed_delay_task_async<F>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> Result<TaskId>
         where
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
@@ -574,7 +604,7 @@ pub mod simple_scheduler {
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
-        ) -> TaskId
+        ) -> Result<TaskId>
         where
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
@@ -610,7 +640,7 @@ pub mod simple_scheduler {
             initial_delay: Duration,
             period: Duration,
             task_fn: F,
-        ) -> TaskId
+        ) -> Result<TaskId>
         where
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
@@ -622,7 +652,7 @@ pub mod simple_scheduler {
             let task_fn = ArcMut::new(task_fn);
 
             let (done_tx, done) = oneshot::channel();
-            let handle = tokio::spawn({
+            let handle = spawn_scheduled_task("ScheduledTaskManager::add_scheduled_task_async", {
                 let mut task_fn = task_fn;
                 async move {
                     match mode {
@@ -743,7 +773,7 @@ pub mod simple_scheduler {
                     }
                     drop(done_tx);
                 }
-            });
+            })?;
 
             self.tasks.write().insert(
                 id,
@@ -754,7 +784,7 @@ pub mod simple_scheduler {
                 },
             );
 
-            id
+            Ok(id)
         }
     }
 }
@@ -780,68 +810,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn add_scheduled_task_without_tokio_runtime_returns_error() {
+        let manager = ScheduledTaskManager::new();
+        let error = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedDelay,
+                Duration::ZERO,
+                Duration::from_secs(1),
+                |_token| async move { Ok(()) },
+            )
+            .expect_err("adding a scheduled task without a Tokio runtime should fail");
+
+        assert!(
+            error.to_string().contains("requires a Tokio runtime"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(manager.task_count(), 0);
+    }
+
+    #[test]
+    fn add_scheduled_task_async_without_tokio_runtime_returns_error() {
+        let manager = ScheduledTaskManager::new();
+        let error = manager
+            .add_scheduled_task_async(
+                ScheduleMode::FixedDelay,
+                Duration::ZERO,
+                Duration::from_secs(1),
+                async move |_token| Ok(()),
+            )
+            .expect_err("adding an async scheduled task without a Tokio runtime should fail");
+
+        assert!(
+            error.to_string().contains("requires a Tokio runtime"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(manager.task_count(), 0);
+    }
+
     #[tokio::test]
     async fn adds_task_and_increments_task_count() {
         let manager = ScheduledTaskManager::new();
-        let task_id = manager.add_scheduled_task(
-            ScheduleMode::FixedRate,
-            Duration::from_secs(1),
-            Duration::from_secs(2),
-            |token| async move {
-                if token.is_cancelled() {
-                    return Ok(());
-                }
-                Ok(())
-            },
-        );
-
-        assert_eq!(manager.task_count(), 1);
-        manager.cancel_task(task_id);
-    }
-
-    #[tokio::test]
-    async fn cancels_task_and_decrements_task_count() {
-        let manager = ScheduledTaskManager::new();
-        let task_id = manager.add_scheduled_task(
-            ScheduleMode::FixedRate,
-            Duration::from_secs(1),
-            Duration::from_secs(2),
-            |token| async move {
-                if token.is_cancelled() {
-                    return Ok(());
-                }
-                Ok(())
-            },
-        );
-
-        manager.cancel_task(task_id);
-        assert_eq!(manager.task_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn aborts_task_and_decrements_task_count() {
-        let manager = ScheduledTaskManager::new();
-        let task_id = manager.add_scheduled_task(
-            ScheduleMode::FixedRate,
-            Duration::from_secs(1),
-            Duration::from_secs(2),
-            |token| async move {
-                if token.is_cancelled() {
-                    return Ok(());
-                }
-                Ok(())
-            },
-        );
-
-        manager.abort_task(task_id);
-        assert_eq!(manager.task_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn cancels_all_tasks() {
-        let manager = ScheduledTaskManager::new();
-        for _ in 0..3 {
-            manager.add_scheduled_task(
+        let task_id = manager
+            .add_scheduled_task(
                 ScheduleMode::FixedRate,
                 Duration::from_secs(1),
                 Duration::from_secs(2),
@@ -851,7 +862,72 @@ mod tests {
                     }
                     Ok(())
                 },
-            );
+            )
+            .expect("fixed-rate scheduled task should start");
+
+        assert_eq!(manager.task_count(), 1);
+        manager.cancel_task(task_id);
+    }
+
+    #[tokio::test]
+    async fn cancels_task_and_decrements_task_count() {
+        let manager = ScheduledTaskManager::new();
+        let task_id = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedRate,
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                |token| async move {
+                    if token.is_cancelled() {
+                        return Ok(());
+                    }
+                    Ok(())
+                },
+            )
+            .expect("fixed-rate scheduled task should start");
+
+        manager.cancel_task(task_id);
+        assert_eq!(manager.task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn aborts_task_and_decrements_task_count() {
+        let manager = ScheduledTaskManager::new();
+        let task_id = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedRate,
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                |token| async move {
+                    if token.is_cancelled() {
+                        return Ok(());
+                    }
+                    Ok(())
+                },
+            )
+            .expect("fixed-rate scheduled task should start");
+
+        manager.abort_task(task_id);
+        assert_eq!(manager.task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancels_all_tasks() {
+        let manager = ScheduledTaskManager::new();
+        for _ in 0..3 {
+            manager
+                .add_scheduled_task(
+                    ScheduleMode::FixedRate,
+                    Duration::from_secs(1),
+                    Duration::from_secs(2),
+                    |token| async move {
+                        if token.is_cancelled() {
+                            return Ok(());
+                        }
+                        Ok(())
+                    },
+                )
+                .expect("fixed-rate scheduled task should start");
         }
 
         assert_eq!(manager.task_count(), 3);
@@ -863,12 +939,14 @@ mod tests {
     async fn shutdown_all_waits_for_idle_drivers() {
         let manager = ScheduledTaskManager::new();
         for _ in 0..3 {
-            manager.add_scheduled_task(
-                ScheduleMode::FixedDelay,
-                Duration::from_secs(60),
-                Duration::from_secs(60),
-                |_token| async move { Ok(()) },
-            );
+            manager
+                .add_scheduled_task(
+                    ScheduleMode::FixedDelay,
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    |_token| async move { Ok(()) },
+                )
+                .expect("fixed-delay scheduled task should start");
         }
 
         let report = manager.shutdown_all(Duration::from_secs(1)).await;
@@ -884,18 +962,22 @@ mod tests {
     #[tokio::test]
     async fn shutdown_tasks_only_stops_selected_drivers() {
         let manager = ScheduledTaskManager::new();
-        let selected = manager.add_scheduled_task(
-            ScheduleMode::FixedDelay,
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            |_token| async move { Ok(()) },
-        );
-        manager.add_scheduled_task(
-            ScheduleMode::FixedDelay,
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            |_token| async move { Ok(()) },
-        );
+        let selected = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedDelay,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+                |_token| async move { Ok(()) },
+            )
+            .expect("selected scheduled task should start");
+        manager
+            .add_scheduled_task(
+                ScheduleMode::FixedDelay,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+                |_token| async move { Ok(()) },
+            )
+            .expect("unselected scheduled task should start");
 
         let report = manager.shutdown_tasks([selected], Duration::from_secs(1)).await;
 
@@ -916,19 +998,21 @@ mod tests {
         let manager = ScheduledTaskManager::new();
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
-        manager.add_scheduled_task(ScheduleMode::FixedDelay, Duration::ZERO, Duration::from_secs(60), {
-            let started = Arc::clone(&started);
-            let dropped = Arc::clone(&dropped);
-            move |_token| {
+        manager
+            .add_scheduled_task(ScheduleMode::FixedDelay, Duration::ZERO, Duration::from_secs(60), {
                 let started = Arc::clone(&started);
                 let dropped = Arc::clone(&dropped);
-                async move {
-                    let _marker = DropMarker(dropped);
-                    started.store(true, Ordering::Release);
-                    future::pending::<anyhow::Result<()>>().await
+                move |_token| {
+                    let started = Arc::clone(&started);
+                    let dropped = Arc::clone(&dropped);
+                    async move {
+                        let _marker = DropMarker(dropped);
+                        started.store(true, Ordering::Release);
+                        future::pending::<anyhow::Result<()>>().await
+                    }
                 }
-            }
-        });
+            })
+            .expect("fixed-delay scheduled task should start");
         time::timeout(Duration::from_secs(1), async {
             while !started.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
@@ -954,23 +1038,27 @@ mod tests {
     async fn shutdown_all_only_times_out_unfinished_drivers() {
         let manager = ScheduledTaskManager::new();
         let started = Arc::new(AtomicBool::new(false));
-        manager.add_scheduled_task(ScheduleMode::FixedDelay, Duration::ZERO, Duration::from_secs(60), {
-            let started = Arc::clone(&started);
-            move |_token| {
+        manager
+            .add_scheduled_task(ScheduleMode::FixedDelay, Duration::ZERO, Duration::from_secs(60), {
                 let started = Arc::clone(&started);
-                async move {
-                    started.store(true, Ordering::Release);
-                    future::pending::<anyhow::Result<()>>().await
+                move |_token| {
+                    let started = Arc::clone(&started);
+                    async move {
+                        started.store(true, Ordering::Release);
+                        future::pending::<anyhow::Result<()>>().await
+                    }
                 }
-            }
-        });
+            })
+            .expect("fixed-delay scheduled task should start");
         for _ in 0..3 {
-            manager.add_scheduled_task(
-                ScheduleMode::FixedDelay,
-                Duration::from_secs(60),
-                Duration::from_secs(60),
-                |_token| async move { Ok(()) },
-            );
+            manager
+                .add_scheduled_task(
+                    ScheduleMode::FixedDelay,
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    |_token| async move { Ok(()) },
+                )
+                .expect("idle scheduled task should start");
         }
         time::timeout(Duration::from_secs(1), async {
             while !started.load(Ordering::Acquire) {
@@ -994,17 +1082,19 @@ mod tests {
     async fn aborts_all_tasks() {
         let manager = ScheduledTaskManager::new();
         for _ in 0..3 {
-            manager.add_scheduled_task(
-                ScheduleMode::FixedRate,
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                |token| async move {
-                    if token.is_cancelled() {
-                        return Ok(());
-                    }
-                    Ok(())
-                },
-            );
+            manager
+                .add_scheduled_task(
+                    ScheduleMode::FixedRate,
+                    Duration::from_secs(1),
+                    Duration::from_secs(2),
+                    |token| async move {
+                        if token.is_cancelled() {
+                            return Ok(());
+                        }
+                        Ok(())
+                    },
+                )
+                .expect("fixed-rate scheduled task should start");
         }
 
         assert_eq!(manager.task_count(), 3);
@@ -1015,18 +1105,20 @@ mod tests {
     #[tokio::test]
     async fn skips_task_execution_in_fixed_rate_no_overlap_mode() {
         let manager = ScheduledTaskManager::new();
-        let task_id = manager.add_scheduled_task(
-            ScheduleMode::FixedRateNoOverlap,
-            Duration::from_secs(0),
-            Duration::from_millis(100),
-            |token| async move {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                if token.is_cancelled() {
-                    return Ok(());
-                }
-                Ok(())
-            },
-        );
+        let task_id = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedRateNoOverlap,
+                Duration::from_secs(0),
+                Duration::from_millis(100),
+                |token| async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    if token.is_cancelled() {
+                        return Ok(());
+                    }
+                    Ok(())
+                },
+            )
+            .expect("fixed-rate-no-overlap scheduled task should start");
 
         time::sleep(Duration::from_millis(400)).await;
         manager.cancel_task(task_id);
@@ -1043,14 +1135,16 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let c = counter.clone();
-        let task_id = mgr.add_fixed_rate_task_async(
-            Duration::from_millis(50),
-            Duration::from_millis(100),
-            async move |_ctx| {
-                c.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            },
-        );
+        let task_id = mgr
+            .add_fixed_rate_task_async(
+                Duration::from_millis(50),
+                Duration::from_millis(100),
+                async move |_ctx| {
+                    c.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+            .expect("fixed-rate async task should start");
 
         time::sleep(Duration::from_millis(500)).await;
 
@@ -1067,14 +1161,16 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let c = counter.clone();
-        let task_id = mgr.add_fixed_delay_task_async(
-            Duration::from_millis(10),
-            Duration::from_millis(50),
-            async move |_ctx| {
-                c.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            },
-        );
+        let task_id = mgr
+            .add_fixed_delay_task_async(
+                Duration::from_millis(10),
+                Duration::from_millis(50),
+                async move |_ctx| {
+                    c.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+            .expect("fixed-delay async task should start");
 
         time::sleep(Duration::from_millis(300)).await;
 
@@ -1091,15 +1187,17 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let c = counter.clone();
-        let task_id = mgr.add_fixed_rate_no_overlap_task_async(
-            Duration::from_millis(10),
-            Duration::from_millis(50),
-            async move |_ctx| {
-                time::sleep(Duration::from_millis(80)).await;
-                c.fetch_add(1, Ordering::Relaxed);
-                Ok(())
-            },
-        );
+        let task_id = mgr
+            .add_fixed_rate_no_overlap_task_async(
+                Duration::from_millis(10),
+                Duration::from_millis(50),
+                async move |_ctx| {
+                    time::sleep(Duration::from_millis(80)).await;
+                    c.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                },
+            )
+            .expect("fixed-rate-no-overlap async task should start");
 
         time::sleep(Duration::from_millis(400)).await;
 

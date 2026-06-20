@@ -329,7 +329,7 @@ impl NameServerRuntime {
         self.initialize_rpc_hooks();
 
         info!("Phase 4/4: Starting scheduled tasks...");
-        self.start_schedule_service();
+        self.start_schedule_service()?;
 
         // Transition to Initialized state
         self.transition_to(RuntimeState::Initialized)?;
@@ -413,26 +413,31 @@ impl NameServerRuntime {
     /// Start scheduled tasks for system health monitoring
     ///
     /// Schedules periodic broker health checks to detect and remove inactive brokers
-    fn start_schedule_service(&self) {
+    fn start_schedule_service(&self) -> RocketMQResult<()> {
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
         let mut name_server_runtime_inner = self.inner.clone();
 
-        self.scheduled_task_manager.add_fixed_rate_no_overlap_task_async(
-            Duration::from_secs(5), // Initial delay
-            Duration::from_millis(scan_not_active_broker_interval),
-            async move |_ctx| {
-                debug!("Running scheduled broker health check");
-                if let Some(route_info_manager) = name_server_runtime_inner.route_info_manager.as_mut() {
-                    route_info_manager.scan_not_active_broker();
-                }
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_no_overlap_task_async(
+                Duration::from_secs(5), // Initial delay
+                Duration::from_millis(scan_not_active_broker_interval),
+                async move |_ctx| {
+                    debug!("Running scheduled broker health check");
+                    if let Some(route_info_manager) = name_server_runtime_inner.route_info_manager.as_mut() {
+                        route_info_manager.scan_not_active_broker();
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                RocketMQError::Internal(format!("failed to start broker health check scheduled task: {error}"))
+            })?;
 
         info!(
             "Scheduled task started: broker health check (interval: {}ms)",
             scan_not_active_broker_interval
         );
+        Ok(())
     }
 
     /// Initialize RPC hooks for request pre/post-processing

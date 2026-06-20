@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
@@ -70,6 +72,15 @@ pub struct TaskExecutor {
     executions: Arc<RwLock<HashMap<String, TaskExecution>>>,
 }
 
+fn spawn_executor_task<F>(operation: &'static str, future: F) -> Result<JoinHandle<()>, SchedulerError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))?;
+    Ok(handle.spawn(future))
+}
+
 impl TaskExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
         let semaphore = Arc::new(Semaphore::new(config.max_concurrent_tasks));
@@ -101,11 +112,11 @@ impl TaskExecutor {
         let execution_id_clone = execution_id.clone();
 
         // Spawn the task execution
-        let handle = tokio::spawn(async move {
+        let handle = spawn_executor_task("TaskExecutor::execute_task", async move {
             executor
                 .run_task_internal(task_clone, execution_id_clone, scheduled_time)
                 .await;
-        });
+        })?;
 
         self.store_running_task_handle(execution_id.as_str(), handle).await;
 
@@ -260,7 +271,7 @@ impl TaskExecutor {
         let execution_id_clone = execution_id.clone();
 
         // Spawn the delayed task execution
-        let handle = tokio::spawn(async move {
+        let handle = spawn_executor_task("TaskExecutor::execute_task_with_delay", async move {
             // Wait until actual execution time
             let now = SystemTime::now();
             if actual_execution_time > now {
@@ -272,7 +283,7 @@ impl TaskExecutor {
             executor
                 .run_task_internal(task_clone, execution_id_clone, actual_execution_time)
                 .await;
-        });
+        })?;
 
         self.store_running_task_handle(execution_id.as_str(), handle).await;
 
@@ -456,6 +467,19 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::Release);
         }
+    }
+
+    #[test]
+    fn executor_task_spawn_without_tokio_runtime_returns_error() {
+        let error = match spawn_executor_task("test-executor-spawn", async {}) {
+            Ok(_) => panic!("spawn_executor_task should fail without an ambient Tokio runtime"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            SchedulerError::SystemError(message) if message.contains("requires a Tokio runtime")
+        ));
     }
 
     #[tokio::test]

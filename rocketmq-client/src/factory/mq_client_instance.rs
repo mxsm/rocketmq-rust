@@ -402,7 +402,7 @@ impl MQClientInstance {
                 };
                 mq_client_api_impl.start().await;
                 // Start various schedule tasks
-                self.start_scheduled_task(this.clone());
+                self.start_scheduled_task(this.clone())?;
                 // Start pull service
                 let instance = this.clone();
                 if let Err(e) = self.pull_message_service.start(instance).await {
@@ -647,21 +647,23 @@ impl MQClientInstance {
         true
     }
 
-    fn start_scheduled_task(&mut self, this: ArcMut<Self>) {
+    fn start_scheduled_task(&mut self, this: ArcMut<Self>) -> rocketmq_error::RocketMQResult<()> {
         info!("Starting scheduled tasks with ScheduledTaskManager");
 
         if self.client_config.namesrv_addr.is_none() {
             if let Some(mq_client_api_impl) = self.mq_client_api_impl.as_ref().cloned() {
-                self.scheduled_task_manager.add_fixed_rate_task_async(
-                    Duration::from_secs(10),
-                    Duration::from_secs(120),
-                    async move |_token| {
+                self.scheduled_task_manager
+                    .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), async move |_token| {
                         let mut api = mq_client_api_impl.clone();
                         info!("ScheduledTask: fetchNameServerAddr");
                         api.fetch_name_server_addr().await;
                         Ok(())
-                    },
-                );
+                    })
+                    .map_err(|error| {
+                        rocketmq_error::RocketMQError::Internal(format!(
+                            "failed to start fetchNameServerAddr scheduled task: {error}"
+                        ))
+                    })?;
             } else {
                 warn!(
                     "ScheduledTask: fetchNameServerAddr skipped because mq_client_api_impl is None. [{}]",
@@ -672,48 +674,67 @@ impl MQClientInstance {
 
         let client_instance = this.clone();
         let poll_name_server_interval = self.client_config.poll_name_server_interval;
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_millis(10),
-            Duration::from_millis(poll_name_server_interval as u64),
-            async move |_token| {
-                let mut instance = client_instance.clone();
-                info!("ScheduledTask: update_topic_route_info_from_name_server");
-                instance.update_topic_route_info_from_name_server().await;
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(
+                Duration::from_millis(10),
+                Duration::from_millis(poll_name_server_interval as u64),
+                async move |_token| {
+                    let mut instance = client_instance.clone();
+                    info!("ScheduledTask: update_topic_route_info_from_name_server");
+                    instance.update_topic_route_info_from_name_server().await;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to start update_topic_route_info_from_name_server scheduled task: {error}"
+                ))
+            })?;
 
         let client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(1),
-            Duration::from_millis(heartbeat_broker_interval as u64),
-            async move |_token| {
-                let mut instance = client_instance.clone();
-                info!("ScheduledTask: clean_offline_broker and send_heartbeat");
-                instance.clean_offline_broker().await;
-                instance.send_heartbeat_to_all_broker_with_lock().await;
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(
+                Duration::from_secs(1),
+                Duration::from_millis(heartbeat_broker_interval as u64),
+                async move |_token| {
+                    let mut instance = client_instance.clone();
+                    info!("ScheduledTask: clean_offline_broker and send_heartbeat");
+                    instance.clean_offline_broker().await;
+                    instance.send_heartbeat_to_all_broker_with_lock().await;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to start clean_offline_broker_and_send_heartbeat scheduled task: {error}"
+                ))
+            })?;
 
         let client_instance = this;
         let persist_consumer_offset_interval = self.client_config.persist_consumer_offset_interval as u64;
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(10),
-            Duration::from_millis(persist_consumer_offset_interval),
-            async move |_token| {
-                let mut instance = client_instance.clone();
-                info!("ScheduledTask: persistAllConsumerOffset");
-                instance.persist_all_consumer_offset().await;
-                Ok(())
-            },
-        );
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(
+                Duration::from_secs(10),
+                Duration::from_millis(persist_consumer_offset_interval),
+                async move |_token| {
+                    let mut instance = client_instance.clone();
+                    info!("ScheduledTask: persistAllConsumerOffset");
+                    instance.persist_all_consumer_offset().await;
+                    Ok(())
+                },
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::Internal(format!(
+                    "failed to start persistAllConsumerOffset scheduled task: {error}"
+                ))
+            })?;
 
         info!(
             "All scheduled tasks started, total tasks: {}",
             self.scheduled_task_manager.task_count()
         );
+        Ok(())
     }
 
     pub async fn update_topic_route_info_from_name_server(&mut self) {
@@ -2327,11 +2348,12 @@ mod tests {
         let mut instance = MQClientInstance::new_arc(client_config, 0, "scheduled-shutdown-test", None);
         instance.service_state = ServiceState::Running;
         assert!(instance.connection_event_task_handle.is_some());
-        instance.scheduled_task_manager.add_fixed_delay_task(
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            |_token| async { Ok(()) },
-        );
+        instance
+            .scheduled_task_manager
+            .add_fixed_delay_task(Duration::from_secs(60), Duration::from_secs(60), |_token| async {
+                Ok(())
+            })
+            .expect("scheduled shutdown test task should start");
 
         assert_eq!(instance.scheduled_task_manager.task_count(), 1);
 

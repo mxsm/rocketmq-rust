@@ -87,8 +87,8 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
 }
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
-    pub async fn start(&mut self) {
-        self.task_impl.start().await.unwrap();
+    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        self.task_impl.start().await
     }
 
     pub async fn shutdown(&mut self) {

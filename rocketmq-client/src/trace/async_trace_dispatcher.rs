@@ -186,7 +186,8 @@ impl TraceTaskHandle {
 ///
 /// Uses a `tokio::mpsc::channel` with a capacity of 2048 for queuing trace contexts.
 /// A single worker task periodically flushes batches based on count or time thresholds.
-/// Send operations are performed concurrently via `tokio::spawn`.
+/// The worker is submitted through the client runtime helper, which uses the
+/// current Tokio runtime when available and the shared client fallback runtime otherwise.
 ///
 /// # Discard Policy
 ///

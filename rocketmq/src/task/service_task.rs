@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
@@ -133,6 +136,19 @@ pub struct ServiceManager<T: ServiceTask + 'static> {
     is_daemon: AtomicBool,
 }
 
+fn spawn_service_task<F>(operation: &'static str, future: F) -> RocketMQResult<JoinHandle<()>>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+        RocketMQError::network_connection_failed(
+            "service-task",
+            format!("{operation} requires a Tokio runtime: {error}"),
+        )
+    })?;
+    Ok(handle.spawn(future))
+}
+
 impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
     fn as_ref(&self) -> &T {
         &self.service
@@ -217,9 +233,20 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         let task_handle = self.task_handle.clone();
 
         // Spawn the service task
-        let handle = tokio::spawn(async move {
+        let handle = match spawn_service_task("ServiceManager::start", async move {
             Self::run_internal(service, state, stopped, started, has_notified, wait_point).await;
-        });
+        }) {
+            Ok(handle) => handle,
+            Err(error) => {
+                self.started.store(false, Ordering::Release);
+                self.has_notified.store(false, Ordering::Release);
+                {
+                    let mut state = self.state.write().await;
+                    *state = ServiceLifecycle::NotStarted;
+                }
+                return Err(error);
+            }
+        };
 
         // Store the task handle
         {
@@ -600,6 +627,19 @@ mod tests {
         fn get_join_time(&self) -> Duration {
             Duration::from_millis(10)
         }
+    }
+
+    #[test]
+    fn spawn_service_task_without_tokio_runtime_returns_error() {
+        let error = match spawn_service_task("test-service-start", async {}) {
+            Ok(_) => panic!("spawning without a Tokio runtime should return an error"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("requires a Tokio runtime"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]

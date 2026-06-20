@@ -126,7 +126,7 @@ impl BrokerStatsManager {
                 Ok(())
             }
         });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "sample_stats_table_in_seconds");
 
         // Task 2: Sample every 10 minutes for hour-level statistics
         let stats_table = Arc::clone(&self.stats_table);
@@ -137,7 +137,7 @@ impl BrokerStatsManager {
                 Ok(())
             }
         });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "sample_stats_table_in_minutes");
 
         // Task 3: Sample every hour for day-level statistics
         let stats_table = Arc::clone(&self.stats_table);
@@ -148,7 +148,7 @@ impl BrokerStatsManager {
                 Ok(())
             }
         });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "sample_stats_table_in_hours");
 
         // Task 4: Clean up expired stats every 10 minutes
         let stats_table = Arc::clone(&self.stats_table);
@@ -161,12 +161,19 @@ impl BrokerStatsManager {
                     Ok(())
                 }
             });
-        self.task_ids.lock().push(task_id);
+        self.track_sampling_task(task_id, "cleanup_expired_stats");
 
         info!(
             "Started {} scheduled tasks for BrokerStatsManager",
             self.task_ids.lock().len()
         );
+    }
+
+    fn track_sampling_task(&self, task_id: anyhow::Result<TaskId>, task_name: &str) {
+        match task_id {
+            Ok(task_id) => self.task_ids.lock().push(task_id),
+            Err(error) => warn!("Failed to start BrokerStatsManager scheduled task {task_name}: {error}"),
+        }
     }
 
     fn sample_stats_table_in_seconds(stats_table: &DashMap<String, StatsItemSet>) {

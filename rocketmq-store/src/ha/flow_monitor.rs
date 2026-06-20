@@ -34,8 +34,8 @@ impl FlowMonitor {
         FlowMonitor { server_manager }
     }
 
-    pub async fn start(&self) {
-        self.server_manager.start().await.unwrap();
+    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+        self.server_manager.start().await
     }
 
     pub async fn shutdown(&self) {
@@ -137,14 +137,14 @@ mod tests {
     async fn flow_monitor_starts_successfully() {
         let config = Arc::new(MessageStoreConfig::default());
         let monitor = FlowMonitor::new(config);
-        monitor.start().await;
+        monitor.start().await.expect("flow monitor should start");
     }
 
     #[tokio::test]
     async fn flow_monitor_shuts_down_successfully() {
         let config = Arc::new(MessageStoreConfig::default());
         let monitor = FlowMonitor::new(config);
-        monitor.start().await;
+        monitor.start().await.expect("flow monitor should start");
         monitor.shutdown().await;
     }
 

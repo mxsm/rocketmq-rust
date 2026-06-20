@@ -4100,6 +4100,7 @@ dependencies = [
  "rocketmq-dashboard-common",
  "rocketmq-error",
  "rocketmq-remoting",
+ "rocketmq-runtime",
  "rusqlite",
  "serde",
  "serde_json",

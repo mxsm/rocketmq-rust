@@ -78,6 +78,14 @@ function Get-RuntimeMatches {
     return @($matches)
 }
 
+function ConvertTo-MarkdownInlineCode {
+    param([AllowNull()][string]$Text)
+
+    $tick = [char]0x60
+    $escaped = if ($null -eq $Text) { "" } else { $Text.Replace("|", "\|").Replace("$tick", "$tick$tick") }
+    return "$tick$escaped$tick"
+}
+
 function Write-MarkdownReport {
     param(
         [Parameter(Mandatory = $true)][string]$Title,
@@ -97,8 +105,9 @@ function Write-MarkdownReport {
         $lines.Add("| Crate | File | Line | Code |")
         $lines.Add("|---|---|---:|---|")
         foreach ($match in $Matches) {
-            $code = $match.Text.Replace("|", "\|")
-            $lines.Add("| $($match.Crate) | `$($match.Path)` | $($match.Line) | `$code` |")
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $code |")
         }
     }
 

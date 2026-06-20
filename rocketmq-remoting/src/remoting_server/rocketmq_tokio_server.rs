@@ -376,7 +376,18 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 };
 
                 // Create connection channel wrapper
-                let channel_inner = ArcMut::new(ChannelInner::new(connection, cmd_handler.response_table.clone()));
+                let channel_inner = match ChannelInner::try_new(connection, cmd_handler.response_table.clone()) {
+                    Ok(channel_inner) => ArcMut::new(channel_inner),
+                    Err(error) => {
+                        error!(
+                            remote_addr = %remote_addr,
+                            error = %error,
+                            "failed to initialize remoting channel"
+                        );
+                        drop(permit);
+                        return;
+                    }
+                };
                 let channel = Channel::new(channel_inner, local_addr, remote_addr);
 
                 // Notify CONNECTED event after plaintext/TLS negotiation succeeds

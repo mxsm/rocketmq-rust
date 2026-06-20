@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use tokio::runtime::Handle;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tokio::time::timeout;
 use tracing::error;
@@ -119,6 +122,18 @@ pub struct TaskScheduler {
     scheduler_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
+fn current_scheduler_handle(operation: &'static str) -> SchedulerResult<Handle> {
+    tokio::runtime::Handle::try_current()
+        .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))
+}
+
+fn spawn_scheduler_task<F>(runtime: &Handle, future: F) -> JoinHandle<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    runtime.spawn(future)
+}
+
 impl Default for TaskScheduler {
     fn default() -> Self {
         Self::new(SchedulerConfig::default())
@@ -152,13 +167,20 @@ impl TaskScheduler {
         *running = true;
 
         info!("Starting task scheduler");
+        let runtime = match current_scheduler_handle("TaskScheduler::start") {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                *running = false;
+                return Err(error);
+            }
+        };
 
         // Start scheduler threads
         let mut handles = self.scheduler_handles.write().await;
 
         for i in 0..self.config.max_scheduler_threads {
             let scheduler = self.clone_for_thread();
-            let handle = tokio::spawn(async move {
+            let handle = spawn_scheduler_task(&runtime, async move {
                 scheduler.scheduler_loop(i).await;
             });
             handles.push(handle);
@@ -167,7 +189,7 @@ impl TaskScheduler {
         // Start cleanup thread
         if self.config.enable_persistence {
             let scheduler = self.clone_for_thread();
-            let handle = tokio::spawn(async move {
+            let handle = spawn_scheduler_task(&runtime, async move {
                 scheduler.cleanup_loop().await;
             });
             handles.push(handle);
@@ -590,6 +612,17 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::Release);
         }
+    }
+
+    #[test]
+    fn scheduler_handle_without_tokio_runtime_returns_error() {
+        let error = current_scheduler_handle("test-scheduler-start")
+            .expect_err("scheduler runtime lookup should fail without an ambient Tokio runtime");
+
+        assert!(matches!(
+            error,
+            SchedulerError::SystemError(message) if message.contains("requires a Tokio runtime")
+        ));
     }
 
     #[tokio::test]
