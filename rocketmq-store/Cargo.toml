@@ -150,6 +150,14 @@ name    = "store_stats_service"
 harness = false
 
 [[bench]]
+name    = "store_stats_service_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "store_timer_scheduler_lifecycle_bench"
+harness = false
+
+[[bench]]
 name              = "io_uring_performance"
 harness           = false
 required-features = ["io_uring"]
@@ -161,4 +169,8 @@ required-features = ["rocksdb_store"]
 
 [[bench]]
 name    = "store_blocking_executor_bench"
+harness = false
+
+[[bench]]
+name    = "store_kv_compaction_lifecycle_bench"
 harness = false

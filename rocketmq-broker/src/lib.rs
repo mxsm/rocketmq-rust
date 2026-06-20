@@ -67,6 +67,46 @@ pub mod bench_support {
     }
 
     #[derive(Debug, Clone, Serialize)]
+    pub struct BrokerClientHousekeepingLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<rocketmq_runtime::ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct BrokerTopicQueueMappingCleanLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<rocketmq_runtime::ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct BrokerFastFailureLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub cleaned_response_received: bool,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<rocketmq_runtime::ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
     pub struct BrokerScheduledShutdownProbe {
         pub task_count: usize,
         pub completed: usize,
@@ -210,6 +250,218 @@ pub mod bench_support {
             basic_shutdown_elapsed_us,
             healthy,
         }
+    }
+
+    pub async fn run_broker_client_housekeeping_lifecycle_probe() -> BrokerClientHousekeepingLifecycleProbe {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig::default());
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let service = crate::client::client_housekeeping_service::ClientHousekeepingService::new(
+            runtime.inner_for_test().clone(),
+        );
+        service.start();
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = service.schedule_snapshot();
+        }
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = service.task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = service.shutdown_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(rocketmq_runtime::ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        BrokerClientHousekeepingLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+
+    pub async fn run_broker_topic_queue_mapping_clean_lifecycle_probe() -> BrokerTopicQueueMappingCleanLifecycleProbe {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let message_store_config = Arc::new(MessageStoreConfig {
+            delete_when: "99".to_string(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new(broker_config, message_store_config);
+        let service = runtime
+            .inner_for_test()
+            .topic_queue_mapping_clean_service_unchecked()
+            .clone();
+        service.start_with_schedule(Duration::ZERO, Duration::from_millis(1));
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = service.schedule_snapshot();
+        }
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = service.task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = service.shutdown_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(rocketmq_runtime::ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        BrokerTopicQueueMappingCleanLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+
+    pub async fn run_broker_fast_failure_lifecycle_probe() -> BrokerFastFailureLifecycleProbe {
+        let broker_config = Arc::new(BrokerConfig {
+            broker_fast_failure_enable: true,
+            wait_time_mills_in_send_queue: 0,
+            wait_time_mills_in_pull_queue: 0,
+            wait_time_mills_in_lite_pull_queue: 0,
+            wait_time_mills_in_heartbeat_queue: 0,
+            wait_time_mills_in_transaction_queue: 0,
+            wait_time_mills_in_ack_queue: 0,
+            wait_time_mills_in_admin_broker_queue: 0,
+            ..BrokerConfig::default()
+        });
+        let service = crate::latency::broker_fast_failure::BrokerFastFailure::new(broker_config);
+        let (_task, response_rx) = service.enqueue(crate::latency::broker_fast_failure::FastFailureQueueKind::Send, 77);
+        service.start_with_schedule(Duration::ZERO, Duration::from_millis(1));
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = service.schedule_snapshot();
+        }
+        let cleaned_response_received = tokio::time::timeout(Duration::from_millis(50), response_rx)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+            .is_some();
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = service.task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = service.shutdown_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(rocketmq_runtime::ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = cleaned_response_received
+            && scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        BrokerFastFailureLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            cleaned_response_received,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+}
+
+#[cfg(test)]
+mod bench_support_tests {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_client_housekeeping_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_broker_client_housekeeping_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_topic_queue_mapping_clean_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_broker_topic_queue_mapping_clean_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_fast_failure_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_broker_fast_failure_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.cleaned_response_received, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 }
 

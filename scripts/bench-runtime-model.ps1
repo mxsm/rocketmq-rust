@@ -125,11 +125,39 @@ $jsonArtifacts += Write-JsonArtifact -Name "broker-runtime-lifecycle.json" -Metr
     required_metrics = @("scheduled_shutdown_elapsed_us", "basic_shutdown_elapsed_us", "scheduled_task_drop_count", "healthy")
 }
 
+$jsonArtifacts += Write-JsonArtifact -Name "broker-client-housekeeping.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-broker --bench broker_client_housekeeping_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/broker-client-housekeeping-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "broker-topic-queue-mapping-clean.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-broker --bench broker_topic_queue_mapping_clean_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/broker-topic-queue-mapping-clean-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "broker-fast-failure.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-broker --bench broker_fast_failure_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/broker-fast-failure-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "cleaned_response_received", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
 $jsonArtifacts += Write-JsonArtifact -Name "remoting-connection-lifecycle.json" -Metrics @{
     status = "implemented-benchmark"
     expected_bench = "cargo bench -p rocketmq-remoting --bench remoting_connection_lifecycle_bench"
     artifact = "target/runtime-baseline/prototype/remoting-connection-lifecycle-report.json"
     required_metrics = @("elapsed_us", "healthy", "connection_count", "shutdown_report")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "remoting-connection-pool-cleanup.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-remoting --bench remoting_connection_pool_cleanup_bench"
+    artifact = "target/runtime-baseline/prototype/remoting-connection-pool-cleanup-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
 }
 
 $jsonArtifacts += Write-JsonArtifact -Name "scheduler.json" -Metrics @{
@@ -151,6 +179,27 @@ $jsonArtifacts += Write-JsonArtifact -Name "store-blocking.json" -Metrics @{
     expected_bench = "cargo bench -p rocketmq-store --bench store_blocking_executor_bench"
     artifact = "target/runtime-baseline/prototype/store-blocking-executor-report.json"
     required_metrics = @("elapsed_us", "queue_wait_p95_us", "queue_wait_p99_us", "max_active", "blocking_still_running", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "store-kv-compaction.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-store --bench store_kv_compaction_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/store-kv-compaction-lifecycle-report.json"
+    required_metrics = @("compacted", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "store-stats-service.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-store --bench store_stats_service_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/store-stats-service-lifecycle-report.json"
+    required_metrics = @("snapshot_count", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "store-timer-scheduler.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-store --bench store_timer_scheduler_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/store-timer-scheduler-lifecycle-report.json"
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "shutdown_report", "healthy")
 }
 
 $jsonArtifacts += Write-JsonArtifact -Name "common-executor.json" -Metrics @{
@@ -188,6 +237,13 @@ $jsonArtifacts += Write-JsonArtifact -Name "auth-sync-bridge.json" -Metrics @{
     required_metrics = @("sync_bridge_calls", "multi_thread_block_in_place", "current_thread_handoffs", "shared_runtime_created", "shared_runtime_reused", "healthy")
 }
 
+$jsonArtifacts += Write-JsonArtifact -Name "auth-acl-watcher.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-auth --bench auth_acl_watcher_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/auth-acl-watcher-lifecycle-report.json"
+    required_metrics = @("scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "reload_success", "shutdown_elapsed_us", "shutdown_report", "healthy")
+}
+
 $jsonArtifacts += Write-JsonArtifact -Name "proxy-housekeeping.json" -Metrics @{
     status = "implemented-benchmark"
     expected_bench = "cargo bench -p rocketmq-proxy --bench proxy_housekeeping_lifecycle_bench"
@@ -220,7 +276,14 @@ $jsonArtifacts += Write-JsonArtifact -Name "controller-heartbeat.json" -Metrics 
     status = "implemented-benchmark"
     expected_bench = "cargo bench -p rocketmq-controller --bench controller_heartbeat_lifecycle_bench"
     artifact = "target/runtime-baseline/prototype/controller-heartbeat-lifecycle-report.json"
-    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "shutdown_elapsed_us", "healthy", "shutdown_report")
+    required_metrics = @("task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "healthy", "shutdown_report")
+}
+
+$jsonArtifacts += Write-JsonArtifact -Name "controller-broker-metadata.json" -Metrics @{
+    status = "implemented-benchmark"
+    expected_bench = "cargo bench -p rocketmq-controller --bench controller_broker_metadata_lifecycle_bench"
+    artifact = "target/runtime-baseline/prototype/controller-broker-metadata-lifecycle-report.json"
+    required_metrics = @("expired_broker_removed", "task_count_before_shutdown", "task_count_after_shutdown", "scheduled_runs", "scheduled_skips", "scheduled_overlaps", "scheduled_failures", "shutdown_elapsed_us", "healthy", "shutdown_report")
 }
 
 $manifest = [ordered]@{

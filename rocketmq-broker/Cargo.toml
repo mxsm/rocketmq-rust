@@ -130,3 +130,15 @@ harness = false
 [[bench]]
 name    = "broker_runtime_lifecycle_bench"
 harness = false
+
+[[bench]]
+name    = "broker_client_housekeeping_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "broker_topic_queue_mapping_clean_lifecycle_bench"
+harness = false
+
+[[bench]]
+name    = "broker_fast_failure_lifecycle_bench"
+harness = false

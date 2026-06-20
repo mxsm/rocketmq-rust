@@ -20,11 +20,14 @@ use std::time::SystemTime;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::time;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -81,6 +84,9 @@ pub struct BrokerManager {
 
     /// Background heartbeat checker task group
     task_group: Mutex<Option<TaskGroup>>,
+
+    /// Scheduled heartbeat checker task group
+    scheduled_tasks: Mutex<Option<ScheduledTaskGroup>>,
 }
 
 impl BrokerManager {
@@ -91,6 +97,7 @@ impl BrokerManager {
             config,
             heartbeat_timeout: Duration::from_secs(30),
             task_group: Mutex::new(None),
+            scheduled_tasks: Mutex::new(None),
         }
     }
 
@@ -112,22 +119,22 @@ impl BrokerManager {
         let brokers = self.brokers.clone();
         let timeout = self.heartbeat_timeout;
         let task_group = TaskGroup::root("rocketmq-controller.metadata.broker", RuntimeHandle::new(runtime));
-        let shutdown_token = task_group.cancellation_token();
-        task_group
-            .spawn_service("controller.metadata.broker.heartbeat-checker", async move {
-                let mut interval = time::interval(Duration::from_secs(5));
-                loop {
-                    tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            break;
-                        }
-                        _ = interval.tick() => {
-                            Self::check_heartbeats(&brokers, timeout);
-                        }
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        scheduled_tasks
+            .schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay(
+                    "controller.metadata.broker.heartbeat-checker",
+                    Duration::from_secs(5),
+                ),
+                move || {
+                    let brokers = brokers.clone();
+                    async move {
+                        Self::check_heartbeats(&brokers, timeout);
                     }
-                }
-            })
+                },
+            )
             .map_err(|error| ControllerError::Internal(format!("Failed to spawn broker heartbeat checker: {error}")))?;
+        *self.scheduled_tasks.lock() = Some(scheduled_tasks);
         *self.task_group.lock() = Some(task_group);
 
         Ok(())
@@ -135,7 +142,13 @@ impl BrokerManager {
 
     /// Shutdown the broker manager
     pub async fn shutdown(&self) -> Result<()> {
+        let _ = self.shutdown_with_report().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown_with_report(&self) -> Result<Option<ShutdownReport>> {
         info!("Shutting down broker manager");
+        self.scheduled_tasks.lock().take();
         let task_group = self.task_group.lock().take();
         if let Some(task_group) = task_group {
             let report = task_group.shutdown(Duration::from_secs(10)).await;
@@ -145,9 +158,35 @@ impl BrokerManager {
                     "Broker manager heartbeat checker shutdown report is unhealthy"
                 );
             }
+            self.brokers.clear();
+            return Ok(Some(report));
         }
         self.brokers.clear();
-        Ok(())
+        Ok(None)
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        let root_count = self
+            .task_group
+            .lock()
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 
     /// Register a broker
@@ -267,5 +306,48 @@ mod tests {
 
         assert!(manager.register(info.clone()).await.is_ok());
         assert!(manager.get_broker("broker-a").await.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heartbeat_checker_uses_scheduled_task_group_and_shutdowns_cleanly() {
+        let config = ArcMut::new(ControllerConfig::test_config());
+        let manager = BrokerManager::new(config);
+        let info = BrokerInfo {
+            name: "broker-expired".to_string(),
+            broker_id: 0,
+            cluster_name: "DefaultCluster".to_string(),
+            addr: "127.0.0.1:10911".parse().unwrap(),
+            last_heartbeat: SystemTime::now() - Duration::from_secs(60),
+            version: "5.0.0".to_string(),
+            role: BrokerRole::Master,
+            metadata: serde_json::json!({}),
+        };
+
+        manager.register(info).await.expect("register expired broker");
+        manager.start().await.expect("start broker manager");
+        assert_eq!(manager.task_count(), 1);
+
+        let mut snapshots = manager.schedule_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = manager.schedule_snapshot();
+        }
+
+        assert!(manager.list_brokers().await.is_empty());
+        assert!(snapshots.iter().any(|snapshot| snapshot.runs > 0), "{snapshots:?}");
+
+        let report = manager
+            .shutdown_with_report()
+            .await
+            .expect("shutdown should succeed")
+            .expect("shutdown should return report");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(manager.task_count(), 0);
     }
 }

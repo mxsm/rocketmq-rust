@@ -22,25 +22,25 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_controller::bench_support::run_controller_heartbeat_lifecycle_probe;
-use rocketmq_controller::bench_support::ControllerHeartbeatLifecycleProbe;
+use rocketmq_store::bench_support::run_store_stats_service_lifecycle_probe;
+use rocketmq_store::bench_support::StoreStatsServiceLifecycleProbe;
 
-fn run_lifecycle_probe() -> ControllerHeartbeatLifecycleProbe {
+fn run_lifecycle_probe() -> StoreStatsServiceLifecycleProbe {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(4)
-        .thread_name("rocketmq-controller-heartbeat-bench")
+        .thread_name("rocketmq-store-stats-service-bench")
         .enable_all()
         .build()
-        .expect("controller heartbeat benchmark runtime should start");
+        .expect("store stats service benchmark runtime should start");
 
-    runtime.block_on(run_controller_heartbeat_lifecycle_probe())
+    runtime.block_on(run_store_stats_service_lifecycle_probe())
 }
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("rocketmq-controller should live below workspace root")
+        .expect("rocketmq-store should live below workspace root")
         .to_path_buf()
 }
 
@@ -48,7 +48,7 @@ fn benchmark_artifact_dir() -> PathBuf {
     workspace_root().join("target/runtime-baseline/prototype")
 }
 
-fn write_controller_heartbeat_report_artifact() {
+fn write_store_stats_service_report_artifact() {
     let output = run_lifecycle_probe();
     assert!(output.healthy, "{output:?}");
     let output_dir = benchmark_artifact_dir();
@@ -59,30 +59,29 @@ fn write_controller_heartbeat_report_artifact() {
         .expect("system clock should be after unix epoch")
         .as_millis();
     let payload = serde_json::json!({
-        "case": "controller_heartbeat_lifecycle",
+        "case": "store_stats_service_lifecycle",
         "generated_at_unix_ms": generated_at_unix_ms,
         "probe": output,
     });
-    let path = output_dir.join("controller-heartbeat-lifecycle-report.json");
+    let path = output_dir.join("store-stats-service-lifecycle-report.json");
     fs::write(
         path,
-        serde_json::to_vec_pretty(&payload).expect("controller heartbeat benchmark artifact should serialize"),
+        serde_json::to_vec_pretty(&payload).expect("store stats service benchmark artifact should serialize"),
     )
-    .expect("controller heartbeat benchmark artifact should be written");
+    .expect("store stats service benchmark artifact should be written");
 }
 
-fn bench_controller_heartbeat_lifecycle(criterion: &mut Criterion) {
-    write_controller_heartbeat_report_artifact();
+fn bench_store_stats_service_lifecycle(criterion: &mut Criterion) {
+    write_store_stats_service_report_artifact();
 
-    criterion.bench_function("controller_heartbeat_lifecycle/shutdown_drain", |bencher| {
+    criterion.bench_function("store_stats_service_lifecycle/fixed_delay_shutdown", |bencher| {
         bencher.iter(|| {
             let output = run_lifecycle_probe();
             assert!(output.healthy, "{output:?}");
+            black_box(output.snapshot_count);
             black_box(output.scheduled_runs);
             black_box(output.scheduled_skips);
-            black_box(output.scheduled_overlaps);
             black_box(output.shutdown_elapsed_us);
-            black_box(output.task_count_after_shutdown);
         });
     });
 }
@@ -93,6 +92,6 @@ criterion_group! {
         .sample_size(10)
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(1));
-    targets = bench_controller_heartbeat_lifecycle
+    targets = bench_store_stats_service_lifecycle
 }
 criterion_main!(benches);

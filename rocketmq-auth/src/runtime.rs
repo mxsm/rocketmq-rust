@@ -15,8 +15,11 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use tokio::sync::watch;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -371,10 +374,22 @@ impl AuthRuntime {
     }
 
     pub async fn shutdown(&self) -> RocketMQResult<()> {
-        if let Some(handle) = &self.acl_file_watch_handle {
-            handle.shutdown().await?;
-        }
+        let _ = self.shutdown_with_report().await?;
         Ok(())
+    }
+
+    pub async fn shutdown_with_report(&self) -> RocketMQResult<Option<ShutdownReport>> {
+        if let Some(handle) = &self.acl_file_watch_handle {
+            return Ok(Some(handle.shutdown_with_report().await?));
+        }
+        Ok(None)
+    }
+
+    pub fn acl_file_watcher_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.acl_file_watch_handle
+            .as_ref()
+            .map(AclFileWatchHandle::snapshot)
+            .unwrap_or_default()
     }
 
     pub async fn check_remoting(
@@ -410,19 +425,27 @@ impl AuthRuntime {
 
 #[derive(Clone)]
 struct AclFileWatchHandle {
-    shutdown_tx: watch::Sender<bool>,
     task_group: TaskGroup,
+    scheduled_tasks: ScheduledTaskGroup,
     shutdown_timeout: Duration,
 }
 
 impl AclFileWatchHandle {
     async fn shutdown(&self) -> RocketMQResult<()> {
-        let _ = self.shutdown_tx.send(true);
+        let _ = self.shutdown_with_report().await?;
+        Ok(())
+    }
+
+    async fn shutdown_with_report(&self) -> RocketMQResult<ShutdownReport> {
         let report = self.task_group.shutdown(self.shutdown_timeout).await;
         report
             .assert_no_task_leak()
             .map_err(|error| RocketMQError::auth_hot_reload_failed("aclFile", error))?;
-        Ok(())
+        Ok(report)
+    }
+
+    fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks.snapshot()
     }
 }
 
@@ -599,7 +622,6 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
 
     let watch_config = config.clone();
     let interval = Duration::from_millis(config.acl_file_watch_interval_millis.max(1));
-    let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let handle = match tokio::runtime::Handle::try_current() {
         Ok(handle) => handle,
         Err(error) => {
@@ -608,37 +630,33 @@ fn start_acl_file_watcher(config: &AuthConfig, provider_registry: ProviderRegist
         }
     };
     let task_group = TaskGroup::root("rocketmq-auth.acl-file-watcher", RuntimeHandle::new(handle));
-    if let Err(error) = task_group.spawn_service("acl-file-watcher", async move {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        loop {
-            tokio::select! {
-                changed = shutdown_rx.changed() => {
-                    if changed.is_err() || *shutdown_rx.borrow() {
-                        debug!("ACL file watcher stopped");
-                        break;
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
+        ScheduledTaskConfig::fixed_rate_no_overlap("auth.acl-file-watcher.reload", interval),
+        move || {
+            let provider_registry = provider_registry.clone();
+            let watch_config = watch_config.clone();
+            async move {
+                match load_configured_acl_file(&provider_registry, &watch_config, false).await {
+                    Ok(result) if result.changed => {
+                        debug!(
+                            "Reloaded {} ACL account(s) from configured ACL file",
+                            result.account_count
+                        )
                     }
-                }
-                _ = ticker.tick() => {
-                    match load_configured_acl_file(&provider_registry, &watch_config, false).await {
-                        Ok(result) if result.changed => {
-                            debug!("Reloaded {} ACL account(s) from configured ACL file", result.account_count)
-                        }
-                        Ok(_) => debug!("ACL file unchanged; skipped reload"),
-                        Err(error) => warn!("Failed to reload ACL file: {error}"),
-                    }
+                    Ok(_) => debug!("ACL file unchanged; skipped reload"),
+                    Err(error) => warn!("Failed to reload ACL file: {error}"),
                 }
             }
-        }
-    }) {
+        },
+    ) {
         warn!("Failed to spawn ACL file watcher: {error}");
         return None;
     }
 
     Some(AclFileWatchHandle {
-        shutdown_tx,
         task_group,
+        scheduled_tasks,
         shutdown_timeout: Duration::from_secs(5),
     })
 }

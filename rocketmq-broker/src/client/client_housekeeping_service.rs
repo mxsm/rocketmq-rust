@@ -21,11 +21,14 @@ use parking_lot::Mutex;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use tokio::select;
 use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
@@ -39,6 +42,7 @@ pub struct ClientHousekeepingService<MS: MessageStore> {
     shutdown: Arc<Notify>,
     shutdown_requested: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
+    scheduled_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
 }
 
 impl<MS: MessageStore> Clone for ClientHousekeepingService<MS> {
@@ -48,6 +52,7 @@ impl<MS: MessageStore> Clone for ClientHousekeepingService<MS> {
             shutdown: self.shutdown.clone(),
             shutdown_requested: self.shutdown_requested.clone(),
             task_group: self.task_group.clone(),
+            scheduled_tasks: self.scheduled_tasks.clone(),
         }
     }
 }
@@ -62,6 +67,7 @@ where
             shutdown: Arc::new(Notify::new()),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             task_group: Arc::new(Mutex::new(None)),
+            scheduled_tasks: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -75,37 +81,39 @@ where
             return;
         };
 
-        if task_group.task_count() > 0 {
+        if self.task_count() > 0 {
             debug!("Broker client housekeeping service is already running");
             return;
         }
 
         let broker_runtime_inner = self.clone();
-        let shutdown = self.shutdown.clone();
-        let cancellation_token = task_group.cancellation_token();
-        if let Err(error) = task_group.spawn_service("broker.client-housekeeping.scan", async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(10_000));
-            loop {
-                select! {
-                    _ = cancellation_token.cancelled() => {
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        broker_runtime_inner.scan_exception_channel();
-                    }
-                    _ = shutdown.notified() => {
-                        break;
-                    }
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
+            ScheduledTaskConfig::fixed_rate_no_overlap(
+                "broker.client-housekeeping.scan",
+                tokio::time::Duration::from_millis(10_000),
+            ),
+            move || {
+                let broker_runtime_inner = broker_runtime_inner.clone();
+                async move {
+                    broker_runtime_inner.scan_exception_channel();
                 }
-            }
-        }) {
+            },
+        ) {
             warn!(?error, "failed to spawn broker client housekeeping task");
+            return;
         }
+        *self.scheduled_tasks.lock() = Some(scheduled_tasks);
     }
 
     pub async fn shutdown(&self) {
+        let _ = self.shutdown_with_report().await;
+    }
+
+    pub async fn shutdown_with_report(&self) -> Option<ShutdownReport> {
         self.shutdown_requested.store(true, Ordering::Release);
         self.shutdown.notify_waiters();
+        self.scheduled_tasks.lock().take();
         let task_group = { self.task_group.lock().take() };
         if let Some(task_group) = task_group {
             let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
@@ -115,7 +123,9 @@ where
                     "Broker client housekeeping task shutdown report is unhealthy"
                 );
             }
+            return Some(report);
         }
+        None
     }
 
     fn scan_exception_channel(&self) {
@@ -144,6 +154,30 @@ where
         let group = TaskGroup::root("rocketmq-broker.client-housekeeping", RuntimeHandle::new(handle));
         *task_group = Some(group.clone());
         Some(group)
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        let root_count = self
+            .task_group
+            .lock()
+            .as_ref()
+            .map(TaskGroup::task_count)
+            .unwrap_or_default();
+        let scheduled_count = self
+            .scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .unwrap_or_default();
+        root_count + scheduled_count
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        self.scheduled_tasks
+            .lock()
+            .as_ref()
+            .map(ScheduledTaskGroup::snapshot)
+            .unwrap_or_default()
     }
 }
 
@@ -214,11 +248,15 @@ mod tests {
 
         service.start();
         service.start();
-        assert_eq!(service.task_group.lock().as_ref().map(TaskGroup::task_count), Some(1));
+        assert_eq!(service.task_count(), 1);
 
-        service.shutdown().await;
+        let report = service
+            .shutdown_with_report()
+            .await
+            .expect("shutdown should return a report");
 
         assert!(service.shutdown_requested.load(Ordering::Acquire));
         assert!(service.task_group.lock().is_none());
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

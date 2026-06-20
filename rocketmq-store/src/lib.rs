@@ -49,10 +49,18 @@ pub mod bench_support {
     use std::time::Duration;
     use std::time::Instant;
 
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
     use futures_util::future::join_all;
     use rocketmq_runtime::BlockingExecutorSnapshot;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
+
+    use crate::base::store_stats_service::StoreStatsService;
+    use crate::config::message_store_config::MessageStoreConfig;
+    use crate::kv::compaction_service::CompactionService;
+    use crate::kv::compaction_store::CompactionStore;
+    use crate::timer::timer_message_store::TimerMessageStore;
 
     #[derive(Debug, Clone, Serialize)]
     pub struct StoreBlockingIoProbe {
@@ -66,6 +74,47 @@ pub mod bench_support {
         pub queue_wait_max_us: u128,
         pub snapshot: BlockingExecutorSnapshot,
         pub shutdown_report: ShutdownReport,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct StoreKvCompactionLifecycleProbe {
+        pub compacted: bool,
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct StoreStatsServiceLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub snapshot_count: usize,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct StoreTimerSchedulerLifecycleProbe {
+        pub task_count_before_shutdown: usize,
+        pub task_count_after_shutdown: usize,
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<ShutdownReport>,
         pub healthy: bool,
     }
 
@@ -117,6 +166,182 @@ pub mod bench_support {
         }
     }
 
+    pub async fn run_store_kv_compaction_lifecycle_probe() -> StoreKvCompactionLifecycleProbe {
+        let compaction_store = Arc::new(CompactionStore::new());
+        let topic = CheetahString::from_static_str("kv-compaction-lifecycle-topic");
+        let key = CheetahString::from_static_str("same-key");
+        compaction_store.put_message_with_key(&topic, 0, 0, 1, Some(key.clone()), Bytes::from_static(b"old-message"));
+        compaction_store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::from_static(b"latest-message"));
+
+        let mut service = CompactionService::new(compaction_store.clone(), 1);
+        let _ = service.load(true);
+        service.start();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let compacted = loop {
+            if compaction_store.message_count(&topic, 0) == 1 {
+                break true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = service.schedule_snapshot();
+        }
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = service.task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = service.shutdown_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = compacted
+            && scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        StoreKvCompactionLifecycleProbe {
+            compacted,
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+
+    pub async fn run_store_stats_service_lifecycle_probe() -> StoreStatsServiceLifecycleProbe {
+        let service = Arc::new(StoreStatsService::new(None));
+        service.start();
+
+        let mut snapshots = service.schedule_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = service.schedule_snapshot();
+        }
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let snapshot_count = service.put_snapshot_count();
+        let task_count_before_shutdown = service.task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = service.shutdown_gracefully_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = service.task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = snapshot_count > 0
+            && scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        StoreStatsServiceLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            snapshot_count,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+
+    pub async fn run_store_timer_scheduler_lifecycle_probe() -> StoreTimerSchedulerLifecycleProbe {
+        let root = tempfile::tempdir().expect("timer scheduler benchmark root should be created");
+        let config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
+            read_uncommitted: true,
+            timer_precision_ms: 100,
+            ..MessageStoreConfig::default()
+        });
+        let timer_store = Arc::new(TimerMessageStore::new_with_config(None, config));
+
+        assert!(timer_store.load(), "timer store should load for lifecycle probe");
+        timer_store.start();
+
+        let mut snapshots = timer_store.scheduler_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            snapshots = timer_store.scheduler_snapshot();
+        }
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+        let task_count_before_shutdown = timer_store.scheduler_task_count();
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = timer_store.shutdown_gracefully_with_report().await;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let task_count_after_shutdown = timer_store.scheduler_task_count();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && task_count_before_shutdown > 0
+            && task_count_after_shutdown == 0
+            && shutdown_healthy;
+
+        StoreTimerSchedulerLifecycleProbe {
+            task_count_before_shutdown,
+            task_count_after_shutdown,
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        }
+    }
+
     fn percentile_us(values: &[u128], percentile: usize) -> u128 {
         if values.is_empty() {
             return 0;
@@ -141,5 +366,37 @@ mod bench_support_tests {
         assert!(probe.healthy, "{probe:?}");
         assert_eq!(probe.snapshot.blocking_still_running, 0, "{probe:?}");
         assert!(probe.snapshot.tasks.is_empty(), "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_kv_compaction_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_store_kv_compaction_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.compacted, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_stats_service_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_store_stats_service_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.snapshot_count > 0, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn store_timer_scheduler_lifecycle_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_store_timer_scheduler_lifecycle_probe().await;
+
+        assert!(probe.healthy, "{probe:?}");
+        assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 }

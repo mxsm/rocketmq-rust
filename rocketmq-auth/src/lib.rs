@@ -51,9 +51,23 @@ pub use runtime::ProviderRegistry;
 
 #[doc(hidden)]
 pub mod bench_support {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
     use std::time::Instant;
 
+    use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQResult;
+    use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
+
+    use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
+    use crate::config::AuthConfig;
+    use crate::runtime::AuthRuntimeBuilder;
+
+    static NEXT_ACL_WATCHER_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 
     #[derive(Clone, Copy, Debug, Default, Serialize)]
     pub struct AuthSyncBridgeCounterSnapshot {
@@ -87,6 +101,90 @@ pub mod bench_support {
         pub after: AuthSyncBridgeCounterSnapshot,
         pub delta: AuthSyncBridgeCounterDelta,
         pub healthy: bool,
+    }
+
+    #[derive(Clone, Debug, Serialize)]
+    pub struct AuthAclWatcherLifecycleProbe {
+        pub scheduled_runs: u64,
+        pub scheduled_skips: u64,
+        pub scheduled_overlaps: u64,
+        pub scheduled_failures: u64,
+        pub reload_success: bool,
+        pub shutdown_elapsed_us: u128,
+        pub shutdown_report: Option<ShutdownReport>,
+        pub healthy: bool,
+    }
+
+    pub async fn run_auth_acl_watcher_lifecycle_probe() -> RocketMQResult<AuthAclWatcherLifecycleProbe> {
+        let root = unique_acl_watcher_probe_root();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))?;
+        let acl_file = root.join("plain_acl.yml");
+        write_acl_file(&acl_file, "first")?;
+
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            acl_file_watch_enabled: true,
+            acl_file_watch_interval_millis: 5,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await?;
+        let authn_provider = runtime.provider_registry().authentication_metadata_provider();
+        write_acl_file(&acl_file, "second")?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let reload_success = loop {
+            let user = authn_provider.get_user("alice").await?;
+            if user.password().map(|value| value.as_str()) == Some("second") {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+
+        let mut snapshots = runtime.acl_file_watcher_snapshot();
+        for _ in 0..50 {
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            snapshots = runtime.acl_file_watcher_snapshot();
+        }
+        let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
+        let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
+        let scheduled_overlaps = snapshots.iter().map(|snapshot| snapshot.overlaps).sum();
+        let scheduled_failures = snapshots.iter().map(|snapshot| snapshot.failures).sum();
+
+        let shutdown_started_at = Instant::now();
+        let shutdown_report = runtime.shutdown_with_report().await?;
+        let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let shutdown_healthy = shutdown_report
+            .as_ref()
+            .map(ShutdownReport::is_healthy)
+            .unwrap_or(false);
+        let healthy = reload_success
+            && scheduled_runs > 0
+            && scheduled_overlaps == 0
+            && scheduled_failures == 0
+            && shutdown_healthy;
+
+        let _ = fs::remove_dir_all(root);
+        Ok(AuthAclWatcherLifecycleProbe {
+            scheduled_runs,
+            scheduled_skips,
+            scheduled_overlaps,
+            scheduled_failures,
+            reload_success,
+            shutdown_elapsed_us,
+            shutdown_report,
+            healthy,
+        })
     }
 
     pub fn run_auth_sync_bridge_no_runtime_probe(call_count: usize) -> AuthSyncBridgeProbe {
@@ -181,6 +279,25 @@ pub mod bench_support {
         crate::runtime_bridge::auth_sync_bridge_snapshot().into()
     }
 
+    fn unique_acl_watcher_probe_root() -> PathBuf {
+        let id = NEXT_ACL_WATCHER_PROBE_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("rocketmq-auth-acl-watcher-{}-{id}", std::process::id()))
+    }
+
+    fn write_acl_file(path: &std::path::Path, secret: &str) -> RocketMQResult<()> {
+        fs::write(
+            path,
+            format!(
+                r#"
+accounts:
+  - accessKey: alice
+    secretKey: {secret}
+"#
+            ),
+        )
+        .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))
+    }
+
     impl From<crate::runtime_bridge::AuthSyncBridgeSnapshot> for AuthSyncBridgeCounterSnapshot {
         fn from(snapshot: crate::runtime_bridge::AuthSyncBridgeSnapshot) -> Self {
             Self {
@@ -218,5 +335,20 @@ pub mod bench_support {
                 shared_runtime_reused: self.shared_runtime_reused.saturating_sub(before.shared_runtime_reused),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bench_support_tests {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn auth_acl_watcher_probe_reports_clean_shutdown() {
+        let probe = super::bench_support::run_auth_acl_watcher_lifecycle_probe()
+            .await
+            .expect("auth ACL watcher lifecycle probe should run");
+
+        assert!(probe.healthy, "{probe:?}");
+        assert!(probe.reload_success, "{probe:?}");
+        assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
+        assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
     }
 }

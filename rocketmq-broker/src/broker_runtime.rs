@@ -594,7 +594,6 @@ impl BrokerRuntime {
         &self.scheduled_task_manager
     }
 
-    #[cfg(test)]
     pub(crate) fn inner_for_test(&mut self) -> &mut ArcMut<BrokerRuntimeInner<GenericMessageStore>> {
         &mut self.inner
     }
