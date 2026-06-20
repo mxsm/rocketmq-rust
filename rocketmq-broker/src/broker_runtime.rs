@@ -56,6 +56,8 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -390,6 +392,7 @@ pub(crate) struct BrokerRuntime {
     proxy_request_processor: Option<DefaultServerProcessor>,
     consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     scheduled_task_manager: ScheduledTaskManager,
+    remoting_server_task_group: Option<TaskGroup>,
 }
 
 impl Drop for BrokerRuntime {
@@ -571,6 +574,7 @@ impl BrokerRuntime {
             proxy_request_processor: None,
             consumer_ids_change_listener,
             scheduled_task_manager,
+            remoting_server_task_group: None,
         }
     }
 
@@ -642,6 +646,8 @@ impl BrokerRuntime {
             hook.before_shutdown();
         }
 
+        self.shutdown_remoting_servers().await;
+
         if let Some(auth_runtime) = self.inner.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
                 warn!("Failed to shutdown auth runtime: {error}");
@@ -664,15 +670,15 @@ impl BrokerRuntime {
         }
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
-            pop_message_processor.shutdown();
+            pop_message_processor.shutdown().await;
         }
 
         if let Some(pop_lite_message_processor) = self.inner.pop_lite_message_processor.as_mut() {
-            pop_lite_message_processor.shutdown();
+            pop_lite_message_processor.shutdown().await;
         }
 
         if let Some(ack_message_processor) = self.inner.ack_message_processor.as_mut() {
-            ack_message_processor.shutdown();
+            ack_message_processor.shutdown().await;
         }
 
         if let Some(transactional_message_service) = self.inner.transactional_message_service.as_mut() {
@@ -680,7 +686,7 @@ impl BrokerRuntime {
         }
 
         if let Some(notification_processor) = self.inner.notification_processor.as_mut() {
-            notification_processor.shutdown();
+            notification_processor.shutdown().await;
         }
         self.consumer_ids_change_listener.shutdown();
         if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_ref() {
@@ -761,6 +767,20 @@ impl BrokerRuntime {
             {
                 warn!("Timed out shutting down message store");
             }
+        }
+    }
+
+    async fn shutdown_remoting_servers(&mut self) {
+        let Some(task_group) = self.remoting_server_task_group.take() else {
+            return;
+        };
+
+        let report = task_group.shutdown(Duration::from_secs(35)).await;
+        if !report.is_healthy() {
+            warn!(
+                report = %report.to_json(),
+                "Broker remoting server shutdown report is unhealthy"
+            );
         }
     }
 }
@@ -1696,6 +1716,15 @@ impl BrokerRuntime {
         let (request_processor, fast_request_processor) = self.init_processor();
         self.proxy_request_processor = Some(request_processor.clone());
 
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                warn!(?error, "failed to start broker remoting servers outside Tokio runtime");
+                return;
+            }
+        };
+        let remoting_server_task_group = TaskGroup::root("rocketmq-broker.remoting-server", runtime);
+
         let mut server = RocketMQServer::new(Arc::new(self.inner.broker_config.broker_server_config.clone()));
         //start nomarl broker remoting_server
         let client_housekeeping_service_main = self
@@ -1704,16 +1733,31 @@ impl BrokerRuntime {
             .clone()
             .map(|item| item as Arc<dyn ChannelEventListener>);
         let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
-        tokio::spawn(async move { server.run(request_processor, client_housekeeping_service_main).await });
+        let shutdown_token = remoting_server_task_group.cancellation_token();
+        if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.normal", async move {
+            server
+                .run_with_shutdown(request_processor, client_housekeeping_service_main, async move {
+                    shutdown_token.cancelled().await;
+                })
+                .await
+        }) {
+            warn!(?error, "failed to spawn broker normal remoting server task");
+        }
         //start fast broker remoting_server
         let mut fast_server_config = self.inner.broker_config.broker_server_config.clone();
         fast_server_config.listen_port = self.inner.broker_config.broker_server_config.listen_port - 2;
         let mut fast_server = RocketMQServer::new(Arc::new(fast_server_config));
-        tokio::spawn(async move {
+        let shutdown_token = remoting_server_task_group.cancellation_token();
+        if let Err(error) = remoting_server_task_group.spawn_service("broker.remoting-server.fast", async move {
             fast_server
-                .run(fast_request_processor, client_housekeeping_service_fast)
+                .run_with_shutdown(fast_request_processor, client_housekeeping_service_fast, async move {
+                    shutdown_token.cancelled().await;
+                })
                 .await
-        });
+        }) {
+            warn!(?error, "failed to spawn broker fast remoting server task");
+        }
+        self.remoting_server_task_group = Some(remoting_server_task_group);
 
         if let Some(pop_message_processor) = self.inner.pop_message_processor.as_mut() {
             pop_message_processor.start();
@@ -7424,7 +7468,8 @@ accounts:
             .pop_lite_message_processor
             .as_mut()
             .expect("pop lite processor should be initialized")
-            .shutdown();
+            .shutdown()
+            .await;
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
@@ -7521,7 +7566,8 @@ accounts:
             .pop_lite_message_processor
             .as_mut()
             .expect("pop lite processor should be initialized")
-            .shutdown();
+            .shutdown()
+            .await;
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

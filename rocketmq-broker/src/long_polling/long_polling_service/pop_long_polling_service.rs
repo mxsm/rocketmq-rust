@@ -15,13 +15,16 @@
 #![allow(unused_variables)]
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::TimeUtils::current_millis;
@@ -29,14 +32,19 @@ use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use rocketmq_store::filter::ArcMessageFilter;
 use tokio::select;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::long_polling::polling_header::PollingHeader;
@@ -52,6 +60,9 @@ pub(crate) struct PopLongPollingService<MS: MessageStore, RP> {
     notify_last: bool,
     processor: Option<ArcMut<RP>>,
     notify: Notify,
+    running: AtomicBool,
+    task_group: Mutex<Option<TaskGroup>>,
+    main_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingService<MS, RP> {
@@ -66,21 +77,45 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             broker_runtime_inner,
             processor: None,
             notify: Default::default(),
+            running: AtomicBool::new(false),
+            task_group: Mutex::new(None),
+            main_task: Mutex::new(None),
         }
     }
 
     pub fn start(this: ArcMut<Self>) {
-        tokio::spawn(async move {
+        if this
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                this.running.store(false, Ordering::Release);
+                warn!(?error, "failed to start PopLongPollingService outside Tokio runtime");
+                return;
+            }
+        };
+        let task_group = TaskGroup::root("rocketmq-broker.long-polling.pop", runtime);
+        let cancellation_token = task_group.cancellation_token();
+        let service = this.clone();
+
+        let spawn_result = task_group.spawn_service_with_handle("broker.long-polling.pop.scan", async move {
             loop {
                 select! {
-                    _ = this.notify.notified() => {break;}
+                    _ = cancellation_token.cancelled() => {break;}
+                    _ = service.notify.notified() => {break;}
                     _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => {}
                 }
 
-                if this.polling_map.is_empty() {
+                if service.polling_map.is_empty() {
                     continue;
                 }
-                for entry in this.polling_map.iter() {
+                for entry in service.polling_map.iter() {
                     let key = entry.key();
                     let value = entry.value();
                     if value.is_empty() {
@@ -96,28 +131,67 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                             value.insert(first);
                             break;
                         }
-                        this.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                        this.wake_up(first);
+                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+                        service.wake_up(first);
                     }
                 }
 
-                if this.last_clean_time == 0 || current_millis() - this.last_clean_time > 5 * 60 * 1000 {
-                    this.mut_from_ref().clean_unused_resource();
+                if service.last_clean_time == 0 || current_millis() - service.last_clean_time > 5 * 60 * 1000 {
+                    service.mut_from_ref().clean_unused_resource();
                 }
             }
 
             //clean all
-            for entry in this.polling_map.iter() {
+            for entry in service.polling_map.iter() {
                 let value = entry.value();
                 while let Some(first) = value.pop_front() {
-                    this.wake_up(first.value().clone());
+                    service.wake_up(first.value().clone());
                 }
             }
+            service.running.store(false, Ordering::Release);
         });
+
+        let (_task_id, main_task) = match spawn_result {
+            Ok(result) => result,
+            Err(error) => {
+                this.running.store(false, Ordering::Release);
+                warn!(?error, "failed to spawn PopLongPollingService scan task");
+                return;
+            }
+        };
+
+        *this.task_group.lock() = Some(task_group);
+        *this.main_task.lock() = Some(main_task);
     }
 
-    pub fn shutdown(&mut self) {
+    pub async fn shutdown(&mut self) {
         self.notify.notify_waiters();
+        let main_task = self.main_task.lock().take();
+        if let Some(mut main_task) = main_task {
+            match tokio::time::timeout(Duration::from_secs(5), &mut main_task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!(?error, "PopLongPollingService scan task failed during shutdown");
+                }
+                Err(_) => {
+                    warn!("PopLongPollingService scan task did not stop before shutdown timeout");
+                    main_task.abort();
+                    let _ = main_task.await;
+                }
+            }
+        }
+
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "PopLongPollingService shutdown report is unhealthy"
+                );
+            }
+        }
+        self.running.store(false, Ordering::Release);
     }
 
     fn clean_unused_resource(&mut self) {
@@ -433,7 +507,13 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         match self.processor.clone() {
             None => false,
             Some(mut processor) => {
-                tokio::spawn(async move {
+                let task_group = self.task_group.lock().as_ref().cloned();
+                let Some(task_group) = task_group else {
+                    warn!("PopLongPollingService wake-up skipped because task group is not running");
+                    return false;
+                };
+
+                let spawn_result = task_group.spawn("broker.long-polling.pop.wake-up", TaskKind::Worker, async move {
                     let channel = pop_request.get_channel().clone();
                     let ctx = pop_request.get_ctx().clone();
                     let opaque = pop_request.get_remoting_command().opaque();
@@ -453,6 +533,10 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                         }
                     }
                 });
+                if let Err(error) = spawn_result {
+                    warn!(?error, "failed to spawn PopLongPollingService wake-up task");
+                    return false;
+                }
                 true
             }
         }

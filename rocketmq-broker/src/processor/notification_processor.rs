@@ -59,8 +59,8 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
         PopLongPollingService::start(self.pop_long_polling_service.clone())
     }
 
-    pub fn shutdown(&mut self) {
-        self.pop_long_polling_service.shutdown();
+    pub async fn shutdown(&mut self) {
+        self.pop_long_polling_service.shutdown().await;
     }
 
     pub fn notify_message_arriving_simple(&self, topic: &CheetahString, queue_id: i32) {

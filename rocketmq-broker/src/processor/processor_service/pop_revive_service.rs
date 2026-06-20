@@ -19,11 +19,13 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::future::join_all;
 use futures::FutureExt;
+use parking_lot::Mutex;
 use rocketmq_client_rust::consumer::pull_result::PullResult;
 use rocketmq_client_rust::consumer::pull_status::PullStatus;
 use rocketmq_common::common::config::TopicConfig;
@@ -40,6 +42,8 @@ use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::current_millis;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
@@ -76,6 +80,8 @@ pub struct PopReviveService<MS: MessageStore> {
     inflight_revive_request_map: Arc<tokio::sync::Mutex<BTreeMap<PopCheckPoint, (i64, bool)>>>,
     revive_offset: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
+    running: AtomicBool,
+    task_group: Mutex<Option<TaskGroup>>,
 }
 impl<MS: MessageStore> PopReviveService<MS> {
     pub fn new(
@@ -100,6 +106,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 10, 20, 30, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 1200, 1800, 3600, 7200,
             ],
             shutdown: Arc::new(AtomicBool::new(false)),
+            running: AtomicBool::new(false),
+            task_group: Mutex::new(None),
         }
     }
 
@@ -310,30 +318,60 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
     }
 
-    pub fn start(mut this: ArcMut<Self>) {
-        tokio::spawn(async move {
+    pub fn start(this: ArcMut<Self>) {
+        if this
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        this.shutdown.store(false, Ordering::Release);
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                this.running.store(false, Ordering::Release);
+                warn!(
+                    ?error,
+                    revive_queue_id = this.queue_id,
+                    "failed to start PopReviveService outside Tokio runtime"
+                );
+                return;
+            }
+        };
+        let task_group = TaskGroup::root(format!("rocketmq-broker.pop-revive.{}", this.queue_id), runtime);
+        let cancellation_token = task_group.cancellation_token();
+        let mut service = this.clone();
+
+        if let Err(error) = task_group.spawn_service("broker.pop-revive.scan", async move {
             let mut slow = 1;
             loop {
-                if this.shutdown.load(Relaxed) {
+                if service.shutdown.load(Ordering::Acquire) || cancellation_token.is_cancelled() {
                     break;
                 }
 
-                if current_millis() < this.broker_runtime_inner.should_start_time().load(Relaxed) {
+                if current_millis() < service.broker_runtime_inner.should_start_time().load(Relaxed) {
                     info!(
                         "PopReviveService Ready to run after {}",
-                        this.broker_runtime_inner.should_start_time().load(Relaxed)
+                        service.broker_runtime_inner.should_start_time().load(Relaxed)
                     );
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => break,
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {}
+                    }
                     continue;
                 }
-                tokio::time::sleep(tokio::time::Duration::from_millis(
-                    this.broker_runtime_inner.broker_config().revive_interval,
-                ))
-                .await;
-                if !this.should_run_pop_revive.load(Ordering::Acquire) {
+                tokio::select! {
+                    _ = cancellation_token.cancelled() => break,
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(
+                        service.broker_runtime_inner.broker_config().revive_interval,
+                    )) => {}
+                }
+                if !service.should_run_pop_revive.load(Ordering::Acquire) {
                     continue;
                 }
-                if !this
+                if !service
                     .broker_runtime_inner
                     .message_store()
                     .unwrap()
@@ -343,58 +381,83 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     info!("skip revive topic because timerWheelEnable is false");
                     continue;
                 }
-                if this.broker_runtime_inner.broker_config().enable_pop_log {
+                if service.broker_runtime_inner.broker_config().enable_pop_log {
                     info!(
                         "start revive topic={}, reviveQueueId={}",
-                        this.revive_topic, this.queue_id
+                        service.revive_topic, service.queue_id
                     );
                 }
                 let mut consume_revive_obj = ConsumeReviveObj::new();
-                this.consume_revive_message(&mut consume_revive_obj).await;
-                if !this.should_run_pop_revive.load(Ordering::Acquire) {
+                service.consume_revive_message(&mut consume_revive_obj).await;
+                if !service.should_run_pop_revive.load(Ordering::Acquire) || cancellation_token.is_cancelled() {
                     info!(
                         "slave skip scan, revive topic={}, reviveQueueId={}",
-                        this.revive_topic, this.queue_id
+                        service.revive_topic, service.queue_id
                     );
                     continue;
                 }
 
-                if let Err(e) = Self::merge_and_revive(this.clone(), &mut consume_revive_obj).await {
-                    error!("reviveQueueId={}, revive error:{}", this.queue_id, e);
+                if let Err(e) = Self::merge_and_revive(service.clone(), &mut consume_revive_obj).await {
+                    error!("reviveQueueId={}, revive error:{}", service.queue_id, e);
                     continue;
                 }
                 let mut delay = 0;
                 if let Some(ref sort_list) = consume_revive_obj.sort_list {
                     if !sort_list.is_empty() {
                         delay = (current_millis() - (sort_list[0].get_revive_time() as u64)) / 1000;
-                        this.current_revive_message_timestamp = sort_list[0].get_revive_time();
+                        service.current_revive_message_timestamp = sort_list[0].get_revive_time();
                         slow = 1;
                     }
                 } else {
-                    this.current_revive_message_timestamp = current_millis() as i64;
+                    service.current_revive_message_timestamp = current_millis() as i64;
                 }
-                if this.broker_runtime_inner.broker_config().enable_pop_log {
+                if service.broker_runtime_inner.broker_config().enable_pop_log {
                     info!(
                         "reviveQueueId={}, revive finish,old offset is {}, new offset is {}, ckDelay={}  ",
-                        this.queue_id, consume_revive_obj.old_offset, consume_revive_obj.new_offset, delay
+                        service.queue_id, consume_revive_obj.old_offset, consume_revive_obj.new_offset, delay
                     );
                 }
 
                 if consume_revive_obj.sort_list.is_none() || consume_revive_obj.sort_list.as_ref().unwrap().is_empty() {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                        slow * this.broker_runtime_inner.broker_config().revive_interval,
-                    ))
-                    .await;
-                    if slow < this.broker_runtime_inner.broker_config().revive_max_slow {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => break,
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(
+                            slow * service.broker_runtime_inner.broker_config().revive_interval,
+                        )) => {}
+                    }
+                    if slow < service.broker_runtime_inner.broker_config().revive_max_slow {
                         slow += 1;
                     }
                 }
             }
-        });
+            service.running.store(false, Ordering::Release);
+        }) {
+            this.running.store(false, Ordering::Release);
+            warn!(
+                ?error,
+                revive_queue_id = this.queue_id,
+                "failed to spawn PopReviveService scan task"
+            );
+            return;
+        }
+
+        *this.task_group.lock() = Some(task_group);
     }
 
-    pub fn shutdown(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
+    pub async fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    revive_queue_id = self.queue_id,
+                    "PopReviveService shutdown report is unhealthy"
+                );
+            }
+        }
+        self.running.store(false, Ordering::Release);
     }
 
     async fn consume_revive_message(&self, consume_revive_obj: &mut ConsumeReviveObj) {

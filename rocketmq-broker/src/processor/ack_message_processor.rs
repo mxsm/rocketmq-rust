@@ -15,6 +15,7 @@
 use std::cmp::Ordering;
 
 use cheetah_string::CheetahString;
+use futures::future::join_all;
 use rocketmq_common::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -565,9 +566,12 @@ where
             .decrement_in_flight_message_num(&topic, &consume_group, pop_time, q_id, 1);
     }
 
-    pub fn shutdown(&mut self) {
-        for pop_revive_service in self.pop_revive_services.iter_mut() {
-            pop_revive_service.shutdown();
-        }
+    pub async fn shutdown(&mut self) {
+        join_all(
+            self.pop_revive_services
+                .iter_mut()
+                .map(|pop_revive_service| pop_revive_service.shutdown()),
+        )
+        .await;
     }
 }

@@ -12,16 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_runtime::RuntimeHandle;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tokio::select;
@@ -29,7 +35,9 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tracing::error;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::long_polling::polling_result::PollingResult;
@@ -43,6 +51,9 @@ pub(crate) struct PopLiteLongPollingService<MS: MessageStore, RP> {
     notify: Notify,
     wakeup_tx: UnboundedSender<CheetahString>,
     wakeup_rx: Option<UnboundedReceiver<CheetahString>>,
+    running: AtomicBool,
+    task_group: Mutex<Option<TaskGroup>>,
+    main_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPollingService<MS, RP> {
@@ -56,23 +67,51 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
             notify: Notify::new(),
             wakeup_tx,
             wakeup_rx: Some(wakeup_rx),
+            running: AtomicBool::new(false),
+            task_group: Mutex::new(None),
+            main_task: Mutex::new(None),
         }
     }
 
     pub(crate) fn start(this: ArcMut<Self>) {
-        let mut wakeup_rx = this
-            .mut_from_ref()
-            .wakeup_rx
-            .take()
-            .expect("pop-lite long polling receiver should only be taken once");
-        tokio::spawn(async move {
+        if this
+            .running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let runtime = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => RuntimeHandle::new(handle),
+            Err(error) => {
+                this.running.store(false, Ordering::Release);
+                warn!(
+                    ?error,
+                    "failed to start PopLiteLongPollingService outside Tokio runtime"
+                );
+                return;
+            }
+        };
+        let Some(mut wakeup_rx) = this.mut_from_ref().wakeup_rx.take() else {
+            this.running.store(false, Ordering::Release);
+            warn!("PopLiteLongPollingService receiver has already been taken");
+            return;
+        };
+
+        let task_group = TaskGroup::root("rocketmq-broker.long-polling.pop-lite", runtime);
+        let cancellation_token = task_group.cancellation_token();
+        let service = this.clone();
+
+        let spawn_result = task_group.spawn_service_with_handle("broker.long-polling.pop-lite.scan", async move {
             loop {
                 select! {
-                    _ = this.notify.notified() => { break; }
+                    _ = cancellation_token.cancelled() => { break; }
+                    _ = service.notify.notified() => { break; }
                     wakeup = wakeup_rx.recv() => {
                         match wakeup {
                             Some(client_id) => {
-                                this.wake_up_client(&client_id);
+                                service.wake_up_client(&client_id);
                             }
                             None => break,
                         }
@@ -80,10 +119,10 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
                     _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => {}
                 }
 
-                if this.polling_map.is_empty() {
+                if service.polling_map.is_empty() {
                     continue;
                 }
-                for entry in this.polling_map.iter() {
+                for entry in service.polling_map.iter() {
                     let queue = entry.value();
                     if queue.is_empty() {
                         continue;
@@ -97,24 +136,63 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
                             queue.insert(first);
                             break;
                         }
-                        this.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                        this.wake_up(first);
+                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+                        service.wake_up(first);
                     }
                 }
             }
 
-            for entry in this.polling_map.iter() {
+            for entry in service.polling_map.iter() {
                 let queue = entry.value();
                 while let Some(first) = queue.pop_front() {
-                    this.total_polling_num.fetch_sub(1, Ordering::AcqRel);
-                    this.wake_up(first.value().clone());
+                    service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
+                    service.wake_up(first.value().clone());
                 }
             }
+            service.running.store(false, Ordering::Release);
         });
+
+        let (_task_id, main_task) = match spawn_result {
+            Ok(result) => result,
+            Err(error) => {
+                this.running.store(false, Ordering::Release);
+                warn!(?error, "failed to spawn PopLiteLongPollingService scan task");
+                return;
+            }
+        };
+
+        *this.task_group.lock() = Some(task_group);
+        *this.main_task.lock() = Some(main_task);
     }
 
-    pub(crate) fn shutdown(&mut self) {
+    pub(crate) async fn shutdown(&mut self) {
         self.notify.notify_waiters();
+        let main_task = self.main_task.lock().take();
+        if let Some(mut main_task) = main_task {
+            match tokio::time::timeout(Duration::from_secs(5), &mut main_task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    warn!(?error, "PopLiteLongPollingService scan task failed during shutdown");
+                }
+                Err(_) => {
+                    warn!("PopLiteLongPollingService scan task did not stop before shutdown timeout");
+                    main_task.abort();
+                    let _ = main_task.await;
+                }
+            }
+        }
+
+        let task_group = self.task_group.lock().take();
+        if let Some(task_group) = task_group {
+            let report = task_group.shutdown(Duration::from_secs(5)).await;
+            if !report.is_healthy() {
+                warn!(
+                    report = %report.to_json(),
+                    "PopLiteLongPollingService shutdown report is unhealthy"
+                );
+            }
+        }
+        self.running.store(false, Ordering::Release);
     }
 
     pub(crate) fn wakeup_sender(&self) -> UnboundedSender<CheetahString> {
@@ -180,26 +258,37 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLiteLongPolling
         match self.processor.clone() {
             None => false,
             Some(mut processor) => {
-                tokio::spawn(async move {
-                    let channel = pop_request.get_channel().clone();
-                    let ctx = pop_request.get_ctx().clone();
-                    let opaque = pop_request.get_remoting_command().opaque();
-                    let response = processor
-                        .process_request(channel, ctx, &mut pop_request.get_remoting_command().clone())
-                        .await;
-                    match response {
-                        Ok(result) => {
-                            if let Some(mut response) = result {
-                                let channel = pop_request.get_channel();
-                                response.set_opaque_mut(opaque);
-                                let _ = channel.channel_inner().send_oneway(response, 1000).await;
+                let task_group = self.task_group.lock().as_ref().cloned();
+                let Some(task_group) = task_group else {
+                    warn!("PopLiteLongPollingService wake-up skipped because task group is not running");
+                    return false;
+                };
+
+                let spawn_result =
+                    task_group.spawn("broker.long-polling.pop-lite.wake-up", TaskKind::Worker, async move {
+                        let channel = pop_request.get_channel().clone();
+                        let ctx = pop_request.get_ctx().clone();
+                        let opaque = pop_request.get_remoting_command().opaque();
+                        let response = processor
+                            .process_request(channel, ctx, &mut pop_request.get_remoting_command().clone())
+                            .await;
+                        match response {
+                            Ok(result) => {
+                                if let Some(mut response) = result {
+                                    let channel = pop_request.get_channel();
+                                    response.set_opaque_mut(opaque);
+                                    let _ = channel.channel_inner().send_oneway(response, 1000).await;
+                                }
+                            }
+                            Err(error) => {
+                                error!("Execute pop-lite request when wakeup run {}", error);
                             }
                         }
-                        Err(error) => {
-                            error!("Execute pop-lite request when wakeup run {}", error);
-                        }
-                    }
-                });
+                    });
+                if let Err(error) = spawn_result {
+                    warn!(?error, "failed to spawn PopLiteLongPollingService wake-up task");
+                    return false;
+                }
                 true
             }
         }
