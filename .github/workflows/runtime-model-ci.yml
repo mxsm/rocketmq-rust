@@ -58,7 +58,7 @@ jobs:
 
       - name: Run runtime audit
         shell: pwsh
-        run: ./scripts/runtime-audit.ps1 -SkipBaseline
+        run: ./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
 
       - name: Generate runtime model benchmark placeholders
         shell: pwsh

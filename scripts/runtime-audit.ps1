@@ -2,6 +2,8 @@
 param(
     [string]$OutputDirectory = "target/runtime-audit",
     [string]$BaselineDirectory = "target/runtime-baseline/before",
+    [string]$BoundaryBaselineFile = "scripts/runtime-audit-baseline.json",
+    [switch]$EnforceBoundaryBaseline,
     [switch]$SkipBaseline
 )
 
@@ -15,6 +17,12 @@ if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction Sile
 $workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $auditRoot = Join-Path $workspaceRoot $OutputDirectory
 $baselineRoot = Join-Path $workspaceRoot $BaselineDirectory
+$boundaryBaselinePath = if ([System.IO.Path]::IsPathRooted($BoundaryBaselineFile)) {
+    $BoundaryBaselineFile
+}
+else {
+    Join-Path $workspaceRoot $BoundaryBaselineFile
+}
 $script:testScopeCache = @{}
 $script:benchmarkScopeCache = @{}
 
@@ -351,9 +359,11 @@ function ConvertTo-MarkdownInlineCode {
 function Write-MarkdownReport {
     param(
         [Parameter(Mandatory = $true)][string]$Title,
-        [Parameter(Mandatory = $true)][array]$Matches,
+        [AllowNull()][array]$Matches,
         [Parameter(Mandatory = $true)][string]$Path
     )
+
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("# $Title")
@@ -377,36 +387,40 @@ function Write-MarkdownReport {
 }
 
 function Get-ProductionMatches {
-    param([Parameter(Mandatory = $true)][array]$Matches)
+    param([AllowNull()][array]$Matches)
 
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
     return @($Matches | Where-Object { $_.Scope -eq "production" })
 }
 
 function Get-CountForCrate {
     param(
-        [Parameter(Mandatory = $true)][array]$Matches,
+        [AllowNull()][array]$Matches,
         [Parameter(Mandatory = $true)][string]$Crate
     )
 
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
     return @($Matches | Where-Object { $_.Crate -eq $Crate }).Count
 }
 
 function Get-CountForScope {
     param(
-        [Parameter(Mandatory = $true)][array]$Matches,
+        [AllowNull()][array]$Matches,
         [Parameter(Mandatory = $true)][string]$Scope
     )
 
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
     return @($Matches | Where-Object { $_.Scope -eq $Scope }).Count
 }
 
 function Get-CountForCrateAndScope {
     param(
-        [Parameter(Mandatory = $true)][array]$Matches,
+        [AllowNull()][array]$Matches,
         [Parameter(Mandatory = $true)][string]$Crate,
         [Parameter(Mandatory = $true)][string]$Scope
     )
 
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
     return @($Matches | Where-Object { $_.Crate -eq $Crate -and $_.Scope -eq $Scope }).Count
 }
 
@@ -424,6 +438,488 @@ function Write-BaselineJson {
     }
 
     $payload | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 $Path
+}
+
+function Get-StringSha256Prefix {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$Length = 16
+    )
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($(if ($null -eq $Text) { "" } else { $Text }))
+        $hash = $sha.ComputeHash($bytes)
+        return ([System.BitConverter]::ToString($hash)).Replace("-", "").ToLowerInvariant().Substring(0, $Length)
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-BoundaryKind {
+    param([Parameter(Mandatory = $true)][string]$Category)
+
+    switch ($Category) {
+        "task-group-root-sites" { return "task-group-root" }
+        "current-runtime-adapter-sites" { return "current-runtime-adapter" }
+        "raw-tokio-spawn-sites" { return "raw-tokio-spawn" }
+        "raw-blocking-executor-sites" { return "raw-blocking-executor" }
+        "dedicated-thread-sites" { return "dedicated-thread" }
+        default { return $Category }
+    }
+}
+
+function Get-MigrationPhaseForPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $normalized = $Path.Replace("\", "/")
+    if ($normalized -match "^rocketmq-runtime/") { return "PR-2-runtime-primitives" }
+    if ($normalized -match "^rocketmq-client/") { return "PR-3-service-context-api" }
+    if ($normalized -match "^rocketmq-remoting/") { return "PR-4-remoting-lifecycle" }
+    if ($normalized -match "^rocketmq-namesrv/") { return "PR-5-namesrv-shutdown" }
+    if ($normalized -match "^rocketmq-broker/") { return "PR-6-broker-report-tree" }
+    if ($normalized -match "^rocketmq-(store|controller|auth|common|tieredstore)/") { return "PR-7-store-controller-auth-blocking" }
+    return "legacy-compatibility"
+}
+
+function Get-BoundaryFingerprint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Category,
+        [Parameter(Mandatory = $true)]$Match,
+        [Parameter(Mandatory = $true)][string]$Kind
+    )
+
+    $normalizedText = ($Match.Text -replace "\s+", " ").Trim()
+    $textHash = Get-StringSha256Prefix -Text $normalizedText
+    return "$Category|$Kind|$($Match.Path)|$textHash"
+}
+
+function New-BoundaryDisposition {
+    param(
+        [Parameter(Mandatory = $true)][string]$Disposition,
+        [Parameter(Mandatory = $true)][bool]$ActionRequired,
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [Parameter(Mandatory = $true)][string]$MigrationPhase
+    )
+
+    [pscustomobject]@{
+        Disposition = $Disposition
+        ActionRequired = $ActionRequired
+        Reason = $Reason
+        MigrationPhase = $MigrationPhase
+    }
+}
+
+function Get-BoundaryDisposition {
+    param(
+        [Parameter(Mandatory = $true)][string]$Category,
+        [Parameter(Mandatory = $true)]$Match
+    )
+
+    $path = $Match.Path.Replace("\", "/")
+    $phase = Get-MigrationPhaseForPath -Path $path
+
+    if ($Match.Scope -ne "production") {
+        return New-BoundaryDisposition `
+            -Disposition "test-or-benchmark-only" `
+            -ActionRequired $false `
+            -Reason "Non-production runtime boundary site; tracked for visibility but not enforced as production debt." `
+            -MigrationPhase $phase
+    }
+
+    if ($path -match "^rocketmq-runtime/src/") {
+        return New-BoundaryDisposition `
+            -Disposition "runtime-primitive" `
+            -ActionRequired $false `
+            -Reason "Allowed inside rocketmq-runtime primitive implementation." `
+            -MigrationPhase "PR-2-runtime-primitives"
+    }
+
+    switch ($Category) {
+        "task-group-root-sites" {
+            return New-BoundaryDisposition `
+                -Disposition "unparented-task-group-root-risk" `
+                -ActionRequired $true `
+                -Reason "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup." `
+                -MigrationPhase $phase
+        }
+        "current-runtime-adapter-sites" {
+            if ($path -match "^rocketmq-tools/" -or $path -match "^rocketmq-.+/src/(bin|main)\.rs$") {
+                return New-BoundaryDisposition `
+                    -Disposition "top-level-owned-runtime-boundary" `
+                    -ActionRequired $false `
+                    -Reason "Allowed process or tool entrypoint runtime boundary." `
+                    -MigrationPhase $phase
+            }
+
+            return New-BoundaryDisposition `
+                -Disposition "bare-current-runtime-risk" `
+                -ActionRequired $true `
+                -Reason "Production code binds to the current Tokio runtime outside an approved top-level adapter." `
+                -MigrationPhase $phase
+        }
+        "raw-tokio-spawn-sites" {
+            return New-BoundaryDisposition `
+                -Disposition "raw-spawn-risk" `
+                -ActionRequired $true `
+                -Reason "Production code spawns directly instead of routing through TaskGroup or a documented runtime primitive." `
+                -MigrationPhase $phase
+        }
+        "raw-blocking-executor-sites" {
+            if ($path -eq "rocketmq-auth/src/runtime_bridge.rs") {
+                return New-BoundaryDisposition `
+                    -Disposition "current-runtime-compat-adapter" `
+                    -ActionRequired $false `
+                    -Reason "Auth sync bridge uses block_in_place as a documented compatibility path." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-client/src/producer/producer_impl/default_mq_producer_impl.rs") {
+                return New-BoundaryDisposition `
+                    -Disposition "service-context-parented" `
+                    -ActionRequired $false `
+                    -Reason "Client producer callback offload is routed through the client runtime blocking wrapper." `
+                    -MigrationPhase "PR-3-service-context-api"
+            }
+
+            return New-BoundaryDisposition `
+                -Disposition "raw-blocking-risk" `
+                -ActionRequired $true `
+                -Reason "Production code uses raw blocking offload; migrate to BlockingExecutor or document the compatibility boundary." `
+                -MigrationPhase $phase
+        }
+        "dedicated-thread-sites" {
+            if ($path -eq "rocketmq-client/src/runtime.rs") {
+                return New-BoundaryDisposition `
+                    -Disposition "documented-dedicated-thread" `
+                    -ActionRequired $false `
+                    -Reason "Client fallback idle reaper is a documented dedicated OS thread." `
+                    -MigrationPhase "PR-3-service-context-api"
+            }
+
+            if ($path -match "^rocketmq-common/src/common/thread/thread_service_(tokio|std)\.rs$") {
+                return New-BoundaryDisposition `
+                    -Disposition "documented-dedicated-thread" `
+                    -ActionRequired $false `
+                    -Reason "Common ServiceThread compatibility abstraction owns a documented dedicated thread." `
+                    -MigrationPhase "legacy-compatibility"
+            }
+
+            if ($path -eq "rocketmq-store/src/base/allocate_mapped_file_service.rs") {
+                return New-BoundaryDisposition `
+                    -Disposition "documented-dedicated-thread" `
+                    -ActionRequired $false `
+                    -Reason "Store mapped-file allocation runs on a documented dedicated OS thread." `
+                    -MigrationPhase "PR-7-store-controller-auth-blocking"
+            }
+
+            if ($path -eq "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs") {
+                return New-BoundaryDisposition `
+                    -Disposition "top-level-owned-runtime-boundary" `
+                    -ActionRequired $false `
+                    -Reason "CLI entrypoint owns a dedicated host thread for stack sizing." `
+                    -MigrationPhase "legacy-compatibility"
+            }
+
+            return New-BoundaryDisposition `
+                -Disposition "undocumented-dedicated-thread-risk" `
+                -ActionRequired $true `
+                -Reason "Production code creates a dedicated thread without a boundary disposition in the runtime audit." `
+                -MigrationPhase $phase
+        }
+        default {
+            return New-BoundaryDisposition `
+                -Disposition "unclassified-boundary-risk" `
+                -ActionRequired $true `
+                -Reason "Runtime boundary category has no disposition rule." `
+                -MigrationPhase $phase
+        }
+    }
+}
+
+function Add-BoundaryDisposition {
+    param(
+        [Parameter(Mandatory = $true)][string]$Category,
+        [AllowNull()][array]$Matches
+    )
+
+    $classified = @()
+    $kind = Get-BoundaryKind -Category $Category
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
+    foreach ($match in $Matches) {
+        $disposition = Get-BoundaryDisposition -Category $Category -Match $match
+        $fingerprint = Get-BoundaryFingerprint -Category $Category -Match $match -Kind $kind
+        $classified += [pscustomobject]@{
+            Scope = $match.Scope
+            Crate = $match.Crate
+            Path = $match.Path
+            Line = $match.Line
+            Kind = $kind
+            Text = $match.Text
+            Disposition = $disposition.Disposition
+            ActionRequired = [bool]$disposition.ActionRequired
+            Reason = $disposition.Reason
+            MigrationPhase = $disposition.MigrationPhase
+            Fingerprint = $fingerprint
+        }
+    }
+    return @($classified)
+}
+
+function Write-BoundaryDispositionReport {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [AllowNull()][array]$Matches,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# $Title")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Total matches: $($Matches.Count)")
+    $lines.Add("Action required: $(@($Matches | Where-Object { $_.ActionRequired }).Count)")
+    $lines.Add("Allowed or documented: $(@($Matches | Where-Object { -not $_.ActionRequired }).Count)")
+    $lines.Add("")
+
+    if ($Matches.Count -gt 0) {
+        $lines.Add("| Crate | File | Line | Kind | Disposition | Action required | Migration phase | Reason | Fingerprint | Code |")
+        $lines.Add("|---|---|---:|---|---|---|---|---|---|---|")
+        foreach ($match in $Matches) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.Path
+            $code = ConvertTo-MarkdownInlineCode -Text $match.Text
+            $reason = $match.Reason.Replace("|", "\|")
+            $fingerprint = ConvertTo-MarkdownInlineCode -Text $match.Fingerprint
+            $lines.Add("| $($match.Crate) | $fileCell | $($match.Line) | $($match.Kind) | $($match.Disposition) | $($match.ActionRequired) | $($match.MigrationPhase) | $reason | $fingerprint | $code |")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $Path
+}
+
+function Get-DispositionCounts {
+    param([AllowNull()][array]$Matches)
+
+    $counts = [ordered]@{}
+    $Matches = @($Matches | Where-Object { $null -ne $_ })
+    foreach ($disposition in ($Matches | Select-Object -ExpandProperty Disposition -Unique | Sort-Object)) {
+        $counts[$disposition] = @($Matches | Where-Object { $_.Disposition -eq $disposition }).Count
+    }
+    return $counts
+}
+
+function New-BoundaryBaselineDocument {
+    param([Parameter(Mandatory = $true)][hashtable]$BoundaryDispositionByCategory)
+
+    $document = [ordered]@{
+        version = 1
+        generated_at = (Get-Date -Format o)
+        source = "scripts/runtime-audit.ps1"
+        policy = "fail on new runtime boundary debt; existing debt must not grow"
+        categories = [ordered]@{}
+    }
+
+    foreach ($category in ($BoundaryDispositionByCategory.Keys | Sort-Object)) {
+        $categoryMatches = @($BoundaryDispositionByCategory[$category] | Where-Object { $null -ne $_ })
+        $required = @($categoryMatches | Where-Object { $_.ActionRequired })
+        $fingerprints = @()
+        foreach ($match in ($required | Sort-Object Path, Line, Kind)) {
+            $fingerprints += [ordered]@{
+                fingerprint = $match.Fingerprint
+                path = $match.Path
+                kind = $match.Kind
+                reason = $match.Reason
+                migration_phase = $match.MigrationPhase
+            }
+        }
+
+        $document.categories[$category] = [ordered]@{
+            action_required_max = $required.Count
+            fingerprints = $fingerprints
+        }
+    }
+
+    return $document
+}
+
+function Write-BoundaryBaselineTemplate {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$BoundaryDispositionByCategory,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $document = New-BoundaryBaselineDocument -BoundaryDispositionByCategory $BoundaryDispositionByCategory
+    $document | ConvertTo-Json -Depth 12 | Out-File -Encoding utf8 $Path
+}
+
+function Get-BaselineCategory {
+    param(
+        [Parameter(Mandatory = $true)]$Baseline,
+        [Parameter(Mandatory = $true)][string]$Category
+    )
+
+    $property = $Baseline.categories.PSObject.Properties[$Category]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function Get-BaselineFingerprintSet {
+    param([AllowNull()]$CategoryBaseline)
+
+    $set = @{}
+    if ($null -eq $CategoryBaseline -or $null -eq $CategoryBaseline.fingerprints) {
+        return $set
+    }
+
+    foreach ($entry in @($CategoryBaseline.fingerprints)) {
+        $fingerprint = if ($entry -is [string]) { $entry } else { $entry.fingerprint }
+        if (-not [string]::IsNullOrWhiteSpace($fingerprint)) {
+            $set[$fingerprint] = $true
+        }
+    }
+    return $set
+}
+
+function Compare-BoundaryBaseline {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$BoundaryDispositionByCategory,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{
+            Status = "missing"
+            Failures = @("Boundary baseline file not found: $Path")
+        }
+    }
+
+    $baseline = Get-Content -Raw -LiteralPath $Path -Encoding utf8 | ConvertFrom-Json
+    $failures = New-Object System.Collections.Generic.List[string]
+
+    foreach ($category in ($BoundaryDispositionByCategory.Keys | Sort-Object)) {
+        $categoryBaseline = Get-BaselineCategory -Baseline $baseline -Category $category
+        if ($null -eq $categoryBaseline) {
+            $failures.Add("Missing baseline category: $category")
+            continue
+        }
+
+        $categoryMatches = @($BoundaryDispositionByCategory[$category] | Where-Object { $null -ne $_ })
+        $required = @($categoryMatches | Where-Object { $_.ActionRequired })
+        $max = [int]$categoryBaseline.action_required_max
+        if ($required.Count -gt $max) {
+            $failures.Add("$category action-required count $($required.Count) exceeds baseline max $max")
+        }
+
+        $knownFingerprints = Get-BaselineFingerprintSet -CategoryBaseline $categoryBaseline
+        foreach ($match in $required) {
+            if (-not $knownFingerprints.ContainsKey($match.Fingerprint)) {
+                $failures.Add("$category has new action-required fingerprint $($match.Fingerprint) at $($match.Path):$($match.Line)")
+            }
+        }
+    }
+
+    $status = if ($failures.Count -eq 0) { "passed" } else { "failed" }
+    return [pscustomobject]@{
+        Status = $status
+        Failures = @($failures.ToArray())
+    }
+}
+
+function Write-RuntimeBoundarySummary {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$BoundaryDispositionByCategory,
+        [AllowNull()]$BaselineComparison,
+        [Parameter(Mandatory = $true)][string]$MarkdownPath,
+        [Parameter(Mandatory = $true)][string]$JsonPath
+    )
+
+    $summary = [ordered]@{
+        generated_at = (Get-Date -Format o)
+        baseline_status = if ($null -eq $BaselineComparison) { "not-checked" } else { $BaselineComparison.Status }
+        categories = [ordered]@{}
+        top_action_required = @()
+        baseline_failures = if ($null -eq $BaselineComparison) { @() } else { @($BaselineComparison.Failures) }
+    }
+
+    $top = @()
+    foreach ($category in ($BoundaryDispositionByCategory.Keys | Sort-Object)) {
+        $matches = @($BoundaryDispositionByCategory[$category] | Where-Object { $null -ne $_ })
+        $required = @($matches | Where-Object { $_.ActionRequired })
+        $summary.categories[$category] = [ordered]@{
+            total = $matches.Count
+            action_required = $required.Count
+            allowed_or_documented = @($matches | Where-Object { -not $_.ActionRequired }).Count
+            by_disposition = Get-DispositionCounts -Matches $matches
+        }
+        $top += @($required | Select-Object -First 10)
+    }
+
+    $summary.top_action_required = @(
+        $top |
+            Sort-Object MigrationPhase, Path, Line |
+            Select-Object -First 10 |
+            ForEach-Object {
+                [ordered]@{
+                    category = $_.Kind
+                    crate = $_.Crate
+                    path = $_.Path
+                    line = $_.Line
+                    disposition = $_.Disposition
+                    migration_phase = $_.MigrationPhase
+                    reason = $_.Reason
+                    fingerprint = $_.Fingerprint
+                }
+            }
+    )
+
+    $summary | ConvertTo-Json -Depth 12 | Out-File -Encoding utf8 $JsonPath
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("# Runtime Boundary Summary")
+    $lines.Add("")
+    $lines.Add("Generated: $(Get-Date -Format o)")
+    $lines.Add("")
+    $lines.Add("Baseline status: $($summary.baseline_status)")
+    $lines.Add("")
+    $lines.Add("| Boundary source | Total | Action required | Allowed or documented |")
+    $lines.Add("|---|---:|---:|---:|")
+    foreach ($category in ($BoundaryDispositionByCategory.Keys | Sort-Object)) {
+        $entry = $summary.categories[$category]
+        $lines.Add("| $category | $($entry.total) | $($entry.action_required) | $($entry.allowed_or_documented) |")
+    }
+    $lines.Add("")
+    $lines.Add("## Top Action-Required Runtime Boundary Risks")
+    $lines.Add("")
+    if ($summary.top_action_required.Count -eq 0) {
+        $lines.Add("No action-required runtime boundary risks.")
+    }
+    else {
+        $lines.Add("| Kind | Crate | File | Line | Disposition | Migration phase | Reason | Fingerprint |")
+        $lines.Add("|---|---|---|---:|---|---|---|---|")
+        foreach ($match in $summary.top_action_required) {
+            $fileCell = ConvertTo-MarkdownInlineCode -Text $match.path
+            $reason = $match.reason.Replace("|", "\|")
+            $fingerprint = ConvertTo-MarkdownInlineCode -Text $match.fingerprint
+            $lines.Add("| $($match.category) | $($match.crate) | $fileCell | $($match.line) | $($match.disposition) | $($match.migration_phase) | $reason | $fingerprint |")
+        }
+    }
+
+    if ($null -ne $BaselineComparison -and $BaselineComparison.Failures.Count -gt 0) {
+        $lines.Add("")
+        $lines.Add("## Baseline Failures")
+        $lines.Add("")
+        foreach ($failure in $BaselineComparison.Failures) {
+            $lines.Add("- $failure")
+        }
+    }
+
+    $lines -join [Environment]::NewLine | Out-File -Encoding utf8 $MarkdownPath
 }
 
 function Get-RuntimeSpawnDisposition {
@@ -1352,11 +1848,24 @@ $patterns = [ordered]@{
     "blocking-sites" = "spawn_blocking|blocking_recv|blocking_send|std::fs::|RocksDB|rocksdb|thread::sleep"
     "scheduler-sites" = "schedule_at_fixed_rate|ScheduledTaskManager|FixedRate|FixedDelay|FixedRateNoOverlap|tokio::time::interval|tokio::time::sleep"
     "shutdown-sites" = "abort\(|shutdown_timeout|shutdown_background|CancellationToken|cancelled\(|Notify|wait_for_server_task|shutdown\("
+    "task-group-root-sites" = "TaskGroup::root"
+    "current-runtime-adapter-sites" = "Handle::try_current|Handle::current|RuntimeContext::from_current|RuntimeContext::try_from_current"
+    "raw-tokio-spawn-sites" = "tokio::spawn|JoinSet::spawn"
+    "raw-blocking-executor-sites" = "spawn_blocking|block_in_place"
+    "dedicated-thread-sites" = "std::thread::spawn|thread::Builder::new"
 }
+
+$boundaryKeys = @(
+    "task-group-root-sites",
+    "current-runtime-adapter-sites",
+    "raw-tokio-spawn-sites",
+    "raw-blocking-executor-sites",
+    "dedicated-thread-sites"
+)
 
 $allMatches = @{}
 foreach ($entry in $patterns.GetEnumerator()) {
-    $matches = Get-RuntimeMatches -Pattern $entry.Value
+    $matches = @(Get-RuntimeMatches -Pattern $entry.Value)
     $allMatches[$entry.Key] = $matches
     Write-MarkdownReport `
         -Title ($entry.Key -replace "-", " ") `
@@ -1393,6 +1902,55 @@ Write-ShutdownDispositionReport `
     -Matches $productionShutdownDisposition `
     -Path (Join-Path $auditRoot "production-shutdown-disposition.md")
 
+$productionBoundaryDispositionByCategory = @{}
+foreach ($key in $boundaryKeys) {
+    $classified = Add-BoundaryDisposition `
+        -Category $key `
+        -Matches (Get-ProductionMatches -Matches $allMatches[$key])
+    $productionBoundaryDispositionByCategory[$key] = $classified
+
+    $reportName = switch ($key) {
+        "task-group-root-sites" { "production-task-group-root-disposition.md" }
+        "current-runtime-adapter-sites" { "production-current-runtime-adapter-disposition.md" }
+        "raw-tokio-spawn-sites" { "production-raw-tokio-spawn-disposition.md" }
+        "raw-blocking-executor-sites" { "production-raw-blocking-executor-disposition.md" }
+        "dedicated-thread-sites" { "production-dedicated-thread-disposition.md" }
+        default { "production-$key-disposition.md" }
+    }
+
+    Write-BoundaryDispositionReport `
+        -Title ("Production " + ($key -replace "-", " ") + " Disposition") `
+        -Matches $classified `
+        -Path (Join-Path $auditRoot $reportName)
+}
+
+$boundaryBaselineTemplatePath = Join-Path $auditRoot "runtime-boundary-baseline-template.json"
+Write-BoundaryBaselineTemplate `
+    -BoundaryDispositionByCategory $productionBoundaryDispositionByCategory `
+    -Path $boundaryBaselineTemplatePath
+
+$boundaryBaselineComparison = $null
+if ($EnforceBoundaryBaseline) {
+    $boundaryBaselineComparison = Compare-BoundaryBaseline `
+        -BoundaryDispositionByCategory $productionBoundaryDispositionByCategory `
+        -Path $boundaryBaselinePath
+}
+elseif (Test-Path -LiteralPath $boundaryBaselinePath) {
+    $boundaryBaselineComparison = Compare-BoundaryBaseline `
+        -BoundaryDispositionByCategory $productionBoundaryDispositionByCategory `
+        -Path $boundaryBaselinePath
+}
+
+Write-RuntimeBoundarySummary `
+    -BoundaryDispositionByCategory $productionBoundaryDispositionByCategory `
+    -BaselineComparison $boundaryBaselineComparison `
+    -MarkdownPath (Join-Path $auditRoot "runtime-boundary-summary.md") `
+    -JsonPath (Join-Path $auditRoot "runtime-boundary-summary.json")
+
+if ($EnforceBoundaryBaseline -and $null -ne $boundaryBaselineComparison -and $boundaryBaselineComparison.Status -ne "passed") {
+    throw "Runtime boundary baseline enforcement failed. See $(Join-Path $auditRoot "runtime-boundary-summary.md")."
+}
+
 $classificationLines = @(
     "# Runtime Task Classification",
     "",
@@ -1417,6 +1975,7 @@ $classificationLines = @(
     '`production-scheduler-disposition.md` separates scheduler primitives, documented business timers, protocol timeouts, and remaining follow-up items.',
     '`production-blocking-disposition.md` separates blocking primitives, storage domains, bootstrap/config I/O, tooling, metric/protocol false positives, and remaining follow-up items.',
     '`production-shutdown-disposition.md` separates runtime primitives, crate lifecycle boundaries, tool/dashboard boundaries, error-field false positives, and remaining follow-up items.',
+    '`runtime-boundary-summary.md` separates parented runtime boundaries, compatibility adapters, and unparented runtime debt guarded by baseline enforcement.',
     "Comment-only Rust lines are omitted so documentation examples do not count as runtime sites.",
     "",
     "Manual review is still required before migrating each site."
@@ -1505,6 +2064,16 @@ $summary.production_shutdown_disposition = [ordered]@{
     allowed_or_documented = @($productionShutdownDisposition | Where-Object { -not $_.ActionRequired }).Count
     by_disposition = $shutdownDispositionByKind
 }
+$summary.production_runtime_boundary_disposition = [ordered]@{}
+foreach ($key in ($boundaryKeys | Sort-Object)) {
+    $matches = @($productionBoundaryDispositionByCategory[$key])
+    $summary.production_runtime_boundary_disposition[$key] = [ordered]@{
+        total = $matches.Count
+        action_required = @($matches | Where-Object { $_.ActionRequired }).Count
+        allowed_or_documented = @($matches | Where-Object { -not $_.ActionRequired }).Count
+        by_disposition = Get-DispositionCounts -Matches $matches
+    }
+}
 
 $summary | ConvertTo-Json -Depth 8 | Out-File -Encoding utf8 (Join-Path $auditRoot "summary.json")
 
@@ -1526,6 +2095,12 @@ $riskSummaryLines.Add("Runtime creation disposition: $(@($productionRuntimeCreat
 $riskSummaryLines.Add("Scheduler disposition: $(@($productionSchedulerDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionSchedulerDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines.Add("Blocking disposition: $(@($productionBlockingDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionBlockingDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
 $riskSummaryLines.Add("Shutdown disposition: $(@($productionShutdownDisposition | Where-Object { $_.ActionRequired }).Count) action-required, $(@($productionShutdownDisposition | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
+$riskSummaryLines.Add("")
+$riskSummaryLines.Add("Runtime boundary baseline status: $(if ($null -eq $boundaryBaselineComparison) { "not-checked" } else { $boundaryBaselineComparison.Status }).")
+foreach ($key in ($boundaryKeys | Sort-Object)) {
+    $matches = @($productionBoundaryDispositionByCategory[$key])
+    $riskSummaryLines.Add("$key boundary disposition: $(@($matches | Where-Object { $_.ActionRequired }).Count) action-required, $(@($matches | Where-Object { -not $_.ActionRequired }).Count) allowed-or-documented.")
+}
 $riskSummaryLines -join [Environment]::NewLine | Out-File -Encoding utf8 (Join-Path $auditRoot "production-risk-summary.md")
 
 if (-not $SkipBaseline) {
