@@ -1,0 +1,798 @@
+﻿{
+    "version":  1,
+    "generated_at":  "2026-06-21T11:07:23.2988754+08:00",
+    "source":  "scripts/runtime-audit.ps1",
+    "policy":  "fail on new runtime boundary debt; existing debt must not grow",
+    "categories":  {
+                       "current-runtime-adapter-sites":  {
+                                                             "action_required_max":  55,
+                                                             "fingerprints":  [
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq/src/schedule.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq/src/schedule.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq/src/schedule/executor.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq/src/schedule/executor.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq/src/schedule/scheduler.rs|2646b5153263385f",
+                                                                                      "path":  "rocketmq/src/schedule/scheduler.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq/src/task/service_task.rs|d64d47075d58b085",
+                                                                                      "path":  "rocketmq/src/task/service_task.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-auth/src/runtime.rs|137d6bf0c15da16a",
+                                                                                      "path":  "rocketmq-auth/src/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-auth/src/runtime_bridge.rs|c3736010eadeb0b8",
+                                                                                      "path":  "rocketmq-auth/src/runtime_bridge.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-auth/src/runtime_bridge.rs|1053ae7ef13b2162",
+                                                                                      "path":  "rocketmq-auth/src/runtime_bridge.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/broker_runtime.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/broker_runtime.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/broker_runtime.rs|63e7b24b1eb42f7c",
+                                                                                      "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/broker_runtime.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/client/client_housekeeping_service.rs|137d6bf0c15da16a",
+                                                                                      "path":  "rocketmq-broker/src/client/client_housekeeping_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/latency/broker_fast_failure.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/latency/broker_fast_failure.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/processor/pop_message_processor.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/processor/pop_message_processor.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/processor/processor_service/pop_revive_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/schedule/schedule_message_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/schedule/schedule_message_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs|bf3f68cedd4937e3",
+                                                                                      "path":  "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/topic/manager/topic_route_info_manager.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/topic/manager/topic_route_info_manager.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/topic/topic_queue_mapping_clean_service.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/topic/topic_queue_mapping_clean_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-broker/src/transaction/queue/default_transactional_message_check_listener.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-broker/src/transaction/queue/default_transactional_message_check_listener.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-6-broker-report-tree"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-client/src/runtime.rs|8b0ca1e24bcf718c",
+                                                                                      "path":  "rocketmq-client/src/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-3-service-context-api"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-client/src/runtime.rs|d5f60d4af0cf724e",
+                                                                                      "path":  "rocketmq-client/src/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-3-service-context-api"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-common/src/common/statistics/statistics_manager.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-common/src/common/statistics/statistics_manager.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-common/src/common/stats/moment_stats_item.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-common/src/common/stats/moment_stats_item.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-common/src/common/stats/moment_stats_item_set.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-common/src/common/stats/moment_stats_item_set.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-common/src/utils/http_tiny_client.rs|049d8bb23973973b",
+                                                                                      "path":  "rocketmq-common/src/utils/http_tiny_client.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-controller/src/controller/controller_manager.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-controller/src/controller/controller_manager.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-controller/src/controller/open_raft_controller.rs|d64d47075d58b085",
+                                                                                      "path":  "rocketmq-controller/src/controller/open_raft_controller.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-controller/src/metadata/broker.rs|3f92c1a5e52df62a",
+                                                                                      "path":  "rocketmq-controller/src/metadata/broker.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-controller/src/rpc/server.rs|967375c1721eaf81",
+                                                                                      "path":  "rocketmq-controller/src/rpc/server.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-controller/src/storage/rocksdb_backend.rs|2646b5153263385f",
+                                                                                      "path":  "rocketmq-controller/src/storage/rocksdb_backend.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-dashboard/rocketmq-dashboard-web/backend/src/service/dashboard_service.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/service/dashboard_service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-namesrv/src/bootstrap.rs|137d6bf0c15da16a",
+                                                                                      "path":  "rocketmq-namesrv/src/bootstrap.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-5-namesrv-shutdown"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-observability/src/exporter/prometheus.rs|3f92c1a5e52df62a",
+                                                                                      "path":  "rocketmq-observability/src/exporter/prometheus.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-proxy/src/grpc/server.rs|a813c6046f8dd0f9",
+                                                                                      "path":  "rocketmq-proxy/src/grpc/server.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-proxy/src/grpc/service.rs|eada591ae6b88fbb",
+                                                                                      "path":  "rocketmq-proxy/src/grpc/service.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "legacy-compatibility"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/clients/client.rs|3f92c1a5e52df62a",
+                                                                                      "path":  "rocketmq-remoting/src/clients/client.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/clients/connection_pool.rs|c3736010eadeb0b8",
+                                                                                      "path":  "rocketmq-remoting/src/clients/connection_pool.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/clients/rocketmq_tokio_client.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-remoting/src/clients/rocketmq_tokio_client.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/clients/rocketmq_tokio_client.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-remoting/src/clients/rocketmq_tokio_client.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/connection_v2.rs|3436acf4b56f4b4b",
+                                                                                      "path":  "rocketmq-remoting/src/connection_v2.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/net/channel.rs|3f92c1a5e52df62a",
+                                                                                      "path":  "rocketmq-remoting/src/net/channel.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs|3f92c1a5e52df62a",
+                                                                                      "path":  "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-remoting/src/tls.rs|a5cb914dbc061417",
+                                                                                      "path":  "rocketmq-remoting/src/tls.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/rocksdb/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/rocksdb/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/rocksdb/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store/src/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-store/src/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-store/src/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  },
+                                                                                  {
+                                                                                      "fingerprint":  "current-runtime-adapter-sites|current-runtime-adapter|rocketmq-tieredstore/src/runtime.rs|d53236a4ada899f5",
+                                                                                      "path":  "rocketmq-tieredstore/src/runtime.rs",
+                                                                                      "kind":  "current-runtime-adapter",
+                                                                                      "reason":  "Production code binds to the current Tokio runtime outside an approved top-level adapter.",
+                                                                                      "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                                  }
+                                                                              ]
+                                                         },
+                       "dedicated-thread-sites":  {
+                                                      "action_required_max":  0,
+                                                      "fingerprints":  [
+
+                                                                       ]
+                                                  },
+                       "raw-blocking-executor-sites":  {
+                                                           "action_required_max":  1,
+                                                           "fingerprints":  [
+                                                                                {
+                                                                                    "fingerprint":  "raw-blocking-executor-sites|raw-blocking-executor|rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/topic/service.rs|d08783a27bc08a04",
+                                                                                    "path":  "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/topic/service.rs",
+                                                                                    "kind":  "raw-blocking-executor",
+                                                                                    "reason":  "Production code uses raw blocking offload; migrate to BlockingExecutor or document the compatibility boundary.",
+                                                                                    "migration_phase":  "legacy-compatibility"
+                                                                                }
+                                                                            ]
+                                                       },
+                       "raw-tokio-spawn-sites":  {
+                                                     "action_required_max":  0,
+                                                     "fingerprints":  [
+
+                                                                      ]
+                                                 },
+                       "task-group-root-sites":  {
+                                                     "action_required_max":  53,
+                                                     "fingerprints":  [
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq/src/schedule.rs|e5ddd48c52cb833d",
+                                                                              "path":  "rocketmq/src/schedule.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq/src/schedule/executor.rs|2f74ace68eb5869c",
+                                                                              "path":  "rocketmq/src/schedule/executor.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq/src/schedule/scheduler.rs|ccc6b20f6690b920",
+                                                                              "path":  "rocketmq/src/schedule/scheduler.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq/src/task/service_task.rs|07e24dbf8a1a9bb8",
+                                                                              "path":  "rocketmq/src/task/service_task.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-auth/src/runtime.rs|25d8157356a74d3b",
+                                                                              "path":  "rocketmq-auth/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-auth/src/runtime_bridge.rs|4213dd4f48d4b14a",
+                                                                              "path":  "rocketmq-auth/src/runtime_bridge.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/broker_runtime.rs|1f48d03f8f459739",
+                                                                              "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/broker_runtime.rs|16a4c9d651befb37",
+                                                                              "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/broker_runtime.rs|1102424474220f68",
+                                                                              "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/broker_runtime.rs|694776dfafc27828",
+                                                                              "path":  "rocketmq-broker/src/broker_runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/client/client_housekeeping_service.rs|ed0eff80d69835e6",
+                                                                              "path":  "rocketmq-broker/src/client/client_housekeeping_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/latency/broker_fast_failure.rs|df61f6e09128427b",
+                                                                              "path":  "rocketmq-broker/src/latency/broker_fast_failure.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs|2e2780b1ff99c1af",
+                                                                              "path":  "rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs|cdbd7dfa73b10cc9",
+                                                                              "path":  "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs|49b6d449aabf2bb8",
+                                                                              "path":  "rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/processor/pop_message_processor.rs|6ffaf5725147269a",
+                                                                              "path":  "rocketmq-broker/src/processor/pop_message_processor.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs|4c58099e74a83055",
+                                                                              "path":  "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/processor/processor_service/pop_revive_service.rs|8e3d24a0e10c2464",
+                                                                              "path":  "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/schedule/schedule_message_service.rs|e7475e8961739ac7",
+                                                                              "path":  "rocketmq-broker/src/schedule/schedule_message_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs|21c7a7108135f299",
+                                                                              "path":  "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/topic/manager/topic_route_info_manager.rs|178e7d26f778bde2",
+                                                                              "path":  "rocketmq-broker/src/topic/manager/topic_route_info_manager.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/topic/topic_queue_mapping_clean_service.rs|8518209e17749092",
+                                                                              "path":  "rocketmq-broker/src/topic/topic_queue_mapping_clean_service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-broker/src/transaction/queue/default_transactional_message_check_listener.rs|d6ae8f435097825f",
+                                                                              "path":  "rocketmq-broker/src/transaction/queue/default_transactional_message_check_listener.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-6-broker-report-tree"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-client/src/runtime.rs|fcdf354294225eac",
+                                                                              "path":  "rocketmq-client/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-3-service-context-api"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-client/src/runtime.rs|cbd0fb38e8acfd39",
+                                                                              "path":  "rocketmq-client/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-3-service-context-api"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-client/src/runtime.rs|a2e2c2cdc5c90f0b",
+                                                                              "path":  "rocketmq-client/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-3-service-context-api"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-common/src/common/statistics/statistics_manager.rs|40be6a9f5594b761",
+                                                                              "path":  "rocketmq-common/src/common/statistics/statistics_manager.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-common/src/common/stats/moment_stats_item.rs|ad5011ef9b99b6a3",
+                                                                              "path":  "rocketmq-common/src/common/stats/moment_stats_item.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-common/src/common/stats/moment_stats_item_set.rs|04132067389975c0",
+                                                                              "path":  "rocketmq-common/src/common/stats/moment_stats_item_set.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-controller/src/controller/controller_manager.rs|3748aca09ee31ae1",
+                                                                              "path":  "rocketmq-controller/src/controller/controller_manager.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-controller/src/controller/open_raft_controller.rs|b6053ca3477f2030",
+                                                                              "path":  "rocketmq-controller/src/controller/open_raft_controller.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs|5b502c2e654648ce",
+                                                                              "path":  "rocketmq-controller/src/heartbeat/default_broker_heartbeat_manager.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-controller/src/metadata/broker.rs|783c6e281400cbed",
+                                                                              "path":  "rocketmq-controller/src/metadata/broker.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-controller/src/rpc/server.rs|8e9321481ba91fcf",
+                                                                              "path":  "rocketmq-controller/src/rpc/server.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-controller/src/storage/rocksdb_backend.rs|d86f2fb034b83403",
+                                                                              "path":  "rocketmq-controller/src/storage/rocksdb_backend.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-namesrv/src/bootstrap.rs|5824618b7dd10f62",
+                                                                              "path":  "rocketmq-namesrv/src/bootstrap.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-5-namesrv-shutdown"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-observability/src/exporter/prometheus.rs|658856661cb43688",
+                                                                              "path":  "rocketmq-observability/src/exporter/prometheus.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-proxy/src/grpc/server.rs|f7f1e1340454e4d6",
+                                                                              "path":  "rocketmq-proxy/src/grpc/server.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-proxy/src/grpc/service.rs|ad5011ef9b99b6a3",
+                                                                              "path":  "rocketmq-proxy/src/grpc/service.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "legacy-compatibility"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/clients/client.rs|378262925053706b",
+                                                                              "path":  "rocketmq-remoting/src/clients/client.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/clients/connection_pool.rs|16adbc004d6b15a5",
+                                                                              "path":  "rocketmq-remoting/src/clients/connection_pool.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/clients/rocketmq_tokio_client.rs|0518d1f5447acf8f",
+                                                                              "path":  "rocketmq-remoting/src/clients/rocketmq_tokio_client.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/clients/rocketmq_tokio_client.rs|9c1ddd9605c9bb51",
+                                                                              "path":  "rocketmq-remoting/src/clients/rocketmq_tokio_client.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/connection_v2.rs|d8a3fae6d42a5ed3",
+                                                                              "path":  "rocketmq-remoting/src/connection_v2.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/net/channel.rs|a6ba5ee34314244a",
+                                                                              "path":  "rocketmq-remoting/src/net/channel.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs|e0533711ac7f2287",
+                                                                              "path":  "rocketmq-remoting/src/remoting_server/rocketmq_tokio_server.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-remoting/src/tls.rs|a31fb7e3543046df",
+                                                                              "path":  "rocketmq-remoting/src/tls.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-4-remoting-lifecycle"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/rocksdb/runtime.rs|469b27d8dc42470e",
+                                                                              "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/rocksdb/runtime.rs|d91f79cc4353b1ae",
+                                                                              "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/rocksdb/runtime.rs|6ec00bbb409fc751",
+                                                                              "path":  "rocketmq-store/src/rocksdb/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/runtime.rs|d91f79cc4353b1ae",
+                                                                              "path":  "rocketmq-store/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-store/src/runtime.rs|fbd8710634fb46c5",
+                                                                              "path":  "rocketmq-store/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          },
+                                                                          {
+                                                                              "fingerprint":  "task-group-root-sites|task-group-root|rocketmq-tieredstore/src/runtime.rs|d91f79cc4353b1ae",
+                                                                              "path":  "rocketmq-tieredstore/src/runtime.rs",
+                                                                              "kind":  "task-group-root",
+                                                                              "reason":  "Production code creates a TaskGroup root outside rocketmq-runtime; migrate to injected ServiceContext or parent TaskGroup.",
+                                                                              "migration_phase":  "PR-7-store-controller-auth-blocking"
+                                                                          }
+                                                                      ]
+                                                 }
+                   }
+}
